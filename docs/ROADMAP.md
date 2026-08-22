@@ -29,7 +29,8 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 |---|---|---|---|
 | P1.1 | ✅ **DONE** — corpus fetched, `tools/mame.mjs` builds and runs it. | — | done |
 | P1.2 | ✅ **DONE, and no Allegro shim was needed** — MAME's own `osdepend.h` boundary is eighteen functions, so `src/env/osd.js` replaces `src/msdos/msdos.c` wholesale. The libc extras were measured from MAME's sources, not guessed: `stricmp fopen fclose fread fwrite getchar rand`. | — | done |
-| P1.3 | 🟡 **Runs; needs ROMs for the attract mode.** Verified with a hand-written Z80 ROM (bottom two rows filled exactly). Game ROMs are copyrighted and not fetched — the user supplies them. Next: a golden fingerprint of the frame, and the open video-RAM mapping question in [TESTING.md](TESTING.md). | M | The Z80 core is also the P2 perf workload. |
+| P1.3 | 🟡 **Runs with real ROMs; the emulated Z80 misbehaves.** ROMs load (reset vector verified), the game clears video RAM, but `Z80_Running` drops to 0 after one T-state of 51200 and the fill loop overruns into the 0x5000 interrupt latch. A hand-written six-opcode ROM behaves exactly as predicted, so the defect is in code Z80.c reaches and a short loop does not. | M | |
+| P1.4 | **Differential the Z80 core against a gcc build.** Compile Z80.c with the oracle's gcc, drive both with the same ROM and the same T-state budget, and diff the register file after each step — the same shape as MIRAGE's Unicorn co-sim. This is the tool the bug needs; guessing at 2500 lines of CPU emulation is not. | M | Unblocks Pac-Man, and every game after it. |
 
 ## P2 · Performance
 

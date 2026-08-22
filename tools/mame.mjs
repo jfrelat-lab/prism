@@ -158,6 +158,20 @@ for (const dir of ['pacman', 'mspacman', 'pengo', 'crush', 'ladybug']) {
     if (statSync(full).isFile()) roms[f] = new Uint8Array(readFileSync(full));
   }
 }
+// --roms=<dir>: a directory the user supplies. Game ROMs are copyrighted data and are never
+// fetched by this tool; they are read from wherever the user points it.
+const romArg = process.argv.find(a => a.startsWith('--roms='))?.slice(7);
+if (romArg) {
+  const walk = (d, prefix = '') => {
+    for (const e of readdirSync(d)) {
+      const full = join(d, e);
+      if (statSync(full).isDirectory()) walk(full, `${prefix}${e}/`);
+      else roms[`${prefix}${e}`] = new Uint8Array(readFileSync(full));
+    }
+  };
+  walk(romArg);
+  console.log(`ROMs from ${romArg}: ${Object.keys(roms).length} files`);
+}
 if (process.argv.includes('--test-rom')) Object.assign(roms, testRoms());
 const frames = +(process.argv.find(a => a.startsWith('--frames='))?.slice(9) ?? 60);
 const osd = installOSD(program.M, { files: roms, stopAfterFrames: frames });
