@@ -29,8 +29,8 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 |---|---|---|---|
 | P1.1 | ✅ **DONE** — corpus fetched, `tools/mame.mjs` builds and runs it. | — | done |
 | P1.2 | ✅ **DONE, and no Allegro shim was needed** — MAME's own `osdepend.h` boundary is eighteen functions, so `src/env/osd.js` replaces `src/msdos/msdos.c` wholesale. The libc extras were measured from MAME's sources, not guessed: `stricmp fopen fclose fread fwrite getchar rand`. | — | done |
-| P1.3 | 🟡 **Runs with real ROMs; the emulated Z80 misbehaves.** ROMs load (reset vector verified), the game clears video RAM, but `Z80_Running` drops to 0 after one T-state of 51200 and the fill loop overruns into the 0x5000 interrupt latch. A hand-written six-opcode ROM behaves exactly as predicted, so the defect is in code Z80.c reaches and a short loop does not. | M | |
-| P1.4 | **Differential the Z80 core against a gcc build.** Compile Z80.c with the oracle's gcc, drive both with the same ROM and the same T-state budget, and diff the register file after each step — the same shape as MIRAGE's Unicorn co-sim. This is the tool the bug needs; guessing at 2500 lines of CPU emulation is not. | M | Unblocks Pac-Man, and every game after it. |
+| P1.3 | 🟡 **Runs with real ROMs; the CPU is now verified, the machine layer is not.** The Z80 core matches gcc over 20006 steps (P1.4), the game enables interrupts (`interrupt_enable = 1`) and clears video RAM, but the picture does not advance between 300 and 1200 frames. The defect is therefore in the machine layer or the driver, not the CPU. Next: extend the differential upward — same treatment for `machine.c` and `pacman/*.c`. | M | |
+| P1.4 | ✅ **DONE** — `tools/z80diff.mjs`. Found the defect in seconds: compound assignment evaluated the lvalue before the right-hand side, so `R.PC.W.l += (offset)M_RDMEM_OPCODE()` made every relative jump one byte short. The core is now identical to gcc over 20006 steps including the interrupt path. | — | done |
 
 ## P2 · Performance
 

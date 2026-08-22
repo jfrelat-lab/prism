@@ -400,7 +400,7 @@ aliases (~164 programs) and gcc's predefined TYPE macros (`typedef __SIZE_TYPE__
 instead of a header, and without the macro it reads as `typedef ;` — 60 programs) — took the corpus
 from **696 to 868 passing**, with no compiler work at all; the bitfield-initialiser fix below made it 869.
 
-Current state: **1213/1555 pass, ZERO wrong answers, 342 refused.**
+Current state: **1214/1556 pass, ZERO wrong answers, 342 refused.**
 
 That last number is the property worth having: across 1555 torture programs and 219 c-testsuite
 programs, PRISM either compiles a program correctly or refuses it with a named error. It never claims
@@ -660,6 +660,54 @@ than about PRISM, resolvable by instrumenting the driver, and it blocks nothing.
 
 Multi-unit linking itself was new work (`compileProgram`): parse every unit, place every name, then
 emit — with internal linkage mangled per unit.
+
+## The Z80 differential (`tools/z80diff.mjs`) — P1.4
+
+The tool the Pac-Man bug needed. It compiles `tools/z80diff/z80diff.c` plus MAME's `Z80.c` twice —
+once with the oracle's i386 gcc, once with PRISM — drives both from the same ROM image with the same
+T-state budget, and prints the register file after every step. With identical initial state, any
+divergence is a compiler bug and nothing else. Same shape as MIRAGE's Unicorn co-simulator.
+
+```bash
+node tools/z80diff.mjs --roms=<dir with pacman.6e .6f .6h .6j>
+```
+
+No ROM data lives in the repository: the harness reads whatever directory it is pointed at and copies
+the image into the gitignored `.oracle/`.
+
+**It found the defect in seconds**, at `PC=0x2313`, instruction `10 fc` = `DJNZ -4`: gcc lands on
+0x2311, PRISM landed on 0x2310. The cause is one line of MAME's core —
+
+```c
+#define M_JR   R.PC.W.l += (offset)M_RDMEM_OPCODE();
+```
+
+`M_RDMEM_OPCODE()` increments PC. In `a += b` the load of `a` and the evaluation of `b` are
+**unsequenced**, so gcc evaluates the right-hand side first and reads the already-incremented PC,
+while PRISM read PC first. Every relative jump was one byte short, which is why Pac-Man never got
+out of its init.
+
+PRISM now evaluates the right-hand side of a compound assignment **before** loading the lvalue. Both
+orders conform; only one runs the code this project exists to run. Consequently
+**`pr58943.c` is no longer excluded as undefined behaviour** — it passes on its own, and the
+exclusion list is one shorter. Worth keeping in mind: the earlier decision to exclude it was correct
+as a *gate* decision and wrong as a *design* decision, and real code settled it.
+
+### Two lessons from building the harness itself
+
+**A differential only tests the paths it drives.** The first version always returned
+`Z80_IGNORE_INT`, so its "identical over 20000 steps" said nothing about `EI`/`DI`, `IM 2`, vector
+fetch or `RETI` — exactly the code an interrupt-driven game depends on. Extending it to offer
+interrupts is what exposed the next difference.
+
+**Not every divergence is a bug.** `Z80_Reset` does `R.R = rand()`: the core randomises the refresh
+register deliberately, and PRISM's `rand()` is a deterministic LCG rather than glibc's sequence. The
+harness pins the initial state instead of excluding the field — control the input rather than mask
+the output. (This is a real, documented divergence: any program whose output depends on `rand()` will
+differ from a native build.)
+
+State: **identical over 20006 steps including interrupts.** The Z80 core is compiled correctly, so
+Pac-Man's remaining failure is in the machine layer, not the CPU.
 
 ## Gates still to build
 

@@ -157,7 +157,6 @@ function bucket(msg) {
  */
 const UB_TESTS = {
   '20031003-1.c': 'float->int out of range is undefined; the test pins gcc\'s saturation',
-  'pr58943.c': 'unsequenced read and modify in `x[0] |= foo()`; the test pins gcc\'s order',
   '20021127-1.c': 'defines `llabs`, a reserved library name (C 7.1.3); the test pins gcc\'s builtin folding',
 };
 

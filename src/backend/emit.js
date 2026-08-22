@@ -936,22 +936,35 @@ export class FunctionEmitter {
       return { js: `(${t}=${v},${storeExpr(l.addr, rhsType, t)},${t})`, type: rhsType };
     }
 
-    // Compound assignment: read, operate in the promoted type, coerce back.
+    /*
+     * Compound assignment. The right-hand side is evaluated BEFORE the lvalue is read, which is what
+     * gcc does and what real code depends on: MAME's Z80 core writes
+     *
+     *     R.PC.W.l += (offset)M_RDMEM_OPCODE();
+     *
+     * where the callee increments PC. Reading the lvalue first makes every relative jump one byte
+     * short — DJNZ landed at 0x2310 instead of 0x2311, which is how Pac-Man never got past its
+     * init. C leaves the order unspecified, so both are conforming; only one of them runs the code
+     * this project exists to run.
+     */
     const op = e.op.slice(0, -1);
-    const cur = l.varJs ? { js: l.varJs, type: l.type } : { js: loadExpr(l.addr, l.type), type: l.type };
-    const fake = { n: 'bin', op, a: { ...e.lhs, __pre: cur }, b: e.rhs, type: null };
-    const combined = this.#binaryWith(cur, e.rhs, op);
-    const v = coerce(combined.js, combined.type, rhsType);
-    if (l.varJs) return { js: `(${l.varJs}=${v})`, type: rhsType };
-    const t = this.newTmp();
-    this.#declareTmp(t);
-    // The address is evaluated once by hoisting it into a temp, which C requires.
-    const at = this.newTmp();
-    this.#declareTmp(at);
-    const curAt = l.varJs ? cur.js : loadExpr(at, l.type);
-    const combined2 = this.#binaryWith({ js: curAt, type: l.type }, e.rhs, op);
+    const rv = this.#rval(e.rhs);
+    const rt = this.newTmp(); this.#declareTmp(rt);
+    const rhsVal = { js: rt, type: rv.type };
+
+    if (l.varJs) {
+      const combined = this.#binaryWithValue({ js: l.varJs, type: l.type }, rhsVal, op);
+      return {
+        js: `(${rt}=${rv.js},${l.varJs}=${coerce(combined.js, combined.type, rhsType)})`,
+        type: rhsType,
+      };
+    }
+    const at = this.newTmp(); this.#declareTmp(at);
+    const t = this.newTmp(); this.#declareTmp(t);
+    const combined = this.#binaryWithValue({ js: loadExpr(at, l.type), type: l.type }, rhsVal, op);
+    // The address is computed once, before the right-hand side, so the lvalue is designated once.
     return {
-      js: `(${at}=${l.addr},${t}=${coerce(combined2.js, combined2.type, rhsType)},` +
+      js: `(${at}=${l.addr},${rt}=${rv.js},${t}=${coerce(combined.js, combined.type, rhsType)},` +
         `${storeExpr(at, rhsType, t)},${t})`,
       type: rhsType,
     };
@@ -959,7 +972,11 @@ export class FunctionEmitter {
 
   /** Like #binary but with the left side already evaluated. */
   #binaryWith(a, rhsNode, op) {
-    const b = this.#rval(rhsNode);
+    return this.#binaryWithValue(a, this.#rval(rhsNode), op);
+  }
+
+  /** Like #binaryWith but with BOTH sides already evaluated, so the caller controls the order. */
+  #binaryWithValue(a, b, op) {
     const at = T.decay(a.type), bt = T.decay(b.type);
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;

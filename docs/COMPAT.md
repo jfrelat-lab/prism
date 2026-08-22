@@ -5,10 +5,10 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 193/219 c-testsuite, 1213/1555 gcc torture |
+| a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 193/219 c-testsuite, 1214/1556 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
-| **MAME 0.1** | 🌅 **COMPILES AND RUNS, emulated CPU misbehaves.** 18 units, 894 functions, 0.55 MB of emitted JS. Prints its banner, creates a 224×288 display (Pac-Man's real resolution), obtains its 16 pens, draws frames, and with real ROMs the reset vector is correct (`DI; LD A,3Fh; LD I,A; JP 230Bh`) and the game clears video RAM to 0x40. But the screen stays black: **`Z80_Running` goes to 0 with one T-state consumed of 51200**, and the game's fill loop sweeps past video RAM into the interrupt latch at 0x5000. A hand-written six-opcode Z80 ROM works exactly as predicted, so this is PRISM miscompiling something in Z80.c that a short loop does not reach. Next: a differential against a gcc-built Z80.c. |
+| **MAME 0.1** | 🌅 **COMPILES AND RUNS; CPU verified, machine layer not yet.** 18 units, 894 functions. With real ROMs the reset vector is correct, the game enables interrupts and clears video RAM. The Z80 core is identical to a gcc build over 20006 steps including interrupts (`tools/z80diff.mjs`), so the remaining failure is in the machine layer. |
 | Quake (`WinQuake/`, `id386=0`) | ⛔ P3 |
 | Doom (`linuxdoom-1.10`) | ⛔ P4 |
 
