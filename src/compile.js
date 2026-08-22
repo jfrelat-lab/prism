@@ -1,0 +1,231 @@
+// compile.js — the driver: preprocess, parse, place, emit, link, run.
+//
+// This is the whole pipeline in one file so the seams are visible. Everything it does is tier-0.
+
+import { Preprocessor } from './cpp/cpp.js';
+import { parse } from './parse/parser.js';
+import * as T from './sema/types.js';
+import { Module } from './link/module.js';
+import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
+import { FunctionEmitter, EmitError } from './backend/emit.js';
+import { HEADERS } from './env/headers.js';
+
+/**
+ * Target macros a DJGPP-targeted source expects to find.
+ *
+ * The TYPE macros are not decoration: gcc's own torture suite opens with
+ * `typedef __SIZE_TYPE__ size_t;` rather than including a header, and without the macro that reads
+ * as `typedef ;`. Measured: 60 of 1575 torture programs failed on exactly that, making it the
+ * largest single parse-error cluster — and it is a table, not a feature.
+ */
+export const TARGET_DEFINES = {
+  __i386__: '1', i386: '1', __GNUC__: '4', __GNUC_MINOR__: '9',
+  __STDC__: '1', __STDC_HOSTED__: '1', __CHAR_BIT__: '8', __ILP32__: '1',
+  __SIZEOF_SHORT__: '2', __SIZEOF_INT__: '4', __SIZEOF_LONG__: '4', __SIZEOF_LONG_LONG__: '8',
+  __SIZEOF_FLOAT__: '4', __SIZEOF_DOUBLE__: '8', __SIZEOF_LONG_DOUBLE__: '12',
+  __SIZEOF_POINTER__: '4', __SIZEOF_SIZE_T__: '4', __SIZEOF_PTRDIFF_T__: '4',
+  __SIZEOF_WCHAR_T__: '4',
+
+  __SIZE_TYPE__: 'unsigned int',
+  __PTRDIFF_TYPE__: 'int',
+  __WCHAR_TYPE__: 'int',
+  __WINT_TYPE__: 'unsigned int',
+  __INTPTR_TYPE__: 'int',
+  __UINTPTR_TYPE__: 'unsigned int',
+  __INT8_TYPE__: 'signed char', __UINT8_TYPE__: 'unsigned char',
+  __INT16_TYPE__: 'short', __UINT16_TYPE__: 'unsigned short',
+  __INT32_TYPE__: 'int', __UINT32_TYPE__: 'unsigned int',
+  __INT64_TYPE__: 'long long', __UINT64_TYPE__: 'unsigned long long',
+  __INTMAX_TYPE__: 'long long', __UINTMAX_TYPE__: 'unsigned long long',
+
+  __SCHAR_MAX__: '127', __SHRT_MAX__: '32767', __INT_MAX__: '2147483647',
+  __LONG_MAX__: '2147483647L', __LONG_LONG_MAX__: '9223372036854775807LL',
+  __INTMAX_MAX__: '9223372036854775807LL', __SIZE_MAX__: '4294967295U',
+  __WCHAR_MAX__: '2147483647', __WCHAR_MIN__: '(-2147483647 - 1)',
+  __FLT_MANT_DIG__: '24', __DBL_MANT_DIG__: '53',
+
+  // Endianness. Leaving these out is not neutral: `#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__`
+  // with both macros undefined compares 0 == 0 and takes the BIG-endian branch (widechar-3.c).
+  __ORDER_LITTLE_ENDIAN__: '1234', __ORDER_BIG_ENDIAN__: '4321', __ORDER_PDP_ENDIAN__: '3412',
+  __BYTE_ORDER__: '1234',
+
+  __PRISM__: '1',
+};
+
+/**
+ * The libc surface the emitter may call directly. `params` are the FIXED parameter types; a
+ * variadic entry takes its extras as one JS array. Nothing is listed here speculatively — every
+ * entry exists because a gate case referenced it.
+ */
+const P = T.ptr(T.CHAR), I = T.INT, U = T.UINT, D = T.DOUBLE, V = T.VOID;
+export const BUILTINS = new Map(Object.entries({
+  printf: { ret: I, params: [P], variadic: true },
+  fprintf: { ret: I, params: [P, P], variadic: true },
+  sprintf: { ret: I, params: [P, P], variadic: true },
+  snprintf: { ret: I, params: [P, U, P], variadic: true },
+  puts: { ret: I, params: [P] },
+  putchar: { ret: I, params: [I] },
+  fputs: { ret: I, params: [P, P] },
+  fputc: { ret: I, params: [I, P] },
+  malloc: { ret: P, params: [U] },
+  calloc: { ret: P, params: [U, U] },
+  realloc: { ret: P, params: [P, U] },
+  free: { ret: V, params: [P] },
+  exit: { ret: V, params: [I] },
+  abort: { ret: V, params: [] },
+  atoi: { ret: I, params: [P] },
+  atol: { ret: T.LONG, params: [P] },
+  abs: { ret: I, params: [I] },
+  labs: { ret: T.LONG, params: [T.LONG] },
+  strlen: { ret: U, params: [P] },
+  strcpy: { ret: P, params: [P, P] },
+  strncpy: { ret: P, params: [P, P, U] },
+  strcat: { ret: P, params: [P, P] },
+  strcmp: { ret: I, params: [P, P] },
+  strncmp: { ret: I, params: [P, P, U] },
+  strchr: { ret: P, params: [P, I] },
+  memcpy: { ret: P, params: [P, P, U] },
+  memmove: { ret: P, params: [P, P, U] },
+  memset: { ret: P, params: [P, I, U] },
+  memcmp: { ret: I, params: [P, P, U] },
+  sqrt: { ret: D, params: [D] }, sin: { ret: D, params: [D] }, cos: { ret: D, params: [D] },
+  tan: { ret: D, params: [D] }, atan: { ret: D, params: [D] }, atan2: { ret: D, params: [D, D] },
+  exp: { ret: D, params: [D] }, log: { ret: D, params: [D] }, log10: { ret: D, params: [D] },
+  pow: { ret: D, params: [D, D] }, floor: { ret: D, params: [D] }, ceil: { ret: D, params: [D] },
+  fabs: { ret: D, params: [D] }, fmod: { ret: D, params: [D, D] },
+
+  // gcc's torture suite calls the __builtin_ spelling rather than the library name — 124 programs
+  // use __builtin_abort alone, which made it the single largest gap in the corpus. These are
+  // aliases, not new behaviour.
+  __builtin_abort: { ret: V, params: [], impl: 'abort' },
+  __builtin_exit: { ret: V, params: [I], impl: 'exit' },
+  __builtin_memcpy: { ret: P, params: [P, P, U], impl: 'memcpy' },
+  __builtin_memmove: { ret: P, params: [P, P, U], impl: 'memmove' },
+  __builtin_memset: { ret: P, params: [P, I, U], impl: 'memset' },
+  __builtin_memcmp: { ret: I, params: [P, P, U], impl: 'memcmp' },
+  __builtin_strlen: { ret: U, params: [P], impl: 'strlen' },
+  __builtin_strcpy: { ret: P, params: [P, P], impl: 'strcpy' },
+  __builtin_strcmp: { ret: I, params: [P, P], impl: 'strcmp' },
+  __builtin_malloc: { ret: P, params: [U], impl: 'malloc' },
+  __builtin_free: { ret: V, params: [P], impl: 'free' },
+  __builtin_printf: { ret: I, params: [P], variadic: true, impl: 'printf' },
+  __builtin_puts: { ret: I, params: [P], impl: 'puts' },
+  __builtin_putchar: { ret: I, params: [I], impl: 'putchar' },
+  __builtin_abs: { ret: I, params: [I], impl: 'abs' },
+  __builtin_expect: { ret: T.LONG, params: [T.LONG, T.LONG], impl: '__builtin_expect' },
+  __builtin_prefetch: { ret: V, params: [P], variadic: true, impl: '__builtin_prefetch' },
+  __builtin_return_address: { ret: P, params: [U], impl: '__builtin_return_address' },
+  __builtin_frame_address: { ret: P, params: [U], impl: '__builtin_return_address' },
+  __builtin_constant_p: { ret: I, params: [I], impl: '__builtin_constant_p' },
+  __builtin_unreachable: { ret: V, params: [], impl: 'abort' },
+  alloca: { ret: P, params: [U], impl: 'alloca' },
+  __builtin_alloca: { ret: P, params: [U], impl: 'alloca' },
+  strrchr: { ret: P, params: [P, I] },
+  strstr: { ret: P, params: [P, P] },
+  memchr: { ret: P, params: [P, I, U] },
+}));
+
+export class CompileError extends Error {}
+
+/**
+ * Compile one translation unit.
+ * @returns {{M, F, src, run: (argv?: string[]) => {code: number, stdout: string}}}
+ */
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory } = {}) {
+  const pp = new Preprocessor({
+    defines: { ...TARGET_DEFINES, ...defines },
+    resolve: resolve ?? builtinHeaderResolver(),
+  });
+  const tokens = pp.run(source, file);
+  const { unit, scope } = parse(tokens, { file });
+
+  const mod = new Module(memory ? { memory } : {});
+  const M = makeMachine(mod);
+
+  // Pass 1: give every file-scope name an address BEFORE any body is emitted, because a body may
+  // reference a global or take a function's address before its definition appears.
+  const globals = new Map();
+  const funcs = new Map();
+  for (const d of unit.decls) {
+    if (d.n === 'vardecl') {
+      if (d.type.k === 'func') { funcs.set(d.name, mod.defineFunc(d.name, d.type)); continue; }
+      if (d.storage === 'extern' && !d.init) continue;
+      const sym = mod.defineGlobal(d.name, d.type);
+      globals.set(d.name, { addr: sym.addr, type: d.type });
+    } else if (d.n === 'func') {
+      funcs.set(d.name, mod.defineFunc(d.name, d.type));
+    }
+  }
+
+  // Pass 2: emit. Static initialisers are written straight into the image where they are constant.
+  const ctx = { globals, funcs, builtins: BUILTINS };
+  const pieces = [];
+  const emitted = [];
+  for (const d of unit.decls) {
+    if (d.n === 'vardecl' && globals.has(d.name) && d.init) {
+      staticInit(mod, globals.get(d.name).addr, d.type, d.init, ctx);
+      continue;
+    }
+    if (d.n !== 'func') continue;
+    const fe = new FunctionEmitter(mod, d, ctx);
+    pieces.push(fe.emit());
+    emitted.push(d.name);
+  }
+
+  finalizeHeap(M);
+
+  const src = `"use strict";\nreturn function(M,F,D){\n${pieces.join('\n')}\n` +
+    `${emitted.map(n => `F.${n}=${n};`).join('\n')}\n};`;
+
+  let factory;
+  try {
+    factory = new Function(src)();
+  } catch (e) {
+    throw new CompileError(`emitted JavaScript did not compile: ${e.message}\n${numbered(src)}`);
+  }
+  const F = Object.create(null);
+  factory(M, F, mod.dv);
+  for (const name of emitted) mod.bindFunc(name, F[name]);
+
+  return {
+    M, F, src, mod,
+    run(argv = ['prog']) {
+      M.stdout.length = 0;
+      if (!F.main) throw new CompileError('no main()');
+      // argv lives in the image, because main may keep the pointers.
+      const ptrs = argv.map(a => mod.intern([...new TextEncoder().encode(a)]));
+      const vec = mod.alloc(4 * (ptrs.length + 1), 4);
+      ptrs.forEach((p, i) => mod.dv.setInt32(vec + i * 4, p, true));
+      mod.dv.setInt32(vec + ptrs.length * 4, 0, true);
+      finalizeHeap(M);
+      try {
+        const code = F.main.length === 0 ? F.main() : F.main(ptrs.length, vec);
+        return { code: (code | 0) & 0xff, stdout: M.output() };
+      } catch (e) {
+        if (e instanceof ExitCalled) return { code: e.code & 0xff, stdout: M.output() };
+        throw e;
+      }
+    },
+  };
+}
+
+/**
+ * Write a constant static initialiser directly into the image.
+ * The REAL ctx must be threaded in: an address constant (`int *p = &x;`) can only be folded if the
+ * emitter can see the symbol table. Passing empty maps here silently disabled the whole path.
+ */
+function staticInit(mod, addr, type, init, ctx) {
+  const fe = new FunctionEmitter(mod, { name: '__static', type: T.func(T.VOID, []), body: { n: 'block', items: [] } }, ctx);
+  fe.initStatic(addr, type, init);
+}
+
+export function builtinHeaderResolver(extra = {}) {
+  const table = { ...HEADERS, ...extra };
+  return (name) => {
+    const text = table[name] ?? table[name.replace(/^.*\//, '')];
+    return text === undefined ? null : { path: `<${name}>`, text };
+  };
+}
+
+const numbered = (s) => s.split('\n').map((l, i) => `${String(i + 1).padStart(4)} ${l}`).join('\n');
+export { EmitError, Trap };

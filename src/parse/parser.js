@@ -1,0 +1,1086 @@
+// parser.js — C89 + the useful parts of C99 + the GNU extensions real code uses.
+//
+// Consumes the pp-token stream from src/cpp. Two things make a C parser awkward and both are handled
+// with a scope-aware lookahead rather than a hack:
+//
+//   * `typedef-name` vs `identifier` is not decidable lexically. `(T)(x)` is a cast if T is a
+//     typedef and a call if it is a variable. The scope chain is therefore consulted DURING parsing.
+//   * a declarator reads inside-out (`int *a[3]` is an array of pointers, `int (*a)[3]` a pointer to
+//     array), so declarators are parsed by wrapping the base type as the suffixes unwind.
+
+import { ID, NUM, STR, CHR, PUNCT, EOF, tok } from '../cpp/token.js';
+import * as T from '../sema/types.js';
+import { charValue } from '../cpp/expr.js';
+import { literalUnits } from '../util/charset.js';
+
+export class ParseError extends Error {
+  constructor(msg, tok) {
+    super(tok?.loc ? `${tok.loc.file}:${tok.loc.line}: ${msg}` : msg);
+    this.tok = tok;
+  }
+}
+
+const KEYWORDS = new Set(['auto', 'break', 'case', 'char', 'const', 'continue', 'default', 'do',
+  'double', 'else', 'enum', 'extern', 'float', 'for', 'goto', 'if', 'int', 'long', 'register',
+  'return', 'short', 'signed', 'sizeof', 'static', 'struct', 'switch', 'typedef', 'union',
+  'unsigned', 'void', 'volatile', 'while',
+  // C99 + GNU
+  'inline', 'restrict', '_Bool', '__inline', '__inline__', '__const', '__const__', '__volatile',
+  '__volatile__', '__restrict', '__restrict__', '__signed', '__signed__', '__attribute__',
+  '__extension__', '__typeof__', 'typeof', '__asm__', 'asm', '__alignof__', '__alignof',
+  '__builtin_offsetof', '__label__', '__complex__']);
+
+const STORAGE = new Set(['typedef', 'extern', 'static', 'auto', 'register']);
+const QUALS = new Set(['const', 'volatile', 'restrict', '__const', '__const__', '__volatile',
+  '__volatile__', '__restrict', '__restrict__']);
+const FUNCSPEC = new Set(['inline', '__inline', '__inline__']);
+
+export class Parser {
+  /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
+  constructor(tokens, { scope = new T.Scope(), file = '<input>' } = {}) {
+    this.ts = tokens.filter(t => t.k !== 'pm');
+    this.i = 0;
+    this.scope = scope;
+    this.file = file;
+  }
+
+  // ---------------------------------------------------------------- token helpers
+
+  peek(k = 0) { return this.ts[this.i + k] ?? this.ts[this.ts.length - 1]; }
+  get done() { return this.peek().k === EOF; }
+  next() { return this.ts[this.i++]; }
+  isP(v, k = 0) { const t = this.peek(k); return t.k === PUNCT && t.v === v; }
+  isKw(v, k = 0) { const t = this.peek(k); return t.k === ID && t.v === v; }
+  eatP(v) { if (this.isP(v)) { this.i++; return true; } return false; }
+  eatKw(v) { if (this.isKw(v)) { this.i++; return true; } return false; }
+  expectP(v) {
+    if (!this.eatP(v)) throw new ParseError(`expected '${v}' but found '${this.peek().v || 'end of file'}'`, this.peek());
+  }
+  expectId() {
+    const t = this.peek();
+    if (t.k !== ID || KEYWORDS.has(t.v)) throw new ParseError(`expected an identifier, found '${t.v}'`, t);
+    this.i++;
+    return t.v;
+  }
+
+  // ---------------------------------------------------------------- translation unit
+
+  parseTranslationUnit() {
+    const decls = [];
+    while (!this.done) {
+      if (this.eatP(';')) continue;                       // stray semicolon, GNU-tolerated
+      if (this.eatKw('__extension__')) continue;
+      if (this.isKw('asm') || this.isKw('__asm__')) { decls.push(this.#topLevelAsm()); continue; }
+      decls.push(...this.#declarationOrFunction());
+    }
+    return { n: 'unit', decls };
+  }
+
+  #topLevelAsm() {
+    this.next();
+    this.#skipAttributeLike();
+    this.expectP('(');
+    const parts = [];
+    let depth = 1;
+    while (depth > 0 && !this.done) {
+      if (this.isP('(')) depth++;
+      else if (this.isP(')')) { depth--; if (!depth) { this.i++; break; } }
+      parts.push(this.next());
+    }
+    this.eatP(';');
+    return { n: 'asm', tokens: parts };
+  }
+
+  /** A declaration, or a function definition if a `{` follows the first declarator. */
+  #declarationOrFunction() {
+    const specs = this.#declSpecifiers();
+    const out = [];
+
+    if (this.eatP(';')) {
+      // A bare `struct S { ... };` or `enum E { ... };` declares only the tag.
+      return [{ n: 'tagdecl', type: specs.type }];
+    }
+
+    for (;;) {
+      const d = this.#declarator(specs.type);
+      const datt = this.#skipAttributeLike();
+      if (datt.aligned) d.type = T.withAlign(d.type, datt.aligned);
+
+      // K&R parameter declarations sit between the declarator and the body.
+      const isKR = d.type.k === 'func' && d.type.oldStyle && !this.isP('{') && !this.isP(',')
+        && !this.isP(';') && !this.isP('=');
+      if (isKR || (d.type.k === 'func' && this.isP('{'))) {
+        const fn = this.#functionBody(specs, d, isKR);
+        out.push(fn);
+        return out;
+      }
+
+      if (specs.storage === 'typedef') {
+        this.scope.declare(d.name, { kind: 'typedef', type: d.type });
+        out.push({ n: 'typedef', name: d.name, type: d.type });
+      } else {
+        let init = null;
+        if (this.eatP('=')) init = this.#initializer(d.type);
+        // `int a[] = {…};` completes the array from its initialiser. Two traps: a designated
+        // initialiser can reach past the item count (`{5, [2]=2, 3}` has 3 items and 4 elements),
+        // and a string literal sizes the array by its bytes plus the NUL.
+        let type = d.type;
+        if (type.k === 'array' && type.n === null && init) {
+          if (init.n === 'initlist') type = T.array(type.of, initListExtent(init));
+          else if (init.expr?.n === 'str') {
+            // Sized in ELEMENTS, so a wide literal in a wchar_t[] gets the same count as its
+            // characters rather than four times as many.
+            let len = 0;
+            for (const part of init.expr.parts) len += stringLiteralLength(part.v);
+            type = T.array(type.of, len + 1);
+          }
+        }
+        this.scope.declare(d.name, { kind: type.k === 'func' ? 'func' : 'var', type });
+        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init });
+      }
+      if (this.eatP(',')) continue;
+      this.expectP(';');
+      return out;
+    }
+  }
+
+  #functionBody(specs, d, isKR) {
+    // K&R: `int f(a, b) int a; char b; { ... }` — the parameter types follow the declarator.
+    if (isKR) {
+      const byName = new Map();
+      while (!this.isP('{') && !this.done) {
+        const s = this.#declSpecifiers();
+        for (;;) {
+          const p = this.#declarator(s.type);
+          byName.set(p.name, p.type);
+          if (this.eatP(',')) continue;
+          this.expectP(';');
+          break;
+        }
+      }
+      d.type = T.func(d.type.ret,
+        d.type.params.map(p => ({ name: p.name, type: byName.get(p.name) ?? T.INT })),
+        { variadic: false, oldStyle: true });
+    }
+
+    this.scope.declare(d.name, { kind: 'func', type: d.type });
+    const inner = new T.Scope(this.scope);
+    for (const p of d.type.params) if (p.name) inner.declare(p.name, { kind: 'var', type: p.type });
+    const saved = this.scope;
+    this.scope = inner;
+    let body;
+    try { body = this.#compound(); } finally { this.scope = saved; }
+    return { n: 'func', name: d.name, type: d.type, storage: specs.storage, body };
+  }
+
+  // ---------------------------------------------------------------- declaration specifiers
+
+  /**
+   * Collect specifiers in any order — `unsigned long int`, `long unsigned`, `static const int` are
+   * all legal and mean the same thing. Counting rather than pattern-matching is what makes that work.
+   */
+  #declSpecifiers({ allowNone = false } = {}) {
+    let storage = null, type = null, sawTypeSpec = false;
+    let signed = 0, unsigned = 0, longs = 0, shorts = 0;
+    let base = null;                                  // 'int' | 'char' | 'double' | 'float' | 'void' | '_Bool'
+    const cv = {};
+    let inlineFn = false;
+    let alignAttr = 0;
+
+    for (;;) {
+      const t = this.peek();
+      if (t.k !== ID) break;
+      const v = t.v;
+
+      if (STORAGE.has(v)) { this.i++; storage = v === 'typedef' ? 'typedef' : v; continue; }
+      if (QUALS.has(v)) { this.i++; cv[v.replace(/^__|__$/g, '')] = true; continue; }
+      if (FUNCSPEC.has(v)) { this.i++; inlineFn = true; continue; }
+      if (v === '__extension__') { this.i++; continue; }
+      if (v === '__attribute__') { const a = this.#skipAttributeLike(); if (a.aligned) alignAttr = Math.max(alignAttr, a.aligned); continue; }
+
+      if (v === 'signed' || v === '__signed' || v === '__signed__') { this.i++; signed++; sawTypeSpec = true; continue; }
+      if (v === 'unsigned') { this.i++; unsigned++; sawTypeSpec = true; continue; }
+      if (v === 'long') { this.i++; longs++; sawTypeSpec = true; continue; }
+      if (v === 'short') { this.i++; shorts++; sawTypeSpec = true; continue; }
+      if (v === 'int' || v === 'char' || v === 'double' || v === 'float' || v === 'void' || v === '_Bool') {
+        this.i++; base = v; sawTypeSpec = true; continue;
+      }
+      if (v === 'struct' || v === 'union') { type = this.#recordSpecifier(v); sawTypeSpec = true; continue; }
+      if (v === 'enum') { type = this.#enumSpecifier(); sawTypeSpec = true; continue; }
+      if (v === 'typeof' || v === '__typeof__') { type = this.#typeofSpecifier(); sawTypeSpec = true; continue; }
+
+      // A typedef name is a type specifier only if no other type specifier has been seen —
+      // otherwise `typedef int T; ... unsigned T;` would misparse, and more importantly
+      // `T x;` vs `int T;` are told apart by exactly this test.
+      if (!sawTypeSpec && this.scope.isTypedef(v)) {
+        this.i++;
+        type = this.scope.lookup(v).type;
+        sawTypeSpec = true;
+        continue;
+      }
+      break;
+    }
+
+    if (!type) {
+      type = this.#buildArithmetic({ base, signed, unsigned, longs, shorts }, sawTypeSpec, allowNone);
+    }
+    if (alignAttr) type = T.withAlign(type, alignAttr);
+    return { storage, type: T.qualify(type, Object.keys(cv).length ? cv : null), inline: inlineFn, sawTypeSpec };
+  }
+
+  #buildArithmetic({ base, signed, unsigned, longs, shorts }, sawTypeSpec, allowNone) {
+    if (!sawTypeSpec) {
+      // Implicit int — legal C89 (`static x;`, `f() { }`), and real DOS-era code uses it.
+      if (allowNone) return null;
+      return T.INT;
+    }
+    if (base === 'void') return T.VOID;
+    if (base === '_Bool') return T.scalar('_Bool');
+    if (base === 'float') return T.scalar('float');
+    if (base === 'double') return T.scalar(longs ? 'long double' : 'double');
+    if (base === 'char') return T.scalar(unsigned ? 'unsigned char' : signed ? 'signed char' : 'char');
+    if (shorts) return T.scalar(unsigned ? 'unsigned short' : 'short');
+    if (longs >= 2) return T.scalar(unsigned ? 'unsigned long long' : 'long long');
+    if (longs === 1) return T.scalar(unsigned ? 'unsigned long' : 'long');
+    return T.scalar(unsigned ? 'unsigned int' : 'int');
+  }
+
+  #typeofSpecifier() {
+    this.next();
+    this.expectP('(');
+    if (this.#looksLikeTypeName()) {
+      const t = this.#typeName();
+      this.expectP(')');
+      return t;
+    }
+    const e = this.expression();
+    this.expectP(')');
+    return e.type ?? T.INT;
+  }
+
+  #recordSpecifier(kind) {
+    this.next();
+    this.#skipAttributeLike();
+    let tag = null;
+    if (this.peek().k === ID && !KEYWORDS.has(this.peek().v)) tag = this.expectId();
+
+    if (!this.isP('{')) {
+      // A reference. An existing tag anywhere up the chain wins; otherwise it is incomplete.
+      if (!tag) throw new ParseError(`${kind} with neither tag nor body`, this.peek());
+      const found = this.scope.lookupTag(tag);
+      if (found) return found;
+      return this.scope.declareTag(tag, T.incompleteRecord(kind, tag));
+    }
+
+    // A definition. Declare the (incomplete) tag FIRST so a member can point at it:
+    //   struct node { struct node *next; };
+    const placeholder = T.incompleteRecord(kind, tag);
+    if (tag) this.scope.declareTag(tag, placeholder);
+
+    this.expectP('{');
+    const members = [];
+    while (!this.isP('}') && !this.done) {
+      if (this.eatP(';')) continue;
+      const s = this.#declSpecifiers();
+      // `struct { struct S; };` — an anonymous member (GNU) or just a tag declaration.
+      if (this.eatP(';')) {
+        if (T.isRecord(s.type) && !s.type.tag) members.push({ name: null, type: s.type, anon: true });
+        continue;
+      }
+      for (;;) {
+        let name = null, mtype = s.type, bits;
+        if (this.isP(':')) {
+          this.i++;
+          bits = Number(this.#constExpr());
+        } else {
+          const d = this.#declarator(s.type);
+          name = d.name; mtype = d.type;
+          if (this.eatP(':')) bits = Number(this.#constExpr());
+        }
+        const matt = this.#skipAttributeLike();
+        // Order matters and is observable: `packed` drops the member's alignment to 1, and a
+        // following `aligned(N)` raises it to N. Applying only `aligned` put
+        // `double d __attribute__((aligned(2),packed))` at offset 4 instead of 2.
+        if (matt.packed) mtype = T.withExactAlign(mtype, 1);
+        if (matt.aligned) mtype = T.withExactAlign(mtype, matt.aligned);
+        members.push(bits === undefined ? { name, type: mtype } : { name, type: mtype, bits });
+        if (this.eatP(',')) continue;
+        this.expectP(';');
+        break;
+      }
+    }
+    this.expectP('}');
+    const tail = this.#skipAttributeLike();
+
+    let built = T.record(kind, tag, members, { packed: tail.packed });
+    if (tail.aligned) built = T.withAlign(built, tail.aligned);
+    if (tag) {
+      // Mutate the placeholder in place: anything that already captured it (a self-referential
+      // member) must see the completed type, and re-declaring the tag would not reach those.
+      Object.assign(placeholder, built);
+      return placeholder;
+    }
+    return built;
+  }
+
+  #enumSpecifier() {
+    this.next();
+    this.#skipAttributeLike();
+    let tag = null;
+    if (this.peek().k === ID && !KEYWORDS.has(this.peek().v)) tag = this.expectId();
+    if (!this.isP('{')) {
+      if (!tag) throw new ParseError('enum with neither tag nor body', this.peek());
+      const found = this.scope.lookupTag(tag);
+      if (found) return found;
+      return this.scope.declareTag(tag, T.enumType(tag, []));
+    }
+    this.expectP('{');
+    const consts = [];
+    let nextVal = 0n;
+    while (!this.isP('}') && !this.done) {
+      const name = this.expectId();
+      this.#skipAttributeLike();
+      if (this.eatP('=')) nextVal = this.#constExpr();
+      consts.push({ name, value: nextVal });
+      // An enum constant is an ordinary identifier, visible immediately — the next initializer
+      // may refer to it (`enum { A = 1, B = A + 1 }`).
+      this.scope.declare(name, { kind: 'enumconst', type: T.INT, value: nextVal });
+      nextVal = nextVal + 1n;
+      if (!this.eatP(',')) break;
+    }
+    this.expectP('}');
+    this.#skipAttributeLike();
+    const t = T.enumType(tag, consts);
+    if (tag) this.scope.declareTag(tag, t);
+    return t;
+  }
+
+  /** `__attribute__((...))` and `__asm__("...")` in a declaration; returns what we care about. */
+  #skipAttributeLike() {
+    const found = { packed: false, aligned: null };
+    for (;;) {
+      if (this.isKw('__attribute__') || this.isKw('__attribute')) {
+        this.i++;
+        this.expectP('('); this.expectP('(');
+        let depth = 2;
+        const inner = [];
+        while (depth > 0 && !this.done) {
+          if (this.isP('(')) depth++;
+          else if (this.isP(')')) { depth--; if (!depth) { this.i++; break; } }
+          inner.push(this.next());
+        }
+        for (let k = 0; k < inner.length; k++) {
+          const t = inner[k];
+          if (t.k === ID && /^_*packed_*$/.test(t.v)) { found.packed = true; continue; }
+          // Most attributes are safe to ignore (noinline, unused, format…). These are NOT: they
+          // change the TYPE, so ignoring them produces a wrong program instead of a refusal —
+          // gcc's simd-*.c miscompiled silently until this list existed.
+          if (t.k === ID && /^_*(vector_size|mode|transparent_union|vector)_*$/.test(t.v)) {
+            throw new ParseError(`__attribute__((${t.v})) changes the type and is not supported`, t);
+          }
+          if (t.k === ID && /^_*aligned_*$/.test(t.v)) {
+            // `aligned` with no argument means "the target's maximum"; with one it is a constant
+            // EXPRESSION, and the torture suite writes `aligned(alignment)` behind a macro.
+            if (inner[k + 1]?.k === PUNCT && inner[k + 1].v === '(') {
+              let depth = 1, j = k + 2;
+              const arg = [];
+              while (j < inner.length && depth > 0) {
+                if (inner[j].k === PUNCT && inner[j].v === '(') depth++;
+                else if (inner[j].k === PUNCT && inner[j].v === ')') { depth--; if (!depth) break; }
+                arg.push(inner[j]); j++;
+              }
+              try {
+                const sub = new Parser([...arg, tok(EOF, '')], { scope: this.scope });
+                found.aligned = Number(sub.constExpr());
+              } catch { /* an alignment we cannot fold is better ignored than guessed */ }
+              k = j;
+            } else {
+              found.aligned = 16;
+            }
+            continue;
+          }
+        }
+        continue;
+      }
+      if ((this.isKw('__asm__') || this.isKw('asm')) && this.isP('(', 1)) {
+        this.i++;
+        let depth = 0;
+        do {
+          if (this.isP('(')) depth++;
+          else if (this.isP(')')) depth--;
+          this.i++;
+        } while (depth > 0 && !this.done);
+        continue;
+      }
+      return found;
+    }
+  }
+
+  // ---------------------------------------------------------------- declarators
+
+  /** Parse a declarator, wrapping `base` as the suffixes unwind. Abstract declarators allowed. */
+  #declarator(base, { abstract = false } = {}) {
+    // Pointers bind tightest to the left, so they wrap the base first.
+    while (this.isP('*')) {
+      this.i++;
+      const cv = {};
+      while (this.peek().k === ID && QUALS.has(this.peek().v)) {
+        cv[this.next().v.replace(/^__|__$/g, '')] = true;
+      }
+      this.#skipAttributeLike();
+      base = T.qualify(T.ptr(base), Object.keys(cv).length ? cv : null);
+    }
+
+    // `int (*fp)(void)` — a parenthesized declarator is parsed against a placeholder and the real
+    // base is threaded in afterwards, which is what makes inside-out reading work.
+    if (this.isP('(') && !this.#parenIsParamList()) {
+      this.i++;
+      const hole = { k: 'hole' };
+      const innerD = this.#declarator(hole, { abstract });
+      this.expectP(')');
+      const outer = this.#declaratorSuffix(base);
+      substHole(innerD.type, hole, outer);
+      return { name: innerD.name, type: innerD.type === hole ? outer : innerD.type };
+    }
+
+    let name = null;
+    if (!abstract || (this.peek().k === ID && !KEYWORDS.has(this.peek().v))) {
+      if (this.peek().k === ID && !KEYWORDS.has(this.peek().v)) name = this.expectId();
+      else if (!abstract) throw new ParseError(`expected a declarator, found '${this.peek().v}'`, this.peek());
+    }
+    return { name, type: this.#declaratorSuffix(base) };
+  }
+
+  /** `[...]` and `(...)` suffixes. Applied left to right but wrap outside-in. */
+  #declaratorSuffix(base) {
+    const suffixes = [];
+    for (;;) {
+      if (this.isP('[')) {
+        this.i++;
+        // GNU/C99 allow qualifiers and `static` inside an array parameter's brackets.
+        while (this.peek().k === ID && (QUALS.has(this.peek().v) || this.peek().v === 'static')) this.i++;
+        let n = null;
+        if (!this.isP(']')) n = Number(this.#constExpr());
+        this.expectP(']');
+        suffixes.push({ kind: 'array', n });
+        continue;
+      }
+      if (this.isP('(')) {
+        this.i++;
+        suffixes.push(this.#paramList());
+        this.expectP(')');
+        this.#skipAttributeLike();
+        continue;
+      }
+      break;
+    }
+    // Wrap from the innermost suffix outward: `int a[2][3]` is array-2 of array-3 of int.
+    let t = base;
+    for (let k = suffixes.length - 1; k >= 0; k--) {
+      const s = suffixes[k];
+      t = s.kind === 'array' ? T.array(t, s.n) : T.func(t, s.params, { variadic: s.variadic, oldStyle: s.oldStyle });
+    }
+    return t;
+  }
+
+  #paramList() {
+    if (this.isP(')')) return { kind: 'func', params: [], variadic: false, oldStyle: true };
+    if (this.isKw('void') && this.isP(')', 1)) { this.i++; return { kind: 'func', params: [], variadic: false, oldStyle: false }; }
+
+    // An identifier list with no types is a K&R declarator: `int f(a, b)`.
+    if (this.peek().k === ID && !KEYWORDS.has(this.peek().v) && !this.scope.isTypedef(this.peek().v)
+        && (this.isP(',', 1) || this.isP(')', 1))) {
+      const params = [];
+      for (;;) {
+        params.push({ name: this.expectId(), type: T.INT });
+        if (this.eatP(',')) continue;
+        break;
+      }
+      return { kind: 'func', params, variadic: false, oldStyle: true };
+    }
+
+    const params = [];
+    let variadic = false;
+    for (;;) {
+      if (this.isP('...')) { this.i++; variadic = true; break; }
+      const s = this.#declSpecifiers();
+      const d = this.#declarator(s.type, { abstract: true });
+      // A parameter of array or function type decays immediately, and that is observable through
+      // sizeof inside the function body.
+      params.push({ name: d.name, type: T.decay(d.type) });
+      if (this.eatP(',')) continue;
+      break;
+    }
+    return { kind: 'func', params, variadic, oldStyle: false };
+  }
+
+  /** Does the `(` at the cursor open a parameter list rather than a nested declarator? */
+  #parenIsParamList() {
+    if (this.isP(')', 1)) return true;                       // `f()`
+    if (this.isP('...', 1)) return true;
+    const t = this.peek(1);
+    if (t.k !== ID) return false;
+    if (KEYWORDS.has(t.v)) return true;                      // a type specifier starts a param list
+    return this.scope.isTypedef(t.v);
+  }
+
+  /** A type-name: specifiers plus an abstract declarator. Used by casts, sizeof, offsetof. */
+  #typeName() {
+    const s = this.#declSpecifiers();
+    const d = this.#declarator(s.type, { abstract: true });
+    return d.type;
+  }
+
+  #looksLikeTypeName() {
+    const t = this.peek();
+    if (t.k !== ID) return false;
+    if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
+    if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
+      'struct', 'union', 'enum', 'typeof', '__typeof__'].includes(t.v)) return true;
+    return this.scope.isTypedef(t.v);
+  }
+
+  // ---------------------------------------------------------------- initializers
+
+  #initializer(type) {
+    if (!this.isP('{')) return { n: 'init', expr: this.assignment() };
+    this.i++;
+    const items = [];
+    while (!this.isP('}') && !this.done) {
+      let designators = null;
+      // C99 designated initializers, plus the obsolete GNU `field:` form.
+      while (this.isP('.') || this.isP('[')) {
+        designators ??= [];
+        if (this.eatP('.')) designators.push({ field: this.expectId() });
+        else { this.expectP('['); designators.push({ index: Number(this.#constExpr()) }); this.expectP(']'); }
+      }
+      if (designators) this.expectP('=');
+      items.push({ designators, value: this.#initializer(type) });
+      if (!this.eatP(',')) break;
+    }
+    this.expectP('}');
+    return { n: 'initlist', items };
+  }
+
+  // ---------------------------------------------------------------- statements
+
+  #compound() {
+    this.expectP('{');
+    const saved = this.scope;
+    this.scope = new T.Scope(saved);
+    const items = [];
+    try {
+      while (!this.isP('}') && !this.done) {
+        if (this.eatKw('__label__')) { while (!this.eatP(';') && !this.done) this.i++; continue; }
+        if (this.#startsDeclaration()) items.push(...this.#declarationOrFunction());
+        else items.push(this.statement());
+      }
+    } finally { this.scope = saved; }
+    this.expectP('}');
+    return { n: 'block', items };
+  }
+
+  /** A statement starting with an identifier is a declaration only if that identifier is a type. */
+  #startsDeclaration() {
+    const t = this.peek();
+    if (t.k !== ID) return false;
+    if (t.v === '__extension__') return true;
+    if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
+    if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
+      'struct', 'union', 'enum'].includes(t.v)) return true;
+    // `T x;` is a declaration; `T;` and `T:` are not, and neither is `T = 1` (T as a variable).
+    return this.scope.isTypedef(t.v) && !this.isP(':', 1);
+  }
+
+  statement() {
+    const t = this.peek();
+    if (t.k === PUNCT && t.v === '{') return this.#compound();
+    if (this.eatP(';')) return { n: 'empty' };
+
+    if (t.k === ID) {
+      switch (t.v) {
+        case 'if': {
+          this.i++; this.expectP('('); const cond = this.expression(); this.expectP(')');
+          const then = this.statement();
+          const els = this.eatKw('else') ? this.statement() : null;
+          return { n: 'if', cond, then, els };
+        }
+        case 'while': {
+          this.i++; this.expectP('('); const cond = this.expression(); this.expectP(')');
+          return { n: 'while', cond, body: this.statement() };
+        }
+        case 'do': {
+          this.i++; const body = this.statement();
+          if (!this.eatKw('while')) throw new ParseError("expected 'while' after do-body", this.peek());
+          this.expectP('('); const cond = this.expression(); this.expectP(')'); this.expectP(';');
+          return { n: 'do', body, cond };
+        }
+        case 'for': {
+          this.i++; this.expectP('(');
+          const saved = this.scope;
+          this.scope = new T.Scope(saved);
+          try {
+            let init = null;
+            if (this.isP(';')) this.i++;
+            else if (this.#startsDeclaration()) init = { n: 'decls', decls: this.#declarationOrFunction() };
+            else { init = { n: 'exprstmt', expr: this.expression() }; this.expectP(';'); }
+            const cond = this.isP(';') ? null : this.expression();
+            this.expectP(';');
+            const step = this.isP(')') ? null : this.expression();
+            this.expectP(')');
+            return { n: 'for', init, cond, step, body: this.statement() };
+          } finally { this.scope = saved; }
+        }
+        case 'switch': {
+          this.i++; this.expectP('('); const disc = this.expression(); this.expectP(')');
+          return { n: 'switch', disc, body: this.statement() };
+        }
+        case 'case': {
+          this.i++;
+          const lo = this.#constExpr();
+          // GNU case ranges: `case 1 ... 5:`
+          const hi = this.eatP('...') ? this.#constExpr() : null;
+          this.expectP(':');
+          return { n: 'case', lo, hi, body: this.statement() };
+        }
+        case 'default': this.i++; this.expectP(':'); return { n: 'default', body: this.statement() };
+        case 'break': this.i++; this.expectP(';'); return { n: 'break' };
+        case 'continue': this.i++; this.expectP(';'); return { n: 'continue' };
+        case 'return': {
+          this.i++;
+          const e = this.isP(';') ? null : this.expression();
+          this.expectP(';');
+          return { n: 'return', expr: e };
+        }
+        case 'goto': {
+          this.i++;
+          if (this.isP('*')) { this.i++; const e = this.expression(); this.expectP(';'); return { n: 'gotoexpr', expr: e }; }
+          const label = this.expectId(); this.expectP(';');
+          return { n: 'goto', label };
+        }
+        case 'asm': case '__asm__': return this.#topLevelAsm();
+      }
+      // A label: an identifier followed by ':'.
+      if (!KEYWORDS.has(t.v) && this.isP(':', 1)) {
+        this.i += 2;
+        return { n: 'label', name: t.v, body: this.statement() };
+      }
+    }
+
+    const expr = this.expression();
+    this.expectP(';');
+    return { n: 'exprstmt', expr };
+  }
+
+  // ---------------------------------------------------------------- expressions
+
+  expression() {
+    let e = this.assignment();
+    while (this.isP(',')) { this.i++; e = { n: 'comma', a: e, b: this.assignment(), type: null }; }
+    return e;
+  }
+
+  assignment() {
+    const lhs = this.conditional();
+    const t = this.peek();
+    const OPS = ['=', '+=', '-=', '*=', '/=', '%=', '<<=', '>>=', '&=', '^=', '|='];
+    if (t.k === PUNCT && OPS.includes(t.v)) {
+      this.i++;
+      return { n: 'assign', op: t.v, lhs, rhs: this.assignment(), type: lhs.type };
+    }
+    return lhs;
+  }
+
+  conditional() {
+    const c = this.#binary(0);
+    if (!this.isP('?')) return c;
+    this.i++;
+    // GNU elvis: `a ?: b`
+    const then = this.isP(':') ? null : this.expression();
+    this.expectP(':');
+    const els = this.conditional();
+    return { n: 'cond', cond: c, then, els, type: (then ?? c).type ?? els.type };
+  }
+
+  #binary(minPrec) {
+    let lhs = this.unary();
+    for (;;) {
+      const t = this.peek();
+      if (t.k !== PUNCT) break;
+      const prec = BINPREC[t.v];
+      if (prec === undefined || prec < minPrec) break;
+      this.i++;
+      const rhs = this.#binary(prec + 1);
+      lhs = { n: 'bin', op: t.v, a: lhs, b: rhs, type: binType(t.v, lhs, rhs) };
+    }
+    return lhs;
+  }
+
+  unary() {
+    const t = this.peek();
+    if (t.k === PUNCT) {
+      const U = ['&', '*', '+', '-', '~', '!'];
+      if (U.includes(t.v)) {
+        this.i++;
+        const e = this.unary();
+        let type = e.type;
+        if (t.v === '&') type = T.ptr(e.type ?? T.INT);
+        else if (t.v === '*') type = e.type?.k === 'ptr' ? e.type.to : (e.type?.k === 'array' ? e.type.of : T.INT);
+        else if (t.v === '!') type = T.INT;
+        else if (e.type) type = T.promote(T.decay(e.type));
+        return { n: 'unary', op: t.v, expr: e, type };
+      }
+      if (t.v === '++' || t.v === '--') {
+        this.i++;
+        const e = this.unary();
+        return { n: 'preinc', op: t.v, expr: e, type: e.type };
+      }
+      if (t.v === '(' && this.#isCastAhead()) {
+        this.i++;
+        const type = this.#typeName();
+        this.expectP(')');
+        // A compound literal is `(T){...}`, not a cast.
+        if (this.isP('{')) return { n: 'compound', type, init: this.#initializer(type) };
+        return { n: 'cast', type, expr: this.unary() };
+      }
+    }
+    if (t.k === ID) {
+      if (t.v === 'sizeof') {
+        this.i++;
+        if (this.isP('(') && this.#isTypeNameAhead()) {
+          this.i++;
+          const type = this.#typeName();
+          this.expectP(')');
+          if (this.isP('{')) {
+            const lit = { n: 'compound', type, init: this.#initializer(type) };
+            return { n: 'sizeofexpr', expr: lit, type: T.UINT };
+          }
+          return { n: 'sizeoftype', target: type, type: T.UINT };
+        }
+        return { n: 'sizeofexpr', expr: this.unary(), type: T.UINT };
+      }
+      if (t.v === '__alignof__' || t.v === '__alignof') {
+        this.i++;
+        if (this.isP('(') && this.#isTypeNameAhead()) {
+          this.i++; const type = this.#typeName(); this.expectP(')');
+          return { n: 'alignoftype', target: type, type: T.UINT };
+        }
+        return { n: 'alignofexpr', expr: this.unary(), type: T.UINT };
+      }
+      if (t.v === '__builtin_offsetof') {
+        this.i++;
+        this.expectP('(');
+        const type = this.#typeName();
+        this.expectP(',');
+        const path = this.#offsetofPath();
+        this.expectP(')');
+        return { n: 'offsetof', target: type, path, type: T.UINT };
+      }
+      if (t.v === '__extension__') { this.i++; return this.unary(); }
+    }
+    return this.#postfix();
+  }
+
+  #offsetofPath() {
+    const path = [{ field: this.expectId() }];
+    for (;;) {
+      if (this.eatP('.')) { path.push({ field: this.expectId() }); continue; }
+      if (this.eatP('[')) { path.push({ index: Number(this.#constExpr()) }); this.expectP(']'); continue; }
+      return path;
+    }
+  }
+
+  /** `(` at the cursor: a cast, or a parenthesized expression? Decided by the scope, not by luck. */
+  #isCastAhead() {
+    if (!this.isP('(')) return false;
+    const t = this.peek(1);
+    if (t.k !== ID) return false;
+    if (QUALS.has(t.v)) return true;
+    if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
+      'struct', 'union', 'enum', 'typeof', '__typeof__'].includes(t.v)) return true;
+    if (!this.scope.isTypedef(t.v)) return false;
+    // `(T)` or `(T*)` or `(T[...])` is a cast; `(T + 1)` would be an expression using T as a value,
+    // which cannot happen for a typedef name, so a typedef here is always a cast.
+    return true;
+  }
+
+  #isTypeNameAhead() { return this.#isCastAhead(); }
+
+  #postfix() {
+    let e = this.#primary();
+    for (;;) {
+      if (this.isP('[')) {
+        this.i++;
+        const idx = this.expression();
+        this.expectP(']');
+        const base = e.type ? T.decay(e.type) : null;
+        e = { n: 'index', base: e, index: idx, type: base?.k === 'ptr' ? base.to : T.INT };
+        continue;
+      }
+      if (this.isP('(')) {
+        this.i++;
+        const args = [];
+        if (!this.isP(')')) for (;;) { args.push(this.assignment()); if (!this.eatP(',')) break; }
+        this.expectP(')');
+        let ft = e.type ? T.decay(e.type) : null;
+        if (ft?.k === 'ptr' && ft.to.k === 'func') ft = ft.to;
+        e = { n: 'call', fn: e, args, type: ft?.k === 'func' ? ft.ret : T.INT };
+        continue;
+      }
+      if (this.isP('.') || this.isP('->')) {
+        const arrow = this.isP('->');
+        this.i++;
+        const field = this.expectId();
+        let rec = e.type;
+        if (arrow && rec?.k === 'ptr') rec = rec.to;
+        const f = rec && T.isRecord(rec) ? findField(rec, field) : null;
+        e = { n: 'member', base: e, field, arrow, type: f?.type ?? T.INT, offset: f?.offset ?? null };
+        continue;
+      }
+      if (this.isP('++') || this.isP('--')) {
+        const op = this.next().v;
+        e = { n: 'postinc', op, expr: e, type: e.type };
+        continue;
+      }
+      return e;
+    }
+  }
+
+  #primary() {
+    const t = this.next();
+    if (t.k === NUM) return numberLiteral(t);
+    if (t.k === STR) {
+      const parts = [t];
+      while (this.peek().k === STR) parts.push(this.next());       // adjacent literals concatenate
+      // `L"…"` is an array of wchar_t, which is `int` on i386 — the element type, not just the
+      // bytes, has to be right or `sizeof(L"ab")` and pointer arithmetic on it are both wrong.
+      const wide = parts.some(p => p.v[0] === 'L');
+      // A string literal's type is a COMPLETE array — `sizeof("ab")` is 3 — so it must carry its
+      // length here rather than being left incomplete.
+      let n = 0;
+      for (const p of parts) n += stringLiteralLength(p.v);
+      return { n: 'str', parts, wide, type: T.array(wide ? T.INT : T.CHAR, n + 1) };
+    }
+    if (t.k === CHR) return { n: 'char', value: charValue(t.v), type: T.INT };
+    if (t.k === PUNCT && t.v === '(') {
+      // GNU statement expression: `({ ... })`
+      if (this.isP('{')) {
+        const body = this.#compound();
+        this.expectP(')');
+        return { n: 'stmtexpr', body, type: T.INT };
+      }
+      const e = this.expression();
+      this.expectP(')');
+      return e;
+    }
+    if (t.k === ID && !KEYWORDS.has(t.v)) {
+      const sym = this.scope.lookup(t.v);
+      if (sym?.kind === 'enumconst') return { n: 'num', value: sym.value, type: T.INT };
+      return { n: 'ident', name: t.v, type: sym?.type ?? null, sym };
+    }
+    throw new ParseError(`unexpected '${t.v || 'end of file'}' in expression`, t);
+  }
+
+  /** An integer constant expression, evaluated now. Used by array sizes, bitfields, enums, cases. */
+  #constExpr() {
+    const e = this.conditional();
+    return constEval(e);
+  }
+  constExpr() { return this.#constExpr(); }
+}
+
+// ---------------------------------------------------------------- helpers
+
+const BINPREC = {
+  '||': 1, '&&': 2, '|': 3, '^': 4, '&': 5,
+  '==': 6, '!=': 6,
+  '<': 7, '>': 7, '<=': 7, '>=': 7,
+  '<<': 8, '>>': 8,
+  '+': 9, '-': 9,
+  '*': 10, '/': 10, '%': 10,
+};
+
+const CMP = new Set(['==', '!=', '<', '>', '<=', '>=', '&&', '||']);
+
+function binType(op, a, b) {
+  if (CMP.has(op)) return T.INT;
+  const at = a.type ? T.decay(a.type) : null;
+  const bt = b.type ? T.decay(b.type) : null;
+  if (!at || !bt) return at ?? bt ?? T.INT;
+  // Pointer arithmetic: p+n and p-n keep the pointer type; p-q is an integer.
+  if (at.k === 'ptr' && T.isInteger(bt)) return at;
+  if (bt.k === 'ptr' && T.isInteger(at)) return bt;
+  if (at.k === 'ptr' && bt.k === 'ptr') return T.INT;
+  if (op === '<<' || op === '>>') return T.promote(at);
+  return T.usualArith(at, bt);
+}
+
+/** Replace the placeholder left by a parenthesized declarator with the real outer type. */
+function substHole(type, hole, real) {
+  if (!type || typeof type !== 'object') return;
+  for (const key of ['to', 'of', 'ret']) {
+    if (type[key] === hole) { type[key] = real; recomputeSize(type); return; }
+    if (type[key]) { substHole(type[key], hole, real); recomputeSize(type); }
+  }
+}
+
+function recomputeSize(t) {
+  if (t.k === 'array' && t.of && t.n !== null && t.of.size != null) {
+    t.size = t.of.size * t.n;
+    t.align = t.of.align;
+  }
+}
+
+/** Find a member, descending into anonymous struct/union members as C11/GNU require. */
+export function findField(rec, name) {
+  const direct = rec.byName?.[name];
+  if (direct) return direct;
+  for (const f of rec.fields ?? []) {
+    if (f.name || !T.isRecord(f.type)) continue;
+    const inner = findField(f.type, name);
+    if (inner) return { ...inner, offset: f.offset + inner.offset };
+  }
+  return null;
+}
+
+function numberLiteral(t) {
+  const text = t.v;
+  if (/^[0-9]*\.|[0-9][0-9a-fA-F]*[pP][-+]|^\.[0-9]/.test(text) || /^[0-9.]+[eE][-+]?[0-9]/.test(text)
+      || (/^[0-9]/.test(text) && /[fF]$/.test(text) && !/^0[xX]/.test(text))) {
+    const v = parseFloat(text.replace(/[fFlL]+$/, ''));
+    return { n: 'float', value: v, type: /[fF]$/.test(text) ? T.scalar('float') : T.DOUBLE };
+  }
+  const m = text.match(/^(.*?)([uUlL]*)$/);
+  const body = m[1], suffix = m[2];
+  let v;
+  if (/^0[xX]/.test(body)) v = BigInt(body);
+  else if (/^0[bB][01]+$/.test(body)) v = BigInt(body);
+  else if (/^0[0-7]+$/.test(body)) { v = 0n; for (const c of body.slice(1)) v = v * 8n + BigInt(c); }
+  else v = BigInt(body);
+  const uns = /[uU]/.test(suffix);
+  const longs = (suffix.match(/[lL]/g) ?? []).length;
+  let type;
+  if (longs >= 2) type = uns ? T.ULLONG : T.LLONG;
+  else if (longs === 1) type = uns ? T.ULONG : T.LONG;
+  else if (uns) type = v > 0xffffffffn ? T.ULLONG : T.UINT;
+  else type = v > 0x7fffffffn ? (v > 0xffffffffn ? T.LLONG : T.UINT) : T.INT;
+  return { n: 'num', value: v, type };
+}
+
+/** How many elements a brace initialiser actually reaches, designators included. */
+export function initListExtent(init) {
+  let idx = 0, max = 0;
+  for (const it of init.items) {
+    if (it.designators?.[0]?.index !== undefined) idx = it.designators[0].index;
+    idx++;
+    if (idx > max) max = idx;
+  }
+  return max;
+}
+
+/** The length of a string literal in ELEMENTS — wide units for `L"…"`, bytes otherwise.
+ *  Counting source BYTES here made `sizeof(L"Ä")` 12 instead of 8. */
+export const stringLiteralLength = (text) => literalUnits(text).length;
+
+export class ConstError extends Error {}
+
+/**
+ * Wrap a folded value to its expression's type. A constant expression is evaluated IN its type:
+ * `(0x1234567876543210LL << 32) >> 32` must lose the shifted-out bits, and without this the static
+ * initialiser kept them and disagreed with the same expression evaluated at run time
+ * (gcc's 20060110-1.c).
+ */
+function narrow(v, t) {
+  if (typeof v !== 'bigint' || !t || t.k !== 'scalar') return v;
+  const bits = (t.size ?? 4) * 8;
+  if (t.name === 'float' || t.name === 'double' || t.name === 'long double') return v;
+  return t.signed ? BigInt.asIntN(bits, v) : BigInt.asUintN(bits, v);
+}
+
+function binConst(op, a, b) {
+  switch (op) {
+    case '+': return a + b; case '-': return a - b; case '*': return a * b;
+    case '/': if (b === 0n) throw new ConstError('division by zero'); return a / b;
+    case '%': if (b === 0n) throw new ConstError('division by zero'); return a % b;
+    case '<<': return a << b; case '>>': return a >> b;
+    case '&': return a & b; case '|': return a | b; case '^': return a ^ b;
+    case '==': return a === b ? 1n : 0n; case '!=': return a !== b ? 1n : 0n;
+    case '<': return a < b ? 1n : 0n; case '>': return a > b ? 1n : 0n;
+    case '<=': return a <= b ? 1n : 0n; case '>=': return a >= b ? 1n : 0n;
+    case '&&': return (a !== 0n && b !== 0n) ? 1n : 0n;
+    case '||': return (a !== 0n || b !== 0n) ? 1n : 0n;
+  }
+  throw new ConstError(`operator '${op}' is not constant`);
+}
+
+/** Evaluate an integer constant expression. Throws if the expression is not constant. */
+export function constEval(e) {
+  const r = ce(e);
+  if (typeof r !== 'bigint') throw new ConstError('not an integer constant expression');
+  return r;
+}
+
+function ce(e) {
+  switch (e.n) {
+    case 'num': return e.value;
+    case 'char': return e.value;
+    case 'float': return e.value;                              // callers that need an integer cast
+    case 'bin': {
+      const a = ce(e.a), b = ce(e.b);
+      return narrow(binConst(e.op, a, b), e.type);
+    }
+    case 'unary':
+      switch (e.op) {
+        case '-': return -ce(e.expr);
+        case '+': return ce(e.expr);
+        case '~': return ~ce(e.expr);
+        case '!': return ce(e.expr) === 0n ? 1n : 0n;
+      }
+      throw new ConstError(`unary '${e.op}' is not constant`);
+    case 'cond': {
+      const c = ce(e.cond);
+      return c !== 0n ? (e.then ? ce(e.then) : c) : ce(e.els);
+    }
+    case 'cast': {
+      const v = ce(e.expr);
+      const t = e.type ?? e.target;
+      if (T.isInteger(t) && typeof v === 'bigint') {
+        return t.signed ? BigInt.asIntN(t.size * 8, v) : BigInt.asUintN(t.size * 8, v);
+      }
+      return v;
+    }
+    case 'sizeoftype': {
+      if (e.target.size == null) throw new ConstError('sizeof an incomplete type');
+      return BigInt(e.target.size);
+    }
+    case 'sizeofexpr': {
+      const t = e.expr.type;
+      if (!t || t.size == null) throw new ConstError('sizeof an expression of unknown type');
+      return BigInt(t.size);
+    }
+    case 'alignoftype': return BigInt(e.target.align ?? 1);
+    case 'offsetof': {
+      let t = e.target, off = 0;
+      for (const step of e.path) {
+        if (step.field !== undefined) {
+          const f = findField(t, step.field);
+          if (!f) throw new ConstError(`no member '${step.field}'`);
+          off += f.offset; t = f.type;
+        } else {
+          if (t.k !== 'array') throw new ConstError('subscript of a non-array in offsetof');
+          off += step.index * t.of.size; t = t.of;
+        }
+      }
+      return BigInt(off);
+    }
+    case 'comma': throw new ConstError('comma is not allowed in a constant expression');
+  }
+  throw new ConstError(`'${e.n}' is not a constant expression`);
+}
+
+/** Parse a whole translation unit from preprocessed tokens. */
+export function parse(tokens, opts = {}) {
+  const p = new Parser(tokens, opts);
+  const unit = p.parseTranslationUnit();
+  return { unit, scope: p.scope };
+}

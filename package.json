@@ -1,0 +1,23 @@
+{
+  "name": "prism",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A dynamic C\u2192JavaScript compiler in pure JavaScript, running unmodified DOS-era game and emulator sources.",
+  "scripts": {
+    "oracle:build": "docker build --platform linux/386 -t prism-oracle tools/oracle",
+    "oracle:version": "node -e \"import('./tools/oracle.mjs').then(o=>console.log(o.version()))\"",
+    "probe:abi": "node tools/probe-abi.mjs",
+    "gate:abi": "node tools/gate-abi.mjs",
+    "gate:cpp": "node tools/gate-cpp.mjs",
+    "gate:deep": "node tools/gate-abi.mjs 3000 20260820 && CPP_GEN=250 node tools/gate-cpp.mjs && DECL_GEN=200 node tools/gate-decl.mjs && node tools/gate-run.mjs",
+    "test": "node tools/gate-abi.mjs && node tools/gate-cpp.mjs && node tools/gate-decl.mjs && node tools/gate-run.mjs && node tools/gate-suite.mjs",
+    "gate:decl": "node tools/gate-decl.mjs",
+    "gate:run": "node tools/gate-run.mjs",
+    "gate:suite": "node tools/gate-suite.mjs",
+    "gate:suite:capture": "node tools/gate-suite.mjs --capture",
+    "gaps": "node tools/gate-suite.mjs --gaps",
+    "gate:torture": "node tools/gate-suite.mjs --suite=torture",
+    "gaps:torture": "node tools/gate-suite.mjs --suite=torture --gaps"
+  }
+}

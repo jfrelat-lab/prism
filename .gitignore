@@ -1,0 +1,9 @@
+# Upstream sources, fetched not vendored (see docs/TESTING.md). Same rule as MIRAGE's games/ and boot/.
+corpus/
+
+# Scratch shared with the oracle container.
+.oracle/
+
+node_modules/
+*.log
+.DS_Store

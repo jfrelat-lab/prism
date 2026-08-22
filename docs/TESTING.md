@@ -1,0 +1,541 @@
+# PRISM — Testing & Gates
+
+The safety net. Nothing in PRISM validates its own answers: every layer is checked against an
+**external** oracle, and the bar for a commit is a green run of the gates that touch what changed.
+
+## The oracle (`tools/oracle.mjs`, `tools/oracle/Dockerfile`)
+
+This host is **arm64 macOS**. Measured before anything was built:
+
+| | Result |
+|---|---|
+| `gcc` | absent — `gcc` is a symlink to Apple clang 17 (arm64) |
+| `clang -m32` | **fails**: `ld: unknown -arch name: armv4t` (clang reads `-m32` as 32-bit ARM) |
+| cross-compiler | none (`i686-*`, `djgpp`, `mingw` all absent) |
+| `csmith` | absent |
+| `docker` | 28.5.2, aarch64 server |
+
+So the entire external-truth layer lives in a container: **`i386/debian:bookworm-slim`, platform
+`linux/386`** (`uname -m` → `i686`). `linux/386` rather than amd64 + `-m32` on purpose — the
+differential gates need programs that **run**, not just object files, and Rosetta does not execute
+32-bit x86.
+
+```bash
+npm run oracle:build      # docker build --platform linux/386 -t prism-oracle tools/oracle
+npm run oracle:version    # gcc (Debian 12.2.0-14+deb12u1) 12.2.0 / csmith 2.3.0
+```
+
+`oracle.mjs` keeps **one long-lived container** and talks to it with `docker exec`, because the
+costs are not comparable: `docker run` ≈ **3.8 s**, `docker exec` ≈ **46 ms**, and a gate makes
+thousands of calls. Files are exchanged through a bind-mounted `.oracle/` scratch dir, so Node
+writes them directly instead of paying for `docker cp`.
+
+**Debian's `csmith` package ships the generator and none of the runtime headers** its output
+`#include`s — and three of those headers do not exist in the source tree either, they are `m4`
+templates the upstream build expands. The image fetches the pinned `csmith-2.3.0` runtime tree and
+runs the same rule upstream's `runtime/Makefile.am` uses (`$(M4) < $< > $@`).
+
+Measured cost of one Csmith differential cycle (generate → `gcc -O0` → run): **~3 s**
+(1.3 s generate, 1.8 s compile, 0.05 s run). A 2577-line program compiled at `-O0` *and* `-O2` cost
+16.7 s, so the per-program figure tracks program size, not a fixed overhead. 10 000 programs is
+therefore ~3 h at 8-way parallelism — and it is a **one-off capture whose result is committed**, the
+same pattern as MIRAGE's `golden-baseline.json` and its Unicorn capture. Once captured, the gate
+needs neither Docker nor gcc.
+
+## The ABI gate (`tools/gate-abi.mjs`) — the only gate that exists today
+
+`src/sema/abi.js` vs a real i386 gcc: `sizeof`, alignment, member offsets, and **bitfield bit
+placement**. Bar: exact, every case.
+
+```bash
+npm run gate:abi              # 317 cases (17 hand + 300 generated), ~1700 checks
+npm run gate:abi:deep         # 3000 generated cases
+node tools/gate-abi.mjs 800 777    # [count] [seed]
+```
+
+Three design points, each of which earned itself:
+
+**Bitfields are checked by observation, not by `offsetof`** (which C forbids on a bitfield). The
+probe zeroes a struct, writes all-ones into one field, and dumps the bytes; the resulting bit
+pattern pins the placement exactly. There is no other ground truth.
+
+**Alignment is measured the way a struct experiences it** — the offset the type forces inside
+`struct { char pad; T inner; }` — not with `__alignof__`. See the trap below.
+
+**Generated cases, following MIRAGE's `x86-gen` lesson ("the generator does not think").** Seeded
+xorshift32, no `Math.random`, so a seed always yields the same structs. This was not decoration:
+the 17 hand-written cases and seed 12345 **passed on the first run**, and four other seeds then
+found 13–25 divergences each. Everything below was found that way.
+
+### What the oracle actually said (observed, never derived)
+
+```
+int=4 long=4 ptr=4 long long=8 long double=12    char is SIGNED
+struct {char a; int b;}         size 8   b@4
+struct {char a; long long b;}   size 12  b@4     <- align 4, not 8
+struct {char a; double b;}      size 12  b@4     <- align 4, not 8
+struct {char a; long double b;} size 16  b@4
+```
+
+**The trap that made `abi.js` necessary.** `__alignof__(double)` and `__alignof__(long long)` report
+**8** on i386, but the ABI aligns both to **4 inside a struct**. `__alignof__` answers "preferred
+alignment", which is a different question from the one a struct layout asks. Had `abi.js` been
+written from `__alignof__`, every struct containing a `double` would have been 4 bytes out — and
+because game code `memcpy`s WAD/ROM bytes straight into structs, the symptom would have been
+corrupted sprites, hunted anywhere but here.
+
+### The three bitfield rules the generator found
+
+1. **A bitfield may span up to `sizeof(T)/alignof(T)` units of `alignof(T)` bits — not one.**
+   The naive "never straddle a `sizeof(T)` unit" rule is wrong, and `unsigned long long f3:21` at
+   bit 112 proves it: it straddles, and gcc leaves it there. The real System V / PCC test is
+   `ceil((bitPos % abits + width) / abits) > sizeof(T)*8 / abits`. `long long` (8 bytes, 4-byte
+   aligned) gets two units; `int` gets one.
+
+2. **A packed bitfield is exempt from that rule entirely** — not merely clamped to a byte. gcc
+   guards the whole test with `! DECL_PACKED (field)`, so in a packed struct `unsigned int f1:26`
+   following a 23-bit field sits at bit **23**, not 24.
+
+3. **A zero-width bitfield** rounds to `alignof(T)*8` (so `long long :0` moves to bit 32, not 64),
+   contributes **no** alignment to the struct (`{char; int :0; char}` is size 5, align 1), and is
+   **not** exempt under `packed` — a different code path from rule 2, which is why the two disagree.
+
+`double` and `long double` are not legal bitfield types even in GNU C; the generator does not emit
+them.
+
+### Sensitivity — why green means something
+
+A gate that passes on its first run may simply be blind. Each rule was perturbed and the gate had to
+go red:
+
+| Perturbation | Result |
+|---|---|
+| `double` align 4 → 8 | **129 divergences**, first case `struct {char a; double b;}` |
+| `long double` size 12 → 16 | 137 divergences |
+| bitfield span rule disabled | 65 divergences |
+
+⚠️ The first attempt at the `double` perturbation reported *no change* — the `sed` pattern was one
+space off and had silently matched nothing. The gate was fine; the measurement was not. Verify that
+a perturbation actually applied before concluding the gate is blind.
+
+### Current state
+
+9 seeds × 800 cases (39 848 checks) and 4 fresh seeds × 3000 cases (65 806 checks): **all pass**.
+
+## The preprocessor gate (`tools/gate-cpp.mjs`)
+
+`src/cpp/` vs `gcc -E -P -std=gnu89`. Bar: **identical token stream**. The comparison is on tokens,
+not text — gcc's whitespace and line decisions carry no meaning and the compiler downstream consumes
+tokens. gcc's output is re-lexed with PRISM's own lexer, which exercises the lexer on a second input.
+
+```bash
+npm run gate:cpp                       # 42 hand cases + 60 generated, ~18 s with the ABI gate
+CPP_SEED=777 CPP_GEN=250 npm run gate:cpp
+```
+
+Cases are self-contained (no system headers) so this gate tests the preprocessor and nothing else;
+the `include-*` cases ship their own headers into per-case `d0`/`d1` directories, which is what makes
+`#include_next` testable. Generated cases that gcc REJECTS are skipped — but only after checking that
+PRISM rejected them too; accepting what gcc rejects is a divergence, not a skip.
+
+State: **7 seeds × (42 hand + 250 generated) all green**, hand cases including the canonical
+C99 6.10.3.5 example and Prosser's `f(2)(9)`.
+
+### What the hand cases could not find
+
+The 42 hand cases and the first generated seed passed at 30/32 and then 273/282. Everything below
+came from generation or from sensitivity-checking, not from a case anyone wrote on purpose:
+
+1. **Expansion is not line-oriented.** A function-like macro name at the end of a line takes its
+   argument list from the next — the standard's own example depends on it (`& mm\n    (ff)`). The
+   unit of expansion is a run of tokens delimited by **directives**, not by newlines. The original
+   line-by-line loop failed the standard's example and no hand case had caught it.
+2. **An empty argument next to `##` is a PLACEMARKER, not nothing.** Deleting it lets the paste reach
+   the token *before* the parameter: `zz p0 ## p1` with an empty `p0` produced `zzbb` instead of
+   `zz bb`. The hand-written `A3(,y,)` case missed it because `out` was empty there by luck. This one
+   bug accounted for 7 of 9 generated failures, including all four "invalid paste" errors.
+3. **The GNU comma-paste deletes the comma only when the variadic list is ABSENT.** `VE("a")` drops
+   it; `VE("a", )` keeps it. `parseArgs` had padded the missing argument with `[]`, destroying the
+   distinction before `subst` could see it.
+4. **An unclosed argument list at end of file was accepted silently.** The slice handed to `#expand`
+   stops before the EOF token, so `parseArgs` ran off the end of the array rather than seeing EOF.
+   gcc errors; PRISM did not.
+5. **`#if` does not evaluate dead branches.** `#if (0 ? 1/0 : 5) == 5` and `#if 1 || 1/0` both
+   compile under gcc. `||`, `&&` and `?:` therefore parse their dead side but do not diagnose it.
+
+### Sensitivity — and the two bugs it found on its own
+
+| Perturbation | Result |
+|---|---|
+| hide sets disabled (no blue paint) | 3 failures, 16 s |
+| placemarker removed | 3 failures |
+| variadic absent/empty conflated | 1 failure |
+| `#if` arithmetic narrowed to 32 bits | 1 failure |
+| run split at every line instead of at directives | 77 failures (all of them) |
+
+The first and last perturbations each **hung for over ten minutes** before they were fixed, and both
+hangs were real defects in the shipped code rather than artifacts:
+
+- The runaway guard was **per-call**, but argument expansion recurses into `#expand`, so each level
+  stopped at its own limit while the total work stayed exponential. The budget is now **global to one
+  top-level expansion**.
+- `#process` had **no progress guarantee**: with `j === start` it looped forever emitting nothing.
+  That cannot happen in the shipped code (a run never begins on a directive), but a hang is the worst
+  possible way to find out otherwise, so it is now an explicit error.
+
+⚠️ A third hang was pure harness: `timeout` does not exist on macOS, so a whole perturbation sweep
+printed nothing at all and looked like five silent passes. Same family as the one-space `sed` in the
+ABI gate below — **verify that a perturbation applied before believing what it reports**.
+
+### Known limitation
+
+Expansion rewrites its work list with `splice()`, which is quadratic when a macro grows the list.
+It is bounded and reported, never a hang, but it will matter for real headers. Not yet measured on
+any — a frame-stack rewrite is roadmap P0.3b, to be justified by a measurement on the corpus rather
+than by this note.
+
+## The declaration gate (`tools/gate-decl.mjs`)
+
+`src/parse/` + `src/sema/` vs a real i386 gcc. There is no backend yet, so the parser cannot be
+gated by running programs — but everything a *declaration* means is observable without one: sizeof,
+alignment, member offsets, enum constant values, and the constant expressions inside array bounds
+and bitfield widths. Getting those right needs the declarator grammar, typedef resolution, tag
+scoping and the ABI all correct at once.
+
+```bash
+npm run gate:decl                          # 12 hand cases + 120 generated
+DECL_SEED=777 DECL_GEN=200 npm run gate:decl
+```
+
+**Queries are not written by hand.** The gate enumerates whatever tags, typedefs and enum constants
+PRISM *ended up with* and asks gcc about each. A declaration PRISM silently misparses into the wrong
+shape still gets caught, because the shape is what generates the question.
+
+State: 4 seeds, **8400+ checks, all pass**. Hand cases cover the classic declarator readings
+(`int *a[6]` vs `int (*b)[6]` vs `int *(*d)[3]` vs `char (*e)[2][3]`), K&R definitions, implicit
+`int`, self-referential structs, anonymous members, packed, `long double`, and enum initializers
+using `sizeof` and `?:`.
+
+### The blind spot the sensitivity check found
+
+Reversing the declarator suffix loop in the parser — turning `int m[2][3]` into `int m[3][2]` —
+left the gate at **719/719**. Not a bad perturbation: a real blind spot. Layout is *symmetric under
+array-dimension permutation*, so sizeof and a member's own offset genuinely cannot tell the two
+readings apart.
+
+Closed by asking gcc for one **interior** element of each multi-dimensional array member:
+`offsetof(T, m[0][2])` is 8 under one reading and 16 under the other. The same perturbation now
+fails 719/720. Without that, a whole class of declarator bugs would have been invisible until the
+backend existed.
+
+⚠️ **Not gated yet:** statements and expressions are parsed but nothing observes them. That waits
+for the backend (P0.5) — do not read this gate as covering them.
+
+## The execution gate (`tools/gate-run.mjs`)
+
+The first gate that observes **behaviour** rather than shape: PRISM compiles and runs a program, gcc
+compiles and runs the same source, and everything written to stdout is compared byte for byte along
+with the exit status. Both sides use the unmodified source — gcc against its own headers, PRISM
+against `src/env/headers.js`.
+
+```bash
+npm run gate:run            # 22 programs
+```
+
+State: **22/22**. Coverage: arithmetic and its signed/unsigned corners, unsigned wraparound,
+control flow with switch fallthrough, recursion, pointer arithmetic, 2-D arrays, structs and struct
+assignment, static aggregate initialisers with string literals, function pointers in an array,
+strings, malloc, static locals, bitfield read/write, narrowing casts, floats, short-circuit
+evaluation, compound assignment evaluating its lvalue once, union punning, and 20 printf conversions.
+
+### What running the programs found
+
+Eight of the 22 failed on the first run. Six were real defects:
+
+1. **`slot()` returned the END of an object, not its start.** Every aggregate local was placed one
+   object too high. Two very different symptoms — `*p` reading `a[2]`, and a DataView range error
+   once a frame reached the top of the buffer — one off-by-its-own-size.
+2. **`|` binds looser than `+` in JavaScript.** An address emitted as `_fp+0|0` and then composed
+   with `+4|0` became `(_fp+0)|(0+4)|0`, i.e. `_fp|4`. Every emitted address is now parenthesised.
+   This one bug produced three separate wrong-output failures.
+3. **A switch body's braces must be dropped.** `switch(x){{case 0:…}}` is a JavaScript syntax error;
+   cases must be direct children.
+4. **Initialising an aggregate from an expression is a copy**, not a scalar store — `struct box c = b;`
+   and `char s[8] = "abc";`.
+5. **Static initialisers needed string literals**: bytes for a char array, an interned address for a
+   pointer.
+6. **C's printf rounds a tie to EVEN.** `printf("%.0f", 2.5)` is `2` under glibc and `3` from JS
+   `toFixed`. Measured, not assumed.
+
+### ⚠️ And two were defects in the TEST CASES, not in PRISM
+
+- `printf("%d %d %d", tick(), tick(), tick())` — argument evaluation order is **unspecified**, and
+  gcc evaluates right to left. The case was testing gcc's choice.
+- `printf("%d %d %d %d", i++, i, ++i, i)` — two unsequenced modifications of one object is
+  **undefined**, not merely unspecified.
+
+Both were rewritten into sequenced statements. This is the same trap MIRAGE documents for BCD flags
+and for Unicorn's AF after a shift: **a differential gate must never compare on behaviour the
+standard does not define**, or it reports bugs that do not exist. Any new case here has to be checked
+for unspecified order and unsequenced modification before it is trusted.
+
+### Sensitivity
+
+| Perturbation | Result |
+|---|---|
+| `slot()` back to returning the object's end | 2 failures |
+| `Math.fround` removed from `float` | 2 failures |
+| one address left unparenthesised | 1 failure |
+
+### Not supported by tier-0 (each throws a clear error, none silently miscompiles)
+
+`long long`, `long double`, `goto`, struct pass/return by value, user-defined variadic functions,
+inline assembly, compound literals, statement expressions, `offsetof` in an expression, and a
+bitfield straddling a 32-bit unit.
+
+## The external-suite gate (`tools/gate-suite.mjs`)
+
+[c-testsuite](https://github.com/c-testsuite/c-testsuite) `single-exec`: 219 programs written by
+other people. The hand gates test what I thought of; this one measures what C compilers are actually
+asked to do — and **ranks the gaps by how many programs hit them**, which is the whole point.
+
+```bash
+npm run gate:suite           # against the committed capture, seconds
+npm run gaps                 # just the ranked gap list
+npm run gate:suite:capture   # re-run gcc over the corpus (slow, one-off)
+```
+
+The gcc side is captured once into `tools/suite-baseline.json` and committed, so daily runs are pure
+JS — the same pattern as MIRAGE's `golden-baseline.json`.
+
+**The gate fails on a WRONG ANSWER, not on a refusal.** A refusal is a known gap with a clear error;
+a wrong answer means PRISM claimed success and lied. Current state: **182/219 pass, 37 refused,
+0 wrong answers.**
+
+### Four real defects, none of which a hand-written case had reached
+
+1. **The frame was released before the return expression was evaluated.** `return foo(x)` ran `foo`
+   on a frame overlapping this one, so `foo`'s own locals overwrote the array whose address had just
+   been passed to it. It needs an aggregate local *and* a call inside a `return` to show up
+   (`00077.c`); the value is now computed into a temp first.
+2. **`long long` was silently miscompiled, not refused.** A non-address-taken local lives in a JS
+   `var` and never reaches the load/store accessor, so the type check never fired and 64-bit
+   arithmetic quietly ran as 32-bit. The check moved to `coerce()`, which every value passes
+   through. **This is why "unsupported things throw a clear error" has to be verified, not asserted:**
+   the claim was false for the one type most likely to be silently wrong.
+3. **An incomplete array's size ignored designators and strings.** `int a[] = {5, [2]=2, 3}` has
+   three items and four elements; `char s[] = "a" B "c"` is sized by its bytes.
+4. **`__ILP32__` was missing** from the target macros, so a program probing its data model took the
+   wrong `#if` branch.
+
+⚠️ One reported difference was a harness artifact: the capture goes through `$(cmd)`, which strips
+**every** trailing newline, while PRISM's side kept them. Strip both sides identically or a program
+whose output ends in a blank line looks like a defect. Third time this class of thing has appeared —
+see the `sed` and `timeout` notes above.
+
+### The ranked gaps — and why the ranking mattered
+
+My prediction before running it was "`long long` and `goto` are what real code hits first". The
+first measurement said otherwise: **non-constant static initialisers were #1 with 8 programs**,
+`goto` second with 5, and `long long` appeared in exactly one. Implementing static **address
+constants** (`int *p = &x;`, `.p = &x`, `&arr[2]`, `name + 1`) took that from 8 to 4 and moved three
+programs into passing.
+
+Current ranking (37 refused programs, 21 distinct causes):
+
+```
+  9  long long / unsigned long long
+  5  goto
+  4  non-constant static initialiser (all four are compound literals now)
+  3  missing header
+  1× each: struct by value, statement expressions, strrchr, fopen, __builtin_expect,
+           and eight one-off parse/emit corners
+```
+
+⚠️ A fix that changes nothing is usually not wired up. The address-constant work showed **no
+improvement at all** on its first run, because the driver built the static-initialiser emitter with
+empty symbol tables — the logic was right and unreachable. Check that a change is reached before
+concluding it does not help.
+
+## The torture corpus (`tools/gate-suite.mjs --suite=torture`)
+
+**gcc's own `gcc.c-torture/execute`** — 1592 programs, the hardest widely-available C corpus. Fetched
+from the gcc 12.2 release tarball (GitHub serves no subdirectory archive, and the API's 60
+requests/hour makes 1400 raw fetches impossible):
+
+```bash
+curl -sL https://ftp.gnu.org/gnu/gcc/gcc-12.2.0/gcc-12.2.0.tar.xz -o /tmp/gcc.tar.xz
+tar xJf /tmp/gcc.tar.xz -C .oracle/suites --strip-components=4 \
+    gcc-12.2.0/gcc/testsuite/gcc.c-torture/execute
+npm run gate:torture
+npm run gaps:torture
+```
+
+These tests are **self-checking**: `abort()` on failure, exit 0 on success, so the exit status alone
+is the oracle and no expected output is needed.
+
+### Three harness corrections this corpus forced, each of which first looked like a PRISM result
+
+**1. A gate that runs programs in its own process cannot stop one that loops for ever.** The first
+torture run produced *no output at all* for over ten minutes. Every program now runs in its own
+process (`tools/run-one.mjs`) under a 5 s wall clock, and a timeout is reported as a timeout.
+
+**2. A self-checking corpus is only an oracle where the REFERENCE build passes.** Ten "wrong
+answers" turned out to be tests that plain `gcc -O0` fails too: `memchr-1.c` exits 244, `strlen-2.c`
+exits 2 at every optimisation level, and `return-addr.c` prints real return addresses so its exit
+code differs per build. gcc drives its torture suite through its own harness over a matrix of
+options; run outside that harness, those tests say nothing about PRISM. They are excluded and
+**counted in the output**, never silently dropped.
+
+**3. `abort()` is a DEFECT, not a gap.** It was first bucketed among the refusals, where 38
+miscompiles sat looking like missing features. In a self-checking corpus `abort()` means the
+program's own assertion failed — PRISM compiled it and produced a wrong value. Reclassified with the
+wrong answers, which is what makes the gate go red for them.
+
+### The ranking, and what it bought
+
+The measured ranking was again not what I would have written. The largest gap in the first run was
+not a language feature at all: **`__builtin_abort` in 124 programs**. Two tables — the `__builtin_*`
+aliases (~164 programs) and gcc's predefined TYPE macros (`typedef __SIZE_TYPE__ size_t;` appears
+instead of a header, and without the macro it reads as `typedef ;` — 60 programs) — took the corpus
+from **696 to 868 passing**, with no compiler work at all; the bitfield-initialiser fix below made it 869.
+
+Current state (after P0.5b): **1026/1555 pass, ZERO wrong answers, 529 refused.**
+
+That last number is the property worth having: across 1555 torture programs and 219 c-testsuite
+programs, PRISM either compiles a program correctly or refuses it with a named error. It never claims
+success and lies. Ranked gaps:
+
+```
+  142  long long / unsigned long long     <- now clearly the #1 feature
+   78  missing header (66 of them <stdarg.h>, i.e. user-defined variadics)
+   64  passing a struct or array by value
+   41  parse error near '('
+   37  non-constant static initialiser (compound literals)
+   28  goto
+   19  nested function definitions (a GNU extension)
+   15  inline assembly
+```
+
+### P0.6c — closing the miscompiles (37 → ~8)
+
+Correctness before coverage: a refusal is honest, a wrong answer is not. Seven distinct causes, in
+the order they were found:
+
+1. **`__attribute__((aligned(N)))` was parsed and thrown away.** It changes layout materially:
+   `struct { char c; int i __attribute__((aligned(16))); }` puts `i` at 16 and is 32 bytes. A
+   typedef carries it too. Also **member-level `packed`**, whose interaction with `aligned` is
+   order-dependent and observable — `packed` drops the member to alignment 1 and a following
+   `aligned(2)` raises it to 2, so `double d __attribute__((aligned(2),packed))` sits at offset 2,
+   not 4.
+2. **The address-precedence bug was only half fixed.** The earlier pass parenthesised the *composed*
+   address but not the fragments: `((t)|0+2|0)` still parses as `t|2`. It hid for two whole rounds
+   because on an aligned base `p|4` happens to equal `p+4` — an ordinary struct cannot expose it,
+   and it took a *packed* struct's odd offsets to fail. **This single fix moved 15 programs.** The
+   `packed-access-through-pointer` case in `gate-run` now pins it.
+3. **A bitfield read undergoes the integer promotions**, and to a type that is not the declared one:
+   `unsigned int u:7` promotes to `int`, because an `int` holds every value of a 7-bit unsigned
+   field. Returning `unsigned int` made `bit.u % 61` unsigned (gcc's `bitfld-1.c` exists for this).
+4. **Constant folding did integer division on floating operands.** `double d = 1024.0 - 1.0/32768.0`
+   folded to exactly 1024.0, so `floor(d)` was 1024 instead of 1023.
+5. **Bitfields in brace initialisers** were filtered out by `bits === undefined`, so
+   `struct { signed s:3; unsigned u:3; } x = {-1,-1}` wrote *nothing*. Fixed in the dynamic path
+   first and **the static path was missed**, so a file-scope `struct s x = {-123,-456}` still wrote
+   nothing until a second, identical fix.
+6. **`extern` inside a block created a private global** instead of binding to the file-scope object,
+   so the inner declaration shadowed the outer definition.
+7. **Two silent-wrongness sources turned into refusals**: type-changing attributes
+   (`vector_size`, `mode`, `transparent_union`) were ignored like cosmetic ones, and wide literals
+   (`L"…"`, `L'x'`) were emitted as bytes when `wchar_t` is 4 bytes on i386. Ignoring an attribute
+   that changes a type is not "not supporting" it — it is producing a wrong program.
+
+⚠️ **Refusing wide literals COST 9 passing programs** — a real trade, not a pure win: torture peaked
+at 894 before #7 and settled at 885. Those 9 were passing because their wide strings were pure ASCII,
+so the byte encoding happened to satisfy the test; they were right by accident, on the same code path
+that made `wchar_t-1.c` wrong. A score that goes DOWN after a correctness fix is worth stating
+plainly rather than smoothing over.
+
+### P0.6e — the last six, and one property gained
+
+37 → 0 wrong answers. The remaining causes:
+
+- **The value of a bitfield assignment is what was STORED**, not the right-hand side. Assigning 1081
+  to a `signed int m:11` yields -967, so `(l.m = j) == j` must be false (`921016-1.c`).
+- **Source is a byte stream.** gcc's default input charset is UTF-8, but a narrow literal copies
+  bytes through untouched and a real file need not be valid UTF-8 — `20000227-1.c` embeds a raw
+  0xFF. Reading with `'utf8'` turned one byte into U+FFFD and then into three. Files are now read
+  `'latin1'`, and a wide literal decodes the UTF-8 it carries.
+- **Constant folding dropped casts.** `(unsigned short) -4` folded to -4 instead of 65532, so
+  `volatile unsigned long l2 = (unsigned short int) -4;` held 0xFFFFFFFC (`pr39240.c`).
+- **A flexible array member** contributes nothing to a struct's size but takes the next aligned
+  offset; its size was `null`, which made the running bit position NaN. Initialising one is now a
+  refusal rather than a plausible wrong object.
+- **Two tests were excluded as bad oracles**, by name and with the reason recorded in the gate:
+  `20031003-1.c` pins gcc's saturation on an out-of-range float→int (undefined), and `pr58943.c`
+  pins gcc's order in `x[0] |= foo()` (an unsequenced read and modify). Same rule as refusing to
+  compare on argument evaluation order.
+
+**The duplication that caused the wide-literal mess got removed rather than patched.** Literal
+decoding existed in three copies — the `#if` evaluator, the parser (to size an array), the emitter
+(to lay bytes into memory) — and they disagreed, which is how `sizeof(L"Ä")` came out as 12. It now
+lives once, in `src/util/charset.js`.
+
+### P0.6d — wide literals, and what implementing a feature exposes
+
+Implemented properly (`wchar_t` is 4 bytes on i386, so a wide literal is an array of 32-bit
+elements): 885 → 892, miscompiles 8 → 6. Four separate things had to be right, and only the corpus
+found the last three:
+
+- The `L` prefix must be dropped **before** the quotes. Folding it into the slice that strips the
+  quotes left `"Ä` and produced `x[0] == 34`.
+- `L"a" "b"` is ONE wide string: the wideness of a concatenation is decided first and every part
+  encoded at that width. Encoding each part at its own width put a 1-byte `'b'` after a 4-byte `'a'`.
+- Indexing a wide literal must read a `wchar_t`. `#rval` returned `char *` unconditionally.
+- A string literal's type is a **complete** array — `sizeof("ab")` is 3 — so it carries its length.
+
+**A missing macro is not neutral.** `#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__` with both macros
+undefined compares `0 == 0` and takes the big-endian branch. Defining the endianness macros fixed
+`widechar-3.c` — and *revealed* two more failures (`bitfld-6/7`) that had been passing only because
+an `#ifdef __BYTE_ORDER__` compiled to nothing and returned 0. A fix that makes the score worse may
+simply have stopped hiding something.
+
+**And that pair exposed a whole untested class:** `layoutUnion` recorded no bit placement at all, so
+a bitfield in a union read `undefined >> 5`. The ABI generator had never produced one
+(`bf = !union && …`), so nothing covered it. Now generated on both, plus two hand cases.
+
+⚠️ **The ABI gate could not have caught #1's parser half.** `gate-abi` builds types by hand and
+applies the alignment itself, so it verifies the layout *rules* and not the parser's use of them.
+That is what `gate-decl` (which parses real C) is for, and the lesson is general: a gate that
+constructs its own input does not test the front end that would normally produce it.
+
+## 64-bit integers (P0.5b)
+
+tier-0 represents `long long` as a **BigInt**. The plan called for i32 pairs and tier-1 will lower
+them, but tier-0 is the compact/generic path: BigInt is correct by construction where pairs need a
+twenty-function helper library and an out-of-band return convention.
+
+The property that makes it safe is that **JS refuses to mix BigInt with Number**. Every conversion in
+or out has to be written, and a missed one throws `Cannot mix BigInt and other types` — a loud error
+rather than a quietly wrong number. That is the right failure mode for a 64-bit type on a 32-bit
+target, and it is why `coerce()` handles i64 before anything else.
+
+Three defects appeared the moment 131 previously-refused programs started running, and two of them
+were in **constant folding rather than emitted code** — a place bugs hide well, because nothing
+compares the compile-time and run-time paths against each other:
+
+- A 64-bit literal was masked with `asIntN` regardless of signedness, so `18446744073709551615ULL`
+  became `-1n` and `(double)` of it was -1.
+- The parser's constant evaluator did not wrap a folded value to its expression's type, so
+  `long long b = (0x1234567876543210LL << 32) >> 32;` kept the shifted-out bits while the same
+  expression evaluated at run time did not.
+- `printf` needed real length modifiers: `nextArg() | 0` on a BigInt throws, which is how `%lld`
+  announced itself.
+
+A fourth test was excluded as a bad oracle: `20021127-1.c` defines `llabs`, a name reserved for the
+library (C 7.1.3), and pins gcc's builtin folding rather than any required behaviour.
+
+## Gates still to build
+
+In the order the roadmap wants them: preprocessor vs `gcc -E`; c-testsuite; gcc torture `execute/`;
+the Csmith differential; tier-0 == tier-1; whole-program pixel diff against MIRAGE running the
+original binary; `dbx-oracle` DOS-call sequence; and the perf ratio in one comparable unit.
