@@ -167,6 +167,21 @@ function makeLibc(M) {
     },
     memchr: (p, c, n) => { c &= 0xff; for (let i = 0; i < n; i++) if (u8()[p + i] === c) return p + i; return 0; },
 
+    /**
+     * Walk a va_list. Each argument occupies a whole number of 4-byte slots, which is how i386
+     * lays varargs on the stack; the OLD position is returned so `*(type *)` reads this argument
+     * and the list already points at the next one.
+     */
+    __prism_va_next: (pp, size) => {
+      const cur = dv().getInt32(pp, true);
+      // A zero-sized argument advances by ZERO, not by one slot: the `|| 1` fallback here disagreed
+      // with the caller's packing, which desynchronised every argument after a `struct { char x[0]; }`
+      // (gcc's va-arg-22.c passes 21 structs by value, the first of them empty).
+      const step = Math.ceil((size | 0) / 4) * 4;
+      dv().setInt32(pp, (cur + step) | 0, true);
+      return cur;
+    },
+
     // --- gcc builtins that are not library calls
     __builtin_expect: (v, _expected) => v,
     __builtin_prefetch: () => {},

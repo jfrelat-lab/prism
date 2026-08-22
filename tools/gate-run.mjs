@@ -153,6 +153,153 @@ int main(void) {
 // Structs by value. A parameter is a pointer to a copy the CALLER made — so the callee may modify it
 // without the caller seeing it — and a return goes through a caller-supplied buffer, because the
 // callee's frame is released before the value could be read out of it.
+// User-defined variadic functions. The caller packs the tail into a buffer and passes its address;
+// va_list is a plain char*, as on i386 SysV. `bump` checks that each argument is evaluated ONCE —
+// taking the type from the parser's annotation rather than by emitting the expression.
+// goto, as a state machine over the function's top-level statements. Covers the four shapes real
+// code uses: a backward loop, a forward exit, a jump out of a for loop, and label fallthrough
+// (`fall(0)` must reach BOTH labels, giving 11).
+// GNU label addresses and computed goto. In a state-machine translation the "address" of a label IS
+// its dispatch value, so `&&lab` and `goto *p` fall out for free — including from a static table.
+C('computed-goto', `
+#include <stdio.h>
+int walk(int n) {
+  static const void *tbl[] = { &&one, &&two, &&three };
+  int s = 0;
+  if (n < 0 || n > 2) return -1;
+  goto *tbl[n];
+one:
+  s += 1;
+two:
+  s += 20;
+three:
+  s += 300;
+  return s;
+}
+struct bf { unsigned a : 3; signed b : 11; };
+int main(void) {
+  printf("%d %d %d %d\\n", walk(0), walk(1), walk(2), walk(9));
+  struct bf f; f.a = 6; f.b = 1023;
+  /* Sequenced on purpose: printf of f.a++ and f.a in one call reads and modifies one object with
+     unsequenced subexpressions, which is UNDEFINED - the third time this trap was written into a
+     case in this project. See docs/TESTING.md. */
+  unsigned p1 = f.a++; unsigned p2 = f.a;
+  printf("%u %u\\n", p1, p2);
+  printf("%u\\n", ++f.a);
+  int q1 = f.b++; int q2 = f.b;
+  printf("%d %d\\n", q1, q2);
+  return 0;
+}
+`);
+
+C('goto', `
+#include <stdio.h>
+int f(int n) {
+  int i = 0, s = 0;
+retry:
+  i++;
+  if (i > n) goto done;
+  s += i;
+  goto retry;
+done:
+  return s;
+}
+int g(int n) {
+  int i, s = 0;
+  for (i = 0; i < 10; i++) { if (i == n) goto out; s += i; }
+  s = -1;
+out:
+  return s;
+}
+int h(int x) {
+  if (x < 0) goto neg;
+  if (x == 0) goto zero;
+  return 1;
+neg:
+  return -1;
+zero:
+  return 0;
+}
+int fall(int x) {
+  int s = 0;
+  if (x) goto b;
+a:
+  s += 1;
+b:
+  s += 10;
+  return s;
+}
+int nested(int n) {
+  int i, j, s = 0;
+  for (i = 0; i < 4; i++) for (j = 0; j < 4; j++) { if (i * j > n) goto stop; s += i * j; }
+stop:
+  return s;
+}
+int main(void) {
+  printf("%d %d %d\\n", f(5), f(0), f(1));
+  printf("%d %d\\n", g(4), g(99));
+  printf("%d %d %d\\n", h(-5), h(0), h(7));
+  printf("%d %d\\n", fall(0), fall(1));
+  printf("%d %d\\n", nested(2), nested(99));
+  return 0;
+}
+`);
+
+C('varargs', `
+#include <stdarg.h>
+#include <stdio.h>
+int sum(int n, ...) {
+  va_list ap; int i, s = 0;
+  va_start(ap, n);
+  for (i = 0; i < n; i++) s += va_arg(ap, int);
+  va_end(ap);
+  return s;
+}
+double avg(int n, ...) {
+  va_list ap; int i; double s = 0;
+  va_start(ap, n);
+  for (i = 0; i < n; i++) s += va_arg(ap, double);
+  va_end(ap);
+  return s / n;
+}
+void cat(char *out, int n, ...) {
+  va_list ap; int i; char *p = out;
+  va_start(ap, n);
+  for (i = 0; i < n; i++) { char *s = va_arg(ap, char *); while (*s) *p++ = *s++; }
+  va_end(ap);
+  *p = 0;
+}
+long long bigsum(int n, ...) {
+  va_list ap; int i; long long s = 0;
+  va_start(ap, n);
+  for (i = 0; i < n; i++) s += va_arg(ap, long long);
+  va_end(ap);
+  return s;
+}
+int mixed(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int a = va_arg(ap, int);
+  double d = va_arg(ap, double);
+  char *s = va_arg(ap, char *);
+  va_end(ap);
+  return a + (int)d + (int)s[0];
+}
+int calls = 0;
+int bump(void) { return ++calls; }
+int main(void) {
+  printf("%d %d %d\\n", sum(4, 1, 2, 3, 4), sum(1, 42), sum(0));
+  printf("%.3f\\n", avg(3, 1.0, 2.0, 6.0));
+  char buf[64]; cat(buf, 3, "ab", "cd", "ef");
+  printf("%s\\n", buf);
+  printf("%lld\\n", bigsum(3, 4000000000LL, 4000000000LL, 1LL));
+  printf("%d\\n", mixed(3, 7, 2.5, "A"));
+  int r = sum(2, bump(), bump());
+  printf("%d %d\\n", r, calls);
+  return 0;
+}
+`);
+
 C('struct-by-value', `
 #include <stdio.h>
 struct pt { int x, y; };

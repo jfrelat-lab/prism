@@ -97,11 +97,14 @@ export class Parser {
     const outputs = [], inputs = [], clobbers = [];
     let section = 0;                                  // 0 outputs, 1 inputs, 2 clobbers
     while (this.eatP(':')) {
+      const isClobber = section >= 2;
       const into = section === 0 ? outputs : section === 1 ? inputs : clobbers;
       section++;
       if (this.isP(':') || this.isP(')')) continue;
       for (;;) {
-        if (section <= 2 && this.peek().k === STR && !this.isP('(', 1)) {
+        // A clobber is a bare string with no `( expr )` after it. Testing the section counter AFTER
+        // incrementing it made `asm ("" : : : "memory")` look for an operand and fail on the `)`.
+        if (isClobber || (this.peek().k === STR && !this.isP('(', 1))) {
           // a clobber list entry: just a string
           into.push({ clobber: this.next().v });
         } else {
@@ -232,6 +235,10 @@ export class Parser {
       if (v === 'unsigned') { this.i++; unsigned++; sawTypeSpec = true; continue; }
       if (v === 'long') { this.i++; longs++; sawTypeSpec = true; continue; }
       if (v === 'short') { this.i++; shorts++; sawTypeSpec = true; continue; }
+      if (/^_*(complex|Complex)_*$/.test(v) || v === '__real__'
+          || v === '__real' || v === '__imag__' || v === '__imag') {
+        throw new ParseError('GNU complex types are not supported', t);
+      }
       if (v === 'int' || v === 'char' || v === 'double' || v === 'float' || v === 'void' || v === '_Bool') {
         this.i++; base = v; sawTypeSpec = true; continue;
       }
@@ -618,6 +625,9 @@ export class Parser {
     if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
     if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
       'struct', 'union', 'enum'].includes(t.v)) return true;
+    // Route the GNU complex spellings into the DECLARATION path, where they get a clear refusal
+    // instead of surfacing as "expected ';'" from the expression parser.
+    if (/^_*(complex|Complex)_*$/.test(t.v)) return true;
     // `T x;` is a declaration; `T;` and `T:` are not, and neither is `T = 1` (T as a variable).
     return this.scope.isTypedef(t.v) && !this.isP(':', 1);
   }
@@ -749,6 +759,13 @@ export class Parser {
   unary() {
     const t = this.peek();
     if (t.k === PUNCT) {
+      // GNU label address. The lexer produces `&&` as one punctuator, so this must be checked
+      // before the unary operators.
+      if (t.v === '&&' && this.peek(1).k === ID && !KEYWORDS.has(this.peek(1).v)) {
+        this.i++;
+        const name = this.expectId();
+        return { n: 'labeladdr', name, type: T.ptr(T.VOID) };
+      }
       const U = ['&', '*', '+', '-', '~', '!'];
       if (U.includes(t.v)) {
         this.i++;

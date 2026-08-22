@@ -5,8 +5,8 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 26/26 hand programs, 191/219 c-testsuite, 1108/1555 gcc torture |
-| `<stdarg.h>`, `goto`, nested functions, compound literals, non-empty inline asm, `long double` | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
+| a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 192/219 c-testsuite, 1206/1555 gcc torture |
+| nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | MAME 0.1 | ⛔ P1 |
 | Quake (`WinQuake/`, `id386=0`) | ⛔ P3 |

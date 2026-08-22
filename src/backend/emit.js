@@ -153,6 +153,10 @@ export class FunctionEmitter {
     this.sret = T.isRecord(d.type.ret);
     const params = d.type.params.map((p, i) => p.name ?? `_unused${i}`);
     if (this.sret) params.unshift('_sret');
+    // A variadic function takes the caller-packed argument buffer as a hidden last parameter, which
+    // is what `va_start` resolves to.
+    this.variadic = !!d.type.variadic;
+    if (this.variadic) params.push('_va');
 
     // Which locals escape? A scalar that is never `&`-taken can live in a JS var. Everything with
     // an address, and every aggregate, needs a slot. This single decision is the difference between
@@ -179,7 +183,23 @@ export class FunctionEmitter {
       }
     }
 
-    this.#block(d.body, escaped);
+    // `goto` is emitted as a state machine over the function's TOP-LEVEL statements: a labelled
+    // `for(;;) switch(_pc)`, where a jump sets _pc and `continue`s. JS switch fallthrough reproduces
+    // C label fallthrough exactly, and `continue _top` from inside a nested loop unwinds it — which
+    // is what a goto out of a loop must do. A label nested inside a block or loop would need real
+    // control-flow flattening and is still refused.
+    this.labels = this.#planLabels(d.body);
+    if (this.labels) {
+      this.out.push('var _pc=0;');
+      this.out.push('_top: for(;;){ switch(_pc){');
+      for (const [k, seg] of this.labels.segments.entries()) {
+        this.out.push(`case ${k}:`);
+        for (const item of seg) this.#item(item, escaped);
+      }
+      this.out.push('} break _top; }');
+    } else {
+      this.#block(d.body, escaped);
+    }
 
     const body = [];
     body.push(`var _fp=M.sp-${this.frameSize}|0;`);
@@ -190,6 +210,44 @@ export class FunctionEmitter {
     body.push(`  return ${d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
 
     return `function ${d.name}(${params.join(',')}){\n${body.join('\n')}\n}`;
+  }
+
+  /**
+   * Split a function body at its top-level labels. Returns null when the function has no labels, and
+   * throws when a label sits inside a nested block — that case needs control-flow flattening.
+   */
+  #planLabels(body) {
+    // A `label` node wraps the statement that follows it, so flatten it back into a marker plus
+    // that statement before splitting.
+    const flat = [];
+    const walk = (items) => {
+      for (const it of items) {
+        if (it.n === 'label') { flat.push({ mark: it.name }); walk([it.body]); continue; }
+        flat.push(it);
+      }
+    };
+    walk(body.items);
+    const names = flat.filter(x => x.mark).map(x => x.mark);
+    if (!names.length) {
+      // A goto with no TOP-LEVEL label means the label is nested inside a block or loop, which needs
+      // real control-flow flattening. Say that, rather than the misleading "no label in this
+      // function" this used to report.
+      if (findGoto(body)) unsup('a label nested inside a block');
+      return null;
+    }
+
+    // Every goto in the function must target one of these top-level labels.
+    for (const target of collectGotoTargets(body)) {
+      if (!names.includes(target)) unsup(`goto into a nested block ('${target}')`);
+    }
+
+    const segments = [[]];
+    const index = new Map();
+    for (const x of flat) {
+      if (x.mark) { index.set(x.mark, segments.length); segments.push([]); continue; }
+      segments[segments.length - 1].push(x);
+    }
+    return { segments, index };
   }
 
   // ------------------------------------------------------------- statements
@@ -336,6 +394,13 @@ export class FunctionEmitter {
       writeConst(this.mod, addr, type, this.#stringAddr(expr));
       return true;
     }
+    if (expr.n === 'labeladdr') {
+      const k = this.labels?.index.get(expr.name);
+      if (k === undefined) unsup(`the address of label '${expr.name}' in a static initialiser`);
+      writeConst(this.mod, addr, type, k);
+      return true;
+    }
+
     // A 64-bit initialiser must be folded in BigInt: going through Number would silently lose the
     // low bits of anything past 2^53.
     if (is64(type)) {
@@ -546,8 +611,26 @@ export class FunctionEmitter {
         this.out.push(`return ${t};`);
         return;
       }
-      case 'label': case 'goto': case 'gotoexpr':
-        return unsup('goto');
+      case 'label': {
+        // Reached only when a label is nested; the planner rejects that, so this is the top-level
+        // case where the marker has already opened a new switch arm.
+        this.#stmt(s.body, escaped);
+        return;
+      }
+      case 'goto': {
+        const k = this.labels?.index.get(s.label);
+        if (k === undefined) unsup(`goto '${s.label}'`);
+        this.out.push(`{_pc=${k}; continue _top;}`);
+        return;
+      }
+      case 'gotoexpr': {
+        // A computed goto is the state machine's natural form: the "address" of a label IS its _pc
+        // value, so `goto *p` is simply a dispatch on p.
+        if (!this.labels) unsup('a computed goto with no labels in this function');
+        const v = this.#rval(s.expr);
+        this.out.push(`{_pc=(${v.js})|0; continue _top;}`);
+        return;
+      }
       case 'asm': {
         // An asm whose template is empty emits no instructions — it exists only as a barrier — so
         // with no output operands the faithful translation is nothing at all. Its INPUTS are still
@@ -714,6 +797,11 @@ export class FunctionEmitter {
       }
       case 'call': return this.#call(e);
       case 'preinc': case 'postinc': return this.#incdec(e);
+      case 'labeladdr': {
+        const k = this.labels?.index.get(e.name);
+        if (k === undefined) unsup(`the address of label '${e.name}'`);
+        return { js: String(k), type: T.ptr(T.VOID) };
+      }
       case 'sizeoftype': return { js: String(e.target.size), type: T.UINT };
       case 'sizeofexpr': {
         const t = e.expr.type;
@@ -907,7 +995,25 @@ export class FunctionEmitter {
 
   #incdec(e) {
     const l = this.#lval(e.expr);
-    if (l.bitfield) unsup('++/-- on a bitfield');
+    if (l.bitfield) {
+      // Read, adjust in the promoted type, store truncated, and yield the value that was STORED —
+      // the same rule as a bitfield assignment, so `++m` on a `signed int m:11` wraps.
+      const f = l.bitfield;
+      const at = this.newTmp(); this.#declareTmp(at);
+      const v = this.newTmp(); this.#declareTmp(v);
+      const { unitOff, poke } = bitfieldPoke(f, at, v);
+      const cur = this.#loadBitfield({ addr: l.addr, bitfield: f });
+      const old = this.newTmp(); this.#declareTmp(old);
+      const one = { n: 'num', value: 1n, type: T.INT };
+      const nv = coerce(this.#binaryWith({ js: old, type: bitfieldPromoted(f) }, one,
+        e.op === '++' ? '+' : '-').js, bitfieldPromoted(f), f.type);
+      const readBack = this.#loadBitfield({ addr: l.addr, bitfield: f });
+      return {
+        js: `(${at}=(${l.addr}+${unitOff}|0),${old}=${cur},${v}=${nv},${poke},` +
+          `${e.n === 'preinc' ? readBack : old})`,
+        type: bitfieldPromoted(f),
+      };
+    }
     const one = { n: 'num', value: 1n, type: T.INT };
     const op = e.op === '++' ? '+' : '-';
     const cur = l.varJs ? { js: l.varJs, type: l.type } : null;
@@ -941,6 +1047,10 @@ export class FunctionEmitter {
       const name = e.fn.name;
       const f = this.ctx.funcs.get(name);
       const rt = this.ctx.builtins.get(name);
+      if (rt?.vaStart) {
+        if (!this.variadic) throw new EmitError('va_start outside a variadic function');
+        return { js: '_va', type: T.ptr(T.CHAR) };
+      }
       if (rt) {
         const args = e.args.map((a, i) => this.#rvalForCall(a, rt.params?.[i]));
         // A variadic runtime function takes its extras as one JS array, which is enough for
@@ -975,7 +1085,10 @@ export class FunctionEmitter {
    */
   #callArgs(e, ft) {
     const args = [];
-    for (let i = 0; i < e.args.length; i++) {
+    // A variadic callee receives ONLY its fixed parameters positionally; the tail travels in the
+    // packed buffer. Passing both made the buffer land in the wrong JS parameter.
+    const positional = ft?.variadic ? Math.min(ft.params.length, e.args.length) : e.args.length;
+    for (let i = 0; i < positional; i++) {
       const want = ft?.params?.[i]?.type;
       const node = e.args[i];
       const asRecord = want && T.isRecord(want) ? want
@@ -986,7 +1099,46 @@ export class FunctionEmitter {
       const off = this.slot(ft.ret.size, ft.ret.align);
       args.unshift(`(_fp+${off}|0)`);
     }
+    if (ft?.variadic) args.push(this.#packVarargs(e, ft));
     return args;
+  }
+
+  /**
+   * Pack the variadic tail of a call into a caller-owned buffer and return its address. Each value
+   * takes a whole number of 4-byte slots after the DEFAULT ARGUMENT PROMOTIONS — a float is passed
+   * as a double, anything narrower than int as an int — because that is what the callee's `va_arg`
+   * will assume when it is handed a type to read.
+   */
+  #packVarargs(e, ft) {
+    const fixed = ft.params.length;
+    const tail = e.args.slice(fixed);
+    const items = [];
+    let total = 0;
+    for (const node of tail) {
+      // The TYPE comes from the parser's annotation, not from emitting the expression: calling
+      // #rval here and again below would evaluate each argument twice, so `f(2, i++, i++)` would
+      // increment four times.
+      let t = T.decay(node.type ?? T.INT);
+      if (T.isFloat(t) && t.name === 'float') t = T.DOUBLE;          // default promotion
+      else if (T.isInteger(t) && T.rank(t) < 3) t = T.promote(t);
+      const size = T.isRecord(t) ? t.size : (t.size ?? 4);
+      items.push({ node, type: t, off: total });
+      total += Math.ceil(size / 4) * 4;
+    }
+    if (!total) return '0';
+    const base = this.slot(total, 8);
+    const parts = [];
+    for (const it of items) {
+      const addr = `(_fp+${base + it.off}|0)`;
+      if (T.isRecord(it.type)) {
+        const src = this.#lval(it.node);
+        parts.push(`M.copy(${addr},${src.addr},${it.type.size})`);
+      } else {
+        parts.push(storeExpr(addr, it.type, this.#rvalCoerced(it.node, it.type)));
+      }
+    }
+    const t = this.newTmp(); this.#declareTmp(t);
+    return `(${parts.join(',')},${t}=(_fp+${base}|0),${t})`;
   }
 
   /** Copy a struct argument into a caller-owned temporary and pass its address. */
@@ -1092,6 +1244,26 @@ function unifyCond(a, b) {
   if (bt.k === 'ptr') return bt;
   if (T.isArith(at) && T.isArith(bt)) return T.usualArith(at, bt);
   return at;
+}
+
+/** Does this subtree contain a goto? */
+function findGoto(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(findGoto);
+  if (node.n === 'goto' || node.n === 'gotoexpr') return true;
+  return Object.keys(node).some(k => k !== 'type' && k !== 'sym' && k !== 'loc' && findGoto(node[k]));
+}
+
+/** Every label a goto in this subtree targets. */
+function collectGotoTargets(node, out = new Set()) {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) { for (const x of node) collectGotoTargets(x, out); return out; }
+  if (node.n === 'goto') out.add(node.label);
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'sym' || k === 'loc') continue;
+    collectGotoTargets(node[k], out);
+  }
+  return out;
 }
 
 /** Walk a function body and collect every name that has `&` applied to it. */

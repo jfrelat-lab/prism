@@ -400,7 +400,7 @@ aliases (~164 programs) and gcc's predefined TYPE macros (`typedef __SIZE_TYPE__
 instead of a header, and without the macro it reads as `typedef ;` — 60 programs) — took the corpus
 from **696 to 868 passing**, with no compiler work at all; the bitfield-initialiser fix below made it 869.
 
-Current state (after P0.5b): **1108/1555 pass, ZERO wrong answers, 447 refused.**
+Current state (end of P0.5b): **1206/1555 pass, ZERO wrong answers, 349 refused.**
 
 That last number is the property worth having: across 1555 torture programs and 219 c-testsuite
 programs, PRISM either compiles a program correctly or refuses it with a named error. It never claims
@@ -566,6 +566,48 @@ This is the **second** time the same shape appeared — wide literals first, the
 So: **judge a landing by the miscompile count, not the pass count.** A feature that raises passes
 while raising miscompiles has made the compiler worse, because a refusal is honest and a wrong
 answer is not.
+
+## The rest of P0.5b: varargs, goto, and a batch of parse errors
+
+**User-defined variadic functions** (49 programs). The caller packs the variadic tail into a buffer on
+the shadow stack and passes its address; `va_list` is a plain `char *`, exactly as on i386 SysV. The
+pleasant consequence is that **`va_arg` needs no emitter support at all** — two builtins and a macro
+suffice:
+
+```c
+#define va_arg(ap, type) (*(type *)__prism_va_next(&(ap), sizeof(type)))
+```
+
+Two defects, both from the two halves of a convention disagreeing:
+
+- The variadic tail was passed **both** positionally and in the buffer, so the buffer landed in the
+  wrong JS parameter.
+- Each argument was **evaluated twice** — once to learn its type, once to store it — so
+  `f(2, i++, i++)` incremented four times. The type now comes from the parser's annotation instead.
+- A **zero-sized** argument advanced the reader by one slot and the packer by none (a `|| 1` fallback
+  on one side only), which desynchronised every argument after a `struct { char x[0]; }`
+  (`va-arg-22.c` passes 21 structs by value, the first of them empty). **Both halves of a convention
+  must share the rule**, or a corner case shifts everything after it.
+
+**`goto`** (16 programs) is a state machine over the function's top-level statements: a labelled
+`for(;;) switch(_pc)`, where a jump sets `_pc` and `continue`s. JS switch fallthrough reproduces C
+label fallthrough exactly, and `continue _top` from inside a nested loop unwinds it — which is what a
+goto out of a loop must do. A label nested inside a block still needs control-flow flattening and is
+refused by name.
+
+That translation then made **GNU label addresses free**: in a state machine the "address" of a label
+IS its dispatch value, so `&&lab` is an integer and `goto *p` is a dispatch on it — including from a
+static table (16 programs).
+
+**A parse-error batch** (~46 programs): `asm ("" : : : "memory")` failed because the clobber section
+was identified from a counter that had already been incremented; `++`/`--` on a bitfield now
+read-modify-writes and yields the value STORED; and GNU complex types became a named refusal instead
+of surfacing as "expected ';'".
+
+⚠️ **A third test case of mine relied on undefined behaviour** — `printf("%u %u", f.a++, f.a)`. The
+checklist for a new case in this file is therefore: no unspecified argument order, and no unsequenced
+read-and-modify of one object. (A fourth self-inflicted one: backticks inside a C comment terminate
+the JS template literal the case lives in.)
 
 ## Gates still to build
 

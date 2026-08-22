@@ -186,7 +186,27 @@ const FLOATH = `
 #endif
 `;
 
+const STDARG = `
+#ifndef _PRISM_STDARG_H
+#define _PRISM_STDARG_H
+/*
+ * On i386 System V the variadic arguments sit contiguously in memory and va_list is just a pointer
+ * into them, so va_arg needs no compiler magic — only pointer arithmetic. __prism_va_start() hands
+ * back the buffer the CALLER packed; __prism_va_next() post-increments the walker by the argument's
+ * slot size and returns the old position, which is exactly what a dereference wants.
+ */
+typedef char *va_list;
+char *__prism_va_start(void);
+char *__prism_va_next(va_list *ap, unsigned size);
+#define va_start(ap, last) ((ap) = __prism_va_start())
+#define va_end(ap) ((void)0)
+#define va_copy(dst, src) ((dst) = (src))
+#define va_arg(ap, type) (*(type *)__prism_va_next(&(ap), sizeof(type)))
+#endif
+`;
+
 export const HEADERS = {
+  'stdarg.h': STDARG,
   'stdint.h': STDINT,
   'stdbool.h': STDBOOL,
   'float.h': FLOATH,

@@ -120,6 +120,10 @@ export const BUILTINS = new Map(Object.entries({
   __builtin_unreachable: { ret: V, params: [], impl: 'abort' },
   alloca: { ret: P, params: [U], impl: 'alloca' },
   __builtin_alloca: { ret: P, params: [U], impl: 'alloca' },
+  // The variadic pair. __prism_va_start is intercepted by the emitter (it must resolve to the
+  // current function's hidden buffer parameter); __prism_va_next is an ordinary runtime call.
+  __prism_va_start: { ret: P, params: [], vaStart: true },
+  __prism_va_next: { ret: P, params: [P, U] },
   strrchr: { ret: P, params: [P, I] },
   strstr: { ret: P, params: [P, P] },
   memchr: { ret: P, params: [P, I, U] },
