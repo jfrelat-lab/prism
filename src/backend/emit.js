@@ -1066,7 +1066,9 @@ export class FunctionEmitter {
       if (f) {
         const ft = f.type;
         const args = this.#callArgs(e, ft);
-        return { js: `F.${name}(${args.join(',')})`, type: ft?.ret ?? T.INT };
+        // The LINKAGE name, not the source name: a file-scope `static` is mangled per translation
+        // unit, and using the source name here called a function that was never bound.
+        return { js: `F[${JSON.stringify(f.name)}](${args.join(',')})`, type: ft?.ret ?? T.INT };
       }
       throw new EmitError(`call to undeclared function '${name}'`);
     }

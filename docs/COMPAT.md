@@ -5,10 +5,10 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 192/219 c-testsuite, 1206/1555 gcc torture |
+| a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 193/219 c-testsuite, 1213/1555 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
-| MAME 0.1 | ⛔ P1 |
+| **MAME 0.1** | 🌅 **COMPILES AND RUNS** — 18 units, 894 functions, 0.55 MB of emitted JS. Prints its own banner, creates a 224×288 display (Pac-Man's real resolution), obtains its 16 palette pens, draws frames. Verified with a hand-written Z80 ROM: it fills the bottom two rows exactly (224×16 = 3584 pixels, one pen), so the Z80 core, the memory-map dispatch and the tilemap renderer all work. **Game ROMs are not included** — supply your own. |
 | Quake (`WinQuake/`, `id386=0`) | ⛔ P3 |
 | Doom (`linuxdoom-1.10`) | ⛔ P4 |
 

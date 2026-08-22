@@ -205,7 +205,29 @@ char *__prism_va_next(va_list *ap, unsigned size);
 #endif
 `;
 
+const TIMEH = `
+#ifndef _PRISM_TIME_H
+#define _PRISM_TIME_H
+typedef unsigned long clock_t;
+typedef long time_t;
+#define CLOCKS_PER_SEC 1000000
+#define UCLOCKS_PER_SEC 1000000
+clock_t clock(void);
+time_t time(time_t *t);
+
+/*
+ * DJGPP's own high-resolution clock. MAME 0.1 uses uclock() unless UNIX is defined, so a DJGPP
+ * target has to supply it — with DJGPP's real values: uclock_t is 64-bit and UCLOCKS_PER_SEC is the
+ * PIT rate, 1193180, which is what a program dividing by it expects.
+ */
+typedef unsigned long long uclock_t;
+#define UCLOCKS_PER_SEC 1193180
+uclock_t uclock(void);
+#endif
+`;
+
 export const HEADERS = {
+  'time.h': TIMEH,
   'stdarg.h': STDARG,
   'stdint.h': STDINT,
   'stdbool.h': STDBOOL,

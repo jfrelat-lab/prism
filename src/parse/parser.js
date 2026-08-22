@@ -311,7 +311,17 @@ export class Parser {
 
     // A definition. Declare the (incomplete) tag FIRST so a member can point at it:
     //   struct node { struct node *next; };
-    const placeholder = T.incompleteRecord(kind, tag);
+    //
+    // And if the tag is ALREADY present in this scope as an incomplete record, complete THAT object
+    // instead of making a new one. Making a new one is how `struct MachineDriver` stayed incomplete
+    // in MAME: driver.h includes machine.h, machine.h declares `struct MachineDriver *drv` — taking
+    // a reference to the placeholder — and driver.h then defines the body further down. Replacing
+    // the tag left every earlier reference pointing at an object that was never filled in. Any pair
+    // of mutually-referential headers hits this.
+    const existing = tag ? this.scope.localTag(tag) : null;
+    const placeholder = (existing && existing.k === kind && !existing.complete)
+      ? existing
+      : T.incompleteRecord(kind, tag);
     if (tag) this.scope.declareTag(tag, placeholder);
 
     this.expectP('{');

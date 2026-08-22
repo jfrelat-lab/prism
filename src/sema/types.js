@@ -42,9 +42,15 @@ export const array = (of, n) => ({
 export const func = (ret, params, { variadic = false, oldStyle = false } = {}) =>
   ({ k: 'func', ret, params, variadic, oldStyle, size: 1, align: 1 });
 
-/** An enum is an `int` that carries its constants. */
+/**
+ * An enum is an `int` that carries its constants — but its SIGNEDNESS follows them. An enum whose
+ * enumerators are all non-negative is unsigned, which is only observable through a bitfield:
+ * `enum e code : 8` holding 150 must read back as 150, not sign-extend to -106. C leaves the choice
+ * to the implementation and gcc chooses unsigned, so a program switching on such a field depends on
+ * it (c-testsuite 00218).
+ */
 export const enumType = (tag, consts) =>
-  ({ k: 'enum', tag, consts, size: 4, align: 4, signed: true });
+  ({ k: 'enum', tag, consts, size: 4, align: 4, signed: (consts ?? []).some(c => BigInt(c.value) < 0n) });
 
 /**
  * Build a struct or union type. `members` are {name, type, bits?}; layout comes straight from

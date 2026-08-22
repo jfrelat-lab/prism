@@ -9,6 +9,7 @@ import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
 import { FunctionEmitter, EmitError } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
+import { osdBuiltins, installOSD } from './env/osd.js';
 
 /**
  * Target macros a DJGPP-targeted source expects to find.
@@ -124,10 +125,16 @@ export const BUILTINS = new Map(Object.entries({
   // current function's hidden buffer parameter); __prism_va_next is an ordinary runtime call.
   __prism_va_start: { ret: P, params: [], vaStart: true },
   __prism_va_next: { ret: P, params: [P, U] },
+  clock: { ret: T.ULONG, params: [] },
+  uclock: { ret: T.ULLONG, params: [] },
+  time: { ret: T.LONG, params: [P] },
   strrchr: { ret: P, params: [P, I] },
   strstr: { ret: P, params: [P, P] },
   memchr: { ret: P, params: [P, I, U] },
 }));
+
+// The MAME 0.1 platform backend's declarations, kept next to its implementation in src/env/osd.js.
+for (const [k, v] of Object.entries(osdBuiltins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 
@@ -191,27 +198,130 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
 
-  return {
-    M, F, src, mod,
-    run(argv = ['prog']) {
-      M.stdout.length = 0;
-      if (!F.main) throw new CompileError('no main()');
-      // argv lives in the image, because main may keep the pointers.
-      const ptrs = argv.map(a => mod.intern([...new TextEncoder().encode(a)]));
-      const vec = mod.alloc(4 * (ptrs.length + 1), 4);
-      ptrs.forEach((p, i) => mod.dv.setInt32(vec + i * 4, p, true));
-      mod.dv.setInt32(vec + ptrs.length * 4, 0, true);
-      finalizeHeap(M);
-      try {
-        const code = F.main.length === 0 ? F.main() : F.main(ptrs.length, vec);
-        return { code: (code | 0) & 0xff, stdout: M.output() };
-      } catch (e) {
-        if (e instanceof ExitCalled) return { code: e.code & 0xff, stdout: M.output() };
-        throw e;
+  return { M, F, src, mod, run: makeRunner(M, F, mod) };
+}
+
+export { installOSD };
+
+/**
+ * Compile and link SEVERAL translation units into one module.
+ *
+ * The only real subtlety is C's internal linkage: a file-scope `static` is private to its unit, so
+ * two files may each have their own `static int errorlog`, and MAME's Z80.c alone has hundreds of
+ * statics. Those names are mangled per unit; everything with external linkage is shared, which is
+ * what lets a game driver call into the CPU core across a file boundary.
+ *
+ * @param units [{file, source}]
+ */
+export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {} } = {}) {
+  const mod = new Module(memory ? { memory } : {});
+  const M = makeMachine(mod);
+  const resolver = resolve ?? builtinHeaderResolver(includes);
+
+  // Parse every unit first: pass 1 must see all declarations before any body is emitted.
+  const parsed = [];
+  for (const u of units) {
+    const pp = new Preprocessor({ defines: { ...TARGET_DEFINES, ...defines }, resolve: resolver });
+    const tokens = pp.run(u.source, u.file);
+    const { unit, scope } = parse(tokens, { file: u.file });
+    parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
+  }
+
+  // Pass 1: place every name. A static gets a private linkage name; the rest are shared.
+  const sharedGlobals = new Map(), sharedFuncs = new Map();
+  for (const p of parsed) {
+    p.globals = new Map();
+    p.funcs = new Map();
+    for (const d of p.unit.decls) {
+      const internal = d.storage === 'static';
+      if (d.n === 'vardecl') {
+        const link = internal ? `${p.tag}$${d.name}` : d.name;
+        if (d.type.k === 'func') {
+          (internal ? p.funcs : sharedFuncs).set(d.name, mod.defineFunc(link, d.type));
+          continue;
+        }
+        // `extern int x;` with no initialiser declares; it does not define.
+        if (d.storage === 'extern' && !d.init) continue;
+        const sym = mod.defineGlobal(link, d.type);
+        (internal ? p.globals : sharedGlobals).set(d.name, { addr: sym.addr, type: d.type });
+      } else if (d.n === 'func') {
+        const link = internal ? `${p.tag}$${d.name}` : d.name;
+        (internal ? p.funcs : sharedFuncs).set(d.name, mod.defineFunc(link, d.type));
       }
-    },
+    }
+  }
+
+  // Pass 2: emit, with each unit's statics shadowing the shared names.
+  const pieces = [], emitted = [];
+  for (const p of parsed) {
+    const ctx = {
+      globals: overlay(sharedGlobals, p.globals),
+      funcs: overlay(sharedFuncs, p.funcs),
+      builtins: BUILTINS,
+    };
+    for (const d of p.unit.decls) {
+      if (d.n === 'vardecl') {
+        if (!d.init) continue;
+        const g = ctx.globals.get(d.name);
+        if (g) staticInit(mod, g.addr, d.type, d.init, ctx);
+        continue;
+      }
+      if (d.n !== 'func') continue;
+      const link = ctx.funcs.get(d.name)?.name ?? d.name;
+      pieces.push(new FunctionEmitter(mod, { ...d, name: link }, ctx).emit());
+      emitted.push(link);
+    }
+  }
+
+  finalizeHeap(M);
+  const src = '"use strict";\nreturn function(M,F,D){\n' + pieces.join('\n') + '\n' +
+    emitted.map(n => `F[${JSON.stringify(n)}]=${n};`).join('\n') + '\n};';
+
+  let factory;
+  try {
+    factory = new Function(src)();
+  } catch (e) {
+    throw new CompileError(`emitted JavaScript did not compile: ${e.message}`);
+  }
+  const F = Object.create(null);
+  factory(M, F, mod.dv);
+  for (const name of emitted) mod.bindFunc(name, F[name]);
+
+  return { M, F, src, mod, run: makeRunner(M, F, mod) };
+}
+
+/** A per-unit view: the unit's own statics shadow the shared names. */
+function overlay(shared, own) {
+  const m = new Map(shared);
+  for (const [k, v] of own) m.set(k, v);
+  return m;
+}
+
+/** A JS-identifier-safe tag, so src/pacman/driver.c and src/pengo/driver.c do not collide. */
+const tagOf = (file) => file.replace(/\.[cC]$/, '').replace(/[^A-Za-z0-9_]/g, '_');
+
+/** The entry point, shared by compile() and compileProgram(). */
+function makeRunner(M, F, mod) {
+  return function run(argv = ['prog']) {
+    M.stdout.length = 0;
+    const main = F.main;
+    if (!main) throw new CompileError('no main()');
+    // argv lives in the image, because main may keep the pointers.
+    const ptrs = argv.map(a => mod.intern([...new TextEncoder().encode(a)]));
+    const vec = mod.alloc(4 * (ptrs.length + 1), 4);
+    ptrs.forEach((p, i) => mod.dv.setInt32(vec + i * 4, p, true));
+    mod.dv.setInt32(vec + ptrs.length * 4, 0, true);
+    finalizeHeap(M);
+    try {
+      const code = main.length === 0 ? main() : main(ptrs.length, vec);
+      return { code: (code | 0) & 0xff, stdout: M.output() };
+    } catch (e) {
+      if (e instanceof ExitCalled) return { code: e.code & 0xff, stdout: M.output() };
+      throw e;
+    }
   };
 }
+
 
 /**
  * Write a constant static initialiser directly into the image.

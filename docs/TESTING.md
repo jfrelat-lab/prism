@@ -400,7 +400,7 @@ aliases (~164 programs) and gcc's predefined TYPE macros (`typedef __SIZE_TYPE__
 instead of a header, and without the macro it reads as `typedef ;` — 60 programs) — took the corpus
 from **696 to 868 passing**, with no compiler work at all; the bitfield-initialiser fix below made it 869.
 
-Current state (end of P0.5b): **1206/1555 pass, ZERO wrong answers, 349 refused.**
+Current state: **1213/1555 pass, ZERO wrong answers, 342 refused.**
 
 That last number is the property worth having: across 1555 torture programs and 219 c-testsuite
 programs, PRISM either compiles a program correctly or refuses it with a named error. It never claims
@@ -608,6 +608,58 @@ of surfacing as "expected ';'".
 checklist for a new case in this file is therefore: no unspecified argument order, and no unsequenced
 read-and-modify of one object. (A fourth self-inflicted one: backticks inside a C comment terminate
 the JS template literal the case lives in.)
+
+## P1 — MAME 0.1 (`tools/mame.mjs`)
+
+MAME 0.1 compiles from its unmodified source and runs: 18 translation units, 894 functions, 0.55 MB
+of emitted JavaScript.
+
+```bash
+node tools/mame.mjs                       # build only
+node tools/mame.mjs --run --test-rom      # run with a hand-written Z80 ROM
+```
+
+**The platform boundary is MAME's own.** `osdepend.h` declares exactly eighteen functions and the
+whole Allegro dependency lives in `src/msdos/msdos.c`, which MAME's makefile already selects per
+platform. PRISM supplies a different backend (`src/env/osd.js`) and compiles every other file
+untouched — the intended use of the abstraction, not a modification. Built without `-DX86_ASM`, a
+build option Z80.c guards its assembly behind.
+
+Everything in the backend is **deterministic**: `clock`/`uclock` are counters, `rand` is the ANSI
+LCG, `osd_obtain_pen` hands out indices in order. Reading host time or entropy would destroy the
+property that makes a golden frame fingerprint possible.
+
+**Game ROMs are not included and will not be fetched** — they are copyrighted data. Verification
+instead uses a **hand-assembled Z80 program** as `pacman.6e`, which proves more than a game ROM
+would because the opcodes are known and so is the expected effect: it writes 64 cells of video RAM
+at 0x4000 and colour RAM at 0x4400, and the run fills exactly the bottom two rows of the display —
+224×16 = 3584 pixels, all one pen. That exercises the Z80 core, the memory-map dispatch and the
+tilemap renderer with data authored here.
+
+⚠️ **Open, and deliberately not explained away:** writing 32 cells instead of 64 produces *zero*
+pixels anywhere, which no model of "which video RAM indices are visible" accounts for — 32 indices
+cannot fill the 56 visible cells that 64 do. The first hypothesis (56 of 64 visible) was refuted by
+measurement; a second was not invented. It is a question about Pac-Man's video RAM mapping rather
+than about PRISM, resolvable by instrumenting the driver, and it blocks nothing.
+
+### Four defects found by compiling real code, two of them structural
+
+1. **A struct tag was never completed.** `driver.h` includes `machine.h`, which declares
+   `struct MachineDriver *drv` *before* `driver.h` defines the body. On the definition PRISM created
+   a NEW placeholder and re-declared the tag, leaving every earlier reference pointing at an object
+   that was never filled in. Any pair of mutually-referential headers hits this — and 1774
+   single-file test programs cannot.
+2. **Call sites used the source name, not the linkage name.** A file-scope `static` had its
+   definition mangled per unit but its callers did not follow.
+3. **An enum whose enumerators are all non-negative is unsigned.** Only observable through a
+   bitfield: `enum e code : 8` holding 150 must read back as 150, not sign-extend to -106. Caught by
+   applying this file's own rule — judge a landing by the miscompile count — when c-testsuite went
+   from 0 wrong answers to 1.
+4. DJGPP's `uclock`/`uclock_t` had to be real (64-bit, `UCLOCKS_PER_SEC` = 1193180): MAME uses them
+   unless `UNIX` is defined, and a DJGPP target must therefore provide them.
+
+Multi-unit linking itself was new work (`compileProgram`): parse every unit, place every name, then
+emit — with internal linkage mangled per unit.
 
 ## Gates still to build
 

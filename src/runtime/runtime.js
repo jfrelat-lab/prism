@@ -20,6 +20,8 @@ export function makeMachine(mod = new Module()) {
     heap: 0,                    // set after linking, when the static area is final
     heapEnd: 0,
     stdout: [],
+    clockTicks: 0,           // the deterministic clock, see rt.clock
+    uclockTicks: 0n,         // ~1/60 s per call at the PIT rate
     funcs: mod.funcTable,
     rt: null,                   // the libc surface, installed below
 
@@ -181,6 +183,17 @@ function makeLibc(M) {
       dv().setInt32(pp, (cur + step) | 0, true);
       return cur;
     },
+
+    /**
+     * A DETERMINISTIC clock. Reading the host's real time would destroy the property the whole test
+     * strategy rests on — the same input must yield byte-identical state, which is what makes a
+     * golden fingerprint possible at all (MIRAGE keeps the same rule: no Date, no Math.random).
+     * A program that measures frame times therefore sees a steady, reproducible rate.
+     */
+    clock: () => { M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockTicks; },
+    // uclock returns a 64-bit count, so a BigInt — see the i64 note in emit.js.
+    uclock: () => { M.uclockTicks += 19886n; return M.uclockTicks; },
+    time: (p) => { const t = 852076800; if (p) dv().setInt32(p, t, true); return t; },
 
     // --- gcc builtins that are not library calls
     __builtin_expect: (v, _expected) => v,

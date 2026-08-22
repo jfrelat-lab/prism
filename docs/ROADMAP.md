@@ -27,9 +27,9 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| P1.1 | Fetch the corpus: `mame01.zip` (SourceForge, 210 kB, 1997-02-05). | S | |
-| P1.2 | **Allegro shim** + DJGPP libc + timers. The worklist is not guessed — it is the linker's unresolved-symbol list, ranked by frequency (MIRAGE's `survey-gaps.mjs` pattern). | M | |
-| P1.3 | Pac-Man attract mode on screen; deterministic, so a golden fingerprint. | M | First real program. Its Z80 interpreter is also the perf workload. |
+| P1.1 | ✅ **DONE** — corpus fetched, `tools/mame.mjs` builds and runs it. | — | done |
+| P1.2 | ✅ **DONE, and no Allegro shim was needed** — MAME's own `osdepend.h` boundary is eighteen functions, so `src/env/osd.js` replaces `src/msdos/msdos.c` wholesale. The libc extras were measured from MAME's sources, not guessed: `stricmp fopen fclose fread fwrite getchar rand`. | — | done |
+| P1.3 | 🟡 **Runs; needs ROMs for the attract mode.** Verified with a hand-written Z80 ROM (bottom two rows filled exactly). Game ROMs are copyrighted and not fetched — the user supplies them. Next: a golden fingerprint of the frame, and the open video-RAM mapping question in [TESTING.md](TESTING.md). | M | The Z80 core is also the P2 perf workload. |
 
 ## P2 · Performance
 
