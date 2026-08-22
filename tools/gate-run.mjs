@@ -150,6 +150,32 @@ int main(void) {
 }
 `);
 
+// Structs by value. A parameter is a pointer to a copy the CALLER made — so the callee may modify it
+// without the caller seeing it — and a return goes through a caller-supplied buffer, because the
+// callee's frame is released before the value could be read out of it.
+C('struct-by-value', `
+#include <stdio.h>
+struct pt { int x, y; };
+struct big { int a[6]; char tag; };
+struct pt mk(int x, int y) { struct pt p; p.x = x; p.y = y; return p; }
+int sum(struct pt p) { p.x += 100; return p.x + p.y; }
+struct pt add(struct pt a, struct pt b) { return mk(a.x + b.x, a.y + b.y); }
+struct big mkbig(int seed) { struct big b; int i; for (i=0;i<6;i++) b.a[i]=seed+i; b.tag='B'; return b; }
+int bigsum(struct big b) { int i, s = 0; for (i=0;i<6;i++) s += b.a[i]; return s + b.tag; }
+int main(void) {
+  struct pt p = mk(3, 4);
+  printf("%d %d\\n", p.x, p.y);
+  printf("%d %d %d\\n", sum(p), p.x, p.y);
+  struct pt q = add(p, mk(10, 20));
+  printf("%d %d\\n", q.x, q.y);
+  printf("%d\\n", add(mk(1,2), mk(3,4)).x);
+  struct big b = mkbig(5);
+  printf("%d %c %d\\n", b.a[0], b.tag, bigsum(b));
+  printf("%d\\n", mk(7,8).y);
+  return 0;
+}
+`);
+
 C('function-pointers', `
 #include <stdio.h>
 int add(int a, int b) { return a + b; }

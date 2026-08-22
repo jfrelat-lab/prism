@@ -148,7 +148,11 @@ export class FunctionEmitter {
 
   emit() {
     const d = this.decl;
+    // A struct RETURN uses the sret convention: the caller supplies the buffer, because the callee's
+    // own frame is released before the value could be read out of it.
+    this.sret = T.isRecord(d.type.ret);
     const params = d.type.params.map((p, i) => p.name ?? `_unused${i}`);
+    if (this.sret) params.unshift('_sret');
 
     // Which locals escape? A scalar that is never `&`-taken can live in a JS var. Everything with
     // an address, and every aggregate, needs a slot. This single decision is the difference between
@@ -159,8 +163,13 @@ export class FunctionEmitter {
     const pre = [];
     for (const p of d.type.params) {
       if (!p.name) continue;
-      const isAggregate = p.type.k === 'array' || T.isRecord(p.type);
-      if (isAggregate) unsup('passing a struct or array by value');
+      if (T.isRecord(p.type)) {
+        // The caller already made a fresh copy, so the callee may modify it in place — no second
+        // copy is needed, and `&param` is simply that address.
+        this.locals.set(p.name, { kind: 'aggparam', js: p.name, type: p.type });
+        continue;
+      }
+      if (p.type.k === 'array') unsup('an array parameter by value');
       if (escaped.has(p.name)) {
         const off = this.slot(p.type.size, p.type.align);
         this.locals.set(p.name, { kind: 'slot', off, type: p.type });
@@ -522,6 +531,13 @@ export class FunctionEmitter {
         // it first lets `return foo(x)` run foo on a frame that overlaps this one — foo's own locals
         // then overwrite the array whose address was just passed to it. Found by c-testsuite 00077,
         // never by a hand-written case, because it needs an aggregate local AND a call in a return.
+        if (T.isRecord(ret)) {
+          const src = this.#lval(s.expr);
+          this.out.push(`M.copy(_sret,${src.addr},${ret.size});`);
+          if (this.frameSize) this.out.push(`M.sp=_fp+${this.frameSize}|0;`);
+          this.out.push('return _sret;');
+          return;
+        }
         const v = this.#rvalCoerced(s.expr, ret);
         if (!this.frameSize) { this.out.push(`return ${v};`); return; }
         const t = this.newTmp(); this.#declareTmp(t);
@@ -532,7 +548,27 @@ export class FunctionEmitter {
       }
       case 'label': case 'goto': case 'gotoexpr':
         return unsup('goto');
-      case 'asm': return unsup('inline assembly');
+      case 'asm': {
+        // An asm whose template is empty emits no instructions — it exists only as a barrier — so
+        // with no output operands the faithful translation is nothing at all. Its INPUTS are still
+        // evaluated, because they are ordinary C expressions and may have side effects.
+        const text = (s.template ?? []).map(t => t.replace(/^L?"|"$/g, '')).join('').trim();
+        // An empty template emits no instructions, so with NO OUTPUT OPERANDS it is faithfully a
+        // no-op — its inputs are still evaluated, being ordinary C expressions with possible side
+        // effects.
+        //
+        // With an output operand it is NOT a no-op, and generalising to "empty template = nothing"
+        // was wrong: a tied constraint carries a value through the shared register even with an
+        // empty template, so `asm ("" : "=r" (i) : "0" (x))` copies x into i (gcc's 20030222-1.c).
+        // Refusing is the honest answer until constraints are modelled.
+        if (text === '' && (s.outputs ?? []).length === 0) {
+          for (const op of s.inputs ?? []) {
+            if (op.expr) this.out.push(this.#rval(op.expr).js + ';');
+          }
+          return;
+        }
+        return unsup('inline assembly');
+      }
     }
     unsup(`statement '${s.n}'`);
   }
@@ -553,6 +589,7 @@ export class FunctionEmitter {
         if (l) {
           if (l.kind === 'slot') return { addr: `(_fp+${l.off}|0)`, type: l.type };
           if (l.kind === 'global') return { addr: String(l.addr), type: l.type };
+          if (l.kind === 'aggparam') return { addr: `(${l.js}|0)`, type: l.type };
           return { varJs: l.js, type: l.type };
         }
         const g = this.ctx.globals.get(e.name);
@@ -597,6 +634,13 @@ export class FunctionEmitter {
       case 'str': {
         const addr = this.#stringAddr(e);
         return { addr: String(addr), type: e.type ?? T.array(T.CHAR, null), isString: true };
+      }
+      case 'call': {
+        // The call evaluates to the address of the sret buffer, so `f().field` and `x = f()` both
+        // work — and it is evaluated exactly once, which is why the caller must not use this twice.
+        const c = this.#rval(e);
+        if (!T.isRecord(c.type)) throw new EmitError('a call returning a scalar is not an lvalue');
+        return { addr: `(${c.js}|0)`, type: c.type };
       }
     }
     throw new EmitError(`'${e.n}' is not an lvalue`);
@@ -911,7 +955,7 @@ export class FunctionEmitter {
       }
       if (f) {
         const ft = f.type;
-        const args = e.args.map((a, i) => this.#rvalForCall(a, ft?.params?.[i]?.type));
+        const args = this.#callArgs(e, ft);
         return { js: `F.${name}(${args.join(',')})`, type: ft?.ret ?? T.INT };
       }
       throw new EmitError(`call to undeclared function '${name}'`);
@@ -919,8 +963,39 @@ export class FunctionEmitter {
     const p = this.#rval(e.fn);
     let ft = T.decay(p.type);
     if (ft.k === 'ptr' && ft.to.k === 'func') ft = ft.to;
-    const args = e.args.map((a, i) => this.#rvalForCall(a, ft?.params?.[i]?.type));
+    const args = this.#callArgs(e, ft);
     return { js: `M.icall(${p.js},[${args.join(',')}])`, type: ft?.ret ?? T.INT };
+  }
+
+  /**
+   * The argument list for one call, including the hidden sret buffer when the callee returns a
+   * struct. Both the buffer and every by-value struct argument are allocated in the CALLER's frame:
+   * the callee's frame is gone by the time the result is read, and C promises the callee its own
+   * copy of each argument.
+   */
+  #callArgs(e, ft) {
+    const args = [];
+    for (let i = 0; i < e.args.length; i++) {
+      const want = ft?.params?.[i]?.type;
+      const node = e.args[i];
+      const asRecord = want && T.isRecord(want) ? want
+        : (!want && node.type && T.isRecord(node.type) ? node.type : null);
+      args.push(asRecord ? this.#structArg(node, asRecord) : this.#rvalForCall(node, want));
+    }
+    if (ft && T.isRecord(ft.ret)) {
+      const off = this.slot(ft.ret.size, ft.ret.align);
+      args.unshift(`(_fp+${off}|0)`);
+    }
+    return args;
+  }
+
+  /** Copy a struct argument into a caller-owned temporary and pass its address. */
+  #structArg(node, type) {
+    if (type.size == null) unsup('passing an incomplete struct by value');
+    const off = this.slot(type.size, type.align);
+    const src = this.#lval(node);
+    const t = this.newTmp(); this.#declareTmp(t);
+    return `(${t}=(_fp+${off}|0),M.copy(${t},${src.addr},${type.size}),${t})`;
   }
 
   #rvalForCall(node, want) {

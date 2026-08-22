@@ -400,7 +400,7 @@ aliases (~164 programs) and gcc's predefined TYPE macros (`typedef __SIZE_TYPE__
 instead of a header, and without the macro it reads as `typedef ;` — 60 programs) — took the corpus
 from **696 to 868 passing**, with no compiler work at all; the bitfield-initialiser fix below made it 869.
 
-Current state (after P0.5b): **1026/1555 pass, ZERO wrong answers, 529 refused.**
+Current state (after P0.5b): **1108/1555 pass, ZERO wrong answers, 447 refused.**
 
 That last number is the property worth having: across 1555 torture programs and 219 c-testsuite
 programs, PRISM either compiles a program correctly or refuses it with a named error. It never claims
@@ -533,6 +533,39 @@ compares the compile-time and run-time paths against each other:
 
 A fourth test was excluded as a bad oracle: `20021127-1.c` defines `llabs`, a name reserved for the
 library (C 7.1.3), and pins gcc's builtin folding rather than any required behaviour.
+
+## Struct by value and inline asm (P0.5b, continued)
+
+**Structs by value** (65 programs): a by-value parameter is a pointer to a copy the CALLER made — so
+the callee may modify it without the caller seeing it — and a return goes through a caller-supplied
+buffer (the sret convention), because the callee's frame is released before the value could be read
+out of it. Both the copies and the buffer are allocated in the caller's frame. Torture 1026 → 1096,
+and for the first time a feature landed with **no new miscompiles at all**.
+
+**Inline asm** is now genuinely parsed — qualifiers, template, operands, clobbers — instead of being
+skipped as an opaque token run. The qualifiers alone were the reason 39 programs failed to *parse*:
+`asm volatile ("")` puts `volatile` between the keyword and the paren.
+
+An asm with an **empty template** emits no instructions, so with no output operands it is faithfully
+a no-op whose inputs are still evaluated (they are C expressions and may have side effects).
+
+### The rule this session had to learn twice
+
+Generalising that to "empty template = nothing at all, outputs included" was wrong, and the corpus
+said so immediately: a **tied constraint carries a value through the shared register even with an
+empty template**, so `asm ("" : "=r" (i) : "0" (x))` copies x into i (`20030222-1.c`), and an output
+operand's lvalue may itself have side effects — `asm("" : "+r"(*bar()))` must still call `bar()`
+(`990130-1.c`). Narrowing back to "no output operands" cost 12 passes (1120 → 1108) and restored
+zero wrong answers.
+
+This is the **second** time the same shape appeared — wide literals first, then asm:
+
+> Implementing a feature moves programs from *refused* to *wrong*, and the fix is to narrow the
+> claim rather than to add more code.
+
+So: **judge a landing by the miscompile count, not the pass count.** A feature that raises passes
+while raising miscompiles has made the compiler worse, because a refusal is honest and a wrong
+answer is not.
 
 ## Gates still to build
 

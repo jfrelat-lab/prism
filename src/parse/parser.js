@@ -76,19 +76,49 @@ export class Parser {
     return { n: 'unit', decls };
   }
 
+  /**
+   * `asm [volatile|inline|goto] ( template [: outputs [: inputs [: clobbers]]] ) ;`
+   *
+   * The qualifiers are the reason 39 torture programs failed to PARSE: `asm volatile ("")` puts
+   * `volatile` between the keyword and the paren. The operands are captured rather than skipped
+   * because an asm with an EMPTY template does nothing at all — it is only a barrier — so one with
+   * no outputs is faithfully a no-op that still evaluates its inputs.
+   */
   #topLevelAsm() {
     this.next();
+    while (this.peek().k === ID &&
+           /^_*(volatile|inline|goto|const)_*$/.test(this.peek().v)) this.i++;
     this.#skipAttributeLike();
     this.expectP('(');
-    const parts = [];
-    let depth = 1;
-    while (depth > 0 && !this.done) {
-      if (this.isP('(')) depth++;
-      else if (this.isP(')')) { depth--; if (!depth) { this.i++; break; } }
-      parts.push(this.next());
+
+    const template = [];
+    while (this.peek().k === STR) template.push(this.next().v);
+
+    const outputs = [], inputs = [], clobbers = [];
+    let section = 0;                                  // 0 outputs, 1 inputs, 2 clobbers
+    while (this.eatP(':')) {
+      const into = section === 0 ? outputs : section === 1 ? inputs : clobbers;
+      section++;
+      if (this.isP(':') || this.isP(')')) continue;
+      for (;;) {
+        if (section <= 2 && this.peek().k === STR && !this.isP('(', 1)) {
+          // a clobber list entry: just a string
+          into.push({ clobber: this.next().v });
+        } else {
+          if (this.eatP('[')) { this.expectId(); this.expectP(']'); }
+          const constraint = this.peek().k === STR ? this.next().v : '';
+          this.expectP('(');
+          const expr = this.expression();
+          this.expectP(')');
+          into.push({ constraint, expr });
+        }
+        if (this.eatP(',')) continue;
+        break;
+      }
     }
+    this.expectP(')');
     this.eatP(';');
-    return { n: 'asm', tokens: parts };
+    return { n: 'asm', template, outputs, inputs, clobbers };
   }
 
   /** A declaration, or a function definition if a `{` follows the first declarator. */
