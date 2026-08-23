@@ -164,7 +164,9 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
       const sym = mod.defineGlobal(d.name, d.type);
       globals.set(d.name, { addr: sym.addr, type: d.type });
     } else if (d.n === 'func') {
-      funcs.set(d.name, mod.defineFunc(d.name, d.type));
+      const f0 = mod.defineFunc(d.name, d.type);
+      f0.defined = true;                      // a body, not just a prototype
+      funcs.set(d.name, f0);
     }
   }
 
@@ -246,7 +248,11 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
         (internal ? p.globals : sharedGlobals).set(d.name, { addr: sym.addr, type: d.type });
       } else if (d.n === 'func') {
         const link = internal ? `${p.tag}$${d.name}` : d.name;
-        (internal ? p.funcs : sharedFuncs).set(d.name, mod.defineFunc(link, d.type));
+        const fn = mod.defineFunc(link, d.type);
+        // A DEFINITION, not just a prototype: the distinction decides whether a call reaches the
+        // program's own code or a runtime builtin of the same name.
+        fn.defined = true;
+        (internal ? p.funcs : sharedFuncs).set(d.name, fn);
       }
     }
   }

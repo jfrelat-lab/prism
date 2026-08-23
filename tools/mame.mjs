@@ -13,7 +13,8 @@
 //   node tools/mame.mjs --run      # run it
 //   node tools/mame.mjs --src      # dump the emitted JavaScript
 
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { deflateSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileProgram, installOSD } from '../src/compile.js';
@@ -180,6 +181,54 @@ console.log(`platform backend installed; ${Object.keys(roms).length} data files 
 console.log(`✓ compiled: ${Object.keys(program.F).length} functions, ` +
   `${(program.src.length / 1024 / 1024).toFixed(2)} MB of emitted JavaScript`);
 
+/**
+ * Write the display as a PNG, through the palette the game itself asked for. No dependencies: a PNG
+ * is a CRC-checked container around a deflate stream, and Node has deflate built in.
+ */
+function writePng(path, M, osd) {
+  const { width: w, height: h, pixels, palette } = osd;
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  let o = 0;
+  for (let y = 0; y < h; y++) {
+    raw[o++] = 0;                                  // filter: none
+    for (let x = 0; x < w; x++) {
+      const pen = M.u8[pixels + y * w + x];
+      const rgb = palette[pen] ?? [0, 0, 0];
+      raw[o++] = rgb[0]; raw[o++] = rgb[1]; raw[o++] = rgb[2];
+    }
+  }
+  const crcTable = (() => {
+    const t = new Int32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c;
+    }
+    return t;
+  })();
+  const crc = (buf) => {
+    let c = -1;
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+  };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const c = Buffer.alloc(4); c.writeUInt32BE(crc(body));
+    return Buffer.concat([len, body, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;   // 8-bit truecolour
+  writeFileSync(path, Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]));
+  console.log(`wrote ${path} (${w}x${h})`);
+}
+
 if (process.argv.includes('--src')) {
   console.log(program.src.slice(0, 4000));
 }
@@ -191,6 +240,8 @@ if (process.argv.includes('--run')) {
     if (r.stdout) console.log(r.stdout.trimEnd());
     console.log(`display ${osd.width}x${osd.height} · pens ${osd.palette.length} · ` +
       `frames ${osd.frames} · samples ${osd.samples.length}`);
+    const pngPath = process.argv.find(a => a.startsWith('--png='))?.slice(6);
+    if (pngPath && osd.width && osd.pixels) writePng(pngPath, program.M, osd);
     if (osd.width && osd.pixels) {
       const px = program.M.u8.subarray(osd.pixels, osd.pixels + osd.width * osd.height);
       let nz = 0;

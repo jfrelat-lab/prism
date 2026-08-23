@@ -8,7 +8,7 @@ written": a row here means a gate observed it, not that the code looks capable o
 | a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 193/219 c-testsuite, 1214/1556 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
-| **MAME 0.1** | 🌅 **COMPILES AND RUNS; CPU verified, machine layer not yet.** 18 units, 894 functions. With real ROMs the reset vector is correct, the game enables interrupts and clears video RAM. The Z80 core is identical to a gcc build over 20006 steps including interrupts (`tools/z80diff.mjs`), so the remaining failure is in the machine layer. |
+| **MAME 0.1** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — `tools/mamediff.mjs` matches every frame hash over 200 frames of Pac-Man with real ROMs, including the 31 frames that draw. 121 frames run in 0.31 s. The picture MAME 0.1 itself produces at that point is its own (a 1997 driver), not a compiler artefact. Game ROMs are supplied by the user, never fetched. |
 | Quake (`WinQuake/`, `id386=0`) | ⛔ P3 |
 | Doom (`linuxdoom-1.10`) | ⛔ P4 |
 

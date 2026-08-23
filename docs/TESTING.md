@@ -709,6 +709,59 @@ differ from a native build.)
 State: **identical over 20006 steps including interrupts.** The Z80 core is compiled correctly, so
 Pac-Man's remaining failure is in the machine layer, not the CPU.
 
+## The whole-build differential (`tools/mamediff.mjs`) and the first perf number
+
+`z80diff` proved the CPU. `mamediff` covers everything above it: both sides compile the SAME MAME
+sources with the SAME headless C backend (`tools/mamediff/osdnull.c`) and print a hash of the display
+bitmap every frame, so the first differing line names the frame.
+
+```bash
+node tools/mamediff.mjs --roms=<dir> [--frames=200]
+node tools/mame.mjs --run --roms=<dir> --frames=200 --png=/tmp/pacman.png
+```
+
+**Result: identical over 226 lines at 200 frames** — every frame hash matches gcc, including the 31
+frames from 91 onward that actually draw (26 340 lit pixels at frame 92). PRISM's output is
+bit-identical to a native i386 gcc build of MAME 0.1, frame by frame.
+
+### Two defects, and one claim of mine that the measurement refuted
+
+**A runtime builtin shadowed a function the program defines.** `#call` consulted the builtin table
+before the program's own functions, so MAME's headless `osd_key_pressed` was replaced by PRISM's —
+which always returns 0, so the run never ended. It burned **twelve hours** before being noticed. The
+general form is worse than the symptom: a program defining its own `memcpy` or `printf` would have
+silently got PRISM's. A definition now wins; a mere prototype does not, so `int printf();` still
+reaches the runtime.
+
+**The platform backend allocated in the wrong region.** `src/env/osd.js` built its bitmaps with
+`mod.alloc`, which grows the STATIC area by advancing `brk` — but the heap start is fixed when the
+program begins, so allocating there at run time handed out addresses `malloc` later handed out again.
+The framebuffer was quietly overwritten and read as all-zero, while the C backend compiled from the
+same source saw 26 340 lit pixels. A platform backend must use the guest's own allocator.
+
+⚠️ **I claimed tier-0 was "pathologically" slow on the strength of that twelve-hour run.** It is not:
+121 frames of Pac-Man run in **0.31 s**. The run was a hang, not slowness, and asserting a
+performance characteristic from a hang is exactly the mistake MIRAGE's "measure, do not justify" note
+warns about.
+
+### The perf number (`tools/bench.mjs`) — and why it cannot be trusted as an absolute
+
+One comparable unit: MAME's Z80 core executing Pac-Man's ROM, a fixed instruction budget, with a
+**checksum on both sides** so the ratio is meaningless unless both did identical work.
+
+```
+gcc -O2, emulated i386 : 200 000 instructions in 60 ms →  3.33 M instr/s
+PRISM tier-0           : 200 000 instructions in 17 ms → 11.96 M instr/s
+```
+
+Same checksum. PRISM is 3.5× *faster* — and that says almost nothing, because **the gcc side runs
+under linux/386 emulation on an arm64 host while PRISM's JavaScript runs natively.** The reference is
+a floor, not native speed, so this comparison FLATTERS PRISM and the real native gap is larger. What
+it does establish honestly: tier-0 emulates a Z80 at ~12 M instructions/s, which is the same order as
+MIRAGE's measured x86 throughput, and there is no pathology to chase. A trustworthy absolute figure
+needs i386 hardware or a same-architecture build, and until then P2 should not be justified by a
+ratio from this harness.
+
 ## Gates still to build
 
 In the order the roadmap wants them: preprocessor vs `gcc -E`; c-testsuite; gcc torture `execute/`;

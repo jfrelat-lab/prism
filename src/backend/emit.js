@@ -1063,7 +1063,14 @@ export class FunctionEmitter {
     if (e.fn.n === 'ident' && !this.locals.has(e.fn.name)) {
       const name = e.fn.name;
       const f = this.ctx.funcs.get(name);
-      const rt = this.ctx.builtins.get(name);
+      /*
+       * A function the PROGRAM DEFINES wins over a runtime builtin of the same name. Checking the
+       * builtin table first meant a program's own `osd_key_pressed` — or its own memcpy, or printf —
+       * was silently replaced by PRISM's: that is how MAME's headless backend lost its "stop after N
+       * frames" and ran for twelve hours. A mere PROTOTYPE does not win, so `int printf();` still
+       * reaches the runtime.
+       */
+      const rt = (f && f.defined) ? null : this.ctx.builtins.get(name);
       if (rt?.vaStart) {
         if (!this.variadic) throw new EmitError('va_start outside a variadic function');
         return { js: '_va', type: T.ptr(T.CHAR) };

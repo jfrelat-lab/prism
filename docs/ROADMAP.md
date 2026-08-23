@@ -29,7 +29,7 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 |---|---|---|---|
 | P1.1 | ✅ **DONE** — corpus fetched, `tools/mame.mjs` builds and runs it. | — | done |
 | P1.2 | ✅ **DONE, and no Allegro shim was needed** — MAME's own `osdepend.h` boundary is eighteen functions, so `src/env/osd.js` replaces `src/msdos/msdos.c` wholesale. The libc extras were measured from MAME's sources, not guessed: `stricmp fopen fclose fread fwrite getchar rand`. | — | done |
-| P1.3 | 🟡 **Runs with real ROMs; the CPU is now verified, the machine layer is not.** The Z80 core matches gcc over 20006 steps (P1.4), the game enables interrupts (`interrupt_enable = 1`) and clears video RAM, but the picture does not advance between 300 and 1200 frames. The defect is therefore in the machine layer or the driver, not the CPU. Next: extend the differential upward — same treatment for `machine.c` and `pacman/*.c`. | M | |
+| P1.3 | ✅ **DONE** — Pac-Man runs and every frame is bit-identical to a native gcc build over 200 frames (`tools/mamediff.mjs`). Two defects found: a runtime builtin shadowed the program's own function definition (twelve-hour hang), and the platform backend allocated in the static area instead of the guest heap. | — | done |
 | P1.4 | ✅ **DONE** — `tools/z80diff.mjs`. Found the defect in seconds: compound assignment evaluated the lvalue before the right-hand side, so `R.PC.W.l += (offset)M_RDMEM_OPCODE()` made every relative jump one byte short. The core is now identical to gcc over 20006 steps including the interrupt path. | — | done |
 
 ## P2 · Performance
@@ -39,7 +39,7 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 | P2.1 | **IR + escape analysis / mem2reg.** | L | The single largest lever: locals in JS vars instead of the heap. MIRAGE deliberately deferred its IR (its roadmap D5); here it is mandatory. |
 | P2.2 | Alignment inference, GVN on address arithmetic, LICM, inlining. | L | |
 | P2.3 | **tier-0 → tier-1 promotion** + inline caches on function pointers. | M | |
-| P2.4 | Perf ratio published in one comparable unit vs native `gcc -m32` and vs MIRAGE on the binary. | S | Measure, never justify. |
+| P2.4 | 🟡 **`tools/bench.mjs` exists; the number is not yet trustworthy.** tier-0 emulates a Z80 at ~12 M instr/s, 3.5× faster than the containerised gcc — but that reference is i386 emulated on arm64, so it flatters PRISM and cannot answer "vs native". **Do not justify P2 with this ratio.** Needs i386 hardware or a same-arch build. | S | |
 
 ## P3 · Quake
 

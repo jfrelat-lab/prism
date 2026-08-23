@@ -25,11 +25,19 @@ export function installOSD(M, { files = {}, keys = () => 0, stopAfterFrames = 0 
   };
   M.osd = state;
 
-  /** Allocate a bitmap plus its pixel data, and fill in the row pointers. */
+  /**
+   * Allocate a bitmap plus its pixel data, and fill in the row pointers.
+   *
+   * Through the guest's own malloc, NOT mod.alloc: the latter grows the STATIC area by advancing
+   * `brk`, and the heap start was already fixed when the program began. Allocating there at run time
+   * handed out addresses that malloc later handed out again, so the framebuffer was quietly
+   * overwritten — the display read as all-zero while a C backend compiled from the same source saw
+   * 26340 lit pixels.
+   */
   function createBitmap(width, height) {
     const rows = Math.max(height, 0);
-    const hdr = mod.alloc(B_LINE + 4 * rows, 4);
-    const pix = mod.alloc(Math.max(width * rows, 1), 4);
+    const hdr = M.rt.malloc(B_LINE + 4 * rows);
+    const pix = M.rt.malloc(Math.max(width * rows, 1));
     dv().setInt32(hdr + B_WIDTH, width, true);
     dv().setInt32(hdr + B_HEIGHT, height, true);
     dv().setInt32(hdr + B_PRIVATE, 0, true);
