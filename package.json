@@ -18,6 +18,10 @@
     "gate:suite:capture": "node tools/gate-suite.mjs --capture",
     "gaps": "node tools/gate-suite.mjs --gaps",
     "gate:torture": "node tools/gate-suite.mjs --suite=torture",
-    "gaps:torture": "node tools/gate-suite.mjs --suite=torture --gaps"
+    "gaps:torture": "node tools/gate-suite.mjs --suite=torture --gaps",
+    "bench": "node tools/bench.mjs --steps=20000000",
+    "mame": "node tools/mame.mjs",
+    "mamediff": "node tools/mamediff.mjs",
+    "z80diff": "node tools/z80diff.mjs"
   }
 }

@@ -20,6 +20,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { sh, SCRATCH, version } from './oracle.mjs';
 import { compileProgram, installOSD } from '../src/compile.js';
 import { HEADERS } from '../src/env/headers.js';
@@ -57,6 +58,24 @@ const BENCH_C = `
 #include <time.h>
 #include "Z80.h"
 
+/*
+ * The native builds time THEMSELVES. Timing them from outside with spawnSync measured process
+ * creation and OS scheduling as well as the work, and it showed the same binary running at 36, 79
+ * and 115 M instr/s on three consecutive workloads — a 3x spread that was the harness, not the
+ * machine. PRISM is already measured in-process, so this makes the two sides comparable.
+ *
+ * PRISM does not define BENCH_REALTIME: its clock() is a deterministic counter on purpose.
+ */
+#ifdef BENCH_REALTIME
+#include <sys/time.h>
+static double now_ms(void)
+{
+  struct timeval tv;
+  gettimeofday(&tv, 0);
+  return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+}
+#endif
+
 unsigned char RAM[0x20000];
 int Z80_IRQ = Z80_IGNORE_INT;
 static int IntVector = 0xff;
@@ -86,11 +105,17 @@ int main(void)
   Z80_GetRegs(&R); R.R = 0; Z80_SetRegs(&R);
   Z80_IPeriod = 1;
 
+#ifdef BENCH_REALTIME
+  { double t0 = now_ms();
+#endif
   for (i = 0; i < ${STEPS}L; i++)
   {
     Z80_ICount = 1;
     Z80_Execute();
   }
+#ifdef BENCH_REALTIME
+  printf("elapsed %.1f\\n", now_ms() - t0); }
+#endif
   /* A checksum, so neither compiler can optimise the loop away and both did the same work. */
   Z80_GetRegs(&R);
   for (i = 0; i < 0x10000; i++) checksum = checksum * 31 + RAM[i];
@@ -113,12 +138,51 @@ console.log(`workload: MAME's Z80 core, Pac-Man ROM, ${STEPS.toLocaleString('en'
 
 // --- gcc, at -O2 (what a real build uses)
 console.log('gcc -O2 …');
-const g = sh('cd bench && gcc -std=gnu89 -w -O2 -DLSB_FIRST -I. -o benchref bench.c Z80.c 2>&1 && ' +
-  'S=$(date +%s%N); ./benchref; E=$(date +%s%N); echo "MS $(( (E-S)/1000000 ))"', { timeout: 1800000 });
-const gccMs = +(g.stdout.match(/MS (\d+)/)?.[1] ?? 0);
+const g = sh('cd bench && gcc -std=gnu89 -w -O2 -DLSB_FIRST -DBENCH_REALTIME -I. ' +
+  '-o benchref bench.c Z80.c 2>&1 && ./benchref', { timeout: 1800000 });
+const gccMs = Math.round(+(g.stdout.match(/elapsed ([\d.]+)/)?.[1] ?? 0));
 const gccOut = g.stdout.match(/steps .*/)?.[0] ?? '(no output)';
 if (!gccMs) { console.error(`gcc side failed:\n${g.stdout}`); process.exit(1); }
 console.log(`  ${gccOut}\n  ${gccMs} ms → ${(STEPS / gccMs / 1000).toFixed(2)} M instr/s`);
+
+// --- a NATIVE reference on this host's own CPU.
+//
+// The containerised gcc above is i386 under emulation, which makes it a floor rather than a
+// reference: comparing JavaScript running natively against emulated machine code flatters the
+// JavaScript. clang builds the same C for arm64 and runs it on the same core PRISM's JIT runs on, so
+// this is the ratio that actually answers "how much does compiling to JavaScript cost".
+//
+// The caveat that remains, stated rather than buried: this build is LP64, so `int` is still 32 bits
+// but pointers are 64. It is the same algorithm on the same silicon, not the same ABI.
+console.log('\nclang -O2, native on this host …');
+let nativeMs = 0, nativeOut = '(not run)';
+{
+  const nat = join(work, 'native');
+  mkdirSync(nat, { recursive: true });
+  for (const f of readdirSync(work)) {
+    if (/\.(c|h)$/i.test(f)) writeFileSync(join(nat, f), readFileSync(join(work, f)));
+  }
+  writeFileSync(join(nat, 'z80rom.bin'), rom);
+  const r2 = spawnSync('sh', ['-c',
+    `cd ${nat} && clang -std=gnu89 -w -O2 -DLSB_FIRST -DBENCH_REALTIME -I. -o benchnat bench.c Z80.c 2>&1`],
+    { encoding: 'utf8' });
+  if (r2.status !== 0) {
+    console.log(`  clang side unavailable: ${(r2.stdout || r2.stderr || '').split('\n')[0]}`);
+  } else {
+    // Best of three: the point is the machine's capability, not a sample of its scheduler.
+    let best = Infinity, last = '';
+    for (let k = 0; k < 3; k++) {
+      const run = spawnSync('sh', ['-c', `cd ${nat} && ./benchnat`], { encoding: 'utf8' });
+      const ms = +((run.stdout || '').match(/elapsed ([\d.]+)/)?.[1] ?? Infinity);
+      if (ms < best) best = ms;
+      last = (run.stdout || '').split('\n').find(l => l.startsWith('steps')) ?? last;
+    }
+    nativeMs = best;
+    nativeOut = last;
+    console.log(`  ${nativeOut}\n  ${nativeMs.toFixed(0)} ms (best of 3, self-timed) → ` +
+      `${(STEPS / nativeMs / 1000).toFixed(2)} M instr/s`);
+  }
+}
 
 // --- PRISM tier-0
 function resolver(name) {
@@ -154,7 +218,15 @@ if (ourOut !== gccOut) {
 } else {
   console.log(`same checksum, so both did identical work.`);
 }
-console.log(`ratio: PRISM tier-0 is ${(runMs / gccMs).toFixed(1)}× slower than gcc -O2 ` +
-  `AS MEASURED HERE — and the gcc side is itself emulated on this arm64 host, so the true ` +
-  `native gap is LARGER than this number, not smaller.`);
+console.log(`vs the containerised gcc -O2 (i386 EMULATED — a floor, not a reference): ` +
+  `${(runMs / gccMs).toFixed(2)}×`);
+if (nativeMs) {
+  const ratio = runMs / nativeMs;
+  console.log(`vs clang -O2 NATIVE on this host: PRISM tier-0 is ${ratio.toFixed(1)}× slower.`);
+  console.log(`  ^ this is the number that means something. Same algorithm, same silicon.`);
+  if (nativeOut !== ourOut) {
+    console.log(`  ⚠ the native build's checksum differs (${nativeOut}) — it is LP64, so a program`);
+    console.log(`    that depends on pointer width legitimately diverges; the TIMING is still valid.`);
+  }
+}
 console.log(`emitted JavaScript: ${(prog.src.length / 1024).toFixed(0)} KB`);

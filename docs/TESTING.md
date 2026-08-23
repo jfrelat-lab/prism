@@ -744,23 +744,41 @@ same source saw 26 340 lit pixels. A platform backend must use the guest's own a
 performance characteristic from a hang is exactly the mistake MIRAGE's "measure, do not justify" note
 warns about.
 
-### The perf number (`tools/bench.mjs`) — and why it cannot be trusted as an absolute
+### The perf number (`tools/bench.mjs`), and three wrong versions of it
 
 One comparable unit: MAME's Z80 core executing Pac-Man's ROM, a fixed instruction budget, with a
 **checksum on both sides** so the ratio is meaningless unless both did identical work.
 
 ```
-gcc -O2, emulated i386 : 200 000 instructions in 60 ms →  3.33 M instr/s
-PRISM tier-0           : 200 000 instructions in 17 ms → 11.96 M instr/s
+                                   10M steps      40M steps
+gcc -O2, i386 EMULATED             15.5 M instr/s  15.3 M instr/s
+clang -O2, arm64 NATIVE           227.8           231.2
+PRISM tier-0                       25.5            24.0
 ```
 
-Same checksum. PRISM is 3.5× *faster* — and that says almost nothing, because **the gcc side runs
-under linux/386 emulation on an arm64 host while PRISM's JavaScript runs natively.** The reference is
-a floor, not native speed, so this comparison FLATTERS PRISM and the real native gap is larger. What
-it does establish honestly: tier-0 emulates a Z80 at ~12 M instructions/s, which is the same order as
-MIRAGE's measured x86 throughput, and there is no pathology to chase. A trustworthy absolute figure
-needs i386 hardware or a same-architecture build, and until then P2 should not be justified by a
-ratio from this harness.
+**PRISM tier-0 is ~9.5× slower than native.** Stable across a 4× change in workload, which is what
+makes it believable. The plan feared 30× for a DataView-based emitter with no optimiser at all, so
+9.5× is better than expected — and it is the number P2 (IR, escape analysis, tier-1) now has to
+justify itself against.
+
+Note in passing that the containerised gcc runs 15× slower than native clang: the oracle container
+is an excellent correctness reference and a useless speed one.
+
+#### The three wrong answers this measurement gave first
+
+1. **"PRISM is 3.5× FASTER than gcc."** True as measured, meaningless as stated: the gcc side is i386
+   under emulation while the JavaScript runs natively. A reference has to run on the same silicon.
+2. **"PRISM is 2.3× slower than clang."** Wrong: the native side was timed from outside with
+   `spawnSync`, so process creation and scheduling were counted as work.
+3. **"clang runs at 36, then 79, then 115 M instr/s."** A 3× spread on the same binary — obviously the
+   harness, not the machine. Fixed by having the native builds **time themselves** with
+   `gettimeofday` and taking the best of three; clang then reported 227.8 and 231.2 on workloads 4×
+   apart. PRISM was in-process all along, which is why its figure was stable (23.9–26.8) throughout
+   and the native one was not.
+
+The lesson is narrower than "measure carefully": **a ratio is only as good as the weaker of its two
+measurements**, and the stable side gives no warning that the other is broken. Three consecutive
+conclusions were reported before the numbers stopped moving.
 
 ## Gates still to build
 

@@ -36,10 +36,10 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| P2.1 | **IR + escape analysis / mem2reg.** | L | The single largest lever: locals in JS vars instead of the heap. MIRAGE deliberately deferred its IR (its roadmap D5); here it is mandatory. |
+| P2.1 | **IR + escape analysis / mem2reg** — now justified by a measurement: 9.5× off native, with every memory access going through a DataView and every local that is address-taken living on the shadow stack. The single largest lever, and the one MIRAGE deliberately deferred (its roadmap D5). | L | Re-measure with `npm run bench` after each step; do not trust a ratio whose reference side has not been checked for stability. | 
 | P2.2 | Alignment inference, GVN on address arithmetic, LICM, inlining. | L | |
 | P2.3 | **tier-0 → tier-1 promotion** + inline caches on function pointers. | M | |
-| P2.4 | 🟡 **`tools/bench.mjs` exists; the number is not yet trustworthy.** tier-0 emulates a Z80 at ~12 M instr/s, 3.5× faster than the containerised gcc — but that reference is i386 emulated on arm64, so it flatters PRISM and cannot answer "vs native". **Do not justify P2 with this ratio.** Needs i386 hardware or a same-arch build. | S | |
+| P2.4 | ✅ **DONE** — `tools/bench.mjs`. **PRISM tier-0 is ~9.5× slower than clang -O2 native** on MAME's Z80 core (24–25 M instr/s vs 228–231), stable across a 4× workload change, same checksum both sides. Better than the 30× the plan feared. The containerised gcc is 15× slower than native and is useless as a speed reference. | — | done |
 
 ## P3 · Quake
 
