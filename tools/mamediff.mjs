@@ -10,7 +10,7 @@
 // No ROM data enters the repository: the harness copies whatever directory it is pointed at into the
 // gitignored .oracle/ so the container can read the same bytes.
 
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sh, SCRATCH, version } from './oracle.mjs';
@@ -62,10 +62,21 @@ writeFileSync(join(work, 'osdnull.c'), readFileSync(join(ROOT, 'tools', 'mamedif
 cfiles.push('osdnull.c');
 
 // The ROMs, under the subdirectory name MAME asks for.
+//
+// Accept either layout: a flat directory holding one game's files, or a tree with one directory per
+// game — which is how a real MAME rom folder is arranged, and how MAME itself asks for them.
+const gameDir = existsSync(join(romDir, GAME)) && statSync(join(romDir, GAME)).isDirectory()
+  ? join(romDir, GAME) : romDir;
+
+// Wipe first. The scratch directory persists between runs, and a stale ROM set left there let the
+// gcc side load a game that PRISM could not see at all — 46 lines against 2, reported as a
+// divergence in the compiler. A differential where the two sides are given different INPUTS is not
+// measuring the thing it claims to measure.
+rmSync(join(work, GAME), { recursive: true, force: true });
 mkdirSync(join(work, GAME), { recursive: true });
 const roms = {};
-for (const f of readdirSync(romDir)) {
-  const full = join(romDir, f);
+for (const f of readdirSync(gameDir)) {
+  const full = join(gameDir, f);
   if (!statSync(full).isFile()) continue;
   const bytes = new Uint8Array(readFileSync(full));
   writeFileSync(join(work, GAME, f), bytes);

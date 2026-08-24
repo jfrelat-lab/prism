@@ -176,6 +176,10 @@ if (romArg) {
 }
 if (process.argv.includes('--test-rom')) Object.assign(roms, testRoms());
 const frames = +(process.argv.find(a => a.startsWith('--frames='))?.slice(9) ?? 60);
+// The driver to run, as MAME's own argv[1]. It was hardcoded to 'pacman', which meant a loop over
+// five game names ran Pac-Man five times and printed five identical framebuffers — identical output
+// across supposedly different games is the tell.
+const game = process.argv.find(a => a.startsWith('--game='))?.slice(7) ?? 'pacman';
 const osd = installOSD(program.M, { files: roms, stopAfterFrames: frames });
 
 /*
@@ -190,7 +194,7 @@ if (process.argv.includes('--probe-polls')) {
     services: ['uclock', 'clock', 'osd_key_pressed', 'osd_read_key'],
   });
 }
-console.log(`platform backend installed; ${Object.keys(roms).length} data files visible`);
+console.log(`platform backend installed; ${Object.keys(roms).length} data files visible; game '${game}'`);
 
 console.log(`✓ compiled: ${Object.keys(program.F).length} functions, ` +
   `${(program.src.length / 1024 / 1024).toFixed(2)} MB of emitted JavaScript`);
@@ -249,7 +253,7 @@ if (process.argv.includes('--src')) {
 
 if (process.argv.includes('--run')) {
   try {
-    const r = program.run(['mame', 'pacman']);
+    const r = program.run(['mame', game]);
     console.log(`\nexit ${r.code}`);
     if (r.stdout) console.log(r.stdout.trimEnd());
     if (program.M.spinDamping) {

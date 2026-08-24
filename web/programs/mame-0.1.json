@@ -38,15 +38,7 @@
   "argsHint": "a driver name: pacman, mspacman, pengo, crush, ladybug",
   "fps": 60,
   "needsData": {
-    "hint": "ROM set for the driver you name \u2014 for pacman: pacman.6e .6f .6h .6j, plus 5e/5f",
-    "names": [
-      "pacman.6e",
-      "pacman.6f",
-      "pacman.6h",
-      "pacman.6j",
-      "pacman.5e",
-      "pacman.5f"
-    ]
+    "hint": "a ROM set for the driver you name, in a directory called after it \u2014 e.g. pacman/pacman.6e"
   },
   "controls": [
     [

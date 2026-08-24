@@ -8,9 +8,32 @@ written": a row here means a gate observed it, not that the code looks capable o
 | a hosted C program using the supported subset | ✅ **runs** — 29/29 hand programs, 193/219 c-testsuite, 1214/1556 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
-| **MAME 0.1** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — `tools/mamediff.mjs` matches every frame hash over 200 frames of Pac-Man with real ROMs, including the 31 frames that draw. 121 frames run in 0.31 s. The picture MAME 0.1 itself produces at that point is its own (a 1997 driver), not a compiler artefact. Game ROMs are supplied by the user, never fetched. |
+| **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. |
 | Quake (`WinQuake/`, `id386=0`) | ⛔ P3 |
 | Doom (`linuxdoom-1.10`) | ⛔ P4 |
+
+### MAME 0.1, driver by driver
+
+`node tools/mamediff.mjs --roms=<dir> --game=<name> --frames=200` builds the identical sources with
+i386 gcc and with PRISM and compares a hash of every frame. All five drivers MAME 0.1 ships agree:
+
+| Driver | Display | Pens | Frame hashes vs native gcc | Notes |
+|---|---|---|---|---|
+| `pacman` | 224x288 | 16 | ✅ identical, 226 lines | |
+| `mspacman` | 224x288 | 16 | ✅ identical, 226 lines | a different ROM set through the same driver |
+| `pengo` | 224x288 | 32 | ✅ identical, 242 lines | twice the palette |
+| `crush` | 224x288 | 16 | ✅ identical, 226 lines | |
+| `ladybug` | 256x256 | 20 | ✅ identical, 230 lines | different resolution, and the only one that reaches the SOUND path (6 sample calls) |
+
+They are not five runs of the same code: the resolutions, palettes and sound paths differ, which is
+what makes the agreement worth stating.
+
+Two harness defects had to be fixed before this table meant anything, and both made a broken run look
+like a passing one. `tools/mame.mjs` hardcoded `pacman` as argv[1], so a loop over five names ran
+Pac-Man five times and printed five identical framebuffers. And `mamediff`'s scratch directory
+persisted between runs, so a stale ROM set let the gcc side load a game PRISM could not see at all —
+reported as a compiler divergence. **A differential where the two sides get different inputs is not
+measuring what it claims to measure.**
 
 ## Upstream sources — verified 2026-08-20
 

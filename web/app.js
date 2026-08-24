@@ -159,8 +159,10 @@ $('loadServer').onclick = async () => {
     const { files } = await r.json();
     dataFiles = {};
     await Promise.all(files.map(async (f) => {
-      dataFiles[f.replace(/^.*\//, '')] =
-        new Uint8Array(await (await fetch(`/__data/${f}`)).arrayBuffer());
+      // Keep the relative path as the key. MAME asks for "pacman/pacman.6e", and flattening it to
+      // "pacman.6e" left only a case-insensitive basename match to save it — which also lets one
+      // game's file answer for another's when two ROM sets share a filename.
+      dataFiles[f] = new Uint8Array(await (await fetch(`/__data/${f}`)).arrayBuffer());
     }));
     $('dataNote').textContent = `${files.length} files from --data`;
   } catch (e) {
@@ -225,10 +227,12 @@ $('run').onclick = () => {
   }
   stop(true);
   $('log').innerHTML = '';
-  if (program.needsData) {
-    const have = new Set(Object.keys(dataFiles).map(n => n.toLowerCase()));
-    const absent = (program.needsData.names || []).filter(n => !have.has(n.toLowerCase()));
-    if (absent.length) log(`no data file for: ${absent.join(' ')} — the program will say so itself`, 'warn');
+  // Only "you loaded nothing at all". WHICH files are needed depends on the arguments — MAME asks
+  // for a different ROM set per driver — so a fixed list in the descriptor was wrong for four of the
+  // five games and warned about Pac-Man's files while Lady Bug was starting. The program names the
+  // file it cannot open, precisely, and that is the better message.
+  if (program.needsData && !Object.keys(dataFiles).length) {
+    log(`no data files loaded — ${program.needsData.hint}`, 'warn');
   }
 
   const control = makeControl();
