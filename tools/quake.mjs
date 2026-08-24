@@ -18,7 +18,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileProgram, installOSD } from '../src/compile.js';
+import { compileProgram, installStdio } from '../src/compile.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -138,8 +138,27 @@ if (program.failures.length) {
 console.log(`✓ compiled in ${compileMs.toFixed(0)} ms: ${Object.keys(program.F).length} functions, ` +
   `${(program.src.length / 1024 / 1024).toFixed(2)} MB of emitted JavaScript`);
 
+/*
+ * --data=<dir>: where Quake's own data lives, read from a directory the user names. Never fetched.
+ * Quake looks for id1/pak0.pak relative to its base directory, so the tree is mirrored as-is.
+ */
+const dataArg = process.argv.find(a => a.startsWith('--data='))?.slice(7);
+const files = {};
+if (dataArg) {
+  const walk = (d, prefix = '') => {
+    for (const e of readdirSync(d)) {
+      const full = join(d, e);
+      if (statSync(full).isDirectory()) walk(full, `${prefix}${e}/`);
+      else files[`${prefix}${e}`] = new Uint8Array(readFileSync(full));
+    }
+  };
+  walk(dataArg);
+  console.log(`data from ${dataArg}: ${Object.keys(files).length} files ` +
+    `(${(Object.values(files).reduce((n, b) => n + b.length, 0) / 1048576).toFixed(1)} MB)`);
+}
+
 if (process.argv.includes('--run')) {
-  installOSD(program.M, { files: {} });
+  installStdio(program.M, { files });
   try {
     const r = program.run(['quake', '-nosound']);
     console.log(`\nexit ${r.code}`);

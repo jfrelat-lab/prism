@@ -9,7 +9,7 @@ written": a row here means a gate observed it, not that the code looks capable o
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. |
-| Quake (`WinQuake/`, `id386=0`) | ⛔ P3 |
+| Quake (`WinQuake/`, `id386=0`) | 🟡 **COMPILES AND RUNS** — 69 units, 44,570 lines, **1030 of 1039 functions**, 1.67 MB of emitted JavaScript. Reaches `Host_Init`, mounts its filesystem, identifies itself as shareware and stops at `W_LoadWadFile: couldn't load gfx.wad`, which is the correct behaviour with no `id1/pak0.pak`. The 9 functions that do not emit are one class: a label nested inside a block (8) and a goto into a nested block (1); they throw if called. Game data is supplied by the user, never fetched. |
 | Doom (`linuxdoom-1.10`) | ⛔ P4 |
 
 ### MAME 0.1, driver by driver

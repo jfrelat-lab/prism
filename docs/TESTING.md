@@ -853,3 +853,26 @@ The lesson is not "measure more", it is *where*: all of this state lived in the 
 the page, and I kept explaining it from the outside. `postMessage` from a worker queues to the page
 without the worker yielding, so even a guest blocked in its own loop can report its counters. That
 diagnostic channel should have been the first thing built, not the fifth.
+
+### Open: Quake compiles 10x slower in the browser than in Node
+
+Measured, unexplained, and recorded rather than guessed at.
+
+| | |
+|---|---|
+| Node, 69 units, 1.67 MB emitted | 0.9 s |
+| the same build in a browser worker | 9.4 s |
+| MAME in the same browser worker, 0.46 MB emitted | 0.7 s |
+
+Superlinear in emitted size, which is the shape MIRAGE's D6 lesson predicts — but that lesson is about
+emitted VOLUME, and Node compiles the same volume in a tenth of the time, so it does not explain the
+gap on its own.
+
+**Hypothesis refuted by measurement:** the browser uses a SharedArrayBuffer for the guest image and
+the Node tool does not, so shared memory was the obvious suspect. Compiling the same units in Node
+both ways: 903 ms unshared, **765 ms shared**. Shared memory is not the cause, and is if anything
+marginally faster here.
+
+Candidates not yet tested: `new Function` on a 1.67 MB source string being parsed eagerly in a worker,
+a cold JIT tier, or the pane's Chromium build. The next step is to time the phases separately —
+preprocess, parse, emit, `new Function` — on both sides, rather than to reason about it further.
