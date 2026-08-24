@@ -31,6 +31,7 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 | P1.2 | ✅ **DONE, and no Allegro shim was needed** — MAME's own `osdepend.h` boundary is eighteen functions, so `src/env/osd.js` replaces `src/msdos/msdos.c` wholesale. The libc extras were measured from MAME's sources, not guessed: `stricmp fopen fclose fread fwrite getchar rand`. | — | done |
 | P1.3 | ✅ **DONE** — Pac-Man runs and every frame is bit-identical to a native gcc build over 200 frames (`tools/mamediff.mjs`). Two defects found: a runtime builtin shadowed the program's own function definition (twelve-hour hang), and the platform backend allocated in the static area instead of the guest heap. | — | done |
 | P1.4 | ✅ **DONE** — `tools/z80diff.mjs`. Found the defect in seconds: compound assignment evaluated the lvalue before the right-hand side, so `R.PC.W.l += (offset)M_RDMEM_OPCODE()` made every relative jump one byte short. The core is now identical to gcc over 20006 steps including the interrupt path. | — | done |
+| P1.5 | ✅ **DONE** — `web/` + `tools/serve.mjs`: a program-agnostic browser shell. Guest in a Web Worker over a SharedArrayBuffer; the page observes guest memory, because a C main loop never yields and rewriting it (Emscripten's `emscripten_set_main_loop`) is the modification this project refuses. One surface, text until the program creates a display; scan codes in; `argv` through to `main`. Pac-Man is playable at a measured 60.0 of 60 fps. Four defects, and one lesson: **every gate was green while the game was unplayable** — nothing headless has a frame rate. See [TESTING.md](TESTING.md). | — | done |
 
 ## P2 · Performance
 
@@ -39,6 +40,7 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 | P2.1 | **IR + escape analysis / mem2reg** — now justified by a measurement: 9.5× off native, with every memory access going through a DataView and every local that is address-taken living on the shadow stack. The single largest lever, and the one MIRAGE deliberately deferred (its roadmap D5). | L | Re-measure with `npm run bench` after each step; do not trust a ratio whose reference side has not been checked for stability. | 
 | P2.2 | Alignment inference, GVN on address arithmetic, LICM, inlining. | L | |
 | P2.3 | **tier-0 → tier-1 promotion** + inline caches on function pointers. | M | |
+| P2.5 | **Two load modes, over one serialised IR.** Today the shell always compiles from source in the page. Once P2.1 gives us an IR, add a second mode: `source` (fetch C, compile in-page, promote to tier-1 at run time — the only mode where editing a `.c` file is visible immediately) and `bundle` (fetch a prebuilt artifact and start instantly). **The bundle's payload is the IR, not the emitted JavaScript** — that is the whole design constraint. Shipping only emitted tier-0 would cap a cached program at tier-0 for ever, which buys start-up at the price of the performance ceiling and turns PRISM into a worse Emscripten. With the IR present, tier-1 re-emits at run time exactly as it does in `source` mode. Artifact = {serialised per-function IR, resolved type/layout table, the static memory image, the symbol and function-table map, the platform layer it requires, **and the compiler's own version hash**}. Invariant, same discipline as tier-0 == tier-1: a `gate-bundle` must show a bundle run and a source run producing identical state frame for frame. | L | Start-up cost only becomes real with Quake: MAME is 6.3k lines → 0.45 MB of JS in ~700 ms, so Quake's 44.6k lines extrapolates to seconds and megabytes — an estimate, flagged as one, to be measured rather than assumed. |
 | P2.4 | ✅ **DONE** — `tools/bench.mjs`. **PRISM tier-0 is ~9.5× slower than clang -O2 native** on MAME's Z80 core (24–25 M instr/s vs 228–231), stable across a 4× workload change, same checksum both sides. Better than the 30× the plan feared. The containerised gcc is 15× slower than native and is useless as a speed reference. | — | done |
 
 ## P3 · Quake
@@ -72,3 +74,11 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
    demands, ranked by frequency. Never by anticipation.
 4. **Doom is not a DOS program.** Stated now, not discovered at P4.
 5. **Emitted source volume** (MIRAGE's D6 lesson). tier-0 exists from the start.
+6. **A stale bundle outliving a compiler fix** (P2.5). A cached artifact keeps a miscompile alive
+   after the compiler stops producing it, and the failure is invisible: the program simply misbehaves
+   the way it used to. The version hash in the artifact is not bookkeeping — a mismatch must be
+   *detected and refused*, never silently run.
+7. **A timing defect no corpus can see.** `gate-run` compares stdout and `mamediff` compares frame
+   hashes; both are indifferent to *when* a frame happens, which is how a pacing bug shipped while
+   every gate was green. Anything that touches the frame clock needs an explicit fps measurement
+   against the rate the program itself declares.
