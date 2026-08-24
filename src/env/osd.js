@@ -8,7 +8,7 @@
 // Everything here is DETERMINISTIC. No real clock, no host randomness: the same input must produce
 // byte-identical state, which is what makes a golden fingerprint of a frame possible at all.
 
-import { SLOT, paceFrame } from './webhost.js';
+import { SLOT } from './webhost.js';
 
 /** `struct osd_bitmap { int width, height; void *private; unsigned char *line[0]; }` */
 const B_WIDTH = 0, B_HEIGHT = 4, B_PRIVATE = 8, B_LINE = 12;
@@ -74,10 +74,16 @@ export function installOSD(M, {
         Atomics.store(pub.ctrl, SLOT.WIDTH, w | 0);
         Atomics.store(pub.ctrl, SLOT.HEIGHT, h | 0);
         Atomics.store(pub.ctrl, SLOT.PIXELS, b.pix);
+        Atomics.store(pub.ctrl, SLOT.TEXTMODE, 0);
       }
       return b.hdr;
     },
-    osd_close_display: () => { state.screen = 0; },
+    osd_close_display: () => {
+      state.screen = 0;
+      // Back to the text surface, the way a DOS program that leaves mode 13h lands back on the
+      // console it printed to before.
+      if (pub) { Atomics.store(pub.ctrl, SLOT.PIXELS, 0); Atomics.store(pub.ctrl, SLOT.TEXTMODE, 1); }
+    },
 
     // Pens are handed out in order, so a palette entry's index is reproducible.
     osd_obtain_pen: (r, g, b) => {
@@ -94,17 +100,14 @@ export function installOSD(M, {
     },
 
     /*
-     * The one place the guest can be paced, and the only place it needs to be: a program calls this
-     * exactly when it has a frame to show. Blocking here is indistinguishable, to the program, from
-     * running on a slower machine.
+     * A program calls this exactly when it has a frame to show, which makes it the one honest place
+     * to hold the guest back. What holding it back MEANS is not decided here — the caller supplies
+     * `onPresent`, so this module knows nothing about clocks, browsers or pacing policy.
      */
     osd_update_display: () => {
       state.frames++;
+      if (pub) Atomics.store(pub.ctrl, SLOT.FRAME, state.frames);
       if (onPresent) onPresent();
-      if (pub) {
-        Atomics.store(pub.ctrl, SLOT.FRAME, state.frames);
-        paceFrame(pub.ctrl);
-      }
     },
     osd_update_audio: () => {},
 

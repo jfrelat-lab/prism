@@ -43,9 +43,14 @@ Quake compiles but does not yet run. See [docs/COMPAT.md](docs/COMPAT.md) and
 node tools/serve.mjs --data=/path/to/your/roms
 ```
 
-Then open the printed URL, pick a program, load its data files and press **Run**. The shell compiles
-the C in a worker and displays the result; `--data` is optional (the page has a file picker), and
+Then open the printed URL, pick a program, type its arguments, load its data files and press **Run**.
+The shell compiles the C in a worker and shows the program on one surface — a text screen until it
+creates a display, its framebuffer afterwards. `--data` is optional (the page has a file picker), and
 **no game data is ever fetched or stored by this repository** — it reads only a directory you name.
+
+Two programs ship. MAME 0.1 needs a ROM set you supply; the Mandelbrot is plain C89 with no platform
+layer and no data files, and exists so that "the shell is generic" is a claim something can falsify.
+Adding a program means adding a `web/programs/*.json` descriptor, not touching the page.
 
 The dev server exists because `SharedArrayBuffer` requires the COOP/COEP headers, and the shell loads
 `src/` as unbundled ES modules — the browser runs the same files the Node gates run, so there is no

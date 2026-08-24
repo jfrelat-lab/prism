@@ -1,0 +1,15 @@
+{
+  "title": "Mandelbrot",
+  "subtitle": "plain C89 \u00b7 no platform layer, no data files \u2014 proof the shell is not MAME-shaped",
+  "root": "web/programs/demo",
+  "units": [
+    "mandelbrot.c"
+  ],
+  "includeDirs": [],
+  "defines": {},
+  "memory": 16777216,
+  "args": "76 28",
+  "argsHint": "width and height in characters, e.g. 76 28",
+  "fps": 60,
+  "controls": []
+}

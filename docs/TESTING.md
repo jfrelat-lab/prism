@@ -798,10 +798,11 @@ original binary; `dbx-oracle` DOS-call sequence; and the perf ratio in one compa
    and the input did nothing. Fixed with a fallback to `event.key`, which also covers on-screen
    keyboards and some remote-desktop stacks.
 
-3. **I screenshotted before the guest had drawn.** At 3 fps a coin takes a second of wall-clock to
-   appear on the credit line. Two "the coin does not register" conclusions were wrong, and the third
-   measurement — reading the latch and the frame counter instead of looking at a picture — showed the
-   mechanism had been working. *Look at the counter, not at the canvas.*
+3. **I screenshotted before the guest had drawn — three times.** At 3 fps a coin takes a second of
+   wall clock to reach the credit line. Three separate "the coin does not register" conclusions were
+   wrong; each time the fix was to read the shared state at the instant of the event (`keys[4]` was 1
+   in the handler, the latch counted down over the next 8 frames) rather than to photograph the
+   canvas afterwards. *Look at the counter, not at the picture* — and I needed telling three times.
 
 4. **The control table was transcribed from habit, not from the source.** MAME 0.1's coin key is
    `OSD_KEY_3`; 5 is a modern MAME convention and does nothing in 1997 code. The answer was four
@@ -812,3 +813,15 @@ original binary; `dbx-oracle` DOS-call sequence; and the perf ratio in one compa
 `KEY_HOLD_FRAMES` is 8 because Pac-Man's ROM debounces its coin input: a 1-frame pulse registered
 nothing, 4 frames registered nothing, 8 frames registered exactly one coin, and a physical hold
 spanning 6 frames registered two. A guess would have been 1.
+
+### The pacing bug the gates could not see
+
+Every gate was green while the game was unplayable. Nothing in the headless suite has a frame rate:
+`gate-run` compares stdout, `mamediff` compares frame hashes, and both are indifferent to *when* a
+frame happens. The defect — pacing the guest against the page's paint rate instead of against a clock
+— was only visible to somebody trying to play, and it was reported that way ("injouable car trop
+rapide").
+
+Worth keeping in mind for the tiers: an emitted-code bug shows up in a corpus, but a *timing* bug
+needs a human or an explicit measurement of fps against the program's declared rate. The shell now
+prints `59.9 of 60 fps`, which is that measurement made visible.

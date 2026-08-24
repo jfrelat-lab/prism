@@ -132,17 +132,44 @@ PRISM's answer inverts the direction. The guest runs in a **Web Worker** over a
 - **Display** is a read of guest memory at whatever instant the page paints. Nothing is copied and
   nothing is double-buffered — a double buffer would need the guest to yield, which is the one thing
   it cannot do. A torn frame is possible and accepted: it shows as a tear, never as corruption.
-- **Pacing** happens inside the guest's own present call (`osd_update_display`), via `Atomics.wait`
-  on the acknowledgement slot. Blocking there is indistinguishable, to the program, from running on a
-  slower machine. Unthrottled, MAME 0.1 reaches ~400 fps in a browser, which is not a game.
-- **Acknowledgement is on a timer, not on `requestAnimationFrame`.** rAF does not fire in a hidden
-  tab, and pacing off it deadlocked the guest the moment the tab lost focus — it sat at frame 2 for
-  ever. A background tab must throttle the program, not freeze it.
+- **Pacing happens inside the guest's own present call** (`osd_update_display`), against the guest's
+  **own clock**. Blocking there is indistinguishable, to the program, from running on a slower
+  machine, and it is the only place a program tells you it has finished a frame.
+
+  The first design got this wrong in a way worth recording: the guest was allowed to run N frames
+  ahead of an acknowledgement the page published once per paint. The game was unplayable, because its
+  speed became whatever rate the browser felt like waking a timer at — about 125 fps in a foreground
+  tab, 8 fps in a background one, and a hard deadlock at frame 2 when `requestAnimationFrame` stopped
+  firing altogether. **A display's refresh rate is not a clock.** The program declares its frame rate
+  (MAME's drivers carry `frames_per_second`); the guest sleeps until its next frame is due; the page
+  is not involved. Measured after the change: a steady 60.0 of 60 fps, in a hidden tab.
+
+  A guest that falls behind **resyncs instead of catching up**. Repaying a frame debt at full tilt is
+  the fast-forward glitch every emulator with a naive frame timer has.
 - **Keyboard** is one shared byte per PC set-1 scan code, plus a **latch** so a brief tap survives
   long enough to be sampled. See [TESTING.md](TESTING.md) for what that number was measured against.
 
-The page (`web/`) knows nothing about any program. It compiles C, paints an 8-bit indexed
-framebuffer at whatever size the guest asked for, through whatever palette the guest built, and
-forwards scan codes. Everything program-specific is **data** in `web/programs.js` plus a platform
-layer under `src/env/`. `src/` therefore contains no Node imports — the browser loads the same
-modules the gates do.
+### One surface, two modes
+
+A DOS program prints a banner and then goes graphical, on one screen. The shell shows it that way:
+an 80x25 text surface until the program creates a display, its framebuffer while it has one, and back
+to text if it closes it.
+
+Being exact about what that is: **it is not an emulated VGA.** PRISM supplies libc, not hardware, so
+the output arrives through `printf` and there is no 0xB8000 to read — the text screen is a faithful
+*presentation* of the program's output on the same surface graphics mode uses. When a DJGPP program
+eventually writes to video memory directly through `farptr`, its platform layer maps that onto this
+same surface. The shell's own reporting — compile timings, stubbed headers, functions it could not
+emit — stays in a side pane, because a DOS screen never showed "894 functions in 700 ms".
+
+### Genericity that is structural, not asserted
+
+The page knows nothing about any program: it compiles C, paints an 8-bit indexed framebuffer at
+whatever size the guest asked for, through whatever palette the guest built, forwards scan codes, and
+passes the argument string to `main` as `argv`. Programs are **data** — `web/programs/*.json`,
+discovered at start-up, never listed in the page's code — plus a platform layer under `src/env/` if
+one is needed. Two ship: MAME 0.1, and a plain-C89 Mandelbrot with no platform layer and no data
+files, which exists precisely so that "the shell is generic" is a claim something can falsify.
+
+`src/` contains no Node imports, so the browser loads the same modules the gates do — there is no
+build step to drift.

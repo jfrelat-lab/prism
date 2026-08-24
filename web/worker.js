@@ -11,7 +11,7 @@
 import { compileProgram } from '../src/compile.js';
 import { installOSD } from '../src/env/osd.js';
 import { HEADERS } from '../src/env/headers.js';
-import { controlViews, makeKeyReader, SLOT, STATE } from '../src/env/webhost.js';
+import { controlViews, makeKeyReader, makePacer, SLOT, STATE } from '../src/env/webhost.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const log = (line, kind = 'info') => post('log', { line, kind });
@@ -26,10 +26,13 @@ self.onmessage = async (e) => {
   }
 };
 
-async function start({ program, control, data }) {
+async function start({ program, control, data, argv }) {
   const views = controlViews(control);
   const { ctrl, pal } = views;
   const reader = makeKeyReader(views);
+  // The program's own frame rate, from its descriptor. MAME's drivers carry frames_per_second and
+  // Pac-Man's is 60; a program that never presents a frame never waits.
+  const pace = makePacer(ctrl, program.fps || 60);
   const setState = (s) => Atomics.store(ctrl, SLOT.STATE, s);
 
   // --- 1. the sources.
@@ -114,6 +117,7 @@ async function start({ program, control, data }) {
   const files = {};
   for (const [name, bytes] of Object.entries(data || {})) files[name] = new Uint8Array(bytes);
   log(`${Object.keys(files).length} data files visible to the program`);
+  log(`argv: ${(argv || []).join(' ')}`);
 
   installOSD(prog.M, {
     files,
@@ -126,7 +130,8 @@ async function start({ program, control, data }) {
      * worker instead would skip whatever the program does on the way out.
      */
     keys: (k) => (Atomics.load(ctrl, SLOT.STOP) && k === 1 ? 1 : reader.read(k)),
-    onPresent: () => reader.endFrame(),
+    // The frame boundary: retire the key latches, then hold the guest until its frame is due.
+    onPresent: () => { reader.endFrame(); pace(); },
   });
 
   // Stream stdout instead of collecting it: the program's output is a progress report during a run
@@ -147,7 +152,7 @@ async function start({ program, control, data }) {
   const t2 = performance.now();
   let code = 0;
   try {
-    const r = prog.run(program.argv || ['prog']);
+    const r = prog.run(argv && argv.length ? argv : ['prog']);
     code = r.code;
   } catch (err) {
     flush();

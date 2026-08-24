@@ -34,10 +34,12 @@ export const SLOT = {
   EXITCODE: 6,
   PENS: 7,         // how many palette entries are valid
 
-  ACK: 16,         // host → guest: frames the page has painted. Pacing reads this.
+  FPS: 8,          // guest → host: the frame rate the program declares, x1000
+
   STOP: 17,        // host → guest: 1 asks the program to quit through its own quit path
   PAUSE: 18,
-  SPEED: 19,       // host → guest: max frames the guest may run ahead of ACK (0 = unthrottled)
+  SPEED: 19,       // host → guest: percent of normal speed; 0 means unthrottled
+  TEXTMODE: 20,    // guest → host: 1 while no graphics display exists
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -65,26 +67,49 @@ export function controlViews(sab) {
 }
 
 /**
- * Pace the guest to the page's paint rate, from inside the guest's own present call.
+ * Pace the guest against its OWN clock, from inside its own present call.
  *
- * Without this the guest runs flat out: MAME 0.1 reached 400 frames a second, which is not a game,
- * it is a blur, and a keypress lasting 16 ms was sampled dozens of times. `Atomics.wait` blocks the
- * WORKER only — the page keeps painting, which is what releases the wait.
+ * The first design paced the guest against the page: it was allowed to run N frames ahead of an
+ * acknowledgement the page published once per paint. That was wrong in principle, and the symptom was
+ * that the game was unplayable — its speed was whatever rate the browser felt like waking a timer at,
+ * which is 125 fps in a foreground tab and 8 fps in a background one. **A display's refresh rate is
+ * not a clock.**
  *
- * The timeout is not optional: if the page stops acknowledging (tab hidden, page closed), a wait
- * with no timeout would hang the worker forever with no way to stop it.
+ * A program declares its frame rate (MAME's drivers carry `frames_per_second`; Pac-Man is 60). So the
+ * guest sleeps until its next frame is due and the page is not involved at all — which also removes
+ * the deadlock that froze the guest whenever the tab lost focus.
+ *
+ * Determinism is untouched: this changes WHEN frames happen, never what they contain. The guest's own
+ * `clock()`/`uclock()` remain deterministic counters, so a run is still reproducible frame for frame.
  */
-export function paceFrame(ctrl) {
-  const ahead = Atomics.load(ctrl, SLOT.SPEED);
-  for (;;) {
-    if (Atomics.load(ctrl, SLOT.STOP)) return;
-    const paused = Atomics.load(ctrl, SLOT.PAUSE);
-    if (!paused && !ahead) return;
-    const behind = Atomics.load(ctrl, SLOT.FRAME) - Atomics.load(ctrl, SLOT.ACK);
-    if (!paused && behind < ahead) return;
-    // Wait on ACK, so the page's next paint wakes us rather than a poll interval.
-    Atomics.wait(ctrl, SLOT.ACK, Atomics.load(ctrl, SLOT.ACK), 50);
-  }
+export function makePacer(ctrl, fps) {
+  let due = 0;
+  const stopped = () => Atomics.load(ctrl, SLOT.STOP) !== 0;
+
+  /** Sleep without spinning. Waiting on STOP with an expected 0 returns at once if stop is set. */
+  const nap = (ms) => { Atomics.wait(ctrl, SLOT.STOP, 0, Math.min(Math.max(ms, 1), 50)); };
+
+  Atomics.store(ctrl, SLOT.FPS, Math.round(fps * 1000));
+
+  return function pace() {
+    while (Atomics.load(ctrl, SLOT.PAUSE) && !stopped()) { due = 0; nap(50); }
+
+    const pct = Atomics.load(ctrl, SLOT.SPEED);
+    if (!pct) { due = 0; return; }                 // unthrottled: run as fast as the host allows
+
+    const step = 1000 / (fps * pct / 100);
+    const now = performance.now();
+    // Resync rather than try to catch up. A guest that fell behind — a slow host, a long GC pause, a
+    // throttled tab — would otherwise run at full tilt to repay a debt it can never repay, which is
+    // the fast-forward glitch every emulator with a naive frame timer has.
+    if (!due || now > due + 250) due = now;
+    due += step;
+
+    for (let left = due - performance.now(); left > 0; left = due - performance.now()) {
+      if (stopped()) return;
+      nap(left);
+    }
+  };
 }
 
 /**

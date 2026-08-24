@@ -1,0 +1,89 @@
+{
+  "title": "MAME 0.1",
+  "subtitle": "Nicola Salmoria, 1997 \u00b7 arcade emulator, 6,356 lines of C89",
+  "root": "corpus/mame01",
+  "units": [
+    "src/mame.c",
+    "src/common.c",
+    "src/machine.c",
+    "src/driver.c",
+    "src/Z80/Z80.c",
+    "src/pacman/machine.c",
+    "src/pacman/driver.c",
+    "src/crush/machine.c",
+    "src/crush/driver.c",
+    "src/pengo/machine.c",
+    "src/pengo/vidhrdw.c",
+    "src/pengo/sndhrdw.c",
+    "src/pengo/driver.c",
+    "src/ladybug/machine.c",
+    "src/ladybug/vidhrdw.c",
+    "src/ladybug/sndhrdw.c",
+    "src/ladybug/driver.c"
+  ],
+  "includeDirs": [
+    "src",
+    "src/Z80",
+    "src/msdos"
+  ],
+  "defines": {
+    "LSB_FIRST": "1"
+  },
+  "extraUnits": {
+    "prism-osd-vars.c": "int play_sound = 1;\nint osd_joy_up = 0, osd_joy_down = 0, osd_joy_left = 0, osd_joy_right = 0;\nint osd_joy_b1 = 0, osd_joy_b2 = 0, osd_joy_b3 = 0, osd_joy_b4 = 0;\n"
+  },
+  "platform": "mame-osd",
+  "memory": 268435456,
+  "args": "pacman",
+  "argsHint": "a driver name: pacman, mspacman, pengo, crush, ladybug",
+  "fps": 60,
+  "needsData": {
+    "hint": "ROM set for the driver you name \u2014 for pacman: pacman.6e .6f .6h .6j, plus 5e/5f",
+    "names": [
+      "pacman.6e",
+      "pacman.6f",
+      "pacman.6h",
+      "pacman.6j",
+      "pacman.5e",
+      "pacman.5f"
+    ]
+  },
+  "controls": [
+    [
+      "3",
+      "insert coin"
+    ],
+    [
+      "1",
+      "start 1P"
+    ],
+    [
+      "2",
+      "start 2P"
+    ],
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "P",
+      "pause"
+    ],
+    [
+      "Tab",
+      "dip switches"
+    ],
+    [
+      "F3",
+      "reset"
+    ],
+    [
+      "Esc",
+      "quit"
+    ]
+  ]
+}
