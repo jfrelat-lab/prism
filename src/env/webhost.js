@@ -34,6 +34,16 @@ export const SLOT = {
   EXITCODE: 6,
   PENS: 7,         // how many palette entries are valid
 
+  /*
+   * Where a program keeps its OWN palette and frame counter, when it has them. A platform layer that
+   * merely publishes addresses is the lightest one there is: Quake already draws into a 320x200 array
+   * of its own and already counts its frames, so nothing needs copying, hooking or re-implementing —
+   * the page reads what the program was going to write anyway.
+   */
+  PAL_ADDR: 9,     // guest address of 768 palette bytes, or 0 to use the control block's copy
+  PAL_INDIRECT: 10, // 1 when PAL_ADDR holds a POINTER to those bytes rather than the bytes
+  FRAME_ADDR: 11,  // guest address of an int the program increments per frame, or 0 for SLOT.FRAME
+
   FPS: 8,          // guest → host: the frame rate the program declares, x1000
 
   STOP: 17,        // host → guest: 1 asks the program to quit through its own quit path

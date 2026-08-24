@@ -279,3 +279,40 @@ Known limitation, stated rather than discovered later: a timing-**calibration** 
 iterations per tick to measure the machine — gets cut short by damping and reads the machine as slower
 than it is. Nothing in MAME calibrates. If something later does, the fix is a per-program exemption,
 not a cleverer heuristic.
+
+## Two platform layers, and why they look nothing alike
+
+`src/env/osd.js` implements eighteen functions. `src/env/quake.js` implements none — it looks three
+symbols up in the linked image and publishes their addresses.
+
+That is not inconsistency, it is the two programs' boundaries being different in kind. MAME's
+`osdepend.h` is a set of CALLBACKS: the host is asked to create a bitmap, obtain a pen, present a
+frame. Quake's `vid_null.c` is a BUFFER: it declares `byte vid_buffer[320*200]`, points `vid.buffer`
+at it, and the software renderer fills it whether or not anything displays it — and Quake loads its
+own palette and counts its own frames besides.
+
+So for Quake the host has nothing to implement. `vid_buffer`, `host_basepal` and `host_framecount`
+are ordinary globals with stable addresses, and the page reads pixels, palette and frame number
+directly out of guest memory. The control block gained three fields to say where they are
+(`PAL_ADDR`, `PAL_INDIRECT` for a palette behind a pointer, `FRAME_ADDR`), which any program that
+keeps its own can use.
+
+The general lesson for the next port: look for what the program already writes down before writing a
+shim to intercept it.
+
+## Control-flow flattening (`src/backend/flatten.js`)
+
+tier-0 emits `goto` as a state machine over a function's TOP-LEVEL statements, which cannot see a
+label nested inside a loop — and 1990s C puts them there. Quake's edge sorter is the canonical shape:
+labels inside a `do` body with gotos jumping around them.
+
+Rather than teach the state machine about nesting, a pre-pass makes the nesting go away, lowering
+`if`/`while`/`do`/`for`/`switch` into the `if`+`goto` forms they are defined as until the body is one
+flat list. It runs ONLY on functions that need it, so everything else keeps its structured emission —
+a `while` loop stays a `while` loop in the output, which matters for both speed and readability.
+
+Two deliberate refusals rather than guesses: a name declared twice in sibling blocks (hoisting both to
+function scope would silently share one slot), and `break`/`continue` with no enclosing construct.
+
+It moved gcc's torture corpus from 1218 to 1243 and c-testsuite from 193 to 196, and it is what let
+Quake's renderer run.

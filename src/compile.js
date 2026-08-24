@@ -11,6 +11,7 @@ import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
 import { osdBuiltins, installOSD } from './env/osd.js';
 import { installStdio } from './env/stdio.js';
+import { installQuake } from './env/quake.js';
 import { installConsole } from './env/console.js';
 
 /**
@@ -125,6 +126,8 @@ export const BUILTINS = new Map(Object.entries({
   fscanf: { ret: I, params: [P, P], variadic: true },
   sscanf: { ret: I, params: [P, P], variadic: true },
   scanf: { ret: I, params: [P], variadic: true },
+  rand: { ret: I, params: [] },
+  srand: { ret: V, params: [U] },
   atof: { ret: D, params: [P] },
   atol: { ret: I, params: [P] },
   open: { ret: I, params: [P, I], variadic: true },
@@ -287,6 +290,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
 export { installOSD };
 export { installConsole };
 export { installStdio };
+export { installQuake };
 
 /**
  * Compile and link SEVERAL translation units into one module.

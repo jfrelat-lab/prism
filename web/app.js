@@ -317,14 +317,32 @@ function paint() {
       imageData = cx.createImageData(w, h);
       textImage = null;                      // so a return to text mode reallocates its own image
     }
-    const gen = Atomics.load(ctrl, SLOT.PALGEN);
-    if (gen !== palGen) {
-      lut = new Uint32Array(256);
-      for (let i = 0; i < 256; i++) {
-        lut[i] = (255 << 24) | (pal[i * 3 + 2] << 16) | (pal[i * 3 + 1] << 8) | pal[i * 3];
+    /*
+     * The palette comes either from the control block, filled in by a platform layer that intercepts
+     * the program's palette calls (MAME), or straight out of guest memory for a program that keeps
+     * its own (Quake). The second costs 256 reads a frame and saves a layer.
+     */
+    const palAddr = Atomics.load(ctrl, SLOT.PAL_ADDR);
+    if (palAddr) {
+      const at = Atomics.load(ctrl, SLOT.PAL_INDIRECT)
+        ? new DataView(guest.buffer).getInt32(palAddr, true) : palAddr;
+      if (!lut) lut = new Uint32Array(256);
+      if (at) {
+        for (let i = 0; i < 256; i++) {
+          lut[i] = (255 << 24) | (guest[at + i * 3 + 2] << 16) | (guest[at + i * 3 + 1] << 8) | guest[at + i * 3];
+        }
       }
-      palGen = gen;
+    } else {
+      const gen = Atomics.load(ctrl, SLOT.PALGEN);
+      if (gen !== palGen) {
+        lut = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) {
+          lut[i] = (255 << 24) | (pal[i * 3 + 2] << 16) | (pal[i * 3 + 1] << 8) | pal[i * 3];
+        }
+        palGen = gen;
+      }
     }
+    if (!lut) return requestAnimationFrame(paint);
     // Read WHILE the guest writes. A tear is possible and accepted: the alternative is a double
     // buffer the guest would have to swap, and the guest is synchronous C that never yields.
     const dst = new Uint32Array(imageData.data.buffer);
@@ -336,11 +354,19 @@ function paint() {
   requestAnimationFrame(paint);
 }
 
+/** The guest's frame number: its own counter where it keeps one, ours where it does not. */
+function guestFrame() {
+  const { ctrl } = views;
+  const at = Atomics.load(ctrl, SLOT.FRAME_ADDR);
+  if (at && guest) return new DataView(guest.buffer).getInt32(at, true);
+  return Atomics.load(ctrl, SLOT.FRAME);
+}
+
 function stats() {
   if (!views) return;
   const { ctrl } = views;
   const state = Atomics.load(ctrl, SLOT.STATE);
-  const frame = Atomics.load(ctrl, SLOT.FRAME);
+  const frame = guestFrame();
   const w = Atomics.load(ctrl, SLOT.WIDTH), h = Atomics.load(ctrl, SLOT.HEIGHT);
   const graphics = w > 0 && !Atomics.load(ctrl, SLOT.TEXTMODE);
   const now = performance.now();

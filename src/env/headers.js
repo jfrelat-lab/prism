@@ -230,7 +230,13 @@ typedef char *va_list;
 char *__prism_va_start(void);
 char *__prism_va_next(va_list *ap, unsigned size);
 #define va_start(ap, last) ((ap) = __prism_va_start())
-#define va_end(ap) ((void)0)
+/*
+ * va_end EVALUATES its argument. It has nothing to clean up here, but discarding the expression
+ * discards its side effects too, and gcc's does not: va-arg-21.c writes va_end(**ap_ptr++) and
+ * checks that the pointer moved. The bug was latent until vprintf existed — before that the test
+ * could not compile, so it counted as a refusal instead of a wrong answer.
+ */
+#define va_end(ap) ((void)(ap))
 #define va_copy(dst, src) ((dst) = (src))
 #define va_arg(ap, type) (*(type *)__prism_va_next(&(ap), sizeof(type)))
 #endif

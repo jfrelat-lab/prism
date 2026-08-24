@@ -21,6 +21,7 @@ import * as T from '../sema/types.js';
 import { findField, constEval } from '../parse/parser.js';
 import { FUNC_TAG } from '../link/module.js';
 import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
+import { needsFlattening, flattenGotos } from './flatten.js';
 
 /*
  * C identifiers that JavaScript reserves. A C program is entitled to a variable called `in`, `new` or
@@ -169,7 +170,30 @@ export class FunctionEmitter {
   }
 
   emit() {
-    const d = this.decl;
+    let d = this.decl;
+
+    /*
+     * A label below the top level means the state machine cannot see it, so lower the whole body to
+     * labels and gotos first — see flatten.js. Only functions that need it pay: everything else keeps
+     * its structured emission, which is both faster and readable.
+     *
+     * Quake needs this for nine functions, six of them in the span renderer, where a label sits
+     * inside a `do` loop the gotos jump around.
+     */
+    if (needsFlattening(d.body)) {
+      let sw = 0;
+      const newTemp = (disc) => {
+        // The discriminant is evaluated ONCE, into a real local, because the dispatch chain that
+        // replaces the switch would otherwise re-evaluate it per comparison.
+        const name = `_sw${sw++}$${d.name}`;
+        return {
+          decl: { n: 'decls', decls: [{ n: 'vardecl', name, type: T.INT, storage: null, init: { expr: disc } }] },
+          ref: { n: 'ident', name, type: T.INT },
+        };
+      };
+      d = { ...d, body: flattenGotos(d.body, { unsup, newTemp }) };
+      this.decl = d;
+    }
     // A struct RETURN uses the sret convention: the caller supplies the buffer, because the callee's
     // own frame is released before the value could be read out of it.
     this.sret = T.isRecord(d.type.ret);

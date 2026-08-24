@@ -565,6 +565,99 @@ int main(void) {
 
 // ---------------------------------------------------------------- run
 
+C('flatten-gotos', `#include <stdio.h>
+
+/* Quake's edge-insert shape: labels inside a do-while, gotos jumping around them. */
+static int search(int *a, int n, int want)
+{
+    int i = 0, hits = 0;
+    do {
+    again:
+        if (i >= n) goto done;
+        if (a[i] == want) goto found;
+        i++;
+        goto again;
+    found:
+        hits++;
+        i++;
+        goto again;
+    done:
+        break;
+    } while (1);
+    return hits;
+}
+
+/* A label inside a switch, jumped to from another arm — Quake's menu key handlers. */
+static int keys(int k)
+{
+    int out = 0;
+    switch (k) {
+    case 1:
+        out = 10;
+        goto forward;
+    case 2:
+        out = 20;
+        break;
+    case 3:
+    forward:
+        out += 100;
+        break;
+    default:
+        out = -1;
+        break;
+    }
+    return out;
+}
+
+/* break and continue inside loops that get flattened because a label sits in one of them. */
+static int loops(int n)
+{
+    int i, total = 0;
+    for (i = 0; i < n; i++) {
+        if (i % 3 == 0) continue;
+        if (i > 12) break;
+        total += i;
+        if (total > 30) goto stop;
+    }
+    while (n > 0) {
+        n--;
+        total++;
+    }
+stop:
+    return total;
+}
+
+/* A goto that lands inside a nested if — D_PolysetRecursiveTriangle's shape. */
+static int nested(int x)
+{
+    int r = 0;
+    if (x > 0) {
+        if (x > 10) {
+        deep:
+            r += 1000;
+            if (x > 100) r += 7;
+            return r;
+        }
+        r += 1;
+    }
+    if (x == 5) goto deep;
+    return r;
+}
+
+int main(void)
+{
+    int a[8];
+    int i;
+    for (i = 0; i < 8; i++) a[i] = i % 3;
+
+    printf("search %d %d %d\\n", search(a, 8, 0), search(a, 8, 2), search(a, 8, 9));
+    printf("keys %d %d %d %d\\n", keys(1), keys(2), keys(3), keys(9));
+    printf("loops %d %d %d\\n", loops(5), loops(20), loops(0));
+    printf("nested %d %d %d %d\\n", nested(-1), nested(3), nested(5), nested(200));
+    return 0;
+}
+`);
+
 const active = cases.filter(c => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-run: ${active.length} cases\n`);

@@ -147,15 +147,8 @@ export function installOSD(M, {
       return x < y ? -1 : x > y ? 1 : 0;
     },
 
-    /**
-     * A deterministic PRNG. `rand()` must not read host entropy: the same run has to produce the
-     * same frame. This is the ANSI C sample generator, which is also what DJGPP shipped.
-     */
-    rand: () => { M.randState = (Math.imul(M.randState, 1103515245) + 12345) | 0; return (M.randState >>> 16) & 0x7fff; },
-    srand: (seed) => { M.randState = seed | 0; },
   };
 
-  M.randState = 1;
   Object.assign(M.rt, osd, lib);
   return state;
 }
@@ -184,7 +177,5 @@ export function osdBuiltins(T) {
 
     stricmp: { ret: I, params: [P, P] },
     strcmpi: { ret: I, params: [P, P], impl: 'stricmp' },
-    rand: { ret: I, params: [] },
-    srand: { ret: V, params: [U] },
   };
 }

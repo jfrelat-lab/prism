@@ -131,7 +131,7 @@ if (program.failures.length) {
     `${ranked.length} distinct causes:\n`);
   for (const [msg, where] of ranked.slice(0, 22)) {
     console.log(`  ${String(where.length).padStart(4)}  ${msg}`);
-    console.log(`        e.g. ${where.slice(0, 3).join(' ')}`);
+    console.log(`        ${where.join(' ')}`);
   }
 }
 
@@ -155,6 +155,13 @@ if (dataArg) {
   walk(dataArg);
   console.log(`data from ${dataArg}: ${Object.keys(files).length} files ` +
     `(${(Object.values(files).reduce((n, b) => n + b.length, 0) / 1048576).toFixed(1)} MB)`);
+}
+
+if (process.argv.includes('--symbols')) {
+  for (const n of ['vid_buffer', 'host_basepal', 'host_framecount', 'realtime', 'cls', 'key_dest']) {
+    const sym = program.mod.symbols.get(n);
+    console.log(`  ${n.padEnd(16)} ${sym ? '0x' + sym.addr.toString(16) + '  ' + sym.size + ' bytes' : '(absent)'}`);
+  }
 }
 
 if (process.argv.includes('--run')) {

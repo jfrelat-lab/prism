@@ -11,6 +11,8 @@
 import { compileProgram } from '../src/compile.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 import { installOSD } from '../src/env/osd.js';
+import { installStdio } from '../src/env/stdio.js';
+import { installQuake } from '../src/env/quake.js';
 import { installConsole } from '../src/env/console.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
@@ -143,29 +145,40 @@ async function start({ program, control, data, argv }) {
   log(`${Object.keys(files).length} data files visible to the program`);
   log(`argv: ${(argv || []).join(' ')}`);
 
-  installOSD(prog.M, {
-    files,
-    readKey: () => keyboard.readKey(),
-    publish: { ctrl, pal },
-    /*
-     * A held key is a byte in shared memory, so this read is what the guest sees at the instant it
-     * asks — no event queue, no latency beyond one frame of pacing.
-     *
-     * STOP is answered as Esc because that is how the program's OWN quit path works. Killing the
-     * worker instead would skip whatever the program does on the way out.
-     */
-    keys: (k) => (Atomics.load(ctrl, SLOT.STOP) && k === 1 ? 1 : reader.read(k)),
-    // The frame boundary: retire the key latches, then hold the guest until its frame is due.
-    onPresent: () => {
-      reader.endFrame();
-      pace();
-      // Diagnostics, once a second: the pacing numbers live in this thread and the page cannot read
-      // them. postMessage queues to the page without this thread yielding, so a blocked guest can
-      // still report.
-      const f = Atomics.load(ctrl, SLOT.FRAME);
-      if (f % 60 === 0) post('diag', { spin: prog.M.spinDamping, clockUs: prog.M.realClock.micros() });
-    },
-  });
+  /*
+   * The platform layer the descriptor names. They differ in KIND, not in detail: MAME's boundary is
+   * eighteen callbacks, so its layer implements functions; Quake draws into a 320x200 array it
+   * already owns, so its layer only publishes addresses and implements nothing.
+   */
+  if (program.platform === 'quake') {
+    installQuake(prog.M, { publish: { ctrl } });
+    // compile.js installed stdio with no files; re-install with the ones the page supplied.
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+  } else {
+    installOSD(prog.M, {
+      files,
+      readKey: () => keyboard.readKey(),
+      publish: { ctrl, pal },
+      /*
+       * A held key is a byte in shared memory, so this read is what the guest sees at the instant it
+       * asks — no event queue, no latency beyond one frame of pacing.
+       *
+       * STOP is answered as Esc because that is how the program's OWN quit path works. Killing the
+       * worker instead would skip whatever the program does on the way out.
+       */
+      keys: (k) => (Atomics.load(ctrl, SLOT.STOP) && k === 1 ? 1 : reader.read(k)),
+      // The frame boundary: retire the key latches, then hold the guest until its frame is due.
+      onPresent: () => {
+        reader.endFrame();
+        pace();
+        // Diagnostics, once a second: the pacing numbers live in this thread and the page cannot read
+        // them. postMessage queues to the page without this thread yielding, so a blocked guest can
+        // still report.
+        const f = Atomics.load(ctrl, SLOT.FRAME);
+        if (f % 60 === 0) post('diag', { spin: prog.M.spinDamping, clockUs: prog.M.realClock.micros() });
+      },
+    });
+  }
 
   /*
    * The console writes into the guest's own text video RAM, and the page renders that. No output is

@@ -23,7 +23,12 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const port = +(process.argv.find(a => a.startsWith('--port='))?.slice(7) ?? 8080);
-const dataDir = process.argv.find(a => a.startsWith('--data='))?.slice(7);
+// --data may be given more than once, or comma-separated: a program's data and another's do not
+// collide, because each file keeps its path relative to the directory it came from (pacman/... and
+// id1/...), and one server can then feed every program in the picker.
+const dataDirs = process.argv.filter(a => a.startsWith('--data='))
+  .flatMap(a => a.slice(7).split(',')).map(s => s.trim()).filter(Boolean);
+const dataDir = dataDirs[0];
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -81,16 +86,24 @@ const server = createServer(async (req, res) => {
 
     // The opt-in data directory, if the user named one.
     if (path.startsWith('/__data/')) {
-      if (!dataDir) { res.writeHead(404).end('no --data directory'); return; }
+      if (!dataDirs.length) { res.writeHead(404).end('no --data directory'); return; }
       if (path === '/__data/') {
-        const files = await listTree(dataDir).catch(() => []);
+        const files = [];
+        for (const d of dataDirs) files.push(...await listTree(d).catch(() => []));
         headers(res, TYPES['.json']);
         res.end(JSON.stringify({ files }));
         return;
       }
-      const f = safeJoin(dataDir, path.slice('/__data'.length));
-      if (!f) { res.writeHead(403).end('outside the data directory'); return; }
-      const body = await readFile(f);
+      // Whichever data directory actually holds it. First match wins, which is why they must not
+      // overlap — and they do not, since each program's files live under its own name.
+      let body = null;
+      for (const d of dataDirs) {
+        const f = safeJoin(d, path.slice('/__data'.length));
+        if (!f) continue;
+        body = await readFile(f).catch(() => null);
+        if (body) break;
+      }
+      if (!body) { res.writeHead(404).end('no such data file'); return; }
       headers(res, 'application/octet-stream');
       res.end(body);
       return;
@@ -124,6 +137,6 @@ const server = createServer(async (req, res) => {
 server.listen(port, () => {
   console.log(`PRISM shell:  http://localhost:${port}/`);
   console.log(`serving       ${ROOT}`);
-  console.log(dataDir ? `data dir      ${dataDir}  (exposed at /__data/)`
+  console.log(dataDirs.length ? `data dirs     ${dataDirs.join('  ')}  (exposed at /__data/)`
     : `data dir      none — pick data files in the page (--data=<dir> to serve one)`);
 });

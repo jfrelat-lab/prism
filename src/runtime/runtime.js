@@ -20,6 +20,7 @@ export function makeMachine(mod = new Module()) {
     heap: 0,                    // set after linking, when the static area is final
     heapEnd: 0,
     stdout: [],
+    randState: 1,            // see rt.rand — deterministic on purpose
     clockTicks: 0,           // the deterministic clock, see rt.clock
     uclockTicks: 0n,         // ~1/60 s per call at the PIT rate
     funcs: mod.funcTable,
@@ -188,6 +189,15 @@ function makeLibc(M) {
       const i = hs.indexOf(ns);
       return i < 0 ? 0 : h + i;
     },
+    /*
+     * A DETERMINISTIC PRNG, the ANSI C sample generator that DJGPP also shipped. It must not read
+     * host entropy: the same run has to produce the same frames, which is what makes a golden
+     * fingerprint possible. Lived in MAME's platform shim until Quake asked for it — the same
+     * mis-filing as fopen, and for the same reason: this is ISO C, not one program's.
+     */
+    rand: () => { M.randState = (Math.imul(M.randState, 1103515245) + 12345) | 0; return (M.randState >>> 16) & 0x7fff; },
+    srand: (seed) => { M.randState = seed | 0; },
+
     atof: (p) => { const v = parseFloat(M.mod.cstr(p)); return Number.isNaN(v) ? 0 : v; },
     atol: (p) => { const v = parseInt(M.mod.cstr(p), 10); return Number.isNaN(v) ? 0 : v | 0; },
 
