@@ -226,7 +226,23 @@ uclock_t uclock(void);
 #endif
 `;
 
+const SETJMP = `
+#ifndef _PRISM_SETJMP_H
+#define _PRISM_SETJMP_H
+/*
+ * jmp_buf is an ARRAY, as every real setjmp.h makes it, so that \`jmp_buf b;\` declares storage and
+ * passing it decays to a pointer. PRISM stores two words in it: the shadow-stack frame that called
+ * setjmp, and the resume point inside that function.
+ */
+typedef int jmp_buf[8];
+int setjmp(jmp_buf env);
+void longjmp(jmp_buf env, int val);
+#define setjmp setjmp
+#endif
+`;
+
 export const HEADERS = {
+  'setjmp.h': SETJMP,
   'time.h': TIMEH,
   'stdarg.h': STDARG,
   'stdint.h': STDINT,

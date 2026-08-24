@@ -195,6 +195,24 @@ function makeLibc(M) {
     uclock: () => { M.uclockTicks += 19886n; return M.uclockTicks; },
     time: (p) => { const t = 852076800; if (p) dv().setInt32(p, t, true); return t; },
 
+    /**
+     * setjmp/longjmp. The buffer records the shadow-stack frame that called setjmp and the resume
+     * point inside that function; longjmp throws, and the frame's own dispatch loop recognises its
+     * own fp and resumes. A longjmp into a frame that has already returned is undefined in C, and
+     * here it simply finds no catcher and surfaces as an error rather than corrupting anything.
+     */
+    __prism_setjmp: (env, fp, pc) => {
+      dv().setInt32(env, fp | 0, true);
+      dv().setInt32(env + 4, pc | 0, true);
+      return 0;
+    },
+    longjmp: (env, val) => {
+      const fp = dv().getInt32(env, true);
+      const pc = dv().getInt32(env + 4, true);
+      // C says longjmp(env, 0) makes setjmp return 1.
+      throw { __prismJmp: fp, pc, val: (val | 0) === 0 ? 1 : (val | 0) };
+    },
+
     // --- gcc builtins that are not library calls
     __builtin_expect: (v, _expected) => v,
     __builtin_prefetch: () => {},

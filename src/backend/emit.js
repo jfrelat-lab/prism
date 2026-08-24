@@ -191,12 +191,25 @@ export class FunctionEmitter {
     this.labels = this.#planLabels(d.body);
     if (this.labels) {
       this.out.push('var _pc=0;');
-      this.out.push('_top: for(;;){ switch(_pc){');
+      if (this.hasSetjmp) this.out.push('var _sjv=0;');
+      this.out.push(this.hasSetjmp ? '_top: for(;;){ try{ switch(_pc){' : '_top: for(;;){ switch(_pc){');
       for (const [k, seg] of this.labels.segments.entries()) {
+        // The registration runs at the END of the previous segment, which is where a fall-through
+        // arrives from — so a setjmp is recorded before its own case is ever entered.
+        if (seg.pre) {
+          const env = this.#rvalForCall(seg.pre.args[0], T.ptr(T.INT));
+          this.out.push(`_sjv=0; M.rt.__prism_setjmp(${env},_fp,${k});`);
+        }
         this.out.push(`case ${k}:`);
-        for (const item of seg) this.#item(item, escaped);
+        for (const item of seg.items) this.#item(item, escaped);
       }
-      this.out.push('} break _top; }');
+      if (this.hasSetjmp) {
+        // A longjmp aimed at THIS frame resumes; anything else keeps unwinding. The stack pointer is
+        // put back to this frame's base, because everything the abandoned path pushed is gone.
+        this.out.push('} }catch(_e){ if(_e&&_e.__prismJmp===_fp){ _sjv=_e.val; _pc=_e.pc; M.sp=_fp; continue _top; } throw _e; } break _top; }');
+      } else {
+        this.out.push('} break _top; }');
+      }
     } else {
       this.#block(d.body, escaped);
     }
@@ -219,16 +232,24 @@ export class FunctionEmitter {
   #planLabels(body) {
     // A `label` node wraps the statement that follows it, so flatten it back into a marker plus
     // that statement before splitting.
+    //
+    // A statement containing a `setjmp` call also becomes a boundary: longjmp must resume just after
+    // the call, and a numbered dispatch point is exactly what the goto machinery already provides.
+    // The call itself is lifted out and replaced by `_sjv`, so `if (setjmp(e)) return;` becomes
+    // "register, then fall into a case whose first act is to test _sjv".
     const flat = [];
     const walk = (items) => {
       for (const it of items) {
         if (it.n === 'label') { flat.push({ mark: it.name }); walk([it.body]); continue; }
+        const sj = findSetjmpCall(it, this.ctx.builtins);
+        if (sj) flat.push({ sj });
         flat.push(it);
       }
     };
     walk(body.items);
     const names = flat.filter(x => x.mark).map(x => x.mark);
-    if (!names.length) {
+    this.hasSetjmp = flat.some(x => x.sj);
+    if (!names.length && !this.hasSetjmp) {
       // A goto with no TOP-LEVEL label means the label is nested inside a block or loop, which needs
       // real control-flow flattening. Say that, rather than the misleading "no label in this
       // function" this used to report.
@@ -241,11 +262,12 @@ export class FunctionEmitter {
       if (!names.includes(target)) unsup(`goto into a nested block ('${target}')`);
     }
 
-    const segments = [[]];
+    const segments = [{ pre: null, items: [] }];
     const index = new Map();
     for (const x of flat) {
-      if (x.mark) { index.set(x.mark, segments.length); segments.push([]); continue; }
-      segments[segments.length - 1].push(x);
+      if (x.mark) { index.set(x.mark, segments.length); segments.push({ pre: null, items: [] }); continue; }
+      if (x.sj) { segments.push({ pre: x.sj, items: [] }); continue; }
+      segments[segments.length - 1].items.push(x);
     }
     return { segments, index };
   }
@@ -1060,7 +1082,13 @@ export class FunctionEmitter {
 
   #call(e) {
     // A direct call by name; anything else goes through the function table.
-    if (e.fn.n === 'ident' && !this.locals.has(e.fn.name)) {
+    //
+    // A global VARIABLE of function-pointer type is not a direct call: Quake's byte-order helpers are
+    // `int (*LittleLong)(int)` assigned at start-up, and treating the name as a function made it an
+    // undeclared-function error. In C a name is either a function or an object, so a hit in `globals`
+    // settles it in favour of the indirect path.
+    const calleeIsObject = !this.locals.has(e.fn.name) && this.ctx.globals.has(e.fn.name);
+    if (e.fn.n === 'ident' && !this.locals.has(e.fn.name) && !calleeIsObject) {
       const name = e.fn.name;
       const f = this.ctx.funcs.get(name);
       /*
@@ -1071,6 +1099,11 @@ export class FunctionEmitter {
        * reaches the runtime.
        */
       const rt = (f && f.defined) ? null : this.ctx.builtins.get(name);
+      if (rt?.setjmp) {
+        // The registration was emitted by the planner; here the call is just its return value.
+        if (!this.hasSetjmp) unsup('setjmp outside a statement the planner could lift');
+        return { js: '_sjv', type: T.INT };
+      }
       if (rt?.vaStart) {
         if (!this.variadic) throw new EmitError('va_start outside a variadic function');
         return { js: '_va', type: T.ptr(T.CHAR) };
@@ -1270,6 +1303,22 @@ function unifyCond(a, b) {
   if (bt.k === 'ptr') return bt;
   if (T.isArith(at) && T.isArith(bt)) return T.usualArith(at, bt);
   return at;
+}
+
+/** The first `setjmp` call in this statement, if any. */
+function findSetjmpCall(node, builtins) {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) {
+    for (const x of node) { const r = findSetjmpCall(x, builtins); if (r) return r; }
+    return null;
+  }
+  if (node.n === 'call' && node.fn?.n === 'ident' && builtins?.get(node.fn.name)?.setjmp) return node;
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'sym' || k === 'loc') continue;
+    const r = findSetjmpCall(node[k], builtins);
+    if (r) return r;
+  }
+  return null;
 }
 
 /** Does this subtree contain a goto? */

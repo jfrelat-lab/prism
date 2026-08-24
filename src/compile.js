@@ -50,6 +50,15 @@ export const TARGET_DEFINES = {
   __ORDER_LITTLE_ENDIAN__: '1234', __ORDER_BIG_ENDIAN__: '4321', __ORDER_PDP_ENDIAN__: '3412',
   __BYTE_ORDER__: '1234',
 
+  /*
+   * __DATE__ and __TIME__ are FIXED, not the wall clock. A compiler that stamps the real time makes
+   * every build different, and this project's whole test strategy rests on the same input producing
+   * the same output. gcc has -Wdate-time and SOURCE_DATE_EPOCH for the same reason. Quake prints
+   * these in its banner, so the value is visible but constant.
+   */
+  __DATE__: '"Jan  1 1996"',
+  __TIME__: '"00:00:00"',
+
   __PRISM__: '1',
 };
 
@@ -123,6 +132,11 @@ export const BUILTINS = new Map(Object.entries({
   __builtin_alloca: { ret: P, params: [U], impl: 'alloca' },
   // The variadic pair. __prism_va_start is intercepted by the emitter (it must resolve to the
   // current function's hidden buffer parameter); __prism_va_next is an ordinary runtime call.
+  // setjmp is intercepted by the emitter: it must become a resume point in the function's state
+  // machine, which a plain call cannot express. longjmp is an ordinary runtime call that throws.
+  setjmp: { ret: I, params: [P], setjmp: true },
+  longjmp: { ret: V, params: [P, I] },
+  __prism_setjmp: { ret: I, params: [P, P, I] },
   __prism_va_start: { ret: P, params: [], vaStart: true },
   __prism_va_next: { ret: P, params: [P, U] },
   clock: { ret: T.ULONG, params: [] },
@@ -142,7 +156,7 @@ export class CompileError extends Error {}
  * Compile one translation unit.
  * @returns {{M, F, src, run: (argv?: string[]) => {code: number, stdout: string}}}
  */
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false } = {}) {
   const pp = new Preprocessor({
     defines: { ...TARGET_DEFINES, ...defines },
     resolve: resolve ?? builtinHeaderResolver(),
@@ -150,7 +164,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   const tokens = pp.run(source, file);
   const { unit, scope } = parse(tokens, { file });
 
-  const mod = new Module(memory ? { memory } : {});
+  const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
 
   // Pass 1: give every file-scope name an address BEFORE any body is emitted, because a body may
@@ -215,8 +229,13 @@ export { installOSD };
  *
  * @param units [{file, source}]
  */
-export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {} } = {}) {
-  const mod = new Module(memory ? { memory } : {});
+// Reported in diagnostics only. Spelled out rather than imported from node:path, because src/
+// must stay loadable in a browser: the web shell imports these modules directly, unbundled.
+const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
+
+export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false } = {}) {
+  const failures = [];
+  const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
   const resolver = resolve ?? builtinHeaderResolver(includes);
 
@@ -274,7 +293,16 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
       }
       if (d.n !== 'func') continue;
       const link = ctx.funcs.get(d.name)?.name ?? d.name;
-      pieces.push(new FunctionEmitter(mod, { ...d, name: link }, ctx).emit());
+      try {
+        pieces.push(new FunctionEmitter(mod, { ...d, name: link }, ctx).emit());
+      } catch (err) {
+        // With `collect`, a function that cannot be emitted becomes a stub that throws IF CALLED, so
+        // one build reports every gap instead of dying on the first. Porting a 45 000-line program
+        // one error per rebuild is not a workflow. Never silent: the list is returned.
+        if (!collect) throw err;
+        failures.push({ unit: basename(p.file), fn: d.name, message: String(err.message) });
+        pieces.push(`function ${link}(){ throw new Error(${JSON.stringify('unimplemented: ' + d.name)}); }`);
+      }
       emitted.push(link);
     }
   }
@@ -293,7 +321,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
 
-  return { M, F, src, mod, run: makeRunner(M, F, mod) };
+  return { M, F, src, mod, failures, run: makeRunner(M, F, mod) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */
