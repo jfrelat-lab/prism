@@ -10,8 +10,9 @@
 
 import { compileProgram } from '../src/compile.js';
 import { installOSD } from '../src/env/osd.js';
+import { installConsole } from '../src/env/console.js';
 import { HEADERS } from '../src/env/headers.js';
-import { controlViews, makeKeyReader, makePacer, SLOT, STATE } from '../src/env/webhost.js';
+import { controlViews, makeKeyReader, makePacer, makeKeyboard, SLOT, STATE } from '../src/env/webhost.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const log = (line, kind = 'info') => post('log', { line, kind });
@@ -33,6 +34,7 @@ async function start({ program, control, data, argv }) {
   // The program's own frame rate, from its descriptor. MAME's drivers carry frames_per_second and
   // Pac-Man's is 60; a program that never presents a frame never waits.
   const pace = makePacer(ctrl, program.fps || 60);
+  const keyboard = makeKeyboard(views);
   const setState = (s) => Atomics.store(ctrl, SLOT.STATE, s);
 
   // --- 1. the sources.
@@ -134,15 +136,15 @@ async function start({ program, control, data, argv }) {
     onPresent: () => { reader.endFrame(); pace(); },
   });
 
-  // Stream stdout instead of collecting it: the program's output is a progress report during a run
-  // that may never end, so waiting for the return value would show it never.
-  let pending = '';
-  const flush = () => { if (pending) { post('out', { text: pending }); pending = ''; } };
-  prog.M.write = (s) => {
-    prog.M.stdout.push(s);
-    pending += s;
-    if (pending.length > 2048 || pending.includes('\n')) flush();
-  };
+  /*
+   * The console writes into the guest's own text video RAM, and the page renders that. No output is
+   * posted to the page at all any more: a program that prints and a program that pokes 0xB8000 must
+   * end up in the same place, and they do because that place is guest memory.
+   *
+   * stdin now blocks. MAME prints "Press <ENTER> to continue." and calls getchar(); until this
+   * existed, getchar returned EOF and the program asked a question it then ignored.
+   */
+  installConsole(prog.M, { readChar: () => keyboard.read() });
 
   post('ready', { image: prog.mod.buffer });
 
@@ -155,13 +157,11 @@ async function start({ program, control, data, argv }) {
     const r = prog.run(argv && argv.length ? argv : ['prog']);
     code = r.code;
   } catch (err) {
-    flush();
     log(`the program threw: ${String(err && err.message || err)}`, 'error');
     Atomics.store(ctrl, SLOT.EXITCODE, -1);
     setState(STATE.ERROR);
     return;
   }
-  flush();
   const runS = (performance.now() - t2) / 1000;
   const frames = Atomics.load(ctrl, SLOT.FRAME);
   log(`exit ${code} after ${runS.toFixed(1)} s and ${frames} frames ` +

@@ -168,7 +168,6 @@ export function installOSD(M, {
       return size ? Math.floor(got / size) : 0;
     },
     fwrite: (_src, size, count) => count | 0,
-    getchar: () => -1,
 
     /**
      * A deterministic PRNG. `rand()` must not read host entropy: the same run has to produce the
@@ -211,7 +210,6 @@ export function osdBuiltins(T) {
     fclose: { ret: I, params: [ptr] },
     fread: { ret: U, params: [P, U, U, ptr] },
     fwrite: { ret: U, params: [P, U, U, ptr] },
-    getchar: { ret: I, params: [] },
     rand: { ret: I, params: [] },
     srand: { ret: V, params: [U] },
   };

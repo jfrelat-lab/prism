@@ -10,6 +10,7 @@ import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.j
 import { FunctionEmitter, EmitError } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
 import { osdBuiltins, installOSD } from './env/osd.js';
+import { installConsole } from './env/console.js';
 
 /**
  * Target macros a DJGPP-targeted source expects to find.
@@ -75,6 +76,8 @@ export const BUILTINS = new Map(Object.entries({
   snprintf: { ret: I, params: [P, U, P], variadic: true },
   puts: { ret: I, params: [P] },
   putchar: { ret: I, params: [I] },
+  gets: { ret: P, params: [P] },
+  getchar: { ret: I, params: [] },
   fputs: { ret: I, params: [P, P] },
   fputc: { ret: I, params: [I, P] },
   malloc: { ret: P, params: [U] },
@@ -166,6 +169,9 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
 
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
+  // A text console in guest memory from the start, so stdout has somewhere real to land. The host
+  // replaces `readChar` with a blocking one; headless, stdin is simply at EOF.
+  installConsole(M);
 
   // Pass 1: give every file-scope name an address BEFORE any body is emitted, because a body may
   // reference a global or take a function's address before its definition appears.
@@ -218,6 +224,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
 }
 
 export { installOSD };
+export { installConsole };
 
 /**
  * Compile and link SEVERAL translation units into one module.
@@ -237,6 +244,9 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   const failures = [];
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
+  // A text console in guest memory from the start, so stdout has somewhere real to land. The host
+  // replaces `readChar` with a blocking one; headless, stdin is simply at EOF.
+  installConsole(M);
   const resolver = resolve ?? builtinHeaderResolver(includes);
 
   // Parse every unit first: pass 1 must see all declarations before any body is emitted.

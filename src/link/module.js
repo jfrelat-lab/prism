@@ -1,14 +1,29 @@
 // module.js — the linear memory image and the symbol/function tables.
 //
-// One ArrayBuffer, i386 flat: a pointer IS a 32-bit offset into it. Three regions, laid out low to
+// One ArrayBuffer, i386 flat: a pointer IS a 32-bit offset into it. Four regions, laid out low to
 // high, because C code compares and casts pointers and expects a single ordered address space:
 //
 //   0x0000_0000  a reserved null page — a null dereference must fault, not silently read a global
-//   0x0000_1000  statics (.data then .bss), address-stable for the life of the module
+//   0x0000_0400  the PC's low megabyte: BDA, then the VGA windows at 0xA0000 and 0xB8000
+//   0x0010_0000  statics (.data then .bss), address-stable for the life of the module
 //   ...          the heap, growing up (malloc)
 //   top          the shadow stack, growing DOWN (alloca, address-taken locals, struct returns)
+//
+// The low megabyte is reserved rather than handed to the program, and that is not decoration. A
+// DJGPP program reaches video memory at linear 0xA0000/0xB8000 through `_dos_ds` and `sys/farptr.h`,
+// so those have to BE those addresses for such code to compile unmodified. It also means the host can
+// render text mode by reading 0xB8000 out of guest memory, with no idea whether the characters got
+// there through `printf` or through the program poking video RAM itself — which is the whole point of
+// emulating the environment rather than substituting a backend per program.
+//
+// It costs one megabyte of a 256 MB address space and buys the DJGPP memory model for free.
 
 export const NULL_GUARD = 0x1000;
+export const LOW_MEMORY = 0x100000;      // the PC's first megabyte, reserved
+export const BDA = 0x400;                // BIOS data area: cursor position lives at 0x450/0x451
+export const VRAM_TEXT = 0xb8000;        // 80x25, two bytes per cell: character then attribute
+export const VRAM_GFX = 0xa0000;         // mode 13h and the EGA/VGA planar window
+export const TEXT_COLS = 80, TEXT_ROWS = 25;
 
 export class Module {
   /**
@@ -22,7 +37,7 @@ export class Module {
     this.dv = new DataView(this.buffer);
     this.size = memory;
 
-    this.brk = NULL_GUARD;              // next free static address
+    this.brk = LOW_MEMORY;              // next free static address, above the PC's low megabyte
     this.stackTop = memory - 16;        // the shadow stack grows down from here
     this.stackLimit = memory - stack;
 

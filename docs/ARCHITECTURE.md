@@ -149,18 +149,50 @@ PRISM's answer inverts the direction. The guest runs in a **Web Worker** over a
 - **Keyboard** is one shared byte per PC set-1 scan code, plus a **latch** so a brief tap survives
   long enough to be sampled. See [TESTING.md](TESTING.md) for what that number was measured against.
 
+### The PC's low megabyte is real
+
+The guest image reserves its first megabyte for the machine, not the program: the BIOS data area at
+0x400, the VGA graphics window at 0xA0000, the 80x25 text buffer at 0xB8000. Statics start at 1 MB.
+
+This is how DJGPP itself works — a program reaches video memory at linear 0xA0000/0xB8000 through
+`_dos_ds` and `sys/farptr.h` — so those have to *be* those addresses for such code to compile
+unmodified. It costs one megabyte of a 256 MB address space.
+
+What it buys is that the host renders by reading guest memory and cannot tell how the bytes got
+there. `printf` goes through `src/env/console.js`, which writes characters and attributes into
+0xB8000 and keeps the cursor at 0x450/0x451 — the real format, the real place. A program that pokes
+video RAM itself lands in the same cells and needs nothing added. Had the console shipped text to the
+host as strings instead, those two cases would have been different code paths and only the first
+would ever have worked.
+
+Precise about the limit: this is the memory layout and the semantics of writing to it, not an
+emulated VGA. There is no CRTC, no attribute controller, no mode setting yet. It is the part programs
+actually depend on, and the foundation the rest can be added onto.
+
 ### One surface, two modes
 
-A DOS program prints a banner and then goes graphical, on one screen. The shell shows it that way:
-an 80x25 text surface until the program creates a display, its framebuffer while it has one, and back
-to text if it closes it.
+A DOS program prints a banner and then goes graphical, on one screen. The shell shows it that way: an
+80x25 text mode until the program creates a display, its framebuffer while it has one, and back to
+text if it closes it. Text is drawn with the **IBM VGA 8x16 ROM font** (`assets/`, from MIRAGE, where
+it was extracted graphically from DOSBox) — one pixel at a time into an ImageData, the same way
+MIRAGE's `video.js` does it. Canvas `fillText` was tried first and is not good enough: a proportional
+fallback drifts, ASCII drawings stop lining up, and CP437's box-drawing characters — which every DOS
+program's UI is made of — do not exist in a web font.
 
-Being exact about what that is: **it is not an emulated VGA.** PRISM supplies libc, not hardware, so
-the output arrives through `printf` and there is no 0xB8000 to read — the text screen is a faithful
-*presentation* of the program's output on the same surface graphics mode uses. When a DJGPP program
-eventually writes to video memory directly through `farptr`, its platform layer maps that onto this
-same surface. The shell's own reporting — compile timings, stubbed headers, functions it could not
-emit — stays in a side pane, because a DOS screen never showed "894 functions in 700 ms".
+The shell's own reporting — compile timings, stubbed headers, functions it could not emit — stays in a
+side pane, because a DOS screen never showed "894 functions in 700 ms".
+
+### Two kinds of keyboard, because programs ask two questions
+
+Which keys are **held** (one byte per scan code, polled every frame by a game) and which characters
+were **typed** (an ordered queue, read once each by `getchar`). MIRAGE draws the same line — a
+scancode path for INT 9h, a `(scan, ascii)` queue for INT 16h — and for the same reason: answering the
+second question with the first reports Enter as pressed for as long as the finger is down.
+
+Until the queue existed, `getchar` returned EOF, so MAME printed "Press <ENTER> to continue." and
+carried straight on. The program asked a question and ignored the answer — which on screen looked
+like the prompt appearing for no reason. It now blocks in the worker on `Atomics.wait` until a
+character arrives, with a timeout so Stop can still reach it.
 
 ### Genericity that is structural, not asserted
 

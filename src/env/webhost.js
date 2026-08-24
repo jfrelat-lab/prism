@@ -40,6 +40,8 @@ export const SLOT = {
   PAUSE: 18,
   SPEED: 19,       // host → guest: percent of normal speed; 0 means unthrottled
   TEXTMODE: 20,    // guest → host: 1 while no graphics display exists
+  KBD_HEAD: 21,    // host → guest: write cursor into the typed-character queue
+  KBD_TAIL: 22,    // guest → host: read cursor
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -49,6 +51,8 @@ const CTRL_INTS = 512;              // 128 int32 slots, more than the contract n
 const KEYS_AT = 512;                // 256 bytes: one per PC set-1 scancode, 1 = down
 const LATCH_AT = 768;               // 256 bytes: a key that went down since the guest last looked
 const PAL_AT = 1024;                // 256 * 3 bytes, r,g,b
+const KBD_AT = 1792;                // 64 typed characters, one byte each
+export const KBD_SIZE = 64;
 export const CONTROL_BYTES = 2048;
 
 /** Allocate the control block. Called by the page; the worker receives the same buffer. */
@@ -63,6 +67,7 @@ export function controlViews(sab) {
     keys: new Uint8Array(sab, KEYS_AT, 256),
     latch: new Uint8Array(sab, LATCH_AT, 256),
     pal: new Uint8Array(sab, PAL_AT, 768),
+    kbd: new Uint8Array(sab, KBD_AT, KBD_SIZE),
   };
 }
 
@@ -156,6 +161,55 @@ export function makeKeyReader({ keys, latch }) {
       // the measurement above.
       for (const k of observed) if (!keys[k] && latch[k]) latch[k]--;
       observed.clear();
+    },
+  };
+}
+
+/**
+ * The typed-character queue: what `getchar` reads, as distinct from which keys are held down.
+ *
+ * These are two different questions and a program asks both. MAME asks "is 3 held" every frame, which
+ * the key bytes answer. MAME also prints "Press <ENTER> to continue." and calls `getchar()`, which
+ * needs the CHARACTER a person typed, in order, once each. Answering the second question with the
+ * first would report Enter as pressed for as long as the finger is down and read it dozens of times;
+ * answering it with -1, as PRISM did until now, made the program ask and ignore the answer.
+ *
+ * MIRAGE draws the same distinction — a scancode path for INT 9h and a (scan, ascii) queue for INT
+ * 16h — and for the same reason.
+ */
+export function makeKeyboard(views) {
+  const { ctrl, kbd } = views;
+  return {
+    /** Host side: a character was typed. Dropped rather than overwritten if the guest is not reading. */
+    push(ascii) {
+      const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
+      const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
+      if (head - tail >= KBD_SIZE) return false;
+      kbd[head % KBD_SIZE] = ascii & 0xff;
+      Atomics.store(ctrl, SLOT.KBD_HEAD, head + 1);
+      Atomics.notify(ctrl, SLOT.KBD_HEAD);
+      return true;
+    },
+
+    /**
+     * Guest side: block until a character is typed. -1 means the host asked the program to stop,
+     * which `getchar` reports as EOF — the one answer that cannot hang a program waiting for input.
+     *
+     * The timeout on the wait is what makes Stop work: a guest parked here with no timeout would never
+     * see the flag.
+     */
+    read() {
+      for (;;) {
+        if (Atomics.load(ctrl, SLOT.STOP)) return -1;
+        const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
+        const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
+        if (head !== tail) {
+          const c = kbd[tail % KBD_SIZE];
+          Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
+          return c;
+        }
+        Atomics.wait(ctrl, SLOT.KBD_HEAD, head, 100);
+      }
     },
   };
 }

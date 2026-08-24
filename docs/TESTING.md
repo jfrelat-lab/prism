@@ -825,3 +825,10 @@ rapide").
 Worth keeping in mind for the tiers: an emitted-code bug shows up in a corpus, but a *timing* bug
 needs a human or an explicit measurement of fps against the program's declared rate. The shell now
 prints `59.9 of 60 fps`, which is that measurement made visible.
+
+### An exception in a timer is silent
+
+`stats()` referenced a constant I had renamed. It runs on a 250 ms interval, so it threw 32 times
+into the console and the only visible symptom was a status line stuck on "idle" — the canvas, the
+program and the frame counter were all fine. Reading the browser console is not optional after a
+rename: a throw inside a timer or a rAF callback does not stop anything and does not surface.
