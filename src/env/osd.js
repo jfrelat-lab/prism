@@ -8,12 +8,23 @@
 // Everything here is DETERMINISTIC. No real clock, no host randomness: the same input must produce
 // byte-identical state, which is what makes a golden fingerprint of a frame possible at all.
 
+import { SLOT, paceFrame } from './webhost.js';
+
 /** `struct osd_bitmap { int width, height; void *private; unsigned char *line[0]; }` */
 const B_WIDTH = 0, B_HEIGHT = 4, B_PRIVATE = 8, B_LINE = 12;
 
-export function installOSD(M, { files = {}, keys = () => 0, stopAfterFrames = 0 } = {}) {
+export function installOSD(M, {
+  files = {}, keys = () => 0, stopAfterFrames = 0, publish = null, onPresent = null,
+} = {}) {
   const mod = M.mod;
   const dv = () => mod.dv;
+
+  /*
+   * `publish` is the browser path: a control block (src/env/webhost.js) the page reads while this
+   * code runs. Publishing is three integer stores and a palette copy, so the headless path pays
+   * nothing for it — and the page learns the display's geometry from the GAME, never from a config.
+   */
+  const pub = publish;
 
   const state = {
     screen: 0,            // the osd_bitmap the game draws into
@@ -57,6 +68,13 @@ export function installOSD(M, { files = {}, keys = () => 0, stopAfterFrames = 0 
       const b = createBitmap(w | 0, h | 0);
       state.screen = b.hdr; state.pixels = b.pix;
       state.width = w | 0; state.height = h | 0;
+      if (pub) {
+        // PIXELS last: the page treats a non-zero PIXELS as "geometry is valid", so width and
+        // height must already be there when it becomes visible.
+        Atomics.store(pub.ctrl, SLOT.WIDTH, w | 0);
+        Atomics.store(pub.ctrl, SLOT.HEIGHT, h | 0);
+        Atomics.store(pub.ctrl, SLOT.PIXELS, b.pix);
+      }
       return b.hdr;
     },
     osd_close_display: () => { state.screen = 0; },
@@ -64,10 +82,30 @@ export function installOSD(M, { files = {}, keys = () => 0, stopAfterFrames = 0 
     // Pens are handed out in order, so a palette entry's index is reproducible.
     osd_obtain_pen: (r, g, b) => {
       state.palette.push([r & 0xff, g & 0xff, b & 0xff]);
-      return state.palette.length - 1;
+      const pen = state.palette.length - 1;
+      if (pub && pen < 256) {
+        pub.pal[pen * 3] = r & 0xff;
+        pub.pal[pen * 3 + 1] = g & 0xff;
+        pub.pal[pen * 3 + 2] = b & 0xff;
+        Atomics.store(pub.ctrl, SLOT.PENS, pen + 1);
+        Atomics.add(pub.ctrl, SLOT.PALGEN, 1);
+      }
+      return pen;
     },
 
-    osd_update_display: () => { state.frames++; },
+    /*
+     * The one place the guest can be paced, and the only place it needs to be: a program calls this
+     * exactly when it has a frame to show. Blocking here is indistinguishable, to the program, from
+     * running on a slower machine.
+     */
+    osd_update_display: () => {
+      state.frames++;
+      if (onPresent) onPresent();
+      if (pub) {
+        Atomics.store(pub.ctrl, SLOT.FRAME, state.frames);
+        paceFrame(pub.ctrl);
+      }
+    },
     osd_update_audio: () => {},
 
     osd_play_sample: (ch, data, len, freq, vol, loop) =>

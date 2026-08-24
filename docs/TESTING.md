@@ -785,3 +785,30 @@ conclusions were reported before the numbers stopped moving.
 In the order the roadmap wants them: preprocessor vs `gcc -E`; c-testsuite; gcc torture `execute/`;
 the Csmith differential; tier-0 == tier-1; whole-program pixel diff against MIRAGE running the
 original binary; `dbx-oracle` DOS-call sequence; and the perf ratio in one comparable unit.
+
+## Verifying in a browser — four traps, all hit
+
+1. **The tab was `hidden` the whole time.** `requestAnimationFrame` never fired, so the paint loop
+   never ran, the acknowledgement never advanced, and the guest sat at frame 2. The display looked
+   broken; nothing was broken except the assumption that a page in an automated browser is visible.
+   Pacing was moved onto a timer as a result — a real fix, found by a harness artefact.
+
+2. **Every synthesised keypress was silently dropped.** Keys sent by the automation harness arrive
+   with `KeyboardEvent.code === ""`, and the shell keyed off `code` alone. The screen looked perfect
+   and the input did nothing. Fixed with a fallback to `event.key`, which also covers on-screen
+   keyboards and some remote-desktop stacks.
+
+3. **I screenshotted before the guest had drawn.** At 3 fps a coin takes a second of wall-clock to
+   appear on the credit line. Two "the coin does not register" conclusions were wrong, and the third
+   measurement — reading the latch and the frame counter instead of looking at a picture — showed the
+   mechanism had been working. *Look at the counter, not at the canvas.*
+
+4. **The control table was transcribed from habit, not from the source.** MAME 0.1's coin key is
+   `OSD_KEY_3`; 5 is a modern MAME convention and does nothing in 1997 code. The answer was four
+   lines into `src/pacman/machine.c`.
+
+### A calibrated constant, not a chosen one
+
+`KEY_HOLD_FRAMES` is 8 because Pac-Man's ROM debounces its coin input: a 1-frame pulse registered
+nothing, 4 frames registered nothing, 8 frames registered exactly one coin, and a physical hold
+spanning 6 frames registered two. A guess would have been 1.

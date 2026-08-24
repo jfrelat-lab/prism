@@ -18,9 +18,38 @@ compiles as it shipped.
 
 ## Status
 
-Foundation only. The oracle infrastructure and the i386 ABI layout are done and gated; the
-compiler itself is not written yet. See [docs/COMPAT.md](docs/COMPAT.md) for what runs (nothing) and
-[docs/ROADMAP.md](docs/ROADMAP.md) for what is next.
+The compiler works and **MAME 0.1 runs Pac-Man in a browser**, compiled from its unmodified 1997 C
+source: 18 translation units, 894 functions, 0.45 MB of emitted JavaScript, compiled in the browser
+in about 700 ms. Playable — coin, start and the arrow keys all reach the game.
+
+Measured against external oracles, never against itself:
+
+| Gate | Result |
+|---|---|
+| i386 ABI layout (`sizeof`/`offsetof`/bitfields) vs gcc | exact, 1745/1745 |
+| Preprocessor vs `gcc -E` | token-identical |
+| Declarations + sema vs gcc | 1819/1819 |
+| c-testsuite | 193/219, **0 wrong answers** |
+| gcc.c-torture/execute | 1218/1556, **0 wrong answers** |
+| MAME 0.1 vs a native gcc build | **bit-identical framebuffer over 200 frames** |
+| Speed, tier-0 vs `clang -O2` native | 9.5× slower |
+
+Quake compiles but does not yet run. See [docs/COMPAT.md](docs/COMPAT.md) and
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Running a program in the browser
+
+```bash
+node tools/serve.mjs --data=/path/to/your/roms
+```
+
+Then open the printed URL, pick a program, load its data files and press **Run**. The shell compiles
+the C in a worker and displays the result; `--data` is optional (the page has a file picker), and
+**no game data is ever fetched or stored by this repository** — it reads only a directory you name.
+
+The dev server exists because `SharedArrayBuffer` requires the COOP/COEP headers, and the shell loads
+`src/` as unbundled ES modules — the browser runs the same files the Node gates run, so there is no
+build step to drift.
 
 ## Getting started
 

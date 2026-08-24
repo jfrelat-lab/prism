@@ -11,8 +11,13 @@
 export const NULL_GUARD = 0x1000;
 
 export class Module {
-  constructor({ memory = 64 * 1024 * 1024, stack = 1 * 1024 * 1024 } = {}) {
-    this.buffer = new ArrayBuffer(memory);
+  /**
+   * `shared` backs the image with a SharedArrayBuffer instead. The image is then visible to another
+   * thread with no copy, which is what lets a browser display a frame while the guest's own main
+   * loop — synchronous C that never yields — keeps running in a worker.
+   */
+  constructor({ memory = 64 * 1024 * 1024, stack = 1 * 1024 * 1024, shared = false } = {}) {
+    this.buffer = shared ? new SharedArrayBuffer(memory) : new ArrayBuffer(memory);
     this.u8 = new Uint8Array(this.buffer);
     this.dv = new DataView(this.buffer);
     this.size = memory;
@@ -83,7 +88,10 @@ export class Module {
   cstr(addr) {
     let end = addr;
     while (end < this.size && this.u8[end] !== 0) end++;
-    return new TextDecoder().decode(this.u8.subarray(addr, end));
+    // slice, not subarray: TextDecoder refuses a view onto a SharedArrayBuffer, and the image IS
+    // shared in the browser. slice copies into an unshared buffer, which costs nothing here — C
+    // strings passed across this boundary are file names and format strings, not payloads.
+    return new TextDecoder().decode(this.u8.slice(addr, end));
   }
 }
 

@@ -107,3 +107,42 @@ both on and off.
 No `Math.random`, no `Date` in the compiler or the runtime's decision-making. The same input must
 yield byte-identical emitted code and byte-identical program state — that is what makes fingerprint
 gates possible at all. Keep it that way.
+
+## Running in a browser: observing a guest that never yields
+
+A C program's main loop is synchronous. MAME 0.1 spins inside `run_machine` until a key says stop;
+Quake spins in `Host_Frame`. There is no moment at which a browser could paint, and Emscripten's
+answer — `emscripten_set_main_loop`, i.e. **rewrite the loop** — is exactly the source modification
+this project exists to avoid.
+
+PRISM's answer inverts the direction. The guest runs in a **Web Worker** over a
+**SharedArrayBuffer**, and the page **observes the guest's memory** while it runs:
+
+```
+  page (main thread)                    worker (the guest)
+  ─────────────────────                 ──────────────────────────
+  rAF: read pixels ──────┐              compileProgram({shared:true})
+  keydown: write keys ───┤              installOSD({publish, keys, onPresent})
+  timer: bump ACK ───────┤              prog.run()   ← blocks until main() returns
+                         │
+                    control block (2 KB SAB)
+              geometry · palette · frame · keys · ACK/STOP/PAUSE/SPEED
+```
+
+- **Display** is a read of guest memory at whatever instant the page paints. Nothing is copied and
+  nothing is double-buffered — a double buffer would need the guest to yield, which is the one thing
+  it cannot do. A torn frame is possible and accepted: it shows as a tear, never as corruption.
+- **Pacing** happens inside the guest's own present call (`osd_update_display`), via `Atomics.wait`
+  on the acknowledgement slot. Blocking there is indistinguishable, to the program, from running on a
+  slower machine. Unthrottled, MAME 0.1 reaches ~400 fps in a browser, which is not a game.
+- **Acknowledgement is on a timer, not on `requestAnimationFrame`.** rAF does not fire in a hidden
+  tab, and pacing off it deadlocked the guest the moment the tab lost focus — it sat at frame 2 for
+  ever. A background tab must throttle the program, not freeze it.
+- **Keyboard** is one shared byte per PC set-1 scan code, plus a **latch** so a brief tap survives
+  long enough to be sampled. See [TESTING.md](TESTING.md) for what that number was measured against.
+
+The page (`web/`) knows nothing about any program. It compiles C, paints an 8-bit indexed
+framebuffer at whatever size the guest asked for, through whatever palette the guest built, and
+forwards scan codes. Everything program-specific is **data** in `web/programs.js` plus a platform
+layer under `src/env/`. `src/` therefore contains no Node imports — the browser loads the same
+modules the gates do.

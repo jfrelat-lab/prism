@@ -1,0 +1,97 @@
+<!doctype html>
+<!--
+  PRISM — the browser shell.
+  A generic host: it compiles C to JavaScript in a worker, paints whatever framebuffer the guest
+  publishes, and forwards keystrokes as PC scan codes. It knows nothing about any one program.
+
+  Serve it with `node tools/serve.mjs`: SharedArrayBuffer needs COOP/COEP headers, and the guest's
+  memory being shared is what lets the page paint while the guest's own main loop never yields.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRISM</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #171a1f; --edge: #262b33;
+    --fg: #d7dae0; --dim: #8b929e; --accent: #6cb6ff;
+    --warn: #e3b341; --err: #f28b82;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-size: 13px;
+         display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+
+  header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+           padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); }
+  header .name { font-weight: 700; letter-spacing: .14em; color: var(--accent); }
+  header .sep { flex: 1; }
+
+  select, button, input[type=file] { font: inherit; color: var(--fg);
+    background: #1f242c; border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
+
+  main { display: grid; grid-template-columns: 1fr minmax(300px, 34%); min-height: 0; }
+
+  #stage { display: grid; place-items: center; padding: 14px; min-height: 0; overflow: hidden;
+           background: #000; }
+  /* The guest decides the resolution; the canvas is scaled with no smoothing, because a 224x288
+     arcade framebuffer interpolated to fit looks like a different program. */
+  #screen { image-rendering: pixelated; max-width: 100%; max-height: 100%;
+            width: auto; height: 100%; background: #000; }
+
+  aside { border-left: 1px solid var(--edge); display: grid; grid-template-rows: auto auto 1fr;
+          min-height: 0; background: var(--panel); }
+  .bar { padding: 8px 12px; border-bottom: 1px solid var(--edge); color: var(--dim);
+         display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  #stats { color: var(--fg); }
+  kbd { background: #222831; border: 1px solid var(--edge); border-bottom-width: 2px;
+        border-radius: 4px; padding: 0 5px; color: var(--fg); }
+
+  #log { overflow-y: auto; padding: 8px 12px; min-height: 0; }
+  .line { white-space: pre-wrap; word-break: break-word; margin: 1px 0; }
+  .line.warn { color: var(--warn); }
+  .line.error { color: var(--err); }
+  .line.info { color: var(--dim); }
+  /* The program's own output, not the shell's. */
+  .line.stdout { color: var(--fg); font: inherit; margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="name">PRISM</span>
+  <select id="program"></select>
+  <label>data <input type="file" id="data" multiple></label>
+  <button id="loadServer" title="load the directory passed to serve.mjs --data=">from --data</button>
+  <span id="dataNote" style="color:var(--dim)"></span>
+  <button id="start">Run</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="pause">Pause</button>
+  <label>run ahead
+    <select id="speed">
+      <option value="1">1 frame (paced)</option>
+      <option value="2" selected>2 frames</option>
+      <option value="8">8 frames</option>
+      <option value="0">unthrottled</option>
+    </select>
+  </label>
+  <span class="sep"></span>
+  <span id="hint" style="color:var(--dim)"></span>
+</header>
+
+<main>
+  <div id="stage"><canvas id="screen" width="320" height="240"></canvas></div>
+  <aside>
+    <div class="bar"><span id="stats">idle</span></div>
+    <div class="bar" id="controls"></div>
+    <div id="log"></div>
+  </aside>
+</main>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
