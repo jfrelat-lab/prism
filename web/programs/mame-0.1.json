@@ -85,5 +85,6 @@
       "Esc",
       "quit"
     ]
-  ]
+  ],
+  "fpsNote": "A FALLBACK cap only. The program paces itself from drv->frames_per_second through the real clock; this bounds a program that does not throttle itself at all."
 }

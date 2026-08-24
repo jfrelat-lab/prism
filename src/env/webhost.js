@@ -40,8 +40,9 @@ export const SLOT = {
   PAUSE: 18,
   SPEED: 19,       // host → guest: percent of normal speed; 0 means unthrottled
   TEXTMODE: 20,    // guest → host: 1 while no graphics display exists
-  KBD_HEAD: 21,    // host → guest: write cursor into the typed-character queue
+  KBD_HEAD: 21,    // host → guest: write cursor into the keystroke queue
   KBD_TAIL: 22,    // guest → host: read cursor
+  WAKE: 23,        // a pure wake channel, always 0: the host notifies it, a parked guest waits on it
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -51,7 +52,7 @@ const CTRL_INTS = 512;              // 128 int32 slots, more than the contract n
 const KEYS_AT = 512;                // 256 bytes: one per PC set-1 scancode, 1 = down
 const LATCH_AT = 768;               // 256 bytes: a key that went down since the guest last looked
 const PAL_AT = 1024;                // 256 * 3 bytes, r,g,b
-const KBD_AT = 1792;                // 64 typed characters, one byte each
+const KBD_AT = 1792;                // 64 keystrokes, two bytes each: scan code then ASCII
 export const KBD_SIZE = 64;
 export const CONTROL_BYTES = 2048;
 
@@ -67,7 +68,7 @@ export function controlViews(sab) {
     keys: new Uint8Array(sab, KEYS_AT, 256),
     latch: new Uint8Array(sab, LATCH_AT, 256),
     pal: new Uint8Array(sab, PAL_AT, 768),
-    kbd: new Uint8Array(sab, KBD_AT, KBD_SIZE),
+    kbd: new Uint8Array(sab, KBD_AT, KBD_SIZE * 2),
   };
 }
 
@@ -92,7 +93,8 @@ export function makePacer(ctrl, fps) {
   const stopped = () => Atomics.load(ctrl, SLOT.STOP) !== 0;
 
   /** Sleep without spinning. Waiting on STOP with an expected 0 returns at once if stop is set. */
-  const nap = (ms) => { Atomics.wait(ctrl, SLOT.STOP, 0, Math.min(Math.max(ms, 1), 50)); };
+  // The same WAKE channel `park` uses, so one notify from the page releases every kind of wait.
+  const nap = (ms) => { Atomics.wait(ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 50)); };
 
   Atomics.store(ctrl, SLOT.FPS, Math.round(fps * 1000));
 
@@ -166,7 +168,34 @@ export function makeKeyReader({ keys, latch }) {
 }
 
 /**
- * The typed-character queue: what `getchar` reads, as distinct from which keys are held down.
+ * The one way anything in the guest waits.
+ *
+ * Blocking the worker is not the problem — the guest is synchronous C, so when it waits it has to be
+ * stopped. The problems are spinning (a core at 100% to wait), being un-interruptible (Stop must
+ * reach a guest that is waiting), and freezing the screen with no explanation. This answers all
+ * three: the thread is parked at zero cost, STOP is checked before every wait, and the page keeps
+ * painting because it reads guest memory rather than waiting for messages from it.
+ *
+ * The timeout is not a convenience. Without it a guest parked when the page has already gone would
+ * wait for ever with nothing left to wake it.
+ */
+export function makeParker(ctrl) {
+  return function park(ms = 1) {
+    if (Atomics.load(ctrl, SLOT.STOP)) return false;
+    // WAKE is held at 0 for ever and used only as a channel: waiting on it always parks for the
+    // timeout, and any notify from the page cuts the wait short.
+    Atomics.wait(ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 100));
+    return !Atomics.load(ctrl, SLOT.STOP);
+  };
+}
+
+/** Host side: something changed that a parked guest might be waiting for. */
+export function wake(ctrl) {
+  Atomics.notify(ctrl, SLOT.WAKE);
+}
+
+/**
+ * The keystroke queue: what `getchar` reads, as distinct from which keys are held down.
  *
  * These are two different questions and a program asks both. MAME asks "is 3 held" every frame, which
  * the key bytes answer. MAME also prints "Press <ENTER> to continue." and calls `getchar()`, which
@@ -180,12 +209,17 @@ export function makeKeyReader({ keys, latch }) {
 export function makeKeyboard(views) {
   const { ctrl, kbd } = views;
   return {
-    /** Host side: a character was typed. Dropped rather than overwritten if the guest is not reading. */
-    push(ascii) {
+    /**
+     * Host side: a key was struck. Dropped rather than overwritten when the guest is not reading —
+     * a real BIOS buffer overflows the same way, and beeps.
+     */
+    push(scan, ascii) {
       const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
       const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
       if (head - tail >= KBD_SIZE) return false;
-      kbd[head % KBD_SIZE] = ascii & 0xff;
+      const at = (head % KBD_SIZE) * 2;
+      kbd[at] = scan & 0xff;
+      kbd[at + 1] = ascii & 0xff;
       Atomics.store(ctrl, SLOT.KBD_HEAD, head + 1);
       Atomics.notify(ctrl, SLOT.KBD_HEAD);
       return true;
@@ -198,18 +232,27 @@ export function makeKeyboard(views) {
      * The timeout on the wait is what makes Stop work: a guest parked here with no timeout would never
      * see the flag.
      */
-    read() {
-      for (;;) {
-        if (Atomics.load(ctrl, SLOT.STOP)) return -1;
-        const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
-        const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
-        if (head !== tail) {
-          const c = kbd[tail % KBD_SIZE];
-          Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
-          return c;
-        }
-        Atomics.wait(ctrl, SLOT.KBD_HEAD, head, 100);
-      }
-    },
+    read() { return take(1); },
+
+    /**
+     * The same queue, read as a scan code — what MAME's `osd_read_key` returns. One queue with two
+     * readings, not two queues: a real PC has exactly one BIOS buffer, and DOS's `getchar` and a
+     * direct INT 16h read drain it together. Faithful and simpler at once.
+     */
+    readKey() { return take(0); },
   };
+
+  function take(which) {
+    for (;;) {
+      if (Atomics.load(ctrl, SLOT.STOP)) return -1;
+      const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
+      const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
+      if (head !== tail) {
+        const v = kbd[(tail % KBD_SIZE) * 2 + which];
+        Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
+        return v;
+      }
+      Atomics.wait(ctrl, SLOT.KBD_HEAD, head, 100);
+    }
+  }
 }

@@ -185,10 +185,20 @@ function makeLibc(M) {
     },
 
     /**
-     * A DETERMINISTIC clock. Reading the host's real time would destroy the property the whole test
-     * strategy rests on — the same input must yield byte-identical state, which is what makes a
-     * golden fingerprint possible at all (MIRAGE keeps the same rule: no Date, no Math.random).
-     * A program that measures frame times therefore sees a steady, reproducible rate.
+     * A DETERMINISTIC clock — the default, and what every gate runs against. Reading the host's real
+     * time would destroy the property the whole test strategy rests on: the same input must yield
+     * byte-identical state, which is what makes a golden fingerprint possible at all (MIRAGE keeps
+     * the same rule: no Date, no Math.random).
+     *
+     * The increments are one frame's worth per call — 16667 µs and 19886 PIT ticks are 1/60 s — which
+     * has a consequence worth stating out loud rather than leaving as a happy accident. MAME 0.1
+     * throttles itself with
+     *
+     *     do { curr = uclock(); } while ((curr - prev) < UCLOCKS_PER_SEC/drv->frames_per_second);
+     *
+     * and against this clock that loop exits after exactly ONE call. The program believes it waited;
+     * it did not. Determinism is bought by neutralising the program's own timing, and something else
+     * then has to do the pacing. See `installRealClock` for the interactive answer.
      */
     clock: () => { M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockTicks; },
     // uclock returns a 64-bit count, so a BigInt — see the i64 note in emit.js.
@@ -379,4 +389,156 @@ function fixed(v, p) {
   const int = p ? digits.slice(0, -p) : digits;
   const frac = p ? digits.slice(-p) : '';
   return (neg ? '-' : '') + int + (p ? '.' + frac : '');
+}
+
+/**
+ * Replace the deterministic clock with a real, scalable one that does not spin.
+ *
+ * A DOS program of this era paces itself by busy-waiting on a clock, and MAME 0.1 does exactly that
+ * (machine.c, `Z80_Interrupt`). Two ways to host that, both wrong on their own:
+ *
+ *   * a deterministic per-call counter — the wait exits immediately, the program's own timing is
+ *     neutralised, and the host has to impose a frame rate from outside. Reproducible, unfaithful.
+ *   * a real clock — the wait becomes a genuine spin loop that burns a whole core for the rest of
+ *     every frame. Faithful, and exactly what the program did on real hardware, which is precisely
+ *     why it is wasteful here.
+ *
+ * This is the third option: the clock returns real elapsed time, and when it is being polled in a
+ * tight loop it SLEEPS before answering. The program sees monotonic real time and its own throttle
+ * does the pacing, at the rate the program itself chose; nothing spins. The trick is only possible
+ * because the clock is a function call into the runtime — there is no instruction stream to watch.
+ *
+ * `speed` scales it, which is how a speed control should work: lie about time, the way DOSBox does,
+ * rather than fight the program's throttle from outside. At 200% the program's wait is satisfied
+ * twice as fast. At 0 (unlimited) time races ahead so no wait is ever satisfied slowly.
+ *
+ * NOT the default, and never in the gates: this is where reproducibility is traded for faithfulness,
+ * and that trade belongs to an interactive host only.
+ */
+export function installRealClock(M, { now, speed = () => 100, paused = () => false } = {}) {
+  const clockNow = now || (() => performance.now());
+  let wall = clockNow();          // host time at the last advance
+  let micros = 0;                 // guest time elapsed, in microseconds
+
+  function advance() {
+    const t = clockNow();
+    const pct = speed();
+    if (paused()) { wall = t; return micros; }        // a paused program's clock must not run on
+    if (pct <= 0) {
+      // Unlimited: hand out a large jump, so any "has enough time passed" test says yes at once and
+      // the program's own throttle never waits.
+      micros += 1e6;
+    } else {
+      micros += (t - wall) * 1000 * pct / 100;
+    }
+    wall = t;
+    return micros;
+  }
+
+  M.rt.clock = () => (advance() >>> 0);
+  M.rt.uclock = () => BigInt(Math.round(advance() * 1.19318));   // µs -> PIT ticks at 1193180 Hz
+  M.realClock = { micros: () => micros };
+}
+
+/**
+ * Turn the guest's spin-wait loops into sleeping waits, without knowing anything about the loops.
+ *
+ * A DOS program of this era waits by polling. MAME 0.1 alone has
+ *
+ *     do { curr = uclock(); } while ((curr - prev) < UCLOCKS_PER_SEC/drv->frames_per_second);
+ *     while (osd_key_pressed(OSD_KEY_P));            // wait for key release, three times over
+ *
+ * The runtime cannot see a loop — but it does see every call into a service, and that is enough. A
+ * service called over and over with NO FRAME PRESENTED in between is a program that is waiting, not
+ * a program making progress: in normal play `osd_key_pressed` is asked a dozen times per frame and
+ * the frame counter moves; inside a release-wait it is asked thousands of times and nothing moves.
+ *
+ * Past the threshold each call parks for a millisecond, so the loop runs about a thousand times a
+ * second instead of millions, and the core goes idle. The program's own logic is untouched — it is
+ * still polling, it still decides when to stop.
+ *
+ * The threshold has to be MEASURED, not chosen. Too low and a timer-calibration loop — the kind that
+ * counts iterations per tick — concludes the machine is a thousand times slower than it is, which is
+ * the trap MIRAGE hit with Wolf3D. Too high and the core burns for longer than it needs to.
+ *
+ * What this deliberately does NOT catch: a loop that never calls the runtime at all, `while (1);`
+ * being the honest example. Nothing here can see it, because nothing here is called. The only recourse
+ * is terminating the worker, and the general fix would be a safepoint on loop back-edges in the
+ * emitted code — which MIRAGE measured as a real cost on emitted-code speed, so it waits until
+ * something needs it.
+ */
+export function installSpinDamping(M, {
+  park = () => {}, frame, now = () => performance.now(),
+  threshold = 256, sleepMs = 1, landingMs = 1.2, services,
+} = {}) {
+  /*
+   * `services` may be a list (all sharing `threshold`) or a map of name -> threshold. Per-service is
+   * not fussiness: the thresholds differ by two orders of magnitude for a measured reason. A frame's
+   * legitimate polling of `osd_key_pressed` peaked at 21 over 400 frames of Pac-Man, but a program
+   * asks the clock once or twice a frame — so a threshold high enough for the keyboard left 4096
+   * clock calls spinning before every single frame's wait, which measured as ~0.6 ms of pure
+   * overhead per frame and held the rate to 58 fps.
+   */
+  const limit = Array.isArray(services)
+    ? Object.fromEntries(services.map(n => [n, threshold]))
+    : services;
+  let lastName = '', run = 0, lastFrame = -1, runStart = 0, lastAt = 0;
+  // maxRun per service CALIBRATES the threshold: the longest run of consecutive calls seen inside one
+  // frame, so the threshold has to sit above the largest legitimate one.
+  const stats = { parks: 0, spins: 0, calls: 0, maxRun: Object.create(null), learned: Object.create(null) };
+
+  for (const name of Object.keys(limit)) {
+    const inner = M.rt[name];
+    if (typeof inner !== 'function') continue;
+    stats.maxRun[name] = 0;
+    stats.learned[name] = 0;
+
+    M.rt[name] = function (...args) {
+      const f = frame();
+      if (name !== lastName || f !== lastFrame) {
+        // A run just ended: remember how long it took, because that is the program's own deadline,
+        // observed rather than declared. This is the only source for it — the loop's exit condition
+        // is invisible from here.
+        // `lastAt`, not `now()`: the run ended at its LAST CALL, and we only notice here — which can
+        // be a whole frame of emulation later. Measuring to this moment learned the frame PERIOD
+        // (~17.5 ms) instead of the wait (~16 ms), so the landing window sat past the deadline and
+        // the rate stayed stuck at 57 fps.
+        // `>=`, not `>`: the run counter is CLAMPED to the limit once damping starts, so a strict
+        // comparison was never true and this never recorded anything. The landing window silently did
+        // nothing for three measurements — `spins` stayed at 0 and every `learned` at 0, which is how
+        // it was caught.
+        if (lastName && run >= limit[lastName]) stats.learned[lastName] = lastAt - runStart;
+        lastName = name; lastFrame = f; run = 0; runStart = now();
+      }
+      run++;
+      if (run > stats.maxRun[name]) stats.maxRun[name] = run;
+
+      if (run > limit[name]) {
+        run = limit[name];                          // stay damped for as long as it keeps asking
+        const elapsed = now() - runStart;
+        const target = stats.learned[name];
+        /*
+         * Park, except in a narrow window around the moment this wait ended LAST time, where we let
+         * the calls through and let the loop spin.
+         *
+         * The reason is measured: Atomics.wait does not honour a sub-millisecond timeout — asking for
+         * 0.25 ms still costs about one — so parking right up to the deadline overshoots it and the
+         * frame rate came out at 55-59 instead of 60. Sleeping through the bulk of the wait and
+         * spinning only the last millisecond lands on it, and costs about 6% of one core rather than
+         * a whole one.
+         *
+         * Outside that window it parks, which is what keeps an UNPREDICTABLE wait — a key release,
+         * which lasts as long as a finger does — from spinning at all.
+         */
+        const landing = target > landingMs && elapsed > target - landingMs && elapsed < target + landingMs;
+        if (landing) stats.spins++;
+        else { stats.parks++; park(sleepMs); }
+      }
+      stats.calls++;
+      lastAt = now();
+      return inner.apply(this, args);
+    };
+  }
+
+  M.spinDamping = stats;
 }

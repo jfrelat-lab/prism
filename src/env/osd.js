@@ -15,6 +15,7 @@ const B_WIDTH = 0, B_HEIGHT = 4, B_PRIVATE = 8, B_LINE = 12;
 
 export function installOSD(M, {
   files = {}, keys = () => 0, stopAfterFrames = 0, publish = null, onPresent = null,
+  readKey = () => -1,
 } = {}) {
   const mod = M.mod;
   const dv = () => mod.dv;
@@ -122,7 +123,13 @@ export function installOSD(M, {
     // enough frames. That is a harness decision, stated rather than hidden.
     osd_key_pressed: (k) => ((stopAfterFrames && state.frames >= stopAfterFrames && (k | 0) === 1)
       ? 1 : (keys(k | 0) | 0)),
-    osd_read_key: () => 0,
+    /*
+     * BLOCKING, because the real backend is: `readkey()` in Allegro waits. Returning 0 immediately
+     * made MAME's pause menu — `do { key = osd_read_key(); } while (Z80_Running && key != OSD_KEY_P)`
+     * — spin at full speed for ever. A stub that answers instantly is not a neutral stub when the
+     * caller's loop is built on the assumption that it waits.
+     */
+    osd_read_key: () => { const k = readKey(); return k < 0 ? 1 /* Esc, so a stopped guest leaves */ : k; },
     osd_poll_joystick: () => {},
   };
 

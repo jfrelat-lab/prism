@@ -18,6 +18,7 @@ import { deflateSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileProgram, installOSD } from '../src/compile.js';
+import { installSpinDamping } from '../src/runtime/runtime.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -176,6 +177,19 @@ if (romArg) {
 if (process.argv.includes('--test-rom')) Object.assign(roms, testRoms());
 const frames = +(process.argv.find(a => a.startsWith('--frames='))?.slice(9) ?? 60);
 const osd = installOSD(program.M, { files: roms, stopAfterFrames: frames });
+
+/*
+ * --probe-polls: measure how many times in a row the program asks one service INSIDE ONE FRAME.
+ * That is what calibrates the browser host's spin damping: the threshold has to sit above the longest
+ * legitimate run, or a program that is working gets mistaken for a program that is waiting.
+ */
+if (process.argv.includes('--probe-polls')) {
+  installSpinDamping(program.M, {
+    frame: () => osd.frames,
+    threshold: Infinity,                 // measure only; never park
+    services: ['uclock', 'clock', 'osd_key_pressed', 'osd_read_key'],
+  });
+}
 console.log(`platform backend installed; ${Object.keys(roms).length} data files visible`);
 
 console.log(`✓ compiled: ${Object.keys(program.F).length} functions, ` +
@@ -238,6 +252,11 @@ if (process.argv.includes('--run')) {
     const r = program.run(['mame', 'pacman']);
     console.log(`\nexit ${r.code}`);
     if (r.stdout) console.log(r.stdout.trimEnd());
+    if (program.M.spinDamping) {
+      const m = program.M.spinDamping.maxRun;
+      console.log(`longest run of consecutive calls within one frame: ` +
+        Object.entries(m).map(([k, v]) => `${k} ${v}`).join(' · '));
+    }
     console.log(`display ${osd.width}x${osd.height} · pens ${osd.palette.length} · ` +
       `frames ${osd.frames} · samples ${osd.samples.length}`);
     const pngPath = process.argv.find(a => a.startsWith('--png='))?.slice(6);

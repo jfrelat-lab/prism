@@ -9,10 +9,12 @@
 // handoff of the shared image.
 
 import { compileProgram } from '../src/compile.js';
+import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 import { installOSD } from '../src/env/osd.js';
 import { installConsole } from '../src/env/console.js';
 import { HEADERS } from '../src/env/headers.js';
-import { controlViews, makeKeyReader, makePacer, makeKeyboard, SLOT, STATE } from '../src/env/webhost.js';
+import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
+  from '../src/env/webhost.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const log = (line, kind = 'info') => post('log', { line, kind });
@@ -35,6 +37,7 @@ async function start({ program, control, data, argv }) {
   // Pac-Man's is 60; a program that never presents a frame never waits.
   const pace = makePacer(ctrl, program.fps || 60);
   const keyboard = makeKeyboard(views);
+  const park = makeParker(ctrl);
   const setState = (s) => Atomics.store(ctrl, SLOT.STATE, s);
 
   // --- 1. the sources.
@@ -123,6 +126,7 @@ async function start({ program, control, data, argv }) {
 
   installOSD(prog.M, {
     files,
+    readKey: () => keyboard.readKey(),
     publish: { ctrl, pal },
     /*
      * A held key is a byte in shared memory, so this read is what the guest sees at the instant it
@@ -133,7 +137,15 @@ async function start({ program, control, data, argv }) {
      */
     keys: (k) => (Atomics.load(ctrl, SLOT.STOP) && k === 1 ? 1 : reader.read(k)),
     // The frame boundary: retire the key latches, then hold the guest until its frame is due.
-    onPresent: () => { reader.endFrame(); pace(); },
+    onPresent: () => {
+      reader.endFrame();
+      pace();
+      // Diagnostics, once a second: the pacing numbers live in this thread and the page cannot read
+      // them. postMessage queues to the page without this thread yielding, so a blocked guest can
+      // still report.
+      const f = Atomics.load(ctrl, SLOT.FRAME);
+      if (f % 60 === 0) post('diag', { spin: prog.M.spinDamping, clockUs: prog.M.realClock.micros() });
+    },
   });
 
   /*
@@ -145,6 +157,44 @@ async function start({ program, control, data, argv }) {
    * existed, getchar returned EOF and the program asked a question it then ignored.
    */
   installConsole(prog.M, { readChar: () => keyboard.read() });
+
+  /*
+   * A REAL clock, so the program's own frame throttle does the pacing at the rate the program itself
+   * chose rather than at a rate declared for it in a JSON file. The speed control works by scaling
+   * time — lying about it, as DOSBox does with cycles — instead of fighting the program's loop from
+   * outside.
+   *
+   * This is where reproducibility is traded for faithfulness, which is why it is the browser only:
+   * every gate keeps the deterministic clock, and the frame-for-frame differential against a native
+   * build stays meaningful because MAME uses the clock to decide WHEN, never WHAT.
+   */
+  installRealClock(prog.M, {
+    speed: () => Atomics.load(ctrl, SLOT.SPEED),
+    paused: () => Atomics.load(ctrl, SLOT.PAUSE) !== 0,
+  });
+
+  /*
+   * And the reason a real clock does not cost a whole core: every service a program polls in a tight
+   * loop parks instead of spinning once it is clear the program is waiting rather than working.
+   * One mechanism for the clock and for the three key-release loops in MAME alike.
+   */
+  installSpinDamping(prog.M, {
+    park,
+    frame: () => Atomics.load(ctrl, SLOT.FRAME),
+    sleepMs: 1,
+    /*
+     * Per-service thresholds, both measured (`node tools/mame.mjs --probe-polls`, 400 frames of
+     * Pac-Man): legitimate polling of `osd_key_pressed` peaks at 21 per frame, so 256 is a tenfold
+     * margin, while a program asks the clock once or twice a frame. Sharing the keyboard's threshold
+     * with the clock left thousands of clock calls spinning before every frame's wait — ~0.6 ms of
+     * overhead per frame, which is what held the rate at 58 fps instead of 60.
+     *
+     * The 64 on the clock is where a timing-CALIBRATION loop would be cut short and read the machine
+     * as slower than it is. Nothing in MAME calibrates; if something later does, the honest fix is a
+     * per-program exemption, not a cleverer guess.
+     */
+    services: { uclock: 64, clock: 64, osd_key_pressed: 256 },
+  });
 
   post('ready', { image: prog.mod.buffer });
 

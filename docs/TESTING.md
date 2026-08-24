@@ -832,3 +832,24 @@ prints `59.9 of 60 fps`, which is that measurement made visible.
 into the console and the only visible symptom was a status line stuck on "idle" — the canvas, the
 program and the frame counter were all fine. Reading the browser console is not optional after a
 rename: a throw inside a timer or a rAF callback does not stop anything and does not surface.
+
+### Four wrong explanations for 2 fps
+
+The frame rate came out at 57 instead of 60 and I explained it four times before measuring it.
+
+1. "The park granularity overshoots" — plausible, and asking for 0.25 ms instead of 1 ms did move it
+   from 43-59 to 55-59. Partly right, and it hid the rest.
+2. "The learned deadline will fix it" — the learning was measuring from the start of the wait to the
+   *next frame boundary*, which is the frame PERIOD, not the wait. The landing window sat past the
+   deadline and did nothing.
+3. "The 4096-call spin burst before damping costs 0.6 ms a frame" — a clean arithmetic story that
+   matched the residual exactly. Lowering the threshold to 64 changed the rate by nothing at all.
+4. Only then did I post the counters out of the worker: `spins: 0`, every `learned: 0`. The landing
+   window had **never fired**, because the run counter is clamped to the threshold once damping
+   starts and the test was `run > limit` — never true. Three of the four explanations were about a
+   mechanism that was not running.
+
+The lesson is not "measure more", it is *where*: all of this state lived in the worker, invisible to
+the page, and I kept explaining it from the outside. `postMessage` from a worker queues to the page
+without the worker yielding, so even a guest blocked in its own loop can report its counters. That
+diagnostic channel should have been the first thing built, not the fifth.

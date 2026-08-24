@@ -14,7 +14,7 @@
 // The shell's own reporting — compile timings, stubbed headers, functions it could not emit — stays
 // in the side pane. A DOS screen never showed "894 functions in 700 ms".
 
-import { makeControl, controlViews, makeKeyboard, KEY_HOLD_FRAMES, SLOT, STATE }
+import { makeControl, controlViews, makeKeyboard, wake, KEY_HOLD_FRAMES, SLOT, STATE }
   from '../src/env/webhost.js';
 import { scancodeForEvent } from '../src/env/scancodes.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
@@ -183,12 +183,16 @@ addEventListener('keydown', (e) => {
   views.keys[sc] = 1;
   views.latch[sc] = KEY_HOLD_FRAMES;   // so a brief tap survives long enough to be sampled
   if (keyboard) {
-    // The typed character, for stdin. `key` is right here where `code` was right above: a program
-    // reading text wants what the layout produced, not which key the finger was on.
-    if (e.key === 'Enter') keyboard.push(13);
-    else if (e.key === 'Backspace') keyboard.push(8);
-    else if (e.key === 'Tab') keyboard.push(9);
-    else if (e.key && e.key.length === 1) keyboard.push(e.key.charCodeAt(0));
+    // The keystroke, for whoever reads the queue: the scan code AND the character, as a BIOS buffer
+    // holds them. `key` is right here where `code` was right above — a program reading text wants
+    // what the layout produced, not which key the finger was on.
+    let ascii = 0;
+    if (e.key === 'Enter') ascii = 13;
+    else if (e.key === 'Backspace') ascii = 8;
+    else if (e.key === 'Tab') ascii = 9;
+    else if (e.key === 'Escape') ascii = 27;
+    else if (e.key && e.key.length === 1) ascii = e.key.charCodeAt(0);
+    keyboard.push(sc, ascii);
   }
   e.preventDefault();
 });
@@ -197,6 +201,9 @@ addEventListener('keyup', (e) => {
   const sc = scancodeForEvent(e);
   if (!sc) return;
   views.keys[sc] = 0;
+  // A guest parked inside `while (osd_key_pressed(k));` is waiting for exactly this, so tell it now
+  // rather than leaving it to notice on its next timeout.
+  wake(views.ctrl);
   e.preventDefault();
 });
 // A lost focus must release everything, or the program keeps walking left for ever.
@@ -240,6 +247,7 @@ $('run').onclick = () => {
     if (m.type === 'log') log(m.line, m.kind);
     else if (m.type === 'ready') guest = new Uint8Array(m.image);
     else if (m.type === 'failed') log(`build failed: ${m.message}`, 'error');
+    else if (m.type === 'diag') window.PRISM_DIAG = m;
   };
   worker.onerror = (e) => log(`worker error: ${e.message}`, 'error');
   worker.postMessage({ type: 'start', program, control, data: dataFiles, argv });
@@ -265,7 +273,7 @@ function stop(quiet) {
     // thread back. A program wedged before its next present call would never see the flag, so the
     // terminate is not optional; but it is second, not first.
     Atomics.store(views.ctrl, SLOT.STOP, 1);
-    Atomics.notify(views.ctrl, SLOT.STOP);
+    wake(views.ctrl);
   }
   if (worker) { const w = worker; worker = null; setTimeout(() => w.terminate(), 150); }
   clearInterval(statTimer); statTimer = 0;
@@ -278,14 +286,14 @@ $('pause').onclick = () => {
   if (!views) return;
   const now = Atomics.load(views.ctrl, SLOT.PAUSE) ? 0 : 1;
   Atomics.store(views.ctrl, SLOT.PAUSE, now);
-  Atomics.notify(views.ctrl, SLOT.PAUSE);
+  wake(views.ctrl);
   $('pause').textContent = now ? 'Resume' : 'Pause';
 };
 
 $('speed').onchange = () => {
   if (!views) return;
   Atomics.store(views.ctrl, SLOT.SPEED, +$('speed').value);
-  Atomics.notify(views.ctrl, SLOT.STOP);     // wake a guest asleep until its next frame is due
+  wake(views.ctrl);                          // a guest asleep until its next frame is due
 };
 
 // ---------------------------------------------------------------- painting
@@ -333,10 +341,13 @@ function stats() {
   const graphics = w > 0 && !Atomics.load(ctrl, SLOT.TEXTMODE);
   const now = performance.now();
   const fps = (frame - lastFrame) * 1000 / (now - lastStatAt);
-  const target = Atomics.load(ctrl, SLOT.FPS) / 1000;
+  // The MEASURED rate only. There used to be a "of N fps" target here, taken from the descriptor —
+  // and it became a lie the moment the program started pacing itself from its own
+  // drv->frames_per_second. A number the host cannot know should not be printed as if it did.
   $('stats').textContent = (STATE_NAME[state] || state) +
     (graphics ? ` · ${w}x${h} · ${Atomics.load(ctrl, SLOT.PENS)} pens` : ` · text ${TEXT_COLS}x${TEXT_ROWS}`) +
-    (frame ? ` · frame ${frame} · ${fps.toFixed(1)} of ${target || 60} fps` : '');
+    (frame ? ` · frame ${frame} · ${fps.toFixed(1)} fps` : '') +
+    (frame && $('speed').value !== '100' ? ` · ${$('speed').value === '0' ? 'unlimited' : $('speed').value + '%'}` : '');
   lastFrame = frame; lastStatAt = now;
   if (state === STATE.EXITED || state === STATE.ERROR) {
     $('run').disabled = false; $('stopBtn').disabled = true;

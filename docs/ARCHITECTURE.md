@@ -205,3 +205,77 @@ files, which exists precisely so that "the shell is generic" is a claim somethin
 
 `src/` contains no Node imports, so the browser loads the same modules the gates do — there is no
 build step to drift.
+
+## Waiting: the guest blocks, and that is correct
+
+A DOS program of this era waits by polling. MAME 0.1 alone contains
+
+```c
+do { curr = uclock(); } while ((curr - prev) < UCLOCKS_PER_SEC/drv->frames_per_second);
+while (osd_key_pressed(OSD_KEY_P));            /* wait for key release — three of these */
+do { key = osd_read_key(); } while (...);      /* and Allegro's readkey() blocks */
+```
+
+**Blocking the worker is not the problem.** The guest is synchronous C; when it waits it has to be
+stopped, and it is not the UI thread. The three real problems are spinning (a core at 100% to wait),
+being un-interruptible (Stop must reach a waiting guest), and a frozen screen with no explanation.
+The last one is answered by the architecture already: the page reads guest memory, so a blocked guest
+still shows its last frame — and MAME calls `osd_update_display()` inside `displaytext()` before it
+waits, so "PAUSED" is on screen before it stops.
+
+Everything that waits goes through one primitive, `makeParker` in `src/env/webhost.js`: park on an
+atomic, wake on a host notify or a timeout, check STOP every time. The timeout is not a convenience —
+a guest parked after the page has gone would otherwise wait for ever.
+
+Two shapes of wait, handled differently:
+
+- **Blocking services** — called once, expected to wait: `getchar`, `osd_read_key`. They park until
+  the keystroke queue is non-empty. Note that a stub answering *instantly* is not a neutral stub when
+  the caller's loop assumes it waits: `osd_read_key` returning 0 made MAME's pause menu spin for ever.
+- **Polled services** — called in a loop: `uclock`, `clock`, `osd_key_pressed`. These cannot block on
+  the first call, so `installSpinDamping` counts consecutive calls to one service **with no frame
+  presented in between**. In normal play `osd_key_pressed` is asked a dozen times a frame and the
+  frame counter moves; inside a release-wait it is asked thousands of times and nothing moves. That
+  distinction needs no knowledge of the loop.
+
+### The clock is real, and the program paces itself
+
+`installRealClock` replaces the deterministic counter in the browser only. The program's own throttle
+then runs at the rate the program chose (`drv->frames_per_second`), rather than at a rate declared for
+it in a JSON descriptor — and the speed control works by **scaling time**, the way DOSBox does with
+cycles, instead of fighting the program's loop from outside.
+
+Proof that it is the program's clock and not the host's: with the host's fallback cap set to 1000 fps,
+MAME still ran at ~58. The descriptor's `fps` is now only a bound for a program that does not throttle
+itself at all.
+
+This is where reproducibility is traded for faithfulness, so it is the browser only. Every gate keeps
+the deterministic clock, and the frame-for-frame differential against a native build stays meaningful
+because the clock decides *when*, never *what*.
+
+### Numbers, and what is left
+
+Measured with `node tools/mame.mjs --probe-polls` and the shell's own diagnostics:
+
+| | |
+|---|---|
+| longest legitimate run of `osd_key_pressed` in one frame | 21 (400 frames of Pac-Man) |
+| thresholds | 256 for the keyboard, 64 for the clock |
+| learned wait per frame | 14.6 ms |
+| per frame, while running | ~11 parks, ~265 spins |
+| resulting rate | 58.8 of 60 fps, stable |
+
+The residual 2% is overshoot at the moment the wait ends. `Atomics.wait` does not honour a
+sub-millisecond timeout — asking for 0.25 ms still costs about one — so parking right up to the
+deadline overshoots it, and the mechanism instead **learns how long the wait lasted last time** and
+spins only the final millisecond. Chasing the last 2% is not worth more machinery than that.
+
+What this deliberately does not catch: a loop that never calls the runtime, `while (1);` being the
+honest example. Nothing here can see it because nothing here is called. The recourse is terminating
+the worker; the general fix is a safepoint on loop back-edges in emitted code, which MIRAGE measured
+as a real cost on emitted-code speed, so it waits until something needs it.
+
+Known limitation, stated rather than discovered later: a timing-**calibration** loop — one that counts
+iterations per tick to measure the machine — gets cut short by damping and reads the machine as slower
+than it is. Nothing in MAME calibrates. If something later does, the fix is a per-program exemption,
+not a cleverer heuristic.
