@@ -37,10 +37,41 @@ int puts(const char *s);
 int putchar(int c);
 int fputs(const char *s, FILE *stream);
 int fputc(int c, FILE *stream);
+int putc(int c, FILE *stream);
+int vprintf(const char *fmt, char *ap);
+int vfprintf(FILE *stream, const char *fmt, char *ap);
+int vsprintf(char *dst, const char *fmt, char *ap);
+int vsnprintf(char *dst, size_t n, const char *fmt, char *ap);
+FILE *fopen(const char *name, const char *mode);
+int fclose(FILE *stream);
+size_t fread(void *dst, size_t size, size_t count, FILE *stream);
+size_t fwrite(const void *src, size_t size, size_t count, FILE *stream);
+int fseek(FILE *stream, long off, int whence);
+long ftell(FILE *stream);
+void rewind(FILE *stream);
+int fgetc(FILE *stream);
+int getc(FILE *stream);
+int ungetc(int c, FILE *stream);
+char *fgets(char *dst, int n, FILE *stream);
+int feof(FILE *stream);
+int ferror(FILE *stream);
+void clearerr(FILE *stream);
+int fflush(FILE *stream);
+int remove(const char *name);
+int rename(const char *from, const char *to);
+int fscanf(FILE *stream, const char *fmt, ...);
+int sscanf(const char *s, const char *fmt, ...);
+int scanf(const char *fmt, ...);
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
 #endif
 `;
 
 const STDLIB = `
+double atof(const char *s);
+long atol(const char *s);
+
 #ifndef _PRISM_STDLIB_H
 #define _PRISM_STDLIB_H
 #include <stddef.h>
@@ -241,7 +272,57 @@ void longjmp(jmp_buf env, int val);
 #endif
 `;
 
+const ERRNO = `
+#ifndef _PRISM_ERRNO_H
+#define _PRISM_ERRNO_H
+/*
+ * A TENTATIVE definition, not an extern. errno has to exist somewhere and no PRISM translation unit
+ * defines it; C89's common-symbol rule merges tentative definitions across units by name, which is
+ * how libcs of this era did it and how PRISM's linker resolves globals.
+ *
+ * A plain int, not a TLS accessor: there is one thread inside the guest.
+ *
+ * (No backticks in this comment on purpose. These header strings are JS template literals, and a
+ * backtick inside one ends it -- a trap this file has sprung twice now.)
+ */
+int errno;
+#define ENOENT 2
+#define EACCES 13
+#define EEXIST 17
+#define EINVAL 22
+#endif
+`;
+
+const FCNTL = `
+#ifndef _PRISM_FCNTL_H
+#define _PRISM_FCNTL_H
+#define O_RDONLY 0
+#define O_WRONLY 1
+#define O_RDWR   2
+#define O_CREAT  0x40
+#define O_TRUNC  0x200
+#define O_APPEND 0x400
+#define O_BINARY 0
+int open(const char *name, int flags, ...);
+#endif
+`;
+
+const UNISTD = `
+#ifndef _PRISM_UNISTD_H
+#define _PRISM_UNISTD_H
+#include <stddef.h>
+int close(int fd);
+int read(int fd, void *dst, size_t n);
+int write(int fd, const void *src, size_t n);
+int unlink(const char *name);
+#endif
+`;
+
 export const HEADERS = {
+  'errno.h': ERRNO,
+  'fcntl.h': FCNTL,
+  'unistd.h': UNISTD,
+  'sys/types.h': '',
   'setjmp.h': SETJMP,
   'time.h': TIMEH,
   'stdarg.h': STDARG,

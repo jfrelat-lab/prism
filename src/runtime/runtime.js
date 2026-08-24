@@ -95,6 +95,27 @@ function makeLibc(M) {
     fputs: (p, _stream) => { M.write(M.cstr(p)); return 1; },
     fputc: (c, _stream) => { M.write(String.fromCharCode(c & 0xff)); return c & 0xff; },
     fprintf: (_stream, fmt, args) => { const s = format(M, fmt, args ?? []); M.write(s); return s.length; },
+
+    /*
+     * The `v` family: same formatter, arguments read from a va_list instead of a packed array. Quake
+     * needs these badly — `Con_Printf`, `Sys_Error`, `Sys_Printf` and `va()` are all built on
+     * vsprintf, and eleven of its functions failed to emit without them.
+     */
+    vprintf: (fmt, ap) => { const s = format(M, fmt, vaReader(M, ap)); M.write(s); return s.length; },
+    vfprintf: (_stream, fmt, ap) => { const s = format(M, fmt, vaReader(M, ap)); M.write(s); return s.length; },
+    vsprintf: (dst, fmt, ap) => {
+      const s = format(M, fmt, vaReader(M, ap));
+      const bytes = new TextEncoder().encode(s);
+      u8().set(bytes, dst); u8()[dst + bytes.length] = 0;
+      return bytes.length;
+    },
+    vsnprintf: (dst, n, fmt, ap) => {
+      const s = format(M, fmt, vaReader(M, ap));
+      const bytes = new TextEncoder().encode(s);
+      const take = Math.max(0, Math.min(bytes.length, (n | 0) - 1));
+      if (n | 0) { u8().set(bytes.subarray(0, take), dst); u8()[dst + take] = 0; }
+      return bytes.length;
+    },
     sprintf: (dst, fmt, args) => {
       const s = format(M, fmt, args ?? []);
       const bytes = new TextEncoder().encode(s);
@@ -167,6 +188,14 @@ function makeLibc(M) {
       const i = hs.indexOf(ns);
       return i < 0 ? 0 : h + i;
     },
+    atof: (p) => { const v = parseFloat(M.mod.cstr(p)); return Number.isNaN(v) ? 0 : v; },
+    atol: (p) => { const v = parseInt(M.mod.cstr(p), 10); return Number.isNaN(v) ? 0 : v | 0; },
+
+    /*
+     * POSIX file descriptors, the three calls Quake's Con_DebugLog uses and nothing more. They ride
+     * on the same store as stdio (see src/env/stdio.js), so a file written through a descriptor is
+     * readable through `fopen` — which is what a program that mixes the two expects.
+     */
     memchr: (p, c, n) => { c &= 0xff; for (let i = 0; i < n; i++) if (u8()[p + i] === c) return p + i; return 0; },
 
     /**
@@ -256,11 +285,37 @@ function makeLibc(M) {
  * printf. Written out rather than delegated because the format quirks are observable and the gate
  * compares stdout byte for byte against glibc's.
  */
+/**
+ * Where a formatting call's arguments come from. Two sources, one interface.
+ *
+ * `printf` is emitted with its extras packed into a JS array, one slot per argument. `vsprintf` is
+ * handed a `va_list`, which on i386 is a plain pointer into the caller's packed buffer — so the
+ * arguments have to be read out of GUEST MEMORY at their real widths: 4 bytes for an int or a
+ * pointer, 8 for a double (varargs promote float) or a `long long`.
+ *
+ * Splitting the reader is what lets one formatter serve both. The conversion tells us the width, so
+ * the reader never has to guess.
+ */
+function arrayReader(args) {
+  let i = 0;
+  return { i32: () => args[i++], f64: () => args[i++], i64: () => args[i++] };
+}
+
+function vaReader(M, ap) {
+  let p = ap | 0;
+  const dv = M.mod.dv;
+  return {
+    i32: () => { const v = dv.getInt32(p, true); p += 4; return v; },
+    f64: () => { const v = dv.getFloat64(p, true); p += 8; return v; },
+    i64: () => { const v = dv.getBigInt64(p, true); p += 8; return v; },
+  };
+}
+
 export function format(M, fmtPtr, args) {
   const fmt = M.cstr(fmtPtr);
+  const src = Array.isArray(args) ? arrayReader(args) : args;
   let out = '';
-  let ai = 0;
-  const nextArg = () => args[ai++];
+  const nextArg = () => src.i32();
 
   for (let i = 0; i < fmt.length; i++) {
     const c = fmt[i];
@@ -288,11 +343,11 @@ export function format(M, fmtPtr, args) {
     const conv = fmt[i];
     let body;
     switch (conv) {
-      case 'd': case 'i': body = String(intArg(nextArg(), wide64, true)); break;
-      case 'u': body = String(intArg(nextArg(), wide64, false)); break;
-      case 'x': body = intArg(nextArg(), wide64, false).toString(16); break;
-      case 'X': body = intArg(nextArg(), wide64, false).toString(16).toUpperCase(); break;
-      case 'o': body = intArg(nextArg(), wide64, false).toString(8); break;
+      case 'd': case 'i': body = String(intArg(wide64 ? src.i64() : src.i32(), wide64, true)); break;
+      case 'u': body = String(intArg(wide64 ? src.i64() : src.i32(), wide64, false)); break;
+      case 'x': body = intArg(wide64 ? src.i64() : src.i32(), wide64, false).toString(16); break;
+      case 'X': body = intArg(wide64 ? src.i64() : src.i32(), wide64, false).toString(16).toUpperCase(); break;
+      case 'o': body = intArg(wide64 ? src.i64() : src.i32(), wide64, false).toString(8); break;
       case 'c': body = String.fromCharCode(nextArg() & 0xff); break;
       case 's': {
         const p = nextArg() | 0;
@@ -305,10 +360,10 @@ export function format(M, fmtPtr, args) {
         body = v === 0 ? '(nil)' : '0x' + v.toString(16);
         break;
       }
-      case 'f': case 'F': body = fixed(+nextArg(), prec === null || prec === '' ? 6 : +prec); break;
+      case 'f': case 'F': body = fixed(src.f64(), prec === null || prec === '' ? 6 : +prec); break;
       case 'e': case 'E': {
         const p = prec === null || prec === '' ? 6 : +prec;
-        body = (+nextArg()).toExponential(p);
+        body = src.f64().toExponential(p);
         // C writes at least two exponent digits; JS writes one.
         body = body.replace(/e([-+])(\d)$/, 'e$10$2');
         if (conv === 'E') body = body.toUpperCase();
@@ -316,7 +371,7 @@ export function format(M, fmtPtr, args) {
       }
       case 'g': case 'G': {
         const p = prec === null || prec === '' ? 6 : Math.max(1, +prec);
-        const v = +nextArg();
+        const v = src.f64();
         body = String(Number(v.toPrecision(p)));
         if (conv === 'G') body = body.toUpperCase();
         break;

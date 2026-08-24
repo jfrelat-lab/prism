@@ -64,12 +64,23 @@ function resolver(name, angled, fromFile) {
   return { path: `<missing:${name}>`, text: '' };
 }
 
+/*
+ * The DATA half of the platform layer, the same role MAME's OSD_VARS plays.
+ *
+ * `isDedicated` is declared in quakedef.h and defined by each platform's sys_*.c — sys_dos.c,
+ * sys_win.c, sys_linux.c all define it. sys_null.c, the one Quake ships for exactly this purpose,
+ * does not. So it falls to whoever supplies the platform, which here is us.
+ */
+const PLATFORM_VARS = 'int isDedicated;\n';
+
 const units = [];
 for (const f of UNITS) {
   const full = join(SRC, f);
   if (!existsSync(full)) { console.error(`missing unit ${f}`); process.exit(2); }
   units.push({ file: full, source: readFileSync(full, 'latin1') });
 }
+
+units.push({ file: 'prism-platform-vars.c', source: PLATFORM_VARS });
 
 const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
 console.log(`Quake (WinQuake, id386=0) — ${units.length} translation units, ${loc.toLocaleString('en')} lines`);
@@ -78,8 +89,18 @@ let program;
 const t0 = performance.now();
 try {
   program = compileProgram(units, {
-    // __i386__ is deliberately NOT defined: that is what selects id386 = 0 and the portable C paths.
-    defines: { __PRISM__: '1' },
+    /*
+     * __i386__ is UNDEFINED for this build, which is what selects `id386 = 0` and the portable C
+     * equivalent of all 21 hand-written .s files — exactly the configuration Quake compiles in on a
+     * SPARC. It is a build switch, not a source edit.
+     *
+     * `null` means undefine, and it has to: PRISM's target defines set __i386__ because the target
+     * really is i386, and Quake's test is `#if defined __i386__`, which no value can answer. Until
+     * this existed the whole build was silently in the id386=1 configuration — compiling code that
+     * expects assembly routines nothing was providing, and skipping the C globals in r_vars.c
+     * because its entire body sits inside `#if !id386`.
+     */
+    defines: { __PRISM__: '1', __i386__: null, i386: null },
     resolve: resolver,
     memory: 512 * 1024 * 1024,
     collect: true,

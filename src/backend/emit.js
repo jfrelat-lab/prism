@@ -22,6 +22,28 @@ import { findField, constEval } from '../parse/parser.js';
 import { FUNC_TAG } from '../link/module.js';
 import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
 
+/*
+ * C identifiers that JavaScript reserves. A C program is entitled to a variable called `in`, `new` or
+ * `class`, and Quake has one: the emitted module died with "Unexpected token 'in'".
+ *
+ * Locals are already safe because they go out as `_v_name`, but PARAMETERS and function names keep
+ * their own names, which is worth preserving — readable emitted code is this project's primary
+ * debugging lever. So only the collisions are renamed, with a `$`: legal in a JS identifier, and not
+ * something a C identifier produces.
+ *
+ * C's own keywords are absent from the list: a C program cannot use `if`, `for`, `void`, `const`,
+ * `switch`, `enum` or `static` as a name in the first place. What is left is the JavaScript-only half.
+ */
+const JS_RESERVED = new Set([
+  'in', 'new', 'class', 'delete', 'this', 'null', 'true', 'false', 'typeof', 'instanceof',
+  'var', 'let', 'with', 'throw', 'try', 'catch', 'finally', 'super', 'import', 'export',
+  'function', 'yield', 'await', 'async', 'debugger', 'arguments', 'eval',
+  'package', 'private', 'protected', 'public', 'interface', 'implements',
+  'undefined', 'NaN', 'Infinity',
+]);
+
+export const jsIdent = (n) => (JS_RESERVED.has(n) ? n + '$' : n);
+
 export class EmitError extends Error {}
 
 
@@ -151,7 +173,7 @@ export class FunctionEmitter {
     // A struct RETURN uses the sret convention: the caller supplies the buffer, because the callee's
     // own frame is released before the value could be read out of it.
     this.sret = T.isRecord(d.type.ret);
-    const params = d.type.params.map((p, i) => p.name ?? `_unused${i}`);
+    const params = d.type.params.map((p, i) => (p.name ? jsIdent(p.name) : `_unused${i}`));
     if (this.sret) params.unshift('_sret');
     // A variadic function takes the caller-packed argument buffer as a hidden last parameter, which
     // is what `va_start` resolves to.
@@ -170,16 +192,16 @@ export class FunctionEmitter {
       if (T.isRecord(p.type)) {
         // The caller already made a fresh copy, so the callee may modify it in place — no second
         // copy is needed, and `&param` is simply that address.
-        this.locals.set(p.name, { kind: 'aggparam', js: p.name, type: p.type });
+        this.locals.set(p.name, { kind: 'aggparam', js: jsIdent(p.name), type: p.type });
         continue;
       }
       if (p.type.k === 'array') unsup('an array parameter by value');
       if (escaped.has(p.name)) {
         const off = this.slot(p.type.size, p.type.align);
         this.locals.set(p.name, { kind: 'slot', off, type: p.type });
-        pre.push({ off, type: p.type, from: p.name });
+        pre.push({ off, type: p.type, from: jsIdent(p.name) });
       } else {
-        this.locals.set(p.name, { kind: 'var', js: p.name, type: p.type });
+        this.locals.set(p.name, { kind: 'var', js: jsIdent(p.name), type: p.type });
       }
     }
 
@@ -222,7 +244,7 @@ export class FunctionEmitter {
     if (this.frameSize) body.push(`  M.sp=_fp+${this.frameSize}|0;`);
     body.push(`  return ${d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
 
-    return `function ${d.name}(${params.join(',')}){\n${body.join('\n')}\n}`;
+    return `function ${jsIdent(d.name)}(${params.join(',')}){\n${body.join('\n')}\n}`;
   }
 
   /**

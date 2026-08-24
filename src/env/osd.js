@@ -10,6 +10,8 @@
 
 import { SLOT } from './webhost.js';
 
+import { installStdio } from './stdio.js';
+
 /** `struct osd_bitmap { int width, height; void *private; unsigned char *line[0]; }` */
 const B_WIDTH = 0, B_HEIGHT = 4, B_PRIVATE = 8, B_LINE = 12;
 
@@ -133,9 +135,10 @@ export function installOSD(M, {
     osd_poll_joystick: () => {},
   };
 
-  // --- the DOS/DJGPP libc extras MAME 0.1 calls, measured from its sources
-  const handles = new Map();            // FILE* -> {bytes, pos}
-  let nextHandle = 0x40000000;
+  // --- the DOS/DJGPP extras MAME 0.1 calls that are NOT ISO C. File I/O used to live here; it moved
+  // to src/env/stdio.js, because `fopen` is not MAME's and Quake needs the two thirds of the
+  // interface this shim never had.
+  installStdio(M, { files });
 
   const lib = {
     // Case-insensitive compare, a DOS-ism with no ISO equivalent.
@@ -143,38 +146,6 @@ export function installOSD(M, {
       const x = mod.cstr(a).toLowerCase(), y = mod.cstr(b).toLowerCase();
       return x < y ? -1 : x > y ? 1 : 0;
     },
-
-    /**
-     * File I/O over an injected map of name -> Uint8Array. MAME uses it only to load ROMs, so read
-     * support is what matters; a write returns the count without storing, which keeps a high-score
-     * save from failing the run.
-     */
-    fopen: (namePtr, modePtr) => {
-      const name = mod.cstr(namePtr);
-      const mode = mod.cstr(modePtr);
-      // MAME asks for `pacman/pacman.6e`; a caller may key the map either way.
-      const want = name.toLowerCase();
-      const base = want.replace(/^.*\//, '');
-      const key = Object.keys(files).find(k => {
-        const kk = k.toLowerCase();
-        return kk === want || kk === base || kk.replace(/^.*\//, '') === base;
-      });
-      if (key === undefined) return 0;                  // NULL: not found, which MAME reports
-      if (/w|a/.test(mode)) return 0;
-      handles.set(nextHandle, { bytes: files[key], pos: 0 });
-      return nextHandle++;
-    },
-    fclose: (fp) => { handles.delete(fp); return 0; },
-    fread: (dst, size, count, fp) => {
-      const h = handles.get(fp);
-      if (!h) return 0;
-      const want = (size | 0) * (count | 0);
-      const got = Math.max(0, Math.min(want, h.bytes.length - h.pos));
-      M.u8.set(h.bytes.subarray(h.pos, h.pos + got), dst);
-      h.pos += got;
-      return size ? Math.floor(got / size) : 0;
-    },
-    fwrite: (_src, size, count) => count | 0,
 
     /**
      * A deterministic PRNG. `rand()` must not read host entropy: the same run has to produce the
@@ -213,10 +184,6 @@ export function osdBuiltins(T) {
 
     stricmp: { ret: I, params: [P, P] },
     strcmpi: { ret: I, params: [P, P], impl: 'stricmp' },
-    fopen: { ret: ptr, params: [P, P] },
-    fclose: { ret: I, params: [ptr] },
-    fread: { ret: U, params: [P, U, U, ptr] },
-    fwrite: { ret: U, params: [P, U, U, ptr] },
     rand: { ret: I, params: [] },
     srand: { ret: V, params: [U] },
   };

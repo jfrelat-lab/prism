@@ -7,9 +7,10 @@ import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
-import { FunctionEmitter, EmitError } from './backend/emit.js';
+import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
 import { osdBuiltins, installOSD } from './env/osd.js';
+import { installStdio } from './env/stdio.js';
 import { installConsole } from './env/console.js';
 
 /**
@@ -20,6 +21,26 @@ import { installConsole } from './env/console.js';
  * as `typedef ;`. Measured: 60 of 1575 torture programs failed on exactly that, making it the
  * largest single parse-error cluster — and it is a table, not a feature.
  */
+/**
+ * Merge the caller's defines over the target's, where a value of `null` means UNDEFINE.
+ *
+ * A build sometimes has to switch off a macro the target legitimately sets. Quake is the case that
+ * forced this: `__i386__` is defined because the target IS i386, and real code tests it for
+ * alignment and byte order — but Quake reads it as "the 21 hand-written .s files are available",
+ * which for PRISM they are not. Quake's own answer on a non-x86 machine is that `__i386__` is absent
+ * and `id386` becomes 0, selecting the portable C equivalent of every assembly routine. Expressing
+ * that needs a way to say "not defined", which no amount of `{ __i386__: '0' }` can express: the
+ * test is `#if defined __i386__`.
+ */
+export function mergeDefines(target, extra) {
+  const out = { ...target };
+  for (const [k, v] of Object.entries(extra)) {
+    if (v === null) delete out[k];
+    else out[k] = v;
+  }
+  return out;
+}
+
 export const TARGET_DEFINES = {
   __i386__: '1', i386: '1', __GNUC__: '4', __GNUC_MINOR__: '9',
   __STDC__: '1', __STDC_HOSTED__: '1', __CHAR_BIT__: '8', __ILP32__: '1',
@@ -74,6 +95,42 @@ export const BUILTINS = new Map(Object.entries({
   fprintf: { ret: I, params: [P, P], variadic: true },
   sprintf: { ret: I, params: [P, P], variadic: true },
   snprintf: { ret: I, params: [P, U, P], variadic: true },
+  vprintf: { ret: I, params: [P, P] },
+  vfprintf: { ret: I, params: [P, P, P] },
+  vsprintf: { ret: I, params: [P, P, P] },
+  vsnprintf: { ret: I, params: [P, U, P, P] },
+
+  // Files. ISO C, so every program gets them — they used to live inside MAME's platform shim, which
+  // was the wrong home twice over. See src/env/stdio.js.
+  fopen: { ret: P, params: [P, P] },
+  fclose: { ret: I, params: [P] },
+  fread: { ret: U, params: [P, U, U, P] },
+  fwrite: { ret: U, params: [P, U, U, P] },
+  fseek: { ret: I, params: [P, I, I] },
+  ftell: { ret: I, params: [P] },
+  rewind: { ret: V, params: [P] },
+  fgetc: { ret: I, params: [P] },
+  getc: { ret: I, params: [P] },
+  ungetc: { ret: I, params: [I, P] },
+  fgets: { ret: P, params: [P, I, P] },
+  putc: { ret: I, params: [I, P] },
+  feof: { ret: I, params: [P] },
+  ferror: { ret: I, params: [P] },
+  clearerr: { ret: V, params: [P] },
+  fflush: { ret: I, params: [P] },
+  unlink: { ret: I, params: [P] },
+  remove: { ret: I, params: [P] },
+  rename: { ret: I, params: [P, P] },
+  strerror: { ret: P, params: [I] },
+  fscanf: { ret: I, params: [P, P], variadic: true },
+  sscanf: { ret: I, params: [P, P], variadic: true },
+  scanf: { ret: I, params: [P], variadic: true },
+  atof: { ret: D, params: [P] },
+  atol: { ret: I, params: [P] },
+  open: { ret: I, params: [P, I], variadic: true },
+  close: { ret: I, params: [I] },
+  write: { ret: I, params: [I, P, U] },
+  read: { ret: I, params: [I, P, U] },
   puts: { ret: I, params: [P] },
   putchar: { ret: I, params: [I] },
   gets: { ret: P, params: [P] },
@@ -161,7 +218,7 @@ export class CompileError extends Error {}
  */
 export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false } = {}) {
   const pp = new Preprocessor({
-    defines: { ...TARGET_DEFINES, ...defines },
+    defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
@@ -208,7 +265,9 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   finalizeHeap(M);
 
   const src = `"use strict";\nreturn function(M,F,D){\n${pieces.join('\n')}\n` +
-    `${emitted.map(n => `F.${n}=${n};`).join('\n')}\n};`;
+    // The KEY is the C name; the value is the JavaScript identifier, which differs whenever the C
+    // name is a JS reserved word (`in`, `new`, `class`…).
+    `${emitted.map(n => `F[${JSON.stringify(n)}]=${jsIdent(n)};`).join('\n')}\n};`;
 
   let factory;
   try {
@@ -220,11 +279,14 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
 
+  installStdio(M);
+
   return { M, F, src, mod, run: makeRunner(M, F, mod) };
 }
 
 export { installOSD };
 export { installConsole };
+export { installStdio };
 
 /**
  * Compile and link SEVERAL translation units into one module.
@@ -252,7 +314,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   // Parse every unit first: pass 1 must see all declarations before any body is emitted.
   const parsed = [];
   for (const u of units) {
-    const pp = new Preprocessor({ defines: { ...TARGET_DEFINES, ...defines }, resolve: resolver });
+    const pp = new Preprocessor({ defines: mergeDefines(TARGET_DEFINES, defines), resolve: resolver });
     const tokens = pp.run(u.source, u.file);
     const { unit, scope } = parse(tokens, { file: u.file });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
@@ -311,7 +373,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
         // one error per rebuild is not a workflow. Never silent: the list is returned.
         if (!collect) throw err;
         failures.push({ unit: basename(p.file), fn: d.name, message: String(err.message) });
-        pieces.push(`function ${link}(){ throw new Error(${JSON.stringify('unimplemented: ' + d.name)}); }`);
+        pieces.push(`function ${jsIdent(link)}(){ throw new Error(${JSON.stringify('unimplemented: ' + d.name)}); }`);
       }
       emitted.push(link);
     }
@@ -319,7 +381,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
 
   finalizeHeap(M);
   const src = '"use strict";\nreturn function(M,F,D){\n' + pieces.join('\n') + '\n' +
-    emitted.map(n => `F[${JSON.stringify(n)}]=${n};`).join('\n') + '\n};';
+    emitted.map(n => `F[${JSON.stringify(n)}]=${jsIdent(n)};`).join('\n') + '\n};';
 
   let factory;
   try {
@@ -330,6 +392,10 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   const F = Object.create(null);
   factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
+
+  // After emission, because it fills in the program's own `stdin`/`stdout`/`stderr` globals and those
+  // addresses do not exist until the units have been linked.
+  installStdio(M);
 
   return { M, F, src, mod, failures, run: makeRunner(M, F, mod) };
 }
