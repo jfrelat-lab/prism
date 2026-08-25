@@ -382,6 +382,21 @@ export class FunctionEmitter {
   }
 
   #localDecl(d, escaped) {
+    /*
+     * A FUNCTION declared at block scope declares the external function — it never creates an object,
+     * and it needs no `extern` keyword to do so, because a function declaration is extern by default.
+     * Requiring the keyword turned Doom's
+     *
+     *     void V_MarkRect(int, int, int, int);      // inside wipe_ScreenWipe's body
+     *
+     * into a local variable holding zero, and the next line called through it. The symptom was
+     * "call through a non-function pointer 0x0" inside the melt effect, which pointed at the dispatch
+     * table three lines below — the table was perfectly correct.
+     *
+     * Declaring nothing here is the fix: the name then resolves through the ordinary function lookup.
+     */
+    if (d.type.k === 'func') return;
+
     if (d.storage === 'extern') {
       // `extern` inside a block REFERS to the file-scope object; it does not create one. Giving it
       // a private global shadowed the real `v` and gcc's scope-1.c exists to catch exactly that.

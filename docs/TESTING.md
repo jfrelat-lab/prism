@@ -937,3 +937,43 @@ parse error inside the stub, twenty lines from its cause.
 
 Net effect on the external corpora, from work that was aimed at SQLite alone:
 **c-testsuite 196 → 197, gcc.c-torture 1243 → 1255, still zero wrong answers.**
+
+### Two symptoms in Doom, three different causes
+
+Reported as "no demo plays, and pressing Enter gives a menu with a strange blink". None of the three
+causes was where the symptom pointed.
+
+**1. The demos are refused by Doom itself.** Its own message says so: `Demo is from a different game
+version!` — the shareware `DOOM1.WAD`'s recorded demos carry a version byte `linuxdoom-1.10` does not
+accept. Faithful behaviour of this source with this WAD, not a PRISM defect, and the program printed
+the answer all along.
+
+**2. The clock was racing.** The deterministic `gettimeofday` advances one Doom tic per CALL, and
+`I_GetTime` is called several times per frame, so game time ran far ahead of frames and the attract
+pages flew past. `installRealClock` now supplies `gettimeofday` as well — Doom times itself with that
+rather than with `clock()` — and the measured rate is 34.9 fps against Doom's TICRATE of 35.
+
+**3. A block-scope function declaration became a null local.** This one was worth the hunt. Doom's
+melt effect contains:
+
+    int wipe_ScreenWipe(int wipeno, ...) {
+        static int (*wipes[])(int, int, int) = { ... };
+        void V_MarkRect(int, int, int, int);      // <- a declaration, inside a body
+        ...
+        (*wipes[wipeno*3])(width, height, ticks);
+        V_MarkRect(0, 0, width, height);
+
+The crash was `call through a non-function pointer 0x0` inside `wipe_ScreenWipe`, which points
+straight at that dispatch table — and the table was **perfectly correct**, six valid pointers, as
+reading the linked image showed. The null was `V_MarkRect`: PRISM's handling of a block-scope
+declaration was gated on `storage === 'extern'`, and **a function declaration needs no keyword** to be
+external. So it created a local variable holding zero, and the next line called through it.
+
+The lesson is about where to look, not about the fix. Three minimal reproductions of the *table* all
+passed — function-pointer arrays at file scope, with implied size, as a `static` local — because the
+table was never the problem. What settled it was dumping the symbol out of the linked image and then
+reading the emitted JavaScript, where `M.icall(_v_V_MarkRect, ...)` sits two lines below
+`var _v_V_MarkRect=0`.
+
+Still open: starting a real level (`-warp 1 1`) now gets further and then loops in pure guest C, where
+the runtime-call profiler is blind by construction — no runtime calls, nothing to count.

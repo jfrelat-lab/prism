@@ -17,6 +17,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileProgram, installStdio } from '../src/compile.js';
 import { installX11 } from '../src/env/x11.js';
+import { writeIndexedPng } from './png.mjs';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -90,6 +91,27 @@ console.log(`\n✓ compiled in ${(compileMs / 1000).toFixed(1)} s: ${Object.keys
 let x11 = null;
 let frames = 0;
 
+// --sym=<substring>: print matching symbols and their first words. Reading the linked image is how a
+// "null function pointer" question gets settled — an empty table and a bad index look identical from
+// the stack trace.
+const fnArg = process.argv.find(a => a.startsWith('--fn='))?.slice(5);
+if (fnArg) {
+  const i = program.src.indexOf(`function ${fnArg}(`);
+  console.log(i < 0 ? `${fnArg}: not found` : program.src.slice(i, program.src.indexOf('\nfunction ', i + 10)));
+}
+
+const symArg = process.argv.find(a => a.startsWith('--sym='))?.slice(6);
+if (symArg) {
+  for (const [name, sym] of program.mod.symbols) {
+    if (!name.includes(symArg)) continue;
+    const words = [];
+    for (let i = 0; i < Math.min(8, Math.ceil((sym.size ?? 4) / 4)); i++) {
+      words.push('0x' + (program.mod.dv.getInt32(sym.addr + i * 4, true) >>> 0).toString(16));
+    }
+    console.log(`  ${name}  @0x${sym.addr.toString(16)} size ${sym.size}: ${words.join(' ')}`);
+  }
+}
+
 if (process.argv.includes('--run')) {
   // The WAD comes from a directory the user names. DOOM1.WAD is the freely redistributable shareware
   // one; nothing is fetched here.
@@ -149,14 +171,32 @@ if (process.argv.includes('--run')) {
 
   const frameCap = +(process.argv.find(a => a.startsWith('--frames='))?.slice(9) ?? 60);
   frames = 0;
+  // --png=<prefix> --at=1,50,200: dump specific frames. Looking at the pixels is the only way to tell
+  // "renders nothing" from "renders the wrong thing", and the two look identical from a counter.
+  const pngPrefix = process.argv.find(a => a.startsWith('--png='))?.slice(6);
+  const at = new Set((process.argv.find(a => a.startsWith('--at='))?.slice(5) ?? '')
+    .split(',').filter(Boolean).map(Number));
+
   const putImage = program.M.rt.XPutImage;
   program.M.rt.XPutImage = (...args) => {
     const r = putImage(...args);
-    if (++frames >= frameCap) throw new Error('__frames_done');
+    frames++;
+    if (pngPrefix && at.has(frames)) {
+      const x = program.M.x11;
+      writeIndexedPng(`${pngPrefix}-${String(frames).padStart(4, '0')}.png`, {
+        pixels: program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height),
+        width: x.width, height: x.height, palette: x.palette,
+      });
+    }
+    if (frames >= frameCap) throw new Error('__frames_done');
     return r;
   };
   try {
-    const r = program.run(['doom', ...process.argv.filter(a => a.startsWith('-') && !a.startsWith('--')).slice(0, 0)]);
+    // --args="-warp 1 1 -skill 3" reaches Doom as argv, which is how a game is started without
+    // waiting for an attract loop.
+    const extra = (process.argv.find(a => a.startsWith('--args='))?.slice(7) ?? '')
+      .split(/\s+/).filter(Boolean);
+    const r = program.run(['doom', ...extra]);
     console.log(`\n${r.stdout}`);
     console.log(`exit ${r.code}`);
     reportFrame();
@@ -169,7 +209,7 @@ if (process.argv.includes('--run')) {
     // Whatever it printed BEFORE it threw is usually the real message.
     console.log(`\n${program.M.output()}`);
     console.log(`\n✗ ran and threw: ${e.message}`);
-    console.log((e.stack || '').split('\n').slice(1, 8).join('\n'));
+    console.log((e.stack || '').split('\n').slice(1, 16).join('\n'));
   }
 }
 

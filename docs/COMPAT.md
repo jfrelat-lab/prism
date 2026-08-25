@@ -5,13 +5,13 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 197/219 c-testsuite, 1258/1556 gcc torture |
+| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 197/219 c-testsuite, 1259/1556 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. |
 | **Quake** (`WinQuake/`, `id386=0`) | ✅ **RENDERS** — 69 units, 44,570 lines, **every function emits**, 1.72 MB of JavaScript. Loads `id1/pak0.pak`, runs its demos, and draws the game at 320x200 in the browser at ~26 fps. Game data is supplied by the user, never fetched. Sound and networking are Quake's own null drivers. |
 | **SQLite 3.53.4** (amalgamation) | ✅ **RUNS, AND AGREES WITH gcc** — 269,650 lines in ONE translation unit, 2542 functions, 5.8 MB of emitted JavaScript in **1.5 s** (~180,000 lines/second). Creates a table, inserts 200 rows and answers eight queries — aggregates, an index, ORDER BY, a self join — **byte-identical to an i386 gcc build of the same sources** (`tools/sqlite.mjs --diff`). No platform layer and no data files: where MAME and Quake test whether PRISM can HOST a program, this tests whether it can COMPILE one. |
-| **DOOM** (`linuxdoom-1.10`) | ✅ **RUNS AND RENDERS** — 62 units, 45,152 lines, **714 of 715 functions**, 1.11 MB of emitted JavaScript in 0.8 s. Loads `DOOM1.WAD`, plays its demos and draws at 320x200 with all 256 palette entries. Compiled **entirely unmodified**, X11 and all: `src/env/x11.js` shims Xlib at the library boundary so Doom's own `i_video.c` is the video driver. The one function that does not emit is in the sound timer. |
+| **DOOM** (`linuxdoom-1.10`) | 🟡 **RUNS AND RENDERS ITS ATTRACT LOOP** — 62 units, 45,152 lines, 714 of 715 functions, 1.11 MB of JavaScript in 0.8 s. Loads `DOOM1.WAD` and draws its title, credits and order screens at 320x200 with all 256 palette entries, paced at 34.9 fps against a TICRATE of 35. Compiled **entirely unmodified**, X11 and all. Its demos do not play, and Doom says why itself: `Demo is from a different game version!` — the shareware WAD's demos predate this source. Starting a level with `-warp` reaches further and then loops in pure guest C; open. |
 
 ### MAME 0.1, driver by driver
 
