@@ -99,7 +99,13 @@ int main(void)
     check("order by", row, "200|name200");
 
     sqlite3_exec(db, "SELECT avg(score) FROM t WHERE id % 7 = 0;", collect, 0, &err);
-    check("avg with modulo", row, "304.0");
+    /*
+     * 305.0, not 304.0. score = 3*id + 0.5 over id in {7,14,...,196}, so the mean is 3*101.5 + 0.5.
+     * My first attempt at this by hand said 304, PRISM said 305, and a native clang build agreed with
+     * PRISM — the fourth time in this project a test of mine has been wrong rather than the compiler.
+     * Hence --diff below: the expected values belong to a real compiler, not to my arithmetic.
+     */
+    check("avg with modulo", row, "305.0");
 
     sqlite3_exec(db, "SELECT group_concat(id) FROM t WHERE id < 6;", collect, 0, &err);
     check("group_concat", row, "1,2,3,4,5");
@@ -189,6 +195,46 @@ if (lineArg) {
   for (let i = Math.max(0, n - 3); i < Math.min(lines.length, n + 2); i++) {
     console.log(`${String(i + 1).padStart(7)}  ${lines[i].slice(0, 300)}`);
   }
+}
+
+/*
+ * --diff: the only oracle that means anything here. The same amalgamation and the same driver, built
+ * by i386 gcc in the container, running the same SQL — byte-identical output or a defect. It exists
+ * because the alternative is me writing the expected answers, and I have now got one wrong.
+ */
+if (process.argv.includes('--diff')) {
+  const { sh, SCRATCH } = await import('./oracle.mjs');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  const work = join(SCRATCH, 'sqlite');
+  mkdirSync(work, { recursive: true });
+  writeFileSync(join(work, 'sqlite3.c'), amalgamation);
+  writeFileSync(join(work, 'sqlite3.h'), readFileSync(join(SRC, 'sqlite3.h'), 'latin1'));
+  writeFileSync(join(work, 'driver.c'), DRIVER);
+
+  console.log('\nbuilding the same sources with i386 gcc (emulated — this is slow)…');
+  const t = performance.now();
+  const r = sh('cd sqlite && gcc -w -O1 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 ' +
+    '-o ref sqlite3.c driver.c -lm 2>&1 | tail -5 && ./ref', { timeout: 3600000 });
+  console.log(`  gcc side took ${((performance.now() - t) / 1000).toFixed(0)} s`);
+
+  installStdio(program.M, { files: {} });
+  const ours = program.run(['sqlite']).stdout;
+  const theirs = r.stdout;
+
+  const a = ours.trim().split('\n');
+  const b = theirs.trim().split('\n');
+  let bad = 0;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if (a[i] !== b[i]) {
+      if (!bad) console.log('\n✗ first divergence:');
+      if (bad < 5) console.log(`  line ${i}\n    gcc   ${b[i] ?? '(end)'}\n    prism ${a[i] ?? '(end)'}`);
+      bad++;
+    }
+  }
+  console.log(bad
+    ? `\n${bad} of ${Math.max(a.length, b.length)} lines differ`
+    : `\n✓ identical over ${a.length} lines — PRISM and i386 gcc agree on every query.`);
+  process.exit(bad ? 1 : 0);
 }
 
 if (process.argv.includes('--run')) {

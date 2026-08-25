@@ -859,6 +859,26 @@ export class FunctionEmitter {
         if (!T.isRecord(c.type)) throw new EmitError('a call returning a scalar is not an lvalue');
         return { addr: `(${c.js}|0)`, type: c.type };
       }
+      /*
+       * A struct-valued `?:` is not an lvalue in C, but tier-0 still needs an ADDRESS for it: struct
+       * assignment copies from one. So materialise it — a slot in this frame, filled by whichever
+       * branch runs, and the slot's address is the result.
+       *
+       * SQLite's generated parser writes exactly this shape, and refusing it left the entire SQL
+       * parser unimplemented.
+       */
+      case 'cond': {
+        if (!T.isRecord(e.type ?? T.INT)) break;
+        const off = this.slot(e.type.size, e.type.align);
+        const at = `(_fp+${off}|0)`;
+        const a2 = this.#lval(e.then ?? e.cond);
+        const b2 = this.#lval(e.els);
+        return {
+          addr: `(${this.#truth(e.cond)}?M.copy(${at},${a2.addr},${e.type.size}):` +
+            `M.copy(${at},${b2.addr},${e.type.size}),${at})`,
+          type: e.type,
+        };
+      }
     }
     throw new EmitError(`'${e.n}' is not an lvalue`);
   }
@@ -901,7 +921,12 @@ export class FunctionEmitter {
         if (l.varJs) return { js: l.varJs, type: l.type };
         if (l.type.k === 'array') return { js: l.addr, type: T.ptr(l.type.of) };
         if (l.type.k === 'func') return { js: l.addr, type: T.ptr(l.type) };
-        return { js: loadExpr(l.addr, l.type), type: l.type };
+        // A struct's "value" in tier-0 IS its address, exactly as an array's is: every legal
+        // consumer of a struct rvalue -- assignment, an argument, a return, a member access,
+        // sizeof -- wants the address and copies from it. Refusing here made `(void)tok;` fail,
+        // which SQLite's generated parser writes to silence an unused-parameter warning.
+        if (T.isRecord(l.type)) return { js: l.addr, type: l.type };
+      return { js: loadExpr(l.addr, l.type), type: l.type };
       }
 
       case 'index': case 'member': {
@@ -912,6 +937,7 @@ export class FunctionEmitter {
         // gcc's bitfld-1.c exists precisely to catch that.
         if (l.bitfield) return { js: this.#loadBitfield(l), type: bitfieldPromoted(l.bitfield) };
         if (l.type.k === 'array') return { js: l.addr, type: T.ptr(l.type.of) };
+        if (T.isRecord(l.type)) return { js: l.addr, type: l.type };
         return { js: loadExpr(l.addr, l.type), type: l.type };
       }
 
