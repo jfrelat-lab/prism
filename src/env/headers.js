@@ -961,7 +961,43 @@ char *inet_ntoa(struct in_addr in);
 struct hostent { char *h_name; char **h_aliases; int h_addrtype; int h_length; char **h_addr_list; };
 struct hostent *gethostbyname(const char *name);
 `,
-  'linux/soundcard.h': '#define SNDCTL_DSP_SETFMT 0\n#define SNDCTL_DSP_SPEED 0\n#define SNDCTL_DSP_STEREO 0\n#define AFMT_S16_LE 16\n',
+  /*
+   * OSS, the sound interface a Linux program of this era writes to. The numbers were all 0 while it
+   * was a stub, which meant every ioctl looked like every other one; they are distinct now because
+   * src/env/dsp.js switches on them. Not the kernel's own _SIOWR-encoded values: PRISM supplies both
+   * the header and the driver, so they are one thing in two places, and a made-up encoding that
+   * matches is more honest than a real one that is not implemented.
+   *
+   * The set is what Doom's i_sound.c and Quake's snd_linux.c actually name, and nothing else.
+   */
+  'linux/soundcard.h': `
+#ifndef _PRISM_SOUNDCARD_H
+#define _PRISM_SOUNDCARD_H
+#define SNDCTL_DSP_RESET       0x5000
+#define SNDCTL_DSP_SYNC        0x5001
+#define SNDCTL_DSP_SPEED       0x5002
+#define SNDCTL_DSP_STEREO      0x5003
+#define SNDCTL_DSP_GETBLKSIZE  0x5004
+#define SNDCTL_DSP_SETFMT      0x5005
+#define SNDCTL_DSP_CHANNELS    0x5006
+#define SNDCTL_DSP_POST        0x5009
+#define SNDCTL_DSP_SETFRAGMENT 0x500a
+#define SNDCTL_DSP_GETFMTS     0x500b
+#define SNDCTL_DSP_GETOSPACE   0x500c
+#define SNDCTL_DSP_GETISPACE   0x500d
+#define SNDCTL_DSP_NONBLOCK    0x500e
+#define SNDCTL_DSP_GETCAPS     0x500f
+#define SNDCTL_DSP_GETOPTR     0x5012
+#define SNDCTL_DSP_SETTRIGGER  0x5010
+#define PCM_ENABLE_OUTPUT      0x0002
+#define DSP_CAP_TRIGGER        0x1000
+#define DSP_CAP_MMAP           0x2000
+#define AFMT_U8                0x0008
+#define AFMT_S16_LE            0x0010
+struct audio_buf_info { int fragments, fragstotal, fragsize, bytes; };
+struct count_info { int bytes; int blocks; int ptr; };
+#endif
+`,
   'errnos.h': '#include <errno.h>\n',
   'alloca.h': 'void *alloca(unsigned long n);\n',
   'malloc.h': '#include <stdlib.h>\n',
@@ -970,6 +1006,18 @@ struct hostent *gethostbyname(const char *name);
 struct timeval { long tv_sec; long tv_usec; };
 struct timezone { int tz_minuteswest; int tz_dsttime; };
 struct itimerval { struct timeval it_interval; struct timeval it_value; };
+/*
+ * select(), for a program that polls its own stdin. Doom's sound server does exactly that -- a
+ * zero-timeout select on fd 0 -- and it is the one call that makes its loop cooperative rather than
+ * blocking. fd_set is a bitmap of FD_SETSIZE bits, and the macros are the usual ones.
+ */
+#define FD_SETSIZE 1024
+typedef struct { unsigned long fds_bits[FD_SETSIZE / 32]; } fd_set;
+#define FD_ZERO(s)    do { int __i; for (__i = 0; __i < FD_SETSIZE / 32; __i++) (s)->fds_bits[__i] = 0; } while (0)
+#define FD_SET(f, s)   ((s)->fds_bits[(f) / 32] |= (1UL << ((f) % 32)))
+#define FD_CLR(f, s)   ((s)->fds_bits[(f) / 32] &= ~(1UL << ((f) % 32)))
+#define FD_ISSET(f, s) (((s)->fds_bits[(f) / 32] & (1UL << ((f) % 32))) != 0)
+int select(int n, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout);
 int gettimeofday(struct timeval *tv, struct timezone *tz);
 int setitimer(int which, const struct itimerval *val, struct itimerval *old);
 int getitimer(int which, struct itimerval *val);

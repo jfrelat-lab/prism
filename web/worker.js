@@ -35,7 +35,7 @@ self.onmessage = async (e) => {
 
 async function start({ program, control, data, argv }) {
   const views = controlViews(control);
-  const { ctrl, pal } = views;
+  const { ctrl, pal, audio } = views;
   const reader = makeKeyReader(views);
   // The program's own frame rate, from its descriptor. MAME's drivers carry frames_per_second and
   // Pac-Man's is 60; a program that never presents a frame never waits.
@@ -190,7 +190,9 @@ async function start({ program, control, data, argv }) {
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
     installPorts(prog.M);
     const allegro = installAllegro(prog.M, {
-      publish: { ctrl, pal },
+      // `audio` is the ring the page's AudioWorklet reads -- the same move as pixels, one dimension
+      // down: the guest's sound library writes into shared memory and nothing is handed over.
+      publish: { ctrl, pal, audio },
       /*
        * STOP is answered as Esc because that is how the program's OWN quit path works. Killing the
        * worker instead would skip whatever the program does on the way out.

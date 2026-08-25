@@ -129,6 +129,7 @@ export const BUILTINS = new Map(Object.entries({
   remove: { ret: I, params: [P] },
   rename: { ret: I, params: [P, P] },
   strerror: { ret: P, params: [I] },
+  select: { ret: I, params: [I, P, P, P, P] },
   fscanf: { ret: I, params: [P, P], variadic: true },
   sscanf: { ret: I, params: [P, P], variadic: true },
   scanf: { ret: I, params: [P], variadic: true },
@@ -492,6 +493,18 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
 
   // Pass 1: place every name. A static gets a private linkage name; the rest are shared.
   const sharedGlobals = new Map(), sharedFuncs = new Map();
+
+  /*
+   * The objects LIBC provides, defined whether or not any translation unit declares them.
+   *
+   * `errno` is the whole list, and it earns its place: it is an object in libc, not in a header, and
+   * C89 programs are entitled to declare it themselves. Doom's sound server does exactly that --
+   * `extern int errno;` inside myioctl, with no #include <errno.h> anywhere -- which resolved to
+   * nothing and killed the one function every ioctl goes through. PRISM's errno.h carries a
+   * tentative definition, so a program that DOES include it merges with this one under the same
+   * common-symbol rule that already merges tentative definitions between units.
+   */
+  sharedGlobals.set('errno', { addr: mod.defineGlobal('errno', T.INT).addr, type: T.INT });
   for (const p of parsed) {
     p.globals = new Map();
     p.funcs = new Map();

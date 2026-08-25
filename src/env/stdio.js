@@ -22,7 +22,16 @@ const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
 const STDIN = 0x7000_0001, STDOUT = 0x7000_0002, STDERR = 0x7000_0003;
 const FIRST = 0x7100_0000;
 
-export function installStdio(M, { files = {}, readChar = () => -1, env = {} } = {}) {
+export function installStdio(M, {
+  files = {}, readChar = () => -1, env = {},
+  /*
+   * Whether a byte is waiting on stdin, for `select`. A program that POLLS its input needs to ask
+   * that question without consuming an answer -- Doom's sound server does exactly this, a
+   * zero-timeout select on fd 0, and it is what makes its loop cooperative instead of blocking.
+   * Unanswerable by default: with no way to peek, "nothing is waiting" is the truthful reply.
+   */
+  stdinPending = () => false,
+} = {}) {
   const u8 = () => M.u8;
   const enc = new TextEncoder();
 
@@ -289,7 +298,36 @@ export function installStdio(M, { files = {}, readChar = () => -1, env = {} } = 
   };
   api.close = (fd) => api.fclose(fd);
   api.write = (fd, src, n) => { api.fwrite(src, 1, n, fd); return n | 0; };
-  api.read = (fd, dst, n) => api.fread(dst, 1, n, fd);
+  // fd 0 is stdin. It is a distinct number from the FILE* stdin above, and a program that mixes the
+  // two -- soundsrv.c reads fd 0 while printing through stderr -- must find both working.
+  api.read = (fd, dst, n) => {
+    if ((fd | 0) === 0) {
+      let i = 0;
+      for (; i < (n | 0); i++) {
+        const c = readChar();
+        if (c < 0) break;
+        M.u8[dst + i] = c & 0xff;
+      }
+      return i;
+    }
+    return api.fread(dst, 1, n, fd);
+  };
+
+  /*
+   * select(), for fd 0 only, and never blocking.
+   *
+   * The timeout is ignored rather than honoured, and that is a real limitation with a real
+   * justification: there is one thread inside the guest, so a wait here would be a deadlock, not a
+   * wait. Every caller so far passes a ZERO timeout — it is a poll, and a poll is answerable.
+   */
+  api.select = (_n, rd, _wr, _ex, _tv) => {
+    if (!rd) return 0;
+    const ready = stdinPending() ? 1 : 0;
+    const dv = M.mod.dv;
+    if (!ready) { dv.setUint32(rd, 0, true); return 0; }
+    dv.setUint32(rd, 1, true);                       // fd 0 is bit 0 of the first word
+    return 1;
+  };
 
   /*
    * The POSIX layer, taken from SQLite's own syscall table rather than from imagination — its unix

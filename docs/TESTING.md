@@ -1090,3 +1090,101 @@ Without `-nosound`, `osd_init` prints the SEAL device list and calls `scanf("%d"
 never returns an answer and the tool hangs; `tools/mame.mjs` therefore passes `-nosound -nojoy` by
 default, which are msdos.c's own switches and not a modification. In the browser it is not a problem
 — the console reads a real keystroke — but the headless path should answer rather than hang.
+
+
+## Sound
+
+Three targets, three different libraries, and the shape of each platform layer was decided by the
+program rather than by the host — which is the same finding as pixels, one dimension down.
+
+```
+node tools/gate-sound.mjs --wav=/tmp/probe.wav     # MAME's SEAL path, against a known waveform
+node tools/mame.mjs --run --test-rom --wav=/tmp/pac.wav
+node tools/sndserv.mjs --data=<dir with DOOM1.WAD> --wav=/tmp/sfx.wav
+```
+
+### It leaves the guest the way pixels do
+
+An audio ring in the control block (`src/env/webhost.js`), 16384 signed 16-bit samples, with
+monotonic write and read cursors. The page's `web/audio-worklet.js` reads it on the audio thread,
+where a blocked main thread cannot make it stutter, and publishes back what it has consumed.
+
+The reason is the one that shaped the whole host: a C program's sound library is called from inside a
+main loop that never yields, so there is no moment at which the guest could hand a buffer to anybody.
+It writes; the page reads.
+
+Two details that are not optional. The worklet **resamples**: a guest picks its rate from its own
+source — `#define SAMPLE_RATE 44100` in msdos.c, `#define SAMPLERATE 11025` in Doom — and the device
+picks its own, usually 48000. Playing 44100 at 48000 without a step is everything 9% sharp, which is
+very easy to mistake for the emulation running fast. And an underrun **decays the last frame** rather
+than dropping to zero, because a jump to silence and back is a click.
+
+### MAME: SEAL, where the library owns the mixing
+
+`src/env/allegro.js` implements a four-voice mixer, because SEAL is the mixer — msdos.c only hands it
+waveforms, frequencies and volumes. The hard part was not the mixing:
+
+    for(;;) { AGetVoicePosition(hVoice[channel],&pos);
+              if (c == 1 && (pos < len || pos > 2*len)) break;
+              osd_update_audio(); }
+
+`osd_play_streamed_sample` **blocks** on the play cursor — a triple-buffered stream waiting for the
+DAC to leave the third it is about to overwrite. On real hardware that cursor moves because DMA runs
+in real time and AUpdateAudio only refills. A shim whose position never moves hangs MAME on its first
+streamed sample. So the play cursor advances with TIME here too: the browser's real clock in the
+browser, and one frame of sound per call headless.
+
+Headless it is deliberately **not** read from `clock()`. MAME throttles its frames on that counter,
+and advancing it from the audio path would change the emulation being measured. An audio clock must
+not be the game's clock.
+
+`tools/gate-sound.mjs` checks the whole path — MAME's own `osd_play_sample`, through SEAL, into the
+ring — against an expectation computed independently from SEAL's documented contract: 8-bit unsigned
+centred on 128, volume 0..64, the cursor advancing freq/rate per output sample. Sample-exact. It has
+to be a gate of its own because only two of MAME 0.1's five drivers have sound at all (pengo and
+ladybug), so no amount of running Pac-Man would have exercised a line of it.
+
+### Doom: /dev/dsp, where the program owns the mixing
+
+`src/env/dsp.js` is the cheapest audio path in the project, and the contrast with SEAL is the point.
+Doom mixes for itself — `I_UpdateSound` fills `signed short mixbuffer[]` at its own volumes and
+stereo separation — and then submits it in one line:
+
+    write(audio_fd, mixbuffer, SAMPLECOUNT*BUFMUL);
+
+So there is no mixer to write. The device accepts bytes, answers six ioctls, and publishes. The one
+subtlety is that an OSS ioctl takes a POINTER and the driver writes back the value it actually
+granted; a program that asked for 44100 on a card that could only do 22050 is expected to notice.
+
+`linux/soundcard.h` had every constant defined as **0** while it was a stub, which meant every ioctl
+looked like every other one. They are distinct now, and PRISM supplies both the header and the
+driver, so they are one thing in two places.
+
+### Open: Doom's sound needs a second process
+
+`linuxdoom-1.10/doomdef.h` line 84:
+
+    #define SNDSERV  1
+
+The Doom id published does not play sound itself. It starts a separate program —
+`popen("./sndserver ", "w")` — and writes it one ASCII line per effect. That program is
+`corpus/DOOM/sndserv/`, 2,026 lines, and IT is what opens /dev/dsp, reads the WAD and mixes.
+
+It compiles and it works. `tools/sndserv.mjs` runs it alone, feeding it on stdin the exact bytes
+Doom would have sent, and it produces 2.79 s of 16-bit stereo at 11025 Hz, peak 24576 — Doom's own
+sound effect, mixed by Doom's own mixer, compiled unmodified.
+
+What is missing is not audio, it is a **process model**: two address spaces and a scheduler. Working
+around it would mean either defining away SNDSERV (a source modification) or writing Doom's mixer in
+JavaScript (the thing this project exists not to do). Recorded in docs/ROADMAP.md as what it is.
+
+Two compiler gaps fell out of compiling the server, both ordinary C89 that nothing else had needed:
+
+* **`extern int errno;` at block scope, with no `#include <errno.h>` anywhere.** errno is an object
+  in libc, not in a header, and a C89 program may declare it itself. It resolved to nothing and took
+  out `myioctl`, the one function every ioctl goes through. PRISM's link step now defines it the way
+  libc does.
+* **`select()` on stdin.** The server's loop is a zero-timeout select on fd 0, which is what makes it
+  cooperative rather than blocking. Implemented for fd 0, never blocking, and the timeout is ignored
+  rather than honoured — there is one thread inside the guest, so a wait here would be a deadlock and
+  not a wait. Every caller so far polls.

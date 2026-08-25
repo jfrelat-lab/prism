@@ -14,7 +14,7 @@
 // The shell's own reporting — compile timings, stubbed headers, functions it could not emit — stays
 // in the side pane. A DOS screen never showed "894 functions in 700 ms".
 
-import { makeControl, controlViews, makeKeyboard, wake, KEY_HOLD_FRAMES, SLOT, STATE }
+import { makeControl, controlViews, makeKeyboard, wake, KEY_HOLD_FRAMES, AUDIO_RING, SLOT, STATE }
   from '../src/env/webhost.js';
 import { scancodeForEvent } from '../src/env/scancodes.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
@@ -24,6 +24,7 @@ const canvas = $('screen');
 const cx = canvas.getContext('2d', { alpha: false });
 
 let worker = null, views = null, guest = null;
+let audioCtx = null, audioNode = null;
 let imageData = null, lut = null, palGen = -1;
 let statTimer = 0, lastStatAt = 0, lastFrame = 0;
 
@@ -257,6 +258,7 @@ $('run').onclick = () => {
   };
   worker.onerror = (e) => log(`worker error: ${e.message}`, 'error');
   worker.postMessage({ type: 'start', program, control, data: dataFiles, argv });
+  startAudio(control);
 
   // A debug seam: everything the shell knows, reachable from the console. A display bug and a guest
   // bug look identical from the outside, and this is what tells them apart.
@@ -272,6 +274,40 @@ $('run').onclick = () => {
   statTimer = setInterval(stats, 250);
 };
 
+/*
+ * Sound. Started here rather than lazily when the guest first publishes a rate, because a browser
+ * only lets an AudioContext start from a user gesture -- and the Run button IS that gesture. A page
+ * that waited for the program to make a noise would find the context suspended by then.
+ *
+ * If it fails, the program still runs. Sound is not a precondition for anything.
+ */
+async function startAudio(control) {
+  try {
+    stopAudio();
+    audioCtx = new AudioContext();
+    await audioCtx.audioWorklet.addModule(new URL('./audio-worklet.js', import.meta.url));
+    audioNode = new AudioWorkletNode(audioCtx, 'guest-audio', {
+      numberOfInputs: 0, outputChannelCount: [2],
+      processorOptions: { control, ringSamples: AUDIO_RING },
+    });
+    audioNode.connect(audioCtx.destination);
+    await audioCtx.resume();
+    /*
+     * The guest names its own output rate and the page does not resample. Say so when they differ:
+     * the sound is then played at the wrong pitch, which is a real defect and one that is very easy
+     * to mistake for the emulation being slow.
+     */
+    log(`audio: ${audioCtx.sampleRate} Hz output`);
+  } catch (e) {
+    log(`no audio: ${e.message}`, 'warn');
+  }
+}
+
+function stopAudio() {
+  if (audioNode) { audioNode.disconnect(); audioNode = null; }
+  if (audioCtx) { audioCtx.close(); audioCtx = null; }
+}
+
 $('stopBtn').onclick = () => stop(false);
 function stop(quiet) {
   if (views) {
@@ -283,6 +319,7 @@ function stop(quiet) {
   }
   if (worker) { const w = worker; worker = null; setTimeout(() => w.terminate(), 150); }
   clearInterval(statTimer); statTimer = 0;
+  stopAudio();
   if (!quiet) log('stopped');
   $('run').disabled = false; $('stopBtn').disabled = true;
   guest = null;

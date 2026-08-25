@@ -12,10 +12,11 @@
 //   node tools/doom.mjs                     # report what the build is missing, ranked
 //   node tools/doom.mjs --run --data=<dir>  # run it against a WAD you supply
 
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileProgram, installStdio } from '../src/compile.js';
+import { installDsp } from '../src/env/dsp.js';
 import { installX11 } from '../src/env/x11.js';
 import { writeIndexedPng } from './png.mjs';
 import { HEADERS } from '../src/env/headers.js';
@@ -130,6 +131,14 @@ if (process.argv.includes('--run')) {
   const write = program.M.write.bind(program.M);
   program.M.write = (str) => { process.stdout.write(str); write(str); };
   x11 = installX11(program.M);
+  /*
+   * /dev/dsp. Doom mixes its own sound and hands over 16-bit stereo, so the device only has to
+   * accept it -- see src/env/dsp.js. --wav=<path> collects every frame, because sound is the one
+   * output that cannot be checked by counting pixels.
+   */
+  const dsp = installDsp(program.M);
+  const wavPath = process.argv.find(a => a.startsWith('--wav='))?.slice(6);
+  if (wavPath) dsp.wav = [];
 
   /*
    * --frames=N: Doom's main loop never returns, so the harness stops it. I_FinishUpdate calls
@@ -267,6 +276,26 @@ if (process.argv.includes('--run')) {
 }
 
 function reportFrame() {
+  const dsp = program.M.dsp;
+  if (dsp && dsp.wav) {
+    let peak = 0, energy = 0;
+    for (const v of dsp.wav) { const a = Math.abs(v); if (a > peak) peak = a; energy += v * v; }
+    const frames = dsp.wav.length / dsp.channels;
+    console.log(`  audio: ${frames} frames at ${dsp.rate} Hz x${dsp.channels} ` +
+      `(${(frames / dsp.rate).toFixed(2)} s) · peak ${peak} · ` +
+      `rms ${(dsp.wav.length ? Math.sqrt(energy / dsp.wav.length) : 0).toFixed(0)}`);
+    const path = process.argv.find(a => a.startsWith('--wav='))?.slice(6);
+    const n = dsp.wav.length, ch = dsp.channels;
+    const buf = Buffer.alloc(44 + n * 2);
+    buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVE', 8);
+    buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+    buf.writeUInt16LE(ch, 22); buf.writeUInt32LE(dsp.rate, 24);
+    buf.writeUInt32LE(dsp.rate * 2 * ch, 28); buf.writeUInt16LE(2 * ch, 32); buf.writeUInt16LE(16, 34);
+    buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
+    for (let i = 0; i < n; i++) buf.writeInt16LE(dsp.wav[i], 44 + i * 2);
+    writeFileSync(path, buf);
+    console.log(`  wrote ${path}`);
+  }
   if (globalThis.__timed) {
     for (const [n, r] of globalThis.__timed) {
       console.log(`  ${n}: ${r.calls.toLocaleString('en')} calls, ${r.ms.toFixed(0)} ms`);

@@ -182,19 +182,34 @@ const game = process.argv.find(a => a.startsWith('--game='))?.slice(7) ?? 'pacma
  * prints a list of audio devices and blocks on `scanf("%d",&i)`, and without -nojoy it reads the
  * game port every frame. Both are the program's own options, passed as argv -- not a modification.
  */
-const extraArgs = (process.argv.find(a => a.startsWith('--args='))?.slice(7) ?? '-nosound -nojoy')
-  .split(/\s+/).filter(Boolean);
+const wantSound = process.argv.includes('--sound') || process.argv.some(a => a.startsWith('--wav='));
+const extraArgs = (process.argv.find(a => a.startsWith('--args='))?.slice(7) ??
+  (wantSound ? '-nojoy' : '-nosound -nojoy')).split(/\s+/).filter(Boolean);
 /*
  * The platform layer, one level below where it used to be. MAME's own msdos.c is compiled now, so
  * what gets installed is the libraries it links: Allegro and SEAL, the DJGPP memory helpers, the I/O
  * port seam TwkUser.c writes CRTC registers through, and stdio for the ROM files.
  */
-installStdio(program.M, { files: roms });
+/*
+ * With sound on, osd_init prints the SEAL device list and calls `scanf("%d",&i)`. That is the
+ * program asking a question, so it gets an answer rather than a stub: a canned "0\n" on stdin, which
+ * is what a person at a terminal would type. --stdin= overrides it.
+ */
+const cannedStdin = (process.argv.find(a => a.startsWith('--stdin='))?.slice(8) ?? '0\n');
+let stdinAt = 0;
+installStdio(program.M, {
+  files: roms,
+  readChar: () => (stdinAt < cannedStdin.length ? cannedStdin.charCodeAt(stdinAt++) : -1),
+});
 installPorts(program.M);
 const allegro = installAllegro(program.M, { stopAfterFrames: frames });
 const osd = allegro.state;
 // The library's data lives in the linked image; its addresses are only known now.
 allegro.bindGlobals(program);
+// --wav=<path>: collect every mixed sample so the mixer can be LOOKED AT. Sound is the one output
+// this harness cannot check by reading a pixel count, and "it did not throw" is not evidence.
+const wavPath = process.argv.find(a => a.startsWith('--wav='))?.slice(6);
+if (wavPath) program.M.audio.wav = [];
 
 /*
  * --probe-polls: measure how many times in a row the program asks one service INSIDE ONE FRAME.
@@ -217,9 +232,32 @@ if (process.argv.includes('--src')) {
   console.log(program.src.slice(0, 4000));
 }
 
+/** A 16-bit mono WAV, header written by hand: it is 44 bytes and it needs no dependency. */
+function writeWav(path, samples, rate) {
+  const buf = Buffer.alloc(44 + samples.length * 2);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + samples.length * 2, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22); buf.writeUInt32LE(rate, 24); buf.writeUInt32LE(rate * 2, 28);
+  buf.writeUInt16LE(2, 32); buf.writeUInt16LE(16, 34);
+  buf.write('data', 36); buf.writeUInt32LE(samples.length * 2, 40);
+  for (let i = 0; i < samples.length; i++) buf.writeInt16LE(samples[i], 44 + i * 2);
+  writeFileSync(path, buf);
+}
+
 function report() {
     console.log(`display ${osd.width}x${osd.height} · pens ${osd.pens} · ` +
       `frames ${osd.frames} · samples ${osd.samples.length}`);
+    const au = program.M.audio;
+    if (au && au.wav) {
+      let peak = 0, energy = 0, nz = 0;
+      for (const v of au.wav) { const a = Math.abs(v); if (a > peak) peak = a; energy += v * v; if (v) nz++; }
+      const rms = au.wav.length ? Math.sqrt(energy / au.wav.length) : 0;
+      console.log(`audio: ${au.wav.length} samples at ${au.rate} Hz ` +
+        `(${(au.wav.length / au.rate).toFixed(2)} s) · peak ${peak} · rms ${rms.toFixed(0)} · ` +
+        `${nz} non-silent`);
+      writeWav(wavPath, au.wav, au.rate);
+      console.log(`wrote ${wavPath}`);
+    }
     const pngPath = process.argv.find(a => a.startsWith('--png='))?.slice(6);
     if (pngPath && osd.width && osd.pixels) {
       writeIndexedPng(pngPath, {

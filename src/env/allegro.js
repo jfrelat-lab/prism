@@ -205,45 +205,121 @@ export function installAllegro(M, {
     keypressed: () => 0,
     clear_keybuf: () => 0,
 
-    // ---- SEAL. Success and silence: a library that reported failure would send osd_init down its
-    // `return 1` path and abort MAME's start-up before a frame was ever drawn.
+    /*
+     * ---- SEAL, the sound library MAME 0.1 links on DOS. A real four-voice mixer, not stubs.
+     *
+     * The contract is small but it has one hard obligation, and it is not the mixing:
+     * `osd_play_streamed_sample` BLOCKS on the play position.
+     *
+     *     for(;;) { AGetVoicePosition(hVoice[channel],&pos);
+     *               if (c == 1 && (pos < len || pos > 2*len)) break;
+     *               osd_update_audio(); }
+     *
+     * That is a triple-buffered stream waiting for the DAC to leave the third it is about to
+     * overwrite. On real hardware the position advances because DMA is running in real time and
+     * AUpdateAudio only refills; if the position never moves, MAME hangs on its first streamed
+     * sample. So this shim models the DAC the way the hardware works -- a play cursor that advances
+     * with TIME -- and AUpdateAudio does what SEAL's really does: mix everything that has become due
+     * since the last call, and no more.
+     *
+     * AUDIO_FORMAT_8BITS in SEAL is UNSIGNED 8-bit, centred on 128, and volume runs 0..64 (msdos.c
+     * passes MAME's 0..255 as `volume/4`).
+     */
     AInitialize: () => 0,
     AGetAudioNumDevs: () => 1,
     AGetAudioDevCaps: (_id, caps) => {
-      const name = 'PRISM (silent)';
+      const name = 'PRISM shared-memory ring';
       for (let i = 0; i < name.length; i++) M.u8[caps + 2 + i] = name.charCodeAt(i);
       M.u8[caps + 2 + name.length] = 0;
       return 0;
     },
-    AOpenAudio: () => 0,
-    ACloseAudio: () => 0,
-    AUpdateAudio: () => 0,
-    AOpenVoices: () => 0,
-    ACloseVoices: () => 0,
-    ACreateAudioVoice: (lph) => { dv().setInt32(lph, ++voiceSeq, true); return 0; },
-    ADestroyAudioVoice: () => 0,
-    AStopVoice: () => 0,
-    ASetVoiceFrequency: () => 0,
-    ASetVoiceVolume: () => 0,
-    ASetVoicePanning: () => 0,
-    AGetVoicePosition: (_h, lp) => { if (lp) dv().setInt32(lp, 0, true); return 0; },
-    ADestroyAudioData: () => 0,
-    AWriteAudioData: () => 0,
+
+    /** The program chooses the rate; the page is told what it chose, the same way as the geometry. */
+    AOpenAudio: (info) => {
+      audio.rate = dv().getInt32(info + 4, true) || 44100;   // AUDIOINFO.nSampleRate
+      audio.open = true;
+      audio.clockUs = null;
+      if (publish) {
+        Atomics.store(publish.ctrl, SLOT.AUDIO_CHANNELS, 1);   // SEAL voices mix to one channel
+        Atomics.store(publish.ctrl, SLOT.AUDIO_RATE, audio.rate);
+      }
+      return 0;
+    },
+    ACloseAudio: () => {
+      audio.open = false;
+      if (publish) Atomics.store(publish.ctrl, SLOT.AUDIO_RATE, 0);
+      return 0;
+    },
+
+    AOpenVoices: (n) => { audio.voices.length = 0; for (let i = 0; i < (n | 0); i++) newVoice(); return 0; },
+    ACloseVoices: () => { for (const v of audio.voices) v.playing = false; return 0; },
+    ACreateAudioVoice: (lph) => {
+      const h = audio.voices.length ? audio.voices.length : newVoice();
+      const id = audio.voices.findIndex(v => !v.claimed);
+      const v = id >= 0 ? audio.voices[id] : audio.voices[newVoice() - 1];
+      v.claimed = true;
+      dv().setInt32(lph, v.handle, true);
+      return 0;
+    },
+    ADestroyAudioVoice: (h) => { const v = voice(h); if (v) { v.playing = false; v.claimed = false; } return 0; },
+
+    APlayVoice: (h, lpWave) => {
+      const v = voice(h);
+      if (!v) return 1;
+      v.data = dv().getInt32(lpWave + 24, true);           // AUDIOWAVE.lpData
+      v.length = dv().getInt32(lpWave + 8, true) >>> 0;    // dwLength
+      v.loop = (dv().getUint16(lpWave, true) & 0x0100) !== 0;
+      v.loopStart = dv().getInt32(lpWave + 12, true) >>> 0;
+      v.loopEnd = dv().getInt32(lpWave + 16, true) >>> 0 || v.length;
+      v.pos = 0;
+      v.playing = v.length > 0;
+      state.samples.push({ voice: h | 0, len: v.length });
+      return 0;
+    },
+    AStopVoice: (h) => { const v = voice(h); if (v) v.playing = false; return 0; },
+    ASetVoiceFrequency: (h, f) => { const v = voice(h); if (v) v.freq = f >>> 0; return 0; },
+    ASetVoiceVolume: (h, vol) => { const v = voice(h); if (v) v.vol = Math.min(vol >>> 0, 64); return 0; },
+    ASetVoicePanning: (h, p) => { const v = voice(h); if (v) v.pan = p >>> 0; return 0; },
+
+    /** In BYTES into the waveform, which is what msdos.c compares against its buffer thirds. */
+    AGetVoicePosition: (h, lp) => {
+      const v = voice(h);
+      if (lp) dv().setInt32(lp, v ? Math.floor(v.pos) : 0, true);
+      return 0;
+    },
 
     /*
-     * The one SEAL call with an obligation: msdos.c writes `lpWave[i]->lpData` immediately after,
-     * so the buffer has to exist. It reads `dwLength` to size it, exactly as the real library does.
+     * The mixer tick. MAME calls it once per frame through osd_update_audio, and also from inside the
+     * streaming wait loop -- which is why it must always make progress when time has passed.
+     */
+    AUpdateAudio: () => { mix(); return 0; },
+
+    /*
+     * The two data calls. `lpData` has to exist because msdos.c writes through it immediately, and
+     * it reads `dwLength` to size it, exactly as the real library does. AWriteAudioData is where a
+     * real SEAL would upload to the card's own memory; here the data is already in the one address
+     * space, so the upload is the identity -- but the LENGTH it reports matters, because a streamed
+     * voice grows its buffer to 3x after the first write.
      */
     ACreateAudioData: (lpWave) => {
       const len = dv().getInt32(lpWave + 8, true) >>> 0;
       const buf = M.rt.malloc(Math.max(len, 1));
-      M.u8.fill(0, buf, buf + Math.max(len, 1));
-      dv().setInt32(lpWave + 24, buf, true);        // AUDIOWAVE.lpData
+      M.u8.fill(128, buf, buf + Math.max(len, 1));        // 8-bit silence is 128, not 0
+      dv().setInt32(lpWave + 24, buf, true);              // AUDIOWAVE.lpData
       return 0;
     },
-
-    APlayVoice: (h, lpWave) => {
-      state.samples.push({ voice: h | 0, len: dv().getInt32(lpWave + 8, true) });
+    ADestroyAudioData: (lpWave) => {
+      const p = dv().getInt32(lpWave + 24, true);
+      if (p) M.rt.free(p);
+      dv().setInt32(lpWave + 24, 0, true);
+      return 0;
+    },
+    AWriteAudioData: (lpWave) => {
+      for (const v of audio.voices) {
+        if (!v.playing || v.data !== dv().getInt32(lpWave + 24, true)) continue;
+        v.length = dv().getInt32(lpWave + 8, true) >>> 0;
+        v.loopEnd = dv().getInt32(lpWave + 16, true) >>> 0 || v.length;
+      }
       return 0;
     },
 
@@ -282,7 +358,100 @@ export function installAllegro(M, {
     },
   };
   api.strcmpi = api.stricmp;
+
+  /*
+   * ---- the mixer.
+   *
+   * Sound leaves the guest exactly the way pixels do: written into shared memory for the page to
+   * read, never handed over. The reason is the same one that shaped the whole host — the program's
+   * audio library is called from inside a main loop that never yields, so there is no moment at
+   * which the guest could pass a buffer to anybody. See src/env/webhost.js for the ring.
+   */
+  const audio = {
+    open: false,
+    rate: 44100,
+    voices: [],
+    written: 0,          // total output samples ever mixed, monotonic
+    clockUs: null,       // guest microseconds at the last mix
+    ring: publish ? publish.audio : new Int16Array(4096),
+    wav: null,           // tools/mame.mjs --wav collects here; nothing else uses it
+  };
+  M.audio = audio;
+
   let voiceSeq = 0;
+  const newVoice = () => {
+    audio.voices.push({
+      handle: ++voiceSeq, claimed: false, playing: false,
+      data: 0, length: 0, pos: 0, freq: 8000, vol: 0, pan: 128,
+      loop: false, loopStart: 0, loopEnd: 0,
+    });
+    return audio.voices.length;
+  };
+  const voice = (h) => audio.voices.find(v => v.handle === (h | 0)) ?? null;
+
+  /*
+   * How many output samples have become DUE since the last mix.
+   *
+   * In the browser, from the guest's own real clock: the DAC really does advance in real time there,
+   * and the page is consuming the ring at exactly that rate.
+   *
+   * Headless there is no consumer and no real time, so a mix is worth one frame of sound. That is
+   * both deterministic — a gate must get the same bytes every run — and the true call rate, because
+   * MAME calls osd_update_audio once per frame. It is DELIBERATELY not read from `clock()`: MAME
+   * throttles its frames on that counter, and advancing it from here would change the emulation
+   * being measured. An audio clock must not be the game's clock.
+   *
+   * The one place this over-advances is msdos.c's streaming wait loop, which calls osd_update_audio
+   * until the play cursor moves; headless it moves a whole frame at a time, so the loop exits after
+   * one or two turns instead of many. It terminates, which is the property that matters.
+   */
+  function due() {
+    if (M.realClock) {
+      const nowUs = M.realClock.micros();
+      if (audio.clockUs === null) { audio.clockUs = nowUs; return 0; }
+      const dt = nowUs - audio.clockUs;
+      if (dt <= 0) return 0;
+      audio.clockUs = nowUs;
+      // Bounded, so a long pause (a compile, a backgrounded tab) resumes rather than trying to
+      // render the silence it missed.
+      return Math.min(Math.floor(dt * audio.rate / 1e6), audio.rate >> 2);
+    }
+    return Math.floor(audio.rate / 60);
+  }
+
+  function mix() {
+    if (!audio.open) return;
+    let n = due();
+    if (!n) return;
+    // Never overrun the reader. The page publishes what it has consumed; without a page there is no
+    // reader and the ring is a sliding window that nobody is behind.
+    if (publish) {
+      const read = Atomics.load(publish.ctrl, SLOT.AUDIO_READ);
+      const room = audio.ring.length - (audio.written - read);
+      if (room <= 0) return;
+      if (n > room) n = room;
+    }
+    const mask = audio.ring.length - 1;
+    for (let i = 0; i < n; i++) {
+      let acc = 0;
+      for (const v of audio.voices) {
+        if (!v.playing || !v.data || !v.length) continue;
+        const s = M.u8[v.data + (v.pos | 0)] - 128;       // 8-bit unsigned, centred on 128
+        acc += s * v.vol;
+        v.pos += v.freq / audio.rate;
+        if (v.pos >= (v.loop ? v.loopEnd : v.length)) {
+          if (v.loop) v.pos = v.loopStart + (v.pos - v.loopEnd);
+          else { v.pos = 0; v.playing = false; }
+        }
+      }
+      // vol is 0..64 and a sample is -128..127, so the sum of four voices fits 16 bits with room.
+      const out = Math.max(-32768, Math.min(32767, acc * 4));
+      audio.ring[(audio.written + i) & mask] = out;
+      if (audio.wav) audio.wav.push(out);
+    }
+    audio.written += n;
+    if (publish) Atomics.store(publish.ctrl, SLOT.AUDIO_WRITE, audio.written);
+  }
 
   /*
    * The frame.

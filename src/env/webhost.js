@@ -46,6 +46,21 @@ export const SLOT = {
 
   FPS: 8,          // guest → host: the frame rate the program declares, x1000
 
+  /*
+   * Sound, published exactly the way pixels are: the guest's audio library mixes into a ring in
+   * shared memory and the page's AudioWorklet reads it. Same reason, too — a C program's sound
+   * library is called from inside a main loop that never yields, so there is no moment at which the
+   * guest could hand a buffer to the page. It writes, the page reads.
+   *
+   * WRITE and READ are MONOTONIC sample counts, never wrapped indices. Their difference is how much
+   * sound is buffered, which is the one number both sides need: the guest tops the ring up when it
+   * runs low (which is literally SEAL's AUpdateAudio contract) and the page can tell an underrun
+   * from an empty ring.
+   */
+  AUDIO_RATE: 12,   // guest → host: output sample rate, 0 when the program produces no sound
+  AUDIO_WRITE: 13,  // guest → host: total FRAMES ever written (a frame is one sample per channel)
+  AUDIO_CHANNELS: 14, // guest → host: 1 or 2. Doom mixes in stereo, MAME's SEAL voices are mono.
+
   STOP: 17,        // host → guest: 1 asks the program to quit through its own quit path
   PAUSE: 18,
   SPEED: 19,       // host → guest: percent of normal speed; 0 means unthrottled
@@ -53,6 +68,7 @@ export const SLOT = {
   KBD_HEAD: 21,    // host → guest: write cursor into the keystroke queue
   KBD_TAIL: 22,    // guest → host: read cursor
   WAKE: 23,        // a pure wake channel, always 0: the host notifies it, a parked guest waits on it
+  AUDIO_READ: 24,  // host → guest: total frames ever consumed by the page
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -64,7 +80,14 @@ const LATCH_AT = 768;               // 256 bytes: a key that went down since the
 const PAL_AT = 1024;                // 256 * 3 bytes, r,g,b
 const KBD_AT = 1792;                // 64 keystrokes, two bytes each: scan code then ASCII
 export const KBD_SIZE = 64;
-export const CONTROL_BYTES = 2048;
+/*
+ * The audio ring: 16384 signed 16-bit samples, about 370 ms at 44100 Hz. A power of two so the
+ * wrapped index is a mask, and generous because the guest tops it up once per frame — a browser that
+ * skips a frame under load must not be heard doing so.
+ */
+const AUDIO_AT = 2048;
+export const AUDIO_RING = 16384;
+export const CONTROL_BYTES = AUDIO_AT + AUDIO_RING * 2;
 
 /** Allocate the control block. Called by the page; the worker receives the same buffer. */
 export function makeControl() {
@@ -79,6 +102,7 @@ export function controlViews(sab) {
     latch: new Uint8Array(sab, LATCH_AT, 256),
     pal: new Uint8Array(sab, PAL_AT, 768),
     kbd: new Uint8Array(sab, KBD_AT, KBD_SIZE * 2),
+    audio: new Int16Array(sab, AUDIO_AT, AUDIO_RING),
   };
 }
 
