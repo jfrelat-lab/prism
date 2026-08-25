@@ -140,6 +140,59 @@ if (process.argv.includes('--run')) {
    * --profile: which runtime service is a hung program calling? A program stuck in its own pure C is
    * invisible, but one waiting on the host shows up here immediately.
    */
+  /*
+   * --profile-fn: which of the PROGRAM's own functions is spinning.
+   *
+   * The runtime-call profiler is blind to a loop in pure guest C — there is nothing to count. But
+   * Doom is 62 translation units, so almost every call crosses a unit boundary and goes through the
+   * function table, which can be wrapped. It is the same instrument that named Quake's shadow-stack
+   * leak, pointed at a different question.
+   */
+  // --count=a,b,c: how often specific functions are called, and how long they take in total. Naming
+  // them is cheaper than profiling everything when there is already a suspect.
+  const countArg = process.argv.find(a => a.startsWith('--count='))?.slice(8);
+  const timed = new Map();
+  if (countArg) {
+    for (const name of countArg.split(',')) {
+      const inner = program.F[name];
+      if (typeof inner !== 'function') { console.log(`  (no such function: ${name})`); continue; }
+      timed.set(name, { calls: 0, ms: 0 });
+      const rec = timed.get(name);
+      const wrapped = function (...args) {
+        const t = performance.now();
+        const r = inner.apply(this, args);
+        rec.ms += performance.now() - t;
+        rec.calls++;
+        return r;
+      };
+      program.F[name] = wrapped;
+      program.mod.bindFunc(name, wrapped);
+    }
+    globalThis.__timed = timed;
+  }
+
+  if (process.argv.includes('--profile-fn')) {
+    const counts = new Map();
+    let total = 0;
+    const LIMIT = +(process.argv.find(a => a.startsWith('--limit='))?.slice(8) ?? 3_000_000);
+    for (const name of Object.keys(program.F)) {
+      const inner = program.F[name];
+      if (typeof inner !== 'function') continue;
+      const wrapped = function (...args) {
+        counts.set(name, (counts.get(name) || 0) + 1);
+        if (++total > LIMIT) {
+          const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 15);
+          console.log(`\n[profile-fn] after ${LIMIT.toLocaleString('en')} cross-unit calls:`);
+          for (const [n, c] of top) console.log(`  ${String(c).padStart(10)}  ${n}`);
+          process.exit(0);
+        }
+        return inner.apply(this, args);
+      };
+      program.F[name] = wrapped;
+      program.mod.bindFunc(name, wrapped);
+    }
+  }
+
   if (process.argv.includes('--profile')) {
     const counts = new Map();
     for (const name of Object.keys(program.M.rt)) {
@@ -214,6 +267,17 @@ if (process.argv.includes('--run')) {
 }
 
 function reportFrame() {
+  if (globalThis.__timed) {
+    for (const [n, r] of globalThis.__timed) {
+      console.log(`  ${n}: ${r.calls.toLocaleString('en')} calls, ${r.ms.toFixed(0)} ms`);
+    }
+  }
+  // The program's own state, read out of the linked image: "it renders the wrong thing" and "it is in
+  // a different game state" look identical from a pixel count.
+  for (const n of ['gamestate', 'gametic', 'autostart', 'startmap', 'startepisode', 'demoplayback']) {
+    const sym = program.mod.symbols.get(n);
+    if (sym) console.log(`  ${n} = ${program.mod.dv.getInt32(sym.addr, true)}`);
+  }
   const x = x11 ?? program.M.x11;
   if (!x || !x.imageData) { console.log('\nno frame was ever presented'); return; }
   const px = program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height);

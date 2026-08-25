@@ -977,3 +977,25 @@ reading the emitted JavaScript, where `M.icall(_v_V_MarkRect, ...)` sits two lin
 
 Still open: starting a real level (`-warp 1 1`) now gets further and then loops in pure guest C, where
 the runtime-call profiler is blind by construction — no runtime calls, nothing to count.
+
+### Open: Doom stalls after ~25 frames of a real level
+
+`-warp 1 1` starts E1M1 for real — `gamestate = GS_LEVEL`, `autostart = 1`, the renderer runs — and
+produces frames 5, 10, 15, 20, 25 all inside a tenth of a second, then stops. **Stalled, not slow**,
+which took a per-frame progress line to establish; a final report cannot tell the two apart, and I
+spent several rounds assuming "slow" from a timeout that was really a stall.
+
+Two false trails worth recording, because both were mine:
+
+* **"It must be the BigInt fixed-point maths."** Doom's `FixedMul` is `((long long)a * (long long)b)
+  >> 16`, and `long long` is a BigInt in tier-0, so this looked obvious. Measured: FixedMul, FixedDiv
+  and FixedDiv2 together are **45% of a 1 ms frame** — a few thousand calls, not millions. The
+  hypothesis was reasonable and simply wrong, and the only reason I believed it was an unmeasured
+  "Doom is slow".
+* **A Heisenbug.** Wrapping every function-table entry with a counter makes 40 frames complete;
+  without it, 40 frames never arrive. Rebinding the same entries WITHOUT wrapping does not help, so it
+  is not a stale binding. Unexplained, and recorded rather than guessed at.
+
+The instrument that will settle it does not exist yet: a loop in pure guest C is invisible to both
+profilers here, because one counts runtime services and the other counts cross-unit calls, and a
+stalled program is making neither.
