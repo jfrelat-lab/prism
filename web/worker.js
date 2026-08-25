@@ -13,6 +13,7 @@ import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js'
 import { installOSD } from '../src/env/osd.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installQuake } from '../src/env/quake.js';
+import { installX11 } from '../src/env/x11.js';
 import { installConsole } from '../src/env/console.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
@@ -150,7 +151,22 @@ async function start({ program, control, data, argv }) {
    * eighteen callbacks, so its layer implements functions; Quake draws into a 320x200 array it
    * already owns, so its layer only publishes addresses and implements nothing.
    */
-  if (program.platform === 'quake') {
+  if (program.host === 'x11' || program.platform === 'x11') {
+    /*
+     * A UNIX host: the program is an X client, and Xlib is shimmed at the library boundary. Doom
+     * draws into the XImage buffer it asked Xlib for, so the page reads that address directly —
+     * the same "publish what the program already writes" move as Quake's vid_buffer.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    installX11(prog.M, {
+      publish: { ctrl, pal },
+      keyboard: {
+        pending: () => keyboard.pending(),
+        next: () => keyboard.nextEvent(),
+      },
+      onFrame: () => { reader.endFrame(); pace(); },
+    });
+  } else if (program.platform === 'quake') {
     installQuake(prog.M, {
       publish: { ctrl },
       F: prog.F,

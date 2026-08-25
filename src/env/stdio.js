@@ -22,7 +22,7 @@ const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
 const STDIN = 0x7000_0001, STDOUT = 0x7000_0002, STDERR = 0x7000_0003;
 const FIRST = 0x7100_0000;
 
-export function installStdio(M, { files = {}, readChar = () => -1 } = {}) {
+export function installStdio(M, { files = {}, readChar = () => -1, env = {} } = {}) {
   const u8 = () => M.u8;
   const enc = new TextEncoder();
 
@@ -48,6 +48,9 @@ export function installStdio(M, { files = {}, readChar = () => -1 } = {}) {
     for (const k of store.keys()) if (k === base || k.replace(/^.*\//, '') === base) return k;
     return null;
   }
+
+  const environment = { HOME: '/', USER: 'prism', TMPDIR: '/', ...env };
+  const interned = new Map();
 
   const handles = new Map();
   let next = FIRST;
@@ -349,10 +352,37 @@ export function installStdio(M, { files = {}, readChar = () => -1 } = {}) {
     fchown: () => 0,
     fallocate: () => 0,
     geteuid: () => 0,
+    getuid: () => 0,
+    getgid: () => 0,
     mkdir: () => 0,
     rmdir: () => 0,
     readlink: () => -1,
     ioctl: () => -1,
+    /*
+     * SysV shared memory and UDP both FAIL, and say so through their ordinary error returns. Doom
+     * falls back to a plain XImage when shmget fails, and single-player never opens a socket. A
+     * refusal a program already knows how to handle beats a fake that works differently.
+     */
+    shmget: () => -1,
+    shmat: () => -1,
+    shmdt: () => -1,
+    shmctl: () => -1,
+    socket: () => -1,
+    bind: () => -1,
+    sendto: () => -1,
+    recvfrom: () => -1,
+    setsockopt: () => 0,
+    gethostbyname: () => 0,
+    htons: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,
+    ntohs: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,
+    htonl: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) | 0,
+    ntohl: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) | 0,
+    inet_addr: () => 0,
+    inet_ntoa: () => 0,
+    signal: () => 0,
+    raise: () => 0,
+    setitimer: () => 0,
+    getitimer: () => 0,
     getpagesize: () => 4096,
     isatty: () => 0,
     getpid: () => 1,
@@ -397,7 +427,21 @@ export function installStdio(M, { files = {}, readChar = () => -1 } = {}) {
     fsync: () => 0,
     fdatasync: () => 0,
     sysconf: () => 4096,          // the only value asked for here is the page size
-    getenv: () => 0,              // no environment: a caller must handle NULL, and every one does
+    /*
+     * A small environment. Not every program handles a NULL from getenv: Doom calls
+     * `I_Error("Please set $HOME to your home directory")` and stops. HOME is the one variable a
+     * UNIX program of this era assumes exists.
+     */
+    getenv: (namePtr) => {
+      const name = M.mod.cstr(namePtr);
+      const v = Object.prototype.hasOwnProperty.call(environment, name) ? environment[name] : null;
+      if (v === null) return 0;
+      if (!interned.has(name)) {
+        interned.set(name, M.mod.intern([...enc.encode(v), 0]));
+      }
+      return interned.get(name);
+    },
+    setenv: (namePtr, valPtr) => { environment[M.mod.cstr(namePtr)] = M.mod.cstr(valPtr); interned.delete(M.mod.cstr(namePtr)); return 0; },
     localtime: () => 0,          // no calendar here; a caller must handle NULL, and SQLite does
 
     mmap: () => -1,

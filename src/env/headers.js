@@ -25,9 +25,14 @@ const STDIO = `
 #define _PRISM_STDIO_H
 #include <stddef.h>
 typedef struct _PRISM_FILE FILE;
-extern FILE *stdin;
-extern FILE *stdout;
-extern FILE *stderr;
+/*
+ * TENTATIVE definitions, not externs — the same reason as errno: these have to EXIST somewhere and no
+ * PRISM translation unit defines them. C89's common-symbol rule merges them by name across units, and
+ * installStdio fills in the three sentinels once the image is linked.
+ */
+FILE *stdin;
+FILE *stdout;
+FILE *stderr;
 #define EOF (-1)
 #define BUFSIZ 8192
 #define FILENAME_MAX 4096
@@ -62,6 +67,14 @@ int feof(FILE *stream);
 int ferror(FILE *stream);
 void clearerr(FILE *stream);
 int fflush(FILE *stream);
+void perror(const char *s);
+void setbuf(FILE *stream, char *buf);
+int setvbuf(FILE *stream, char *buf, int mode, size_t size);
+FILE *popen(const char *cmd, const char *mode);
+int pclose(FILE *stream);
+#define _IONBF 2
+#define _IOLBF 1
+#define _IOFBF 0
 int remove(const char *name);
 int rename(const char *from, const char *to);
 int fscanf(FILE *stream, const char *fmt, ...);
@@ -98,6 +111,7 @@ long labs(long v);
 `;
 
 const STRING = `
+
 #ifndef _PRISM_STRING_H
 #define _PRISM_STRING_H
 #include <stddef.h>
@@ -112,6 +126,8 @@ void *memcpy(void *d, const void *s, size_t n);
 void *memmove(void *d, const void *s, size_t n);
 void *memset(void *d, int v, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
+int strcasecmp(const char *a, const char *b);
+int strncasecmp(const char *a, const char *b, size_t n);
 #endif
 `;
 
@@ -266,7 +282,6 @@ struct tm {
     int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst;
 };
 struct timespec { long tv_sec; long tv_nsec; };
-struct timeval  { long tv_sec; long tv_usec; };
 struct tm *localtime(const long *t);
 struct tm *gmtime(const long *t);
 int gettimeofday(struct timeval *tv, void *tz);
@@ -419,6 +434,8 @@ int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t owner, gid_t group);
 int rmdir(const char *path);
 int geteuid(void);
+int getuid(void);
+int getgid(void);
 int getpid(void);
 int getpagesize(void);
 int readlink(const char *path, char *buf, size_t n);
@@ -576,7 +593,410 @@ int ioctl(int fd, unsigned long request, ...);
 #endif
 `;
 
+const XLIB = `
+#ifndef _PRISM_XLIB_H
+#define _PRISM_XLIB_H
+/*
+ * Xlib, declared for a host that implements the LIBRARY and not the protocol -- see src/env/x11.js.
+ * Every symbol here appears in Doom's i_video.c; nothing is declared on speculation.
+ *
+ * The struct layouts here and the offsets in x11.js are one thing written twice. Changing either
+ * without the other is a silent bug, which is why both say so.
+ */
+typedef struct _XDisplay Display;
+typedef unsigned long Window;
+typedef unsigned long Drawable;
+typedef unsigned long Colormap;
+typedef unsigned long Pixmap;
+typedef unsigned long Cursor;
+typedef unsigned long Atom;
+typedef unsigned long VisualID;
+typedef unsigned long KeySym;
+typedef unsigned long Time;
+typedef struct _XGC *GC;
+typedef struct _XVisual Visual;
+typedef int Status;
+typedef int Bool;
+
+typedef struct {
+    int width, height;
+    int xoffset;
+    int format;
+    char *data;
+    int byte_order;
+    int bitmap_unit;
+    int bitmap_bit_order;
+    int bitmap_pad;
+    int depth;
+    int bytes_per_line;
+    int bits_per_pixel;
+    unsigned long red_mask, green_mask, blue_mask;
+    char *obdata;
+    int pad[4];
+} XImage;
+
+typedef struct {
+    Visual *visual;
+    VisualID visualid;
+    int screen;
+    int depth;
+    int class;
+    unsigned long red_mask, green_mask, blue_mask;
+    int colormap_size;
+    int bits_per_rgb;
+} XVisualInfo;
+
+typedef struct {
+    unsigned long pixel;
+    unsigned short red, green, blue;
+    char flags;
+    char pad;
+} XColor;
+
+typedef struct {
+    Pixmap background_pixmap;
+    unsigned long background_pixel;
+    Pixmap border_pixmap;
+    unsigned long border_pixel;
+    int bit_gravity, win_gravity, backing_store;
+    unsigned long backing_planes, backing_pixel;
+    Bool save_under;
+    long event_mask, do_not_propagate_mask;
+    Bool override_redirect;
+    Colormap colormap;
+    Cursor cursor;
+} XSetWindowAttributes;
+
+typedef struct { int function; unsigned long plane_mask, foreground, background;
+                 int line_width, line_style, cap_style, join_style, fill_style, fill_rule;
+                 int arc_mode; Pixmap tile, stipple; int ts_x_origin, ts_y_origin;
+                 unsigned long font; int subwindow_mode; Bool graphics_exposures;
+                 int clip_x_origin, clip_y_origin; Pixmap clip_mask;
+                 int dash_offset; char dashes; } XGCValues;
+
+typedef struct { int type; unsigned long serial; Bool send_event; Display *display;
+                 Window window, root, subwindow; Time time; int x, y, x_root, y_root;
+                 unsigned int state, keycode; Bool same_screen; } XKeyEvent;
+typedef struct { int type; unsigned long serial; Bool send_event; Display *display;
+                 Window window, root, subwindow; Time time; int x, y, x_root, y_root;
+                 unsigned int state, button; Bool same_screen; } XButtonEvent;
+typedef struct { int type; unsigned long serial; Bool send_event; Display *display;
+                 Window window, root, subwindow; Time time; int x, y, x_root, y_root;
+                 unsigned int state; char is_hint; Bool same_screen; } XMotionEvent;
+typedef struct { int type; unsigned long serial; Bool send_event; Display *display;
+                 Window window; int x, y, width, height, count; } XExposeEvent;
+
+typedef union _XEvent {
+    int type;
+    XKeyEvent xkey;
+    XButtonEvent xbutton;
+    XMotionEvent xmotion;
+    XExposeEvent xexpose;
+    long pad[24];
+} XEvent;
+
+#define None 0L
+#define True 1
+#define False 0
+#define GXclear 0x0
+#define GXcopy 0x3
+#define Button1Mask (1<<8)
+#define Button2Mask (1<<9)
+#define Button3Mask (1<<10)
+#define ShiftMask (1<<0)
+#define ControlMask (1<<2)
+#define Mod1Mask (1<<3)
+#define AnyPropertyType 0L
+#define GCFunction (1L<<0)
+#define GCForeground (1L<<2)
+#define GCBackground (1L<<3)
+#define GCGraphicsExposures (1L<<16)
+#define Button1 1
+#define Button2 2
+#define Button3 3
+#define CurrentTime 0L
+#define InputOutput 1
+#define ZPixmap 2
+#define PseudoColor 3
+#define TrueColor 4
+#define GrabModeAsync 1
+#define KeyPress 2
+#define KeyRelease 3
+#define ButtonPress 4
+#define ButtonRelease 5
+#define MotionNotify 6
+#define Expose 12
+#define GraphicsExpose 13
+#define NoExpose 14
+#define VisibilityNotify 15
+#define CreateNotify 16
+#define DestroyNotify 17
+#define UnmapNotify 18
+#define MapNotify 19
+#define MapRequest 20
+#define ReparentNotify 21
+#define ConfigureNotify 22
+#define ConfigureRequest 23
+#define GravityNotify 24
+#define ResizeRequest 25
+#define EnterNotify 7
+#define LeaveNotify 8
+#define FocusIn 9
+#define FocusOut 10
+#define KeymapNotify 11
+#define DoRed 1
+#define DoGreen 2
+#define DoBlue 4
+#define CWBackPixel (1L<<1)
+#define CWBorderPixel (1L<<3)
+#define CWEventMask (1L<<11)
+#define CWColormap (1L<<13)
+#define NoEventMask 0L
+#define KeyPressMask (1L<<0)
+#define KeyReleaseMask (1L<<1)
+#define ButtonPressMask (1L<<2)
+#define ButtonReleaseMask (1L<<3)
+#define PointerMotionMask (1L<<6)
+#define ExposureMask (1L<<15)
+#define StructureNotifyMask (1L<<17)
+#define AllocNone 0
+#define AllocAll 1
+#define DefaultScreen(d) XDefaultScreen(d)
+#define RootWindow(d,s) XRootWindow(d,s)
+#define DisplayWidth(d,s) 640
+#define DisplayHeight(d,s) 480
+
+Display *XOpenDisplay(const char *name);
+int XCloseDisplay(Display *d);
+int XDefaultScreen(Display *d);
+Window XRootWindow(Display *d, int screen);
+int XSync(Display *d, Bool discard);
+int XFlush(Display *d);
+int XSynchronize(Display *d, Bool on);
+Colormap XCreateColormap(Display *d, Window w, Visual *v, int alloc);
+GC XCreateGC(Display *d, Drawable dr, unsigned long mask, XGCValues *values);
+int XFreeGC(Display *d, GC gc);
+Pixmap XCreatePixmap(Display *d, Drawable dr, unsigned int w, unsigned int h, unsigned int depth);
+int XFreePixmap(Display *d, Pixmap p);
+Cursor XCreatePixmapCursor(Display *d, Pixmap src, Pixmap mask, XColor *fg, XColor *bg,
+                           unsigned int x, unsigned int y);
+int XDefineCursor(Display *d, Window w, Cursor c);
+int XFillRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h);
+int XGrabPointer(Display *d, Window grab, Bool owner, unsigned int mask, int pmode, int kmode,
+                 Window confine, Cursor cursor, Time t);
+int XUngrabPointer(Display *d, Time t);
+int XWarpPointer(Display *d, Window src, Window dst, int sx, int sy,
+                 unsigned int sw, unsigned int sh, int dx, int dy);
+int XSelectInput(Display *d, Window w, long mask);
+int XStoreName(Display *d, Window w, const char *name);
+int XSetWindowColormap(Display *d, Window w, Colormap c);
+int XAutoRepeatOn(Display *d);
+int XAutoRepeatOff(Display *d);
+int XMapWindow(Display *d, Window w);
+VisualID XVisualIDFromVisual(Visual *v);
+Status XMatchVisualInfo(Display *d, int screen, int depth, int class, XVisualInfo *info);
+Window XCreateWindow(Display *d, Window parent, int x, int y, unsigned int w, unsigned int h,
+                     unsigned int border, int depth, unsigned int class, Visual *visual,
+                     unsigned long mask, XSetWindowAttributes *attrs);
+XImage *XCreateImage(Display *d, Visual *v, unsigned int depth, int format, int offset,
+                     char *data, unsigned int w, unsigned int h, int pad, int bytes_per_line);
+int XPutImage(Display *d, Drawable dr, GC gc, XImage *img, int sx, int sy, int dx, int dy,
+              unsigned int w, unsigned int h);
+int XStoreColors(Display *d, Colormap c, XColor *colors, int n);
+int XPending(Display *d);
+int XNextEvent(Display *d, XEvent *ev);
+KeySym XKeycodeToKeysym(Display *d, unsigned int keycode, int index);
+int XLookupString(XKeyEvent *ev, char *buf, int n, KeySym *ks, void *status);
+#endif
+`;
+
+const XUTIL = `
+#ifndef _PRISM_XUTIL_H
+#define _PRISM_XUTIL_H
+#include <X11/Xlib.h>
+#endif
+`;
+
+const XSHM = `
+#ifndef _PRISM_XSHM_H
+#define _PRISM_XSHM_H
+#include <X11/Xlib.h>
+/*
+ * MIT-SHM is declared so a program compiles, and REFUSED at run time: XShmQueryExtension answers no,
+ * which is a supported answer that sends the program down its ordinary XImage path. Pretending to
+ * share memory with a server that does not exist would be worse in every way.
+ */
+#define ShmCompletion 0
+#define ShmNumberEvents 1
+typedef struct { unsigned long shmseg; int shmid; char *shmaddr; Bool readOnly; } XShmSegmentInfo;
+Bool XShmQueryExtension(Display *d);
+int XShmGetEventBase(Display *d);
+XImage *XShmCreateImage(Display *d, Visual *v, unsigned int depth, int format, char *data,
+                        XShmSegmentInfo *info, unsigned int w, unsigned int h);
+Bool XShmAttach(Display *d, XShmSegmentInfo *info);
+Bool XShmDetach(Display *d, XShmSegmentInfo *info);
+Bool XShmPutImage(Display *d, Drawable dr, GC gc, XImage *img, int sx, int sy, int dx, int dy,
+                  unsigned int w, unsigned int h, Bool send_event);
+#endif
+`;
+
+const KEYSYMDEF = `
+#ifndef _PRISM_KEYSYM_H
+#define _PRISM_KEYSYM_H
+#define XK_BackSpace 0xff08
+#define XK_Tab 0xff09
+#define XK_Return 0xff0d
+#define XK_Pause 0xff13
+#define XK_Escape 0xff1b
+#define XK_Delete 0xffff
+#define XK_Left 0xff51
+#define XK_Up 0xff52
+#define XK_Right 0xff53
+#define XK_Down 0xff54
+#define XK_F1 0xffbe
+#define XK_F2 0xffbf
+#define XK_F3 0xffc0
+#define XK_F4 0xffc1
+#define XK_F5 0xffc2
+#define XK_F6 0xffc3
+#define XK_F7 0xffc4
+#define XK_F8 0xffc5
+#define XK_F9 0xffc6
+#define XK_F10 0xffc7
+#define XK_F11 0xffc8
+#define XK_F12 0xffc9
+#define XK_Shift_L 0xffe1
+#define XK_Shift_R 0xffe2
+#define XK_Control_L 0xffe3
+#define XK_Control_R 0xffe4
+#define XK_Alt_L 0xffe9
+#define XK_Alt_R 0xffea
+#define XK_Meta_L 0xffe7
+#define XK_Meta_R 0xffe8
+#define XK_space 0x0020
+#define XK_minus 0x002d
+#define XK_equal 0x003d
+#define XK_asciitilde 0x007e
+#define XK_KP_Subtract 0xffad
+#define XK_KP_Equal 0xffbd
+#endif
+`;
+
 export const HEADERS = {
+  'X11/Xlib.h': XLIB,
+  'X11/Xutil.h': XUTIL,
+  'X11/keysym.h': KEYSYMDEF,
+  'X11/extensions/XShm.h': XSHM,
+  'values.h': `
+#define MAXINT 2147483647
+#define MININT (-2147483647-1)
+#define MAXSHORT 32767
+#define MINSHORT (-32768)
+#define MAXLONG 2147483647
+#define MINLONG (-2147483647-1)
+#define MAXDOUBLE 1.7976931348623157e308
+#define MINDOUBLE 2.2250738585072014e-308
+`,
+  'sys/ipc.h': `
+#include <sys/types.h>
+typedef int key_t;
+struct ipc_perm { key_t __key; uid_t uid; gid_t gid; uid_t cuid; gid_t cgid; mode_t mode; };
+#define IPC_PRIVATE 0
+#define IPC_CREAT 01000
+#define IPC_EXCL 02000
+#define IPC_RMID 0
+#define IPC_SET 1
+#define IPC_STAT 2
+`,
+  'sys/shm.h': `
+#include <sys/ipc.h>
+/*
+ * Declared so Doom's shared-memory path COMPILES; it is never taken, because XShmQueryExtension
+ * answers no. shmget failing is the ordinary answer on a machine without SysV shared memory.
+ */
+struct shmid_ds { struct ipc_perm shm_perm; int shm_segsz; long shm_atime, shm_dtime, shm_ctime;
+                  int shm_cpid, shm_lpid, shm_nattch; };
+int shmget(key_t key, size_t size, int flag);
+void *shmat(int id, const void *addr, int flag);
+int shmdt(const void *addr);
+int shmctl(int id, int cmd, struct shmid_ds *buf);
+`,
+  'sys/socket.h': `
+#include <sys/types.h>
+struct sockaddr { unsigned short sa_family; char sa_data[14]; };
+int socket(int domain, int type, int protocol);
+int bind(int fd, const struct sockaddr *addr, unsigned int len);
+int sendto(int fd, const void *buf, size_t n, int flags, const struct sockaddr *to, unsigned int tolen);
+int recvfrom(int fd, void *buf, size_t n, int flags, struct sockaddr *from, unsigned int *fromlen);
+int setsockopt(int fd, int level, int name, const void *val, unsigned int len);
+#define AF_INET 2
+#define PF_INET 2
+#define FIONBIO 0x5421
+#define MSG_DONTWAIT 0x40
+#define SOCK_DGRAM 2
+#define SOL_SOCKET 1
+#define IPPROTO_UDP 17
+#define IPPROTO_IP 0
+#define SO_BROADCAST 6
+`,
+  'netinet/in.h': `
+struct in_addr { unsigned int s_addr; };
+struct sockaddr_in { unsigned short sin_family; unsigned short sin_port; struct in_addr sin_addr; char sin_zero[8]; };
+int gethostname(char *name, size_t len);
+unsigned short htons(unsigned short v);
+unsigned short ntohs(unsigned short v);
+unsigned int htonl(unsigned int v);
+unsigned int ntohl(unsigned int v);
+#define INADDR_ANY 0
+#define IPPORT_USERRESERVED 5000
+`,
+  'arpa/inet.h': `
+#include <netinet/in.h>
+unsigned int inet_addr(const char *s);
+char *inet_ntoa(struct in_addr in);
+`,
+  'netdb.h': `
+struct hostent { char *h_name; char **h_aliases; int h_addrtype; int h_length; char **h_addr_list; };
+struct hostent *gethostbyname(const char *name);
+`,
+  'linux/soundcard.h': '#define SNDCTL_DSP_SETFMT 0\n#define SNDCTL_DSP_SPEED 0\n#define SNDCTL_DSP_STEREO 0\n#define AFMT_S16_LE 16\n',
+  'errnos.h': '#include <errno.h>\n',
+  'alloca.h': 'void *alloca(unsigned long n);\n',
+  'malloc.h': '#include <stdlib.h>\n',
+  'sys/time.h': `
+#include <sys/types.h>
+struct timeval { long tv_sec; long tv_usec; };
+struct timezone { int tz_minuteswest; int tz_dsttime; };
+struct itimerval { struct timeval it_interval; struct timeval it_value; };
+int gettimeofday(struct timeval *tv, struct timezone *tz);
+int setitimer(int which, const struct itimerval *val, struct itimerval *old);
+int getitimer(int which, struct itimerval *val);
+#define ITIMER_REAL 0
+#define ITIMER_VIRTUAL 1
+#define ITIMER_PROF 2
+`,
+  'signal.h': `
+typedef void (*__sighandler_t)(int);
+__sighandler_t signal(int sig, __sighandler_t h);
+int raise(int sig);
+#define SIG_DFL ((__sighandler_t)0)
+#define SIG_IGN ((__sighandler_t)1)
+#define SIGHUP 1
+#define SIGINT 2
+#define SIGQUIT 3
+#define SIGILL 4
+#define SIGABRT 6
+#define SIGBUS 7
+#define SIGFPE 8
+#define SIGKILL 9
+#define SIGUSR1 10
+#define SIGSEGV 11
+#define SIGUSR2 12
+#define SIGPIPE 13
+#define SIGALRM 14
+#define SIGTERM 15
+#define SIGCHLD 17
+`,
   'ctype.h': CTYPE,
   'sys/types.h': SYS_TYPES,
   'sys/stat.h': SYS_STAT,

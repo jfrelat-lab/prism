@@ -81,8 +81,8 @@ function describeExpr(e) {
     case 'bin': return `${describeExpr(e.a)} ${e.op} ${describeExpr(e.b)}`;
     case 'unary': return `${e.op}${describeExpr(e.expr)}`;
     case 'cast': return `a cast of ${describeExpr(e.expr)}`;
-    case 'member': return `${describeExpr(e.obj)}.${e.name}`;
-    case 'index': return `${describeExpr(e.arr)}[...]`;
+    case 'member': return `${describeExpr(e.obj ?? e.base)}.${e.name ?? e.field}`;
+    case 'index': return `${describeExpr(e.base)}[${describeExpr(e.index)}]`;
     case 'num': return String(e.value);
     case 'cond': return 'a ?: expression';
     default: return `'${e.n}'`;
@@ -448,6 +448,10 @@ export class FunctionEmitter {
         if (it.designators) idx = it.designators[0].index ?? idx;
         const off = `(${addr}+${idx * type.of.size}|0)`;
         if (it.value.n === 'initlist') this.#initList(off, type.of, it.value);
+        // An AGGREGATE element is a copy, not a store: `char name[23][8] = {"e2m1", ...}` gives each
+        // row a string literal, and storeExpr has no accessor for a char[8]. Doom's D_DoomMain has
+        // exactly that table, and it is the function that starts the game.
+        else if (type.of.k === 'array' || T.isRecord(type.of)) this.#initDynamic(off, type.of, it.value);
         else this.out.push(storeExpr(off, type.of, this.#rvalCoerced(it.value.expr, type.of)) + ';');
         idx++;
       }
@@ -567,6 +571,16 @@ export class FunctionEmitter {
           (this.ctx.builtinRefs ??= new Set()).add(e.name);
           return fn.addr;
         }
+        return null;
+      }
+      /*
+       * An indexed or selected ARRAY decays to its own address, and that is a constant when the
+       * index is. Doom writes `cheat_powerup_seq[0]` — a row of a 2-D array — in a static
+       * initialiser, which is ordinary C and was refused only because this case was missing.
+       */
+      case 'index': case 'member': {
+        const t = e.type;
+        if (t && (t.k === 'array' || t.k === 'func')) return this.#lvalAddrConst(e);
         return null;
       }
       case 'bin': {

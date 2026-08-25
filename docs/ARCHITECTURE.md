@@ -316,3 +316,29 @@ function scope would silently share one slot), and `break`/`continue` with no en
 
 It moved gcc's torture corpus from 1218 to 1243 and c-testsuite from 193 to 196, and it is what let
 Quake's renderer run.
+
+## Being a UNIX host: Doom
+
+Doom's only published source is `linuxdoom-1.10`, so compiling it unmodified means being an X client,
+not a DOS program. That is why the POSIX host exists and why `src/env/x11.js` shims **Xlib at the
+library boundary** — `XOpenDisplay` returns a token, nothing speaks to a server, and Doom's own
+`i_video.c` is the video driver, compiled exactly as id wrote it.
+
+The program cannot tell, and that is what makes it honest rather than a trick: it asks Xlib for an
+image buffer, draws into it, and hands it back with `XPutImage`. Where the bytes go afterwards is the
+host's business. Same principle as Quake's `vid_buffer` — publish what the program already writes.
+
+Three details are worth keeping, because each cost a diagnosis:
+
+* **A client waits for events the server sends.** Doom maps its window and then blocks in
+  `while (!oktodraw) XNextEvent(...)` until an Expose arrives. With nothing delivered it spun — 1.98
+  million calls before a runtime-call profiler named it. Mapping the window now enqueues the Expose a
+  server would have sent.
+* **An unset struct field is a silent feature switch.** `XMatchVisualInfo` filled in visual, screen
+  and depth but not `class`, and Doom uploads its palette only under
+  `if (X_visualinfo.class == PseudoColor && ...)`. The result was a perfectly correct game rendering
+  at 213 fps into a canvas with no colours.
+* **A refusal must be one the program knows how to handle.** MIT-SHM is refused
+  (`XShmQueryExtension` answers no), which selects the ordinary XImage path; but `XShmDetach` reports
+  *success*, because there is nothing attached and failing sent Doom into
+  `I_Error -> I_ShutdownGraphics -> I_Error` until the stack ran out.

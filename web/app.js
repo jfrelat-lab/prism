@@ -203,6 +203,8 @@ addEventListener('keyup', (e) => {
   const sc = scancodeForEvent(e);
   if (!sc) return;
   views.keys[sc] = 0;
+  // A release, in the PC's break-code convention, so a program that wants key-up events gets them.
+  if (keyboard) keyboard.push(sc | 0x80, 0);
   // A guest parked inside `while (osd_key_pressed(k));` is waiting for exactly this, so tell it now
   // rather than leaving it to notice on its next timeout.
   wake(views.ctrl);

@@ -244,6 +244,24 @@ export function makeKeyboard(views) {
      */
     read() { return take(1); },
 
+    /** How many keystrokes are waiting — what XPending answers. */
+    pending() {
+      return Atomics.load(ctrl, SLOT.KBD_HEAD) - Atomics.load(ctrl, SLOT.KBD_TAIL);
+    },
+
+    /**
+     * The next keystroke as an EVENT rather than a character, for a program that wants press and
+     * release. The high bit of the scan code means release — the PC's own break-code convention, so
+     * no extra storage is needed to carry it.
+     */
+    nextEvent() {
+      if (this.pending() <= 0) return null;
+      const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
+      const raw = kbd[(tail % KBD_SIZE) * 2];
+      Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
+      return { scan: raw & 0x7f, down: (raw & 0x80) === 0 };
+    },
+
     /**
      * The same queue, read as a scan code — what MAME's `osd_read_key` returns. One queue with two
      * readings, not two queues: a real PC has exactly one BIOS buffer, and DOS's `getchar` and a

@@ -251,6 +251,26 @@ function makeLibc(M) {
       return old;
     },
 
+    strcasecmp: (a, b) => {
+      const x = M.mod.cstr(a).toLowerCase(), y = M.mod.cstr(b).toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    },
+    strncasecmp: (a, b, n) => {
+      const x = M.mod.cstr(a).toLowerCase().slice(0, n | 0);
+      const y = M.mod.cstr(b).toLowerCase().slice(0, n | 0);
+      return x < y ? -1 : x > y ? 1 : 0;
+    },
+    perror: (p) => { M.write(`${M.mod.cstr(p)}: No such file or directory\n`); },
+    setbuf: () => {},
+    setvbuf: () => 0,
+    popen: () => 0,          // no subprocesses; Doom's sound server simply never starts
+    pclose: () => -1,
+    gethostname: (buf, n) => {
+      const name = 'prism';
+      for (let i = 0; i < Math.min(name.length, (n | 0) - 1); i++) M.u8[buf + i] = name.charCodeAt(i);
+      M.u8[buf + Math.min(name.length, (n | 0) - 1)] = 0;
+      return 0;
+    },
     strspn: (sPtr, acceptPtr) => {
       const accept = new Set([...M.mod.cstr(acceptPtr)].map(c => c.charCodeAt(0)));
       let n = 0;
@@ -262,6 +282,21 @@ function makeLibc(M) {
       let n = 0;
       while (M.u8[sPtr + n] && !reject.has(M.u8[sPtr + n])) n++;
       return n;
+    },
+
+    /*
+     * gettimeofday, deterministic by default like clock() and for the same reason. It advances one
+     * Doom tic (1/35 s) per call, which is enough for a program that polls it to make progress —
+     * Doom's D_DoomLoop spins until I_GetTime reports a new tic, so a frozen clock is an infinite
+     * loop. installRealClock replaces it where real time is wanted.
+     */
+    gettimeofday: (tv, _tz) => {
+      M.wallMicros = (M.wallMicros ?? 0) + 28571;
+      if (tv) {
+        M.mod.dv.setInt32(tv, Math.floor(M.wallMicros / 1e6), true);
+        M.mod.dv.setInt32(tv + 4, M.wallMicros % 1e6, true);
+      }
+      return 0;
     },
 
     atof: (p) => { const v = parseFloat(M.mod.cstr(p)); return Number.isNaN(v) ? 0 : v; },
@@ -567,6 +602,19 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
   }
 
   M.rt.clock = () => (advance() >>> 0);
+  /*
+   * gettimeofday too, from the same scaled clock. Doom times itself with it rather than with clock(),
+   * so leaving it on the deterministic counter meant Doom ran as fast as the host could go — the same
+   * "not a game, a blur" that the pacer exists to prevent.
+   */
+  M.rt.gettimeofday = (tv, _tz) => {
+    const us = advance();
+    if (tv) {
+      M.mod.dv.setInt32(tv, Math.floor(us / 1e6), true);
+      M.mod.dv.setInt32(tv + 4, Math.floor(us % 1e6), true);
+    }
+    return 0;
+  };
   M.rt.uclock = () => BigInt(Math.round(advance() * 1.19318));   // µs -> PIT ticks at 1193180 Hz
   M.realClock = { micros: () => micros };
 }
