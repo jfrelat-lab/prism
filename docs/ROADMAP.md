@@ -35,6 +35,50 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 
 | P1.7 | **Delete `src/env/osd.js`: make MAME compile its own `src/msdos/msdos.c`.** Today PRISM supplies a hand-written backend for MAME's eighteen `osdepend.h` functions. That does not modify MAME — substituting the platform file its own makefile selects per platform is what the abstraction is for — but the boundary is **per program**, which is the cost Emscripten imposes, merely moved from the game into PRISM. Emulating the ENVIRONMENT instead means every DJGPP+Allegro program comes along without a line of PRISM written for it.<br><br>The surface is **measured, not estimated** — `msdos.c` is 498 lines and this is everything it needs: **Allegro** 13 functions (`allegro_init install_keyboard set_gfx_mode set_color get_palette create_bitmap destroy_bitmap save_pcx readkey clear_keybuf poll_joystick initialise_joystick bmp_write_line`) plus `screen`, `key[]`, `BITMAP/PALETTE/RGB`, `GFX_*`; **SEAL** (`audio.h`) 17 `A*` functions, all stubbable; **DJGPP** `inportb`/`outportb` from `pc.h` and `_dosmemputl` from `sys/farptr.h`; and `scanf`.<br><br>Three things that make it far smaller than it looks, each verified by reading the file: (1) **no VGA register emulation is needed.** Both display paths are plain memory writes — the VESA one to an address OUR shim hands out through `bmp_write_line`, the mode-13h one to `0xa0000`, which is already a real address since the low megabyte is reserved. Nothing intercepts them, so MIRAGE's memory-dispatch cliff does not arise. (2) **`TwkUser.c` is included but never called** — its 8 `outportb` on the CRTC must compile, not work. (3) MAME 0.1 depends on **two** third-party libraries, not one: sound is SEAL, not Allegro. | M | The only compiler-level blocker is the `inportb`/`outportb` pair, because `pc.h` defines them as GNU inline asm — two intrinsics recognised by pattern (P5.1's approach), with one live call site. Not blocked behind all of P3.1/P5.1 as previously recorded. |
 
+## MIRAGE + PRISM: where the two projects meet
+
+The division of labour, stated as the north star it is: **MIRAGE owns the low level, PRISM owns the
+high level, and they meet at the device boundary.** Not at the CPU — PRISM has none and wants none.
+
+That boundary is more precise than it sounds, and it is already implemented on MIRAGE's side. A
+MIRAGE device installs itself with `installVGA(machine)` and asks its host for almost nothing:
+
+| What a MIRAGE device needs | Count in `vga.js` / `keyboard.js` |
+|---|---|
+| `machine.onPortWrite(port, fn)` | 7 / 4 |
+| `machine.onPortRead(port, fn)` | 3 / 4 |
+| `machine.mem` | 1 |
+| fields it hangs itself on (`machine.vga`, `keyQueue`, `pic`) | 3 |
+
+So a **PRISM adapter is a `machine` object of about forty lines**: a port-dispatch table, and `mem`
+pointing at PRISM's guest image — whose low megabyte is already reserved, so 0xA0000 and 0xB8000 are
+already the addresses the devices expect. What feeds the dispatch is the `inportb`/`outportb`
+intrinsic, because **a port write is the universal low-level verb**: MIRAGE reaches it from an
+emulated `out dx, al`, PRISM reaches it from a compiled function call, and the device cannot tell.
+
+### The recommended order
+
+| # | Step | Why it is first |
+|---|---|---|
+| 1 | **P5.1 — the `inportb`/`outportb` intrinsics** | Everything hinges on this one piece. It IS the seam, and the same two intrinsics separately unlock MAME's own `msdos.c` (P1.7) and Quake's `sys_dos.c`. Nothing else in the roadmap has three payoffs. |
+| 2 | **The `machine` adapter** (~40 lines) | Lets any MIRAGE device install into PRISM unchanged. |
+| 3 | **First device: the PIT** | Quake's `Sys_FloatTime` needs only channel-0 latch-and-read plus the BIOS tick at 0x46C. Small enough to prove the seam end to end, and real time is what fixes game speed from inside the program. |
+| 4 | **Keyboard** | MIRAGE's `keyboard.js` already models scancodes AND the BIOS queue — the same two-question distinction PRISM re-invented in `src/env/webhost.js`. Converging removes a duplicate, it does not add a dependency. |
+| 5 | **VGA** | **Free for mode 13h**: a linear framebuffer at an address PRISM already has, so it is only memory. **Not free for planar**: EGA/VGA latches and masks need a write barrier on the 0xA0000 window, and that is exactly the memory-dispatch cliff MIRAGE measured (three strategies built and rejected). Decide it on a number, not before. |
+| 6 | **The renderer** | PRISM's shell re-implemented MIRAGE's text mode, down to using its font ROM. Adopting `video.js` deletes that duplication outright. |
+
+### What does NOT converge, and the honest limits
+
+* **The compiler and the recompiler share nothing.** One translates C, the other x86. Do not force it.
+* **The seam is asymmetric.** MIRAGE's devices assume a CPU that traps I/O and memory; PRISM traps
+  function calls. Thin for ports, thick for memory — see step 5.
+* **This does not rescue MIRAGE's blocked list in general.** MIRAGE cannot run DPMI titles, and PRISM
+  can only reach a program whose SOURCE was published. Doom qualifies (the Linux tree). OMF, Jazz and
+  Zone 66 never will. The union is "published source **and** hardware needs", not "everything".
+* **The dependency needs a decision that has been deferred once already.** PRISM currently vendors
+  MIRAGE's 8x16 font rather than importing it. Importing `src/vga.js` for real means committing to a
+  sibling checkout or to publishing MIRAGE as a package. Choose before step 5, not during it.
+
 ## Hosts — which machine PRISM pretends to be
 
 A program of this era does not have *a* platform layer, it ships several: Quake carries `sys_dos.c`,
