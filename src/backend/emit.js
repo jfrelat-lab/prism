@@ -24,6 +24,20 @@ import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
 import { needsFlattening, flattenGotos } from './flatten.js';
 
 /*
+ * The frame epilogue, emitted as a MARKER and resolved once the function's final frame size is known.
+ *
+ * It used to be written inline with `this.frameSize` as it stood at that moment — but slots are
+ * allocated as emission proceeds, so an early `return` followed by any later allocation restored the
+ * stack pointer to the wrong place. W_GetLumpinfo returned inside its loop with the frame at 16
+ * bytes and then grew to 20 for a varargs buffer, leaking 4 bytes per call.
+ *
+ * Silent, cumulative, and fatal at a distance: Quake's own R_RenderView checks that the stack has not
+ * drifted more than 10000 bytes, and died after 1238 frames of leaking 8 bytes each. A program
+ * without that check would simply have run out of stack.
+ */
+const FRAME_RESTORE = '\u0000FRAME_RESTORE\u0000';
+
+/*
  * C identifiers that JavaScript reserves. A C program is entitled to a variable called `in`, `new` or
  * `class`, and Quake has one: the emitted module died with "Unexpected token 'in'".
  *
@@ -265,10 +279,14 @@ export class FunctionEmitter {
     if (this.frameSize) body.push(`M.sp=_fp;`);
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
-    if (this.frameSize) body.push(`  M.sp=_fp+${this.frameSize}|0;`);
+    body.push('  ' + FRAME_RESTORE);
     body.push(`  return ${d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
 
-    return `function ${jsIdent(d.name)}(${params.join(',')}){\n${body.join('\n')}\n}`;
+    // Now the frame's final size is known, so every epilogue marker becomes the one right value.
+    // With no frame at all the restore is a no-op assignment and is dropped rather than emitted.
+    const restore = this.frameSize ? `M.sp=_fp+${this.frameSize}|0;` : '';
+    const text = body.join('\n').split(FRAME_RESTORE).join(restore);
+    return `function ${jsIdent(d.name)}(${params.join(',')}){\n${text}\n}`;
   }
 
   /**
@@ -656,7 +674,7 @@ export class FunctionEmitter {
       case 'return': {
         const ret = this.decl.type.ret;
         if (!s.expr || ret.k === 'void') {
-          if (this.frameSize) this.out.push(`M.sp=_fp+${this.frameSize}|0;`);
+          this.out.push(FRAME_RESTORE);
           this.out.push('return;');
           return;
         }
@@ -667,15 +685,14 @@ export class FunctionEmitter {
         if (T.isRecord(ret)) {
           const src = this.#lval(s.expr);
           this.out.push(`M.copy(_sret,${src.addr},${ret.size});`);
-          if (this.frameSize) this.out.push(`M.sp=_fp+${this.frameSize}|0;`);
+          this.out.push(FRAME_RESTORE);
           this.out.push('return _sret;');
           return;
         }
         const v = this.#rvalCoerced(s.expr, ret);
-        if (!this.frameSize) { this.out.push(`return ${v};`); return; }
         const t = this.newTmp(); this.#declareTmp(t);
         this.out.push(`${t}=${v};`);
-        this.out.push(`M.sp=_fp+${this.frameSize}|0;`);
+        this.out.push(FRAME_RESTORE);
         this.out.push(`return ${t};`);
         return;
       }

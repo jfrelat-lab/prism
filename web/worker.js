@@ -151,7 +151,11 @@ async function start({ program, control, data, argv }) {
    * already owns, so its layer only publishes addresses and implements nothing.
    */
   if (program.platform === 'quake') {
-    installQuake(prog.M, { publish: { ctrl } });
+    installQuake(prog.M, {
+      publish: { ctrl },
+      F: prog.F,
+      onFrame: () => { reader.endFrame(); pace(); },
+    });
     // compile.js installed stdio with no files; re-install with the ones the page supplied.
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
   } else {

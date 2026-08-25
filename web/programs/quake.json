@@ -79,8 +79,8 @@
     "i386": null
   },
   "memory": 536870912,
-  "args": "",
-  "argsHint": "-nosound, -window, +map start \u2026",
+  "args": "+host_framerate 0.0138",
+  "argsHint": "+host_framerate 0.0138 keeps the world at real speed; try +map e1m1",
   "fps": 72,
   "needsData": {
     "hint": "Quake's own data: id1/pak0.pak (the shareware pak is enough)"

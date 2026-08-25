@@ -164,12 +164,110 @@ if (process.argv.includes('--symbols')) {
   }
 }
 
+/*
+ * --bench: wall-clock seconds to play demo1, bounded by the markers Quake prints ITSELF
+ * ("Playing demo from demoN.dem"). The same two markers bound the native build, so both sides are
+ * timed on identical work with no frame hook and no source change.
+ *
+ * A frame counter cannot be used for this: sys_null.c's Sys_FloatTime returns t += 0.1 rather than
+ * reading a clock, so Quake's own timing — and anything derived from it, timedemo included — is
+ * fiction in this configuration. Only wall clock outside the program means anything.
+ */
+if (process.argv.includes('--bench')) {
+  installStdio(program.M, { files });
+  const M = program.M;
+  let t0 = 0, seen = 0;
+  const write = M.write;
+  M.write = (str) => {
+    write(str);
+    if (/Playing demo from demo1\.dem/.test(str)) t0 = performance.now();
+    else if (t0 && /Playing demo from demo2\.dem/.test(str)) {
+      const secs = (performance.now() - t0) / 1000;
+      const frames = new DataView(program.mod.buffer).getInt32(program.mod.symbols.get('host_framecount').addr, true);
+      console.log(`\ndemo1: ${secs.toFixed(2)} s wall clock, ${frames} frames total, ` +
+        `${(frames / secs).toFixed(1)} fps while it played`);
+      seen = 1;
+      throw new Error('__bench_done');
+    }
+  };
+  try { program.run(['quake']); } catch (e) { if (!seen) console.log(`bench stopped: ${e.message}`); }
+  process.exit(0);
+}
+
+// --trace-exit: name the emitted function that called exit(). A program that stops without printing
+// why leaves nothing else to go on, and the JS stack still carries the C function names.
+if (process.argv.includes('--trace-exit')) {
+  const real = program.M.rt.exit;
+  program.M.rt.exit = (c) => {
+    console.log(`\n>>> exit(${c}) called from:`);
+    console.log(new Error().stack.split('\n').slice(2, 10).join('\n'));
+    return real(c);
+  };
+}
+
+if (process.argv.includes('--dump-main')) {
+  const want = process.argv.find(a => a.startsWith('--fn='))?.slice(5) ?? 'main';
+  const i = program.src.indexOf(`function ${want}(`);
+  console.log(i < 0 ? `${want}: not found` : program.src.slice(i, program.src.indexOf('\nfunction ', i + 10)));
+}
+
+// --trace-sp: is the shadow stack drifting? main calls Host_Frame through the function table, so it
+// can be wrapped, and M.sp at the top of each frame should be identical every time.
+if (process.argv.includes('--trace-sp')) {
+  const inner = program.F['Host_Frame'];
+  let n = 0, first = null;
+  program.F['Host_Frame'] = function (t) {
+    const sp = program.M.sp;
+    if (first === null) first = sp;
+    if (n % 200 === 0 || sp !== first) {
+      console.log(`[sp] frame ${n} sp=${sp} drift=${sp - first}`);
+      if (sp !== first) { console.log('[sp] DRIFTED — stopping'); throw new Error('sp drift'); }
+    }
+    n++;
+    return inner(t);
+  };
+  program.mod.bindFunc('Host_Frame', program.F['Host_Frame']);
+}
+
+/*
+ * --audit-sp: which function fails to give the shadow stack back?
+ *
+ * The invariant is absolute — M.sp on return equals M.sp on entry, for every function, including one
+ * that used alloca, because a frame's space dies with the frame. A violation is a leak, and 8 bytes
+ * per Host_Frame is exactly what killed Quake at frame 1238: its own R_RenderView checks that the
+ * stack has not drifted more than 10000 bytes.
+ *
+ * Only cross-unit calls go through the function table, so this sees most of Quake but not calls
+ * within one file. It narrows the search to a unit, which is enough.
+ */
+if (process.argv.includes('--audit-sp')) {
+  let reported = 0;
+  for (const name of Object.keys(program.F)) {
+    const inner = program.F[name];
+    if (typeof inner !== 'function') continue;
+    const wrapped = function (...args) {
+      const before = program.M.sp;
+      const r = inner.apply(this, args);
+      const after = program.M.sp;
+      if (after !== before && reported < 8) {
+        reported++;
+        console.log(`[sp] ${name} leaked ${before - after} bytes (in ${before}, out ${after})`);
+      }
+      return r;
+    };
+    program.F[name] = wrapped;
+    program.mod.bindFunc(name, wrapped);
+  }
+}
+
 if (process.argv.includes('--run')) {
   installStdio(program.M, { files });
   try {
     const r = program.run(['quake', '-nosound']);
     console.log(`\nexit ${r.code}`);
-    console.log(r.stdout.slice(0, 4000));
+    // The whole of it. Truncating at 4000 characters cut the line that said WHY the program stopped,
+    // and made a self-inflicted mystery out of a printed error message.
+    console.log(r.stdout);
   } catch (e) {
     console.log(`\n✗ ran and threw: ${e.message}`);
   }

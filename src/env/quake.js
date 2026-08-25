@@ -17,7 +17,7 @@ import { SLOT } from './webhost.js';
 
 const WIDTH = 320, HEIGHT = 200;      // vid_null.c's BASEWIDTH x BASEHEIGHT
 
-export function installQuake(M, { publish = null } = {}) {
+export function installQuake(M, { publish = null, F = null, onFrame = null } = {}) {
   const sym = (name) => M.mod.symbols.get(name) ?? null;
 
   const buffer = sym('vid_buffer');
@@ -43,6 +43,23 @@ export function installQuake(M, { publish = null } = {}) {
     // PIXELS last: a non-zero PIXELS is what tells the page the geometry above is valid.
     Atomics.store(ctrl, SLOT.PIXELS, buffer.addr);
     Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+  }
+
+  /*
+   * A frame boundary, for a host that wants to pace or to sample input.
+   *
+   * sys_null.c's main() calls Host_Frame across a translation-unit boundary, so the call goes through
+   * the function table and can be wrapped — no hook in the program, and nothing to intercept inside
+   * it. Without this the guest runs flat out: about 500 frames a second, which is not a game.
+   *
+   * Game SPEED is a separate matter and not fixable here: main() passes a hardcoded 0.1 seconds per
+   * frame, so pacing alone would run the world 7x fast. Quake's own `host_framerate` cvar overrides
+   * that per frame, and is set from the command line (+host_framerate 0.0138) — a cvar, not a patch.
+   */
+  if (F && onFrame && typeof F.Host_Frame === 'function') {
+    const inner = F.Host_Frame;
+    F.Host_Frame = function (t) { const r = inner(t); onFrame(); return r; };
+    M.mod.bindFunc('Host_Frame', F.Host_Frame);
   }
 
   return { width: WIDTH, height: HEIGHT, pixels: buffer.addr, palette: basepal.addr };

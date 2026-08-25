@@ -876,3 +876,39 @@ marginally faster here.
 Candidates not yet tested: `new Function` on a 1.67 MB source string being parsed eagerly in a worker,
 a cold JIT tier, or the pane's Chromium build. The next step is to time the phases separately —
 preprocess, parse, emit, `new Function` — on both sides, rather than to reason about it further.
+
+### The shadow-stack leak, and the two tools that found it
+
+Quake ran for 1238 frames and then stopped with its own message: `R_RenderView: called without
+enough stack`. Quake checks that a local's address has not drifted more than 10000 bytes from the one
+it recorded at start-up.
+
+It had drifted. `--trace-sp` on `tools/quake.mjs` wraps `Host_Frame` — reachable because sys_null.c's
+main() calls it across a unit boundary, so it goes through the function table — and showed **8 bytes
+lost per frame**. 8 x 1250 = 10000, which is exactly where it died.
+
+`--audit-sp` then wrapped all 1030 functions and checked the invariant directly: **M.sp on return
+equals M.sp on entry, always**, including for a function that used alloca, because a frame's space
+dies with the frame. Four functions violated it, and the smallest violation was the one worth reading:
+
+    function W_GetLumpinfo(name){
+      var _fp=M.sp-20|0;        // the frame is 20 bytes
+      ...
+          M.sp=_fp+16|0;        // an early return gives back 16
+          return _t2;
+
+The epilogue was written inline with `this.frameSize` **as it stood at that moment**, and slots are
+allocated as emission proceeds — the varargs buffer for a later `Sys_Error` call grew the frame from
+16 to 20 after that return had already been emitted. The fix is to emit a marker and resolve it once
+the frame is final.
+
+Three things worth keeping from this:
+
+1. **The bug was old, not new.** It predates the flattening pass; every function with an early return
+   followed by any later allocation leaked the difference. Nothing in either corpus caught it, because
+   a leak is invisible unless something measures the stack — c-testsuite and gcc's torture programs
+   run once and exit.
+2. **Quake caught it because Quake checks.** A program without that assertion would have run until the
+   shadow stack overflowed, and the failure would have looked like anything at all.
+3. **An invariant is worth more than a test.** "sp out == sp in" is checkable over every function in a
+   real program, and it turned a mystery into a name in one run. `--audit-sp` stays in the tool.
