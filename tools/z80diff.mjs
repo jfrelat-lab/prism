@@ -14,7 +14,8 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sh, SCRATCH, version } from './oracle.mjs';
-import { compileProgram, installOSD } from '../src/compile.js';
+import { compileProgram } from '../src/compile.js';
+import { installStdio } from '../src/env/stdio.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -84,7 +85,7 @@ try {
   console.error(`PRISM side failed to build: ${e.message.split('\n')[0]}`);
   process.exit(1);
 }
-installOSD(prog.M, { files: { 'z80rom.bin': rom } });
+installStdio(prog.M, { files: { 'z80rom.bin': rom } });
 
 let out;
 try {

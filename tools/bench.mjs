@@ -22,7 +22,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { sh, SCRATCH, version } from './oracle.mjs';
-import { compileProgram, installOSD } from '../src/compile.js';
+import { compileProgram } from '../src/compile.js';
+import { installStdio } from '../src/env/stdio.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -199,7 +200,7 @@ const prog = compileProgram([
   { file: join(Z80DIR, 'Z80.c'), source: readFileSync(join(Z80DIR, 'Z80.c'), 'latin1') },
 ], { defines: { LSB_FIRST: '1' }, resolve: resolver, memory: 64 * 1024 * 1024 });
 const compileMs = performance.now() - t0;
-installOSD(prog.M, { files: { 'z80rom.bin': rom } });
+installStdio(prog.M, { files: { 'z80rom.bin': rom } });
 
 const t1 = performance.now();
 const out = prog.run(['bench']);

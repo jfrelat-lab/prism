@@ -14,12 +14,15 @@
 //   node tools/mame.mjs --src      # dump the emitted JavaScript
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { deflateSync } from 'node:zlib';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compileProgram, installOSD } from '../src/compile.js';
+import { compileProgram } from '../src/compile.js';
+import { installAllegro, ALLEGRO_VARS } from '../src/env/allegro.js';
+import { installStdio } from '../src/env/stdio.js';
+import { installPorts } from '../src/env/ports.js';
 import { installSpinDamping } from '../src/runtime/runtime.js';
 import { HEADERS } from '../src/env/headers.js';
+import { writeIndexedPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(ROOT, 'corpus', 'mame01');
@@ -39,6 +42,9 @@ const UNITS = [
   'src/crush/machine.c', 'src/crush/driver.c',
   'src/pengo/machine.c', 'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
   'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
+  // MAME's OWN platform backend, the file its makefile selects for DOS. It used to be replaced by a
+  // JavaScript one; what is shimmed now is the two libraries it links (src/env/allegro.js).
+  'src/msdos/msdos.c',
 ];
 
 const INCLUDE_DIRS = ['src', 'src/Z80', 'src/msdos'];
@@ -75,17 +81,6 @@ function resolver(name, angled, fromFile) {
 }
 
 const missingHeaders = new Set();
-
-/*
- * The DATA half of the platform backend. src/msdos/msdos.c defines these; a different backend must
- * too, and writing them in C is the most honest form — they are ordinary objects with external
- * linkage that the game reads.
- */
-const OSD_VARS = `
-int play_sound = 1;
-int osd_joy_up = 0, osd_joy_down = 0, osd_joy_left = 0, osd_joy_right = 0;
-int osd_joy_b1 = 0, osd_joy_b2 = 0, osd_joy_b3 = 0, osd_joy_b4 = 0;
-`;
 
 /*
  * A hand-assembled Z80 program, standing in for the (copyrighted) pacman.6e.
@@ -130,7 +125,9 @@ const units = UNITS.map(f => {
   return { file: full, source: readFileSync(full, 'latin1') };
 });
 
-units.push({ file: 'prism-osd-vars.c', source: OSD_VARS });
+// Allegro's DATA. The behaviour is in src/env/allegro.js; `screen` and `key[]` have to be real
+// objects with external linkage because msdos.c takes their address and indexes them.
+units.push({ file: 'prism-allegro-vars.c', source: ALLEGRO_VARS });
 
 console.log(`MAME 0.1 — ${units.length} translation units, ` +
   `${units.reduce((n, u) => n + u.source.split('\n').length, 0)} lines`);
@@ -180,7 +177,24 @@ const frames = +(process.argv.find(a => a.startsWith('--frames='))?.slice(9) ?? 
 // five game names ran Pac-Man five times and printed five identical framebuffers — identical output
 // across supposedly different games is the tell.
 const game = process.argv.find(a => a.startsWith('--game='))?.slice(7) ?? 'pacman';
-const osd = installOSD(program.M, { files: roms, stopAfterFrames: frames });
+/*
+ * msdos.c parses its own command line now, and two of its switches matter here: without -nosound it
+ * prints a list of audio devices and blocks on `scanf("%d",&i)`, and without -nojoy it reads the
+ * game port every frame. Both are the program's own options, passed as argv -- not a modification.
+ */
+const extraArgs = (process.argv.find(a => a.startsWith('--args='))?.slice(7) ?? '-nosound -nojoy')
+  .split(/\s+/).filter(Boolean);
+/*
+ * The platform layer, one level below where it used to be. MAME's own msdos.c is compiled now, so
+ * what gets installed is the libraries it links: Allegro and SEAL, the DJGPP memory helpers, the I/O
+ * port seam TwkUser.c writes CRTC registers through, and stdio for the ROM files.
+ */
+installStdio(program.M, { files: roms });
+installPorts(program.M);
+const allegro = installAllegro(program.M, { stopAfterFrames: frames });
+const osd = allegro.state;
+// The library's data lives in the linked image; its addresses are only known now.
+allegro.bindGlobals(program);
 
 /*
  * --probe-polls: measure how many times in a row the program asks one service INSIDE ONE FRAME.
@@ -199,61 +213,32 @@ console.log(`platform backend installed; ${Object.keys(roms).length} data files 
 console.log(`✓ compiled: ${Object.keys(program.F).length} functions, ` +
   `${(program.src.length / 1024 / 1024).toFixed(2)} MB of emitted JavaScript`);
 
-/**
- * Write the display as a PNG, through the palette the game itself asked for. No dependencies: a PNG
- * is a CRC-checked container around a deflate stream, and Node has deflate built in.
- */
-function writePng(path, M, osd) {
-  const { width: w, height: h, pixels, palette } = osd;
-  const raw = Buffer.alloc((w * 3 + 1) * h);
-  let o = 0;
-  for (let y = 0; y < h; y++) {
-    raw[o++] = 0;                                  // filter: none
-    for (let x = 0; x < w; x++) {
-      const pen = M.u8[pixels + y * w + x];
-      const rgb = palette[pen] ?? [0, 0, 0];
-      raw[o++] = rgb[0]; raw[o++] = rgb[1]; raw[o++] = rgb[2];
-    }
-  }
-  const crcTable = (() => {
-    const t = new Int32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-      t[n] = c;
-    }
-    return t;
-  })();
-  const crc = (buf) => {
-    let c = -1;
-    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
-    return (c ^ -1) >>> 0;
-  };
-  const chunk = (type, data) => {
-    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
-    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-    const c = Buffer.alloc(4); c.writeUInt32BE(crc(body));
-    return Buffer.concat([len, body, c]);
-  };
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;   // 8-bit truecolour
-  writeFileSync(path, Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    chunk('IHDR', ihdr),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ]));
-  console.log(`wrote ${path} (${w}x${h})`);
-}
-
 if (process.argv.includes('--src')) {
   console.log(program.src.slice(0, 4000));
 }
 
+function report() {
+    console.log(`display ${osd.width}x${osd.height} · pens ${osd.pens} · ` +
+      `frames ${osd.frames} · samples ${osd.samples.length}`);
+    const pngPath = process.argv.find(a => a.startsWith('--png='))?.slice(6);
+    if (pngPath && osd.width && osd.pixels) {
+      writeIndexedPng(pngPath, {
+        pixels: program.M.u8.subarray(osd.pixels, osd.pixels + osd.width * osd.height),
+        width: osd.width, height: osd.height, palette: osd.palette,
+      });
+      console.log(`wrote ${pngPath} (${osd.width}x${osd.height})`);
+    }
+    if (osd.width && osd.pixels) {
+      const px = program.M.u8.subarray(osd.pixels, osd.pixels + osd.width * osd.height);
+      let nz = 0;
+      for (const b of px) if (b) nz++;
+      console.log(`framebuffer: ${nz} non-zero pixels of ${px.length}`);
+    }
+}
+
 if (process.argv.includes('--run')) {
   try {
-    const r = program.run(['mame', game]);
+    const r = program.run(['mame', game, ...extraArgs]);
     console.log(`\nexit ${r.code}`);
     if (r.stdout) console.log(r.stdout.trimEnd());
     if (program.M.spinDamping) {
@@ -261,17 +246,10 @@ if (process.argv.includes('--run')) {
       console.log(`longest run of consecutive calls within one frame: ` +
         Object.entries(m).map(([k, v]) => `${k} ${v}`).join(' · '));
     }
-    console.log(`display ${osd.width}x${osd.height} · pens ${osd.palette.length} · ` +
-      `frames ${osd.frames} · samples ${osd.samples.length}`);
-    const pngPath = process.argv.find(a => a.startsWith('--png='))?.slice(6);
-    if (pngPath && osd.width && osd.pixels) writePng(pngPath, program.M, osd);
-    if (osd.width && osd.pixels) {
-      const px = program.M.u8.subarray(osd.pixels, osd.pixels + osd.width * osd.height);
-      let nz = 0;
-      for (const b of px) if (b) nz++;
-      console.log(`framebuffer: ${nz} non-zero pixels of ${px.length}`);
-    }
+    report();
   } catch (e) {
-    console.log(`\n✗ ran and threw: ${e.message}`);
+    // The frame cap is how this harness stops a main loop that never returns, not a failure.
+    if (e.message === '__frames_done') report();
+    else console.log(`\n✗ ran and threw: ${e.message}`);
   }
 }

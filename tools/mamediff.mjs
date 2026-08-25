@@ -14,7 +14,8 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sh, SCRATCH, version } from './oracle.mjs';
-import { compileProgram, installOSD } from '../src/compile.js';
+import { compileProgram } from '../src/compile.js';
+import { installStdio } from '../src/env/stdio.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -126,7 +127,7 @@ try {
   process.exit(1);
 }
 // osdnull.c IS the backend here, so only the libc extras are installed.
-installOSD(prog.M, { files: roms });
+installStdio(prog.M, { files: roms });
 
 let out;
 try {

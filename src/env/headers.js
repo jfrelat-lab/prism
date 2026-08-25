@@ -8,6 +8,8 @@
 // Types are the i386 ones (`size_t` is `unsigned int`, not `unsigned long`), because a mismatch here
 // would show up as a wrong argument width in a printf and be blamed on the emitter.
 
+import { DJGPP_HEADERS } from './headers-djgpp.js';
+
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
 #define _PRISM_STDDEF_H
@@ -1003,6 +1005,8 @@ int raise(int sig);
   'sys/mman.h': SYS_MMAN,
   'sys/ioctl.h': SYS_IOCTL,
   'pc.h': PCH,
+  // The DOS/DJGPP set, so MAME's own src/msdos/msdos.c compiles as its makefile intends.
+  ...DJGPP_HEADERS,
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,

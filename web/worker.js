@@ -10,8 +10,9 @@
 
 import { compileProgram } from '../src/compile.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
-import { installOSD } from '../src/env/osd.js';
+import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
+import { installPorts } from '../src/env/ports.js';
 import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
 import { installConsole } from '../src/env/console.js';
@@ -118,6 +119,12 @@ async function start({ program, control, data, argv }) {
       resolve,
       memory: program.memory,
       shared: true,                    // the page reads pixels straight out of this image
+      /*
+       * Safepoints, when the descriptor asks for them. They cost a decrement and a compare on every
+       * iteration of every loop, so this is per-program and not a default -- see the descriptor's
+       * safepointsNote for why MAME needs them and Doom does not.
+       */
+      safepoints: !!program.safepoints,
       collect: true,                 // report every gap in one build, not the first one
     });
   } catch (err) {
@@ -175,29 +182,58 @@ async function start({ program, control, data, argv }) {
     // compile.js installed stdio with no files; re-install with the ones the page supplied.
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
   } else {
-    installOSD(prog.M, {
-      files,
-      readKey: () => keyboard.readKey(),
+    /*
+     * A DOS host: MAME's own src/msdos/msdos.c is compiled, and what is installed is the libraries it
+     * links -- Allegro, SEAL, and DJGPP's memory helpers (src/env/allegro.js). The eighteen
+     * osdepend.h functions are the game's own code again, which is what P1.7 was for.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    installPorts(prog.M);
+    const allegro = installAllegro(prog.M, {
       publish: { ctrl, pal },
       /*
-       * A held key is a byte in shared memory, so this read is what the guest sees at the instant it
-       * asks — no event queue, no latency beyond one frame of pacing.
-       *
        * STOP is answered as Esc because that is how the program's OWN quit path works. Killing the
        * worker instead would skip whatever the program does on the way out.
        */
       keys: (k) => (Atomics.load(ctrl, SLOT.STOP) && k === 1 ? 1 : reader.read(k)),
+      readKey: () => keyboard.readKey(),
       // The frame boundary: retire the key latches, then hold the guest until its frame is due.
       onPresent: () => {
         reader.endFrame();
         pace();
-        // Diagnostics, once a second: the pacing numbers live in this thread and the page cannot read
-        // them. postMessage queues to the page without this thread yielding, so a blocked guest can
-        // still report.
         const f = Atomics.load(ctrl, SLOT.FRAME);
         if (f % 60 === 0) post('diag', { spin: prog.M.spinDamping, clockUs: prog.M.realClock.micros() });
       },
     });
+    allegro.bindGlobals(prog);
+
+    /*
+     * The safepoint handler, and the reason this program asks for safepoints at all.
+     *
+     * `while (osd_key_pressed(OSD_KEY_TAB));` is now a loop in the game's own C reading an array in
+     * memory. It calls nothing, so spin damping cannot see it and the key it waits for would never
+     * change. Refreshing key[] here is the faithful answer rather than a workaround: on a real DOS
+     * machine that array is written by a keyboard INTERRUPT, and a safepoint is the only place this
+     * runtime can be interrupted.
+     *
+     * The budget is deliberately coarse. It is not a sampling rate -- it is how many loop iterations
+     * a program may run before the outside world is allowed to change under it, and one millisecond
+     * of iterations is far below any latency a person can feel.
+     */
+    if (program.safepoints) {
+      const BUDGET = 200000;
+      prog.M.spBudget = BUDGET;
+      let idle = 0;
+      let lastFrame = 0;
+      prog.M.sp_ = () => {
+        prog.M.spBudget = BUDGET;
+        allegro.refreshKeys();
+        const f = Atomics.load(ctrl, SLOT.FRAME);
+        // No frame since the last safepoint means the program is waiting, not working -- the same
+        // judgement spin damping makes about a service, made about a loop.
+        if (f === lastFrame) { if (++idle > 2) park(); } else { idle = 0; lastFrame = f; }
+      };
+    }
   }
 
   /*

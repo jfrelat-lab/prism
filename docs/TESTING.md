@@ -617,6 +617,7 @@ of emitted JavaScript.
 ```bash
 node tools/mame.mjs                       # build only
 node tools/mame.mjs --run --test-rom      # run with a hand-written Z80 ROM
+node tools/mame.mjs --run --test-rom --args="-nosound -nojoy -vesa"   # the other display path
 ```
 
 **The platform boundary is MAME's own.** `osdepend.h` declares exactly eighteen functions and the
@@ -1059,3 +1060,33 @@ node tools/doom.mjs --fn=R_DrawColumn      one function out of a 62-unit program
 ```
 
 For a real program the per-function view is the usable one: Doom is 1.11 MB of JavaScript.
+
+
+### P1.7: deleting the hand-written backend, and the loop it exposed
+
+MAME now compiles `src/msdos/msdos.c`, its own DOS platform backend, and `src/env/osd.js` is gone.
+The check that this changed nothing is the number `--test-rom` prints: **3584 non-zero pixels**, the
+224x16 band the hand-written Z80 program draws, identical through the tweaked VGA mode and through
+`-vesa` at 640x480.
+
+Two things went wrong, and both are the same mistake in different clothes — assuming an ending.
+
+* **The VESA path never presented a frame.** `_dosmemputl` writes one scanline at a time, so the
+  frame boundary is the LAST one; I looked for a write reaching the bottom of the 640x480
+  framebuffer. msdos.c centres a 288-line bitmap in 480 lines, so its last write is to line 383 and
+  the bottom is never touched. Counting scanlines against the game's own `bitmap->height` is what
+  actually ends a frame. Symptom: `--frames=10` ran for ever, because the cap is counted in frames.
+* **`while (osd_key_pressed(k));` cannot be seen from outside.** With osd.js, `osd_key_pressed` was a
+  JavaScript function and spin damping parked it. It is now MAME's own C reading `key[]` out of
+  memory: no call, no service, nothing to count, and the array would never change because only the
+  host writes it. The safepoint from the previous section is what breaks it — and that is not a
+  workaround. On a real DOS machine that array is written by a keyboard INTERRUPT, and a safepoint is
+  the only place this runtime can be interrupted at all. Enabled per program: the browser descriptor
+  carries `"safepoints": true`, Doom's does not.
+
+### Open: the audio-device prompt blocks headless
+
+Without `-nosound`, `osd_init` prints the SEAL device list and calls `scanf("%d",&i)`. Headless, that
+never returns an answer and the tool hangs; `tools/mame.mjs` therefore passes `-nosound -nojoy` by
+default, which are msdos.c's own switches and not a modification. In the browser it is not a problem
+— the console reads a real keystroke — but the headless path should answer rather than hang.

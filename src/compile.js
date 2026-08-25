@@ -9,7 +9,7 @@ import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
 import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
-import { osdBuiltins, installOSD } from './env/osd.js';
+import { allegroBuiltins } from './env/allegro.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
 import { installPorts } from './env/ports.js';
@@ -365,8 +365,11 @@ export const BUILTINS = new Map(Object.entries({
   memchr: { ret: P, params: [P, I, U] },
 }));
 
-// The MAME 0.1 platform backend's declarations, kept next to its implementation in src/env/osd.js.
-for (const [k, v] of Object.entries(osdBuiltins(T))) BUILTINS.set(k, v);
+/*
+ * Allegro, SEAL and the DJGPP memory helpers: the libraries MAME 0.1's OWN src/msdos/msdos.c links
+ * against. Kept next to their implementation in src/env/allegro.js.
+ */
+for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 
@@ -449,7 +452,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   return { M, F, src, mod, run: makeRunner(M, F, mod) };
 }
 
-export { installOSD };
+
 export { installConsole };
 export { installStdio };
 export { installQuake };
