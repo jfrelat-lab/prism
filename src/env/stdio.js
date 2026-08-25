@@ -288,6 +288,123 @@ export function installStdio(M, { files = {}, readChar = () => -1 } = {}) {
   api.write = (fd, src, n) => { api.fwrite(src, 1, n, fd); return n | 0; };
   api.read = (fd, dst, n) => api.fread(dst, 1, n, fd);
 
+  /*
+   * The POSIX layer, taken from SQLite's own syscall table rather than from imagination — its unix
+   * VFS lists every call it makes so it can swap them out under test, which makes it the best
+   * possible specification of what a host must provide. Doom's i_system.c wants a subset of the same.
+   *
+   * Everything rides on the one store, so a file written through stdio is visible through a
+   * descriptor and back.
+   */
+  const O_CREAT_F = 0x40, O_TRUNC_F = 0x200, O_APPEND_F = 0x400, O_WRONLY_F = 1, O_RDWR_F = 2;
+
+  // struct stat, as declared in PRISM's own sys/stat.h: fourteen 4-byte fields. These offsets and
+  // that header are one thing in two places; changing either without the other is a silent bug.
+  const ST_MODE = 8, ST_SIZE = 28, ST_BLKSIZE = 32, ST_BLOCKS = 36, ST_SIZE_BYTES = 56;
+  const S_IFREG = 0o100000;
+
+  function fillStat(st, bytes) {
+    M.u8.fill(0, st, st + ST_SIZE_BYTES);
+    const dv = M.mod.dv;
+    dv.setUint32(st + ST_MODE, S_IFREG | 0o644, true);
+    dv.setInt32(st + ST_SIZE, bytes ? bytes.length : 0, true);
+    dv.setInt32(st + ST_BLKSIZE, 4096, true);
+    dv.setInt32(st + ST_BLOCKS, bytes ? Math.ceil(bytes.length / 512) : 0, true);
+    return 0;
+  }
+
+  Object.assign(api, {
+    access: (namePtr) => (find(M.mod.cstr(namePtr)) === null ? -1 : 0),
+    getcwd: (buf, size) => {
+      if ((size | 0) < 2) return 0;
+      M.u8[buf] = 47; M.u8[buf + 1] = 0;             // "/"
+      return buf;
+    },
+    stat: (namePtr, st) => {
+      const k = find(M.mod.cstr(namePtr));
+      return k === null ? -1 : fillStat(st, store.get(k));
+    },
+    lstat: (namePtr, st) => api.stat(namePtr, st),
+    fstat: (fd, st) => { const h = fileOf(fd); return h ? fillStat(st, h.bytes) : -1; },
+
+    ftruncate: (fd, len) => {
+      const h = fileOf(fd);
+      if (!h) return -1;
+      const n = Math.max(0, len | 0);
+      const out = new Uint8Array(n);
+      out.set(h.bytes.subarray(0, Math.min(n, h.bytes.length)));
+      h.bytes = out;
+      store.set(h.key, out);
+      if (h.pos > n) h.pos = n;
+      return 0;
+    },
+
+    /*
+     * Locking is a no-op and says so. There is exactly one process inside the guest, so every lock
+     * succeeds — which is the truth here, not a shortcut: SQLite's locking exists to keep processes
+     * apart, and there are none to keep apart.
+     */
+    fcntl: () => 0,
+    fchmod: () => 0,
+    fchown: () => 0,
+    fallocate: () => 0,
+    geteuid: () => 0,
+    mkdir: () => 0,
+    rmdir: () => 0,
+    readlink: () => -1,
+    ioctl: () => -1,
+    getpagesize: () => 4096,
+    isatty: () => 0,
+    getpid: () => 1,
+    mprotect: () => 0,
+    msync: () => 0,
+    chmod: () => 0,
+    umask: () => 0,
+    usleep: () => 0,
+    sleep: () => 0,
+
+    pread: (fd, dst, n, off) => {
+      const h = fileOf(fd);
+      if (!h) return -1;
+      const start = Math.max(0, off | 0);
+      const got = Math.max(0, Math.min(n | 0, h.bytes.length - start));
+      M.u8.set(h.bytes.subarray(start, start + got), dst);
+      return got;
+    },
+    pwrite: (fd, src, n, off) => {
+      const h = fileOf(fd);
+      if (!h) return -1;
+      const start = Math.max(0, off | 0);
+      grow(h, start + (n | 0));
+      h.bytes.set(M.u8.slice(src, src + (n | 0)), start);
+      return n | 0;
+    },
+
+    /*
+     * mmap FAILS, deliberately. SQLite treats memory-mapped I/O as an optimisation and falls back to
+     * read/write when the mapping is refused — which is a supported configuration, and far safer than
+     * pretending a mapping is coherent with writes that go through a different path.
+     */
+    lseek: (fd, off, whence) => {
+      const h = fileOf(fd);
+      if (!h) return -1;
+      const base = whence === SEEK_CUR ? h.pos : whence === SEEK_END ? h.bytes.length : 0;
+      const p = base + (off | 0);
+      if (p < 0) return -1;
+      h.pos = p; h.eof = false;
+      return p;
+    },
+    fsync: () => 0,
+    fdatasync: () => 0,
+    sysconf: () => 4096,          // the only value asked for here is the page size
+    getenv: () => 0,              // no environment: a caller must handle NULL, and every one does
+    localtime: () => 0,          // no calendar here; a caller must handle NULL, and SQLite does
+
+    mmap: () => -1,
+    mremap: () => -1,
+    munmap: () => 0,
+  });
+
   Object.assign(M.rt, api);
   M.files = { store, find, norm };
 

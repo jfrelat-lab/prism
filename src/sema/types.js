@@ -83,7 +83,26 @@ export const withAlign = (t, n) => {
  */
 export const withExactAlign = (t, n) => (n && n !== t.align ? { ...t, align: n } : t);
 
-export const qualify = (t, cv) => (cv ? { ...t, cv: { ...(t.cv ?? {}), ...cv } } : t);
+/*
+ * Qualifying a RECORD returns the same object, because a record's identity is its tag and completion
+ * happens IN PLACE. Cloning it broke every mutually-referential pair that used a qualified pointer:
+ *
+ *     struct A { const struct B *p; };     // takes a reference to an incomplete B, and CLONES it
+ *     struct B { int v; };                 // completes the original -- the clone stays empty
+ *
+ * so `a->p->v` reported "'struct B' has no member 'v'". SQLite's sqlite3_file holds exactly that
+ * (`const struct sqlite3_io_methods *pMethods`), and the same shape is everywhere in real C.
+ *
+ * This is safe only because `cv` is recorded and never read — nothing in the compiler consults it
+ * today. When `volatile` starts to matter (it will, at tier-1), qualification has to move onto the
+ * DECLARATION rather than onto the shared type object; doing it there would have avoided this bug in
+ * the first place.
+ */
+export const qualify = (t, cv) => {
+  if (!cv) return t;
+  if (t.k === 'struct' || t.k === 'union') return t;
+  return { ...t, cv: { ...(t.cv ?? {}), ...cv } };
+};
 export const unqual = (t) => (t.cv ? { ...t, cv: undefined } : t);
 
 export const isInteger = (t) =>

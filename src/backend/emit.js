@@ -59,6 +59,36 @@ const JS_RESERVED = new Set([
 
 export const jsIdent = (n) => (JS_RESERVED.has(n) ? n + '$' : n);
 
+/*
+ * An index into a pointer, narrowed to the pointer's width.
+ *
+ * `p + n` is legal C when n is a `long long`, and the index has to come down to 32 bits before it can
+ * be scaled. Tier-0 keeps a 64-bit integer as a BigInt, so the usual `x|0` threw "Cannot mix BigInt
+ * and other types" — loudly, which is the point of the BigInt choice, and it surfaced only when
+ * SQLite indexed a buffer with an i64 length.
+ */
+function indexJs(v) {
+  return is64(T.decay(v.type ?? T.INT)) ? `Number(BigInt.asIntN(32,${v.js}))` : `${v.js}|0`;
+}
+
+
+/** Enough of an expression to find it in the source. A node kind alone is not a search term. */
+function describeExpr(e) {
+  if (!e || typeof e !== 'object') return String(e);
+  switch (e.n) {
+    case 'ident': return `identifier '${e.name}'`;
+    case 'call': return `a call to '${e.fn?.name ?? '?'}'`;
+    case 'bin': return `${describeExpr(e.a)} ${e.op} ${describeExpr(e.b)}`;
+    case 'unary': return `${e.op}${describeExpr(e.expr)}`;
+    case 'cast': return `a cast of ${describeExpr(e.expr)}`;
+    case 'member': return `${describeExpr(e.obj)}.${e.name}`;
+    case 'index': return `${describeExpr(e.arr)}[...]`;
+    case 'num': return String(e.value);
+    case 'cond': return 'a ?: expression';
+    default: return `'${e.n}'`;
+  }
+}
+
 export class EmitError extends Error {}
 
 
@@ -460,11 +490,14 @@ export class FunctionEmitter {
       if (this.#staticScalar(addr, type, init.expr)) return;
     }
     if (init.n === 'initlist') { this.#staticList(addr, type, init); return; }
-    unsup('a non-constant static initialiser');
+    unsup(`a non-constant static initialiser (${describeExpr(init.expr ?? init)})`);
   }
 
   /** One constant scalar, pointer or string into the image. Returns false if not constant. */
   #staticScalar(addr, type, expr) {
+    // `(unsigned char *)"..."` is still a string literal. Peeling casts first costs nothing and is
+    // what a program writes when it stores a literal into a typed pointer.
+    while (expr.n === 'cast' && expr.expr?.n === 'str') expr = expr.expr;
     if (expr.n === 'str') {
       const wideAll = expr.parts.some(pp => isWideLiteral(pp.v));
       const elem = wideAll ? 4 : 1;
@@ -518,6 +551,22 @@ export class FunctionEmitter {
         if (g && g.type.k === 'array') return g.addr;
         const f = this.ctx.funcs?.get(e.name);
         if (f) return f.addr;
+        /*
+         * The address of a LIBRARY function. PRISM's builtins are JavaScript in M.rt and have no
+         * address of their own, but a program is entitled to take one: SQLite's unix layer builds a
+         * table of syscall pointers — `{ "access", (sqlite3_syscall_ptr)access, 0 }` — so it can
+         * swap them out under test.
+         *
+         * Giving the builtin a function-table slot is all it takes; an indirect call then finds the
+         * runtime implementation the same way it finds a compiled one. Recorded here and bound after
+         * emission, when M.rt exists.
+         */
+        const b = this.ctx.builtins?.get(e.name);
+        if (b) {
+          const fn = this.mod.defineFunc(e.name, null);
+          (this.ctx.builtinRefs ??= new Set()).add(e.name);
+          return fn.addr;
+        }
         return null;
       }
       case 'bin': {
@@ -575,7 +624,7 @@ export class FunctionEmitter {
         if (it.designators) idx = it.designators[0].index ?? idx;
         if (it.value.n === 'initlist') this.#staticList(addr + idx * type.of.size, type.of, it.value);
         else if (!this.#staticScalar(addr + idx * type.of.size, type.of, it.value.expr)) {
-          unsup('a non-constant static initialiser');
+          unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)})`);
         }
         idx++;
       }
@@ -600,7 +649,7 @@ export class FunctionEmitter {
         } else if (it.value.n === 'initlist') {
           this.#staticList(addr + f.offset, f.type, it.value);
         } else if (!this.#staticScalar(addr + f.offset, f.type, it.value.expr)) {
-          unsup('a non-constant static initialiser');
+          unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)})`);
         }
         k = named.indexOf(f) + 1;
       }
@@ -780,7 +829,7 @@ export class FunctionEmitter {
         const bt = T.decay(b.type);
         if (bt.k !== 'ptr') throw new EmitError('subscripting a non-pointer');
         const es = bt.to.size ?? 1;
-        return { addr: `((${b.js})+Math.imul(${i.js}|0,${es})|0)`, type: bt.to };
+        return { addr: `((${b.js})+Math.imul(${indexJs(i)},${es})|0)`, type: bt.to };
       }
       case 'member': {
         let recAddr, rec;
@@ -835,6 +884,12 @@ export class FunctionEmitter {
         ? { js: `${e.type.signed ? BigInt.asIntN(64, e.value) : BigInt.asUintN(64, e.value)}n`, type: e.type }
         : { js: String(BigInt.asIntN(32, e.value)), type: e.type };
       case 'char': return { js: String(Number(e.value)), type: T.INT };
+      /*
+       * offsetof is a constant, and constEval already knows how to walk the member path — including
+       * through arrays and nested structs. It reached the emitter unhandled only because nothing had
+       * used it in an ordinary expression before; SQLite uses it in 38 functions.
+       */
+      case 'offsetof': return { js: String(constEval(e)), type: T.UINT };
       case 'float': return { js: e.type.name === 'float' ? `Math.fround(${e.value})` : String(e.value), type: e.type };
       // The element type comes from the literal, not from `char`: indexing `L"ab"` must read a
       // wchar_t. Hardcoding char here made `L"a" "b"[1]` read one byte (20010325-1.c).
@@ -943,11 +998,11 @@ export class FunctionEmitter {
     // Pointer arithmetic scales by the pointee, and p - q divides by it.
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
-      return { js: `((${a.js})${op}Math.imul(${b.js}|0,${s})|0)`, type: at };
+      return { js: `((${a.js})${op}Math.imul(${indexJs(b)},${s})|0)`, type: at };
     }
     if (bt.k === 'ptr' && T.isInteger(at) && op === '+') {
       const s = bt.to.size ?? 1;
-      return { js: `((${b.js})+Math.imul(${a.js}|0,${s})|0)`, type: bt };
+      return { js: `((${b.js})+Math.imul(${indexJs(a)},${s})|0)`, type: bt };
     }
     if (at.k === 'ptr' && bt.k === 'ptr' && op === '-') {
       const s = at.to.size ?? 1;
@@ -1065,7 +1120,7 @@ export class FunctionEmitter {
     const at = T.decay(a.type), bt = T.decay(b.type);
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
-      return { js: `((${a.js})${op}Math.imul(${b.js}|0,${s})|0)`, type: at };
+      return { js: `((${a.js})${op}Math.imul(${indexJs(b)},${s})|0)`, type: at };
     }
     if (op === '<<' || op === '>>') {
       const t = T.promote(at);
@@ -1438,7 +1493,9 @@ function evalConstNumber(e) {
       return castConst(v, e.type);
     }
     case 'bin': {
-      const a = evalConstNumber(e.a), b = evalConstNumber(e.b);
+      const a = evalConstNumber(e.a);
+      // `b` is deliberately not evaluated for && and || — see below.
+      const b = (e.op === '&&' || e.op === '||') ? 0 : evalConstNumber(e.b);
       // `1.0 / 32768.0` is NOT integer division. Folding it with `|0` made
       // `double d = 1024.0 - 1.0/32768.0;` equal 1024.0 exactly, which is what gcc's float-floor.c
       // catches. The node's own type decides, not the shape of the operands.
@@ -1449,9 +1506,29 @@ function evalConstNumber(e) {
         case '%': return a % b;
         case '<<': return a << b; case '>>': return a >> b;
         case '&': return a & b; case '|': return a | b; case '^': return a ^ b;
+        /*
+         * Comparisons and the logical operators are constant expressions in C, and leaving them out
+         * meant a static initialised with something as ordinary as `0 == 1` was refused. SQLite's
+         * amalgamation has one; so, it turns out, do a number of the torture programs.
+         */
+        case '==': return a === b ? 1 : 0;
+        case '!=': return a !== b ? 1 : 0;
+        case '<': return a < b ? 1 : 0;
+        case '>': return a > b ? 1 : 0;
+        case '<=': return a <= b ? 1 : 0;
+        case '>=': return a >= b ? 1 : 0;
+        // Short-circuit for real: the unevaluated side may not be constant at all, and C does not
+        // require it to be.
+        case '&&': return a !== 0 && evalConstNumber(e.b) !== 0 ? 1 : 0;
+        case '||': return a !== 0 || evalConstNumber(e.b) !== 0 ? 1 : 0;
       }
       break;
     }
+    // Also short-circuiting: only the taken branch has to be a constant.
+    case 'cond':
+      return evalConstNumber(e.cond) !== 0
+        ? evalConstNumber(e.then ?? e.cond)
+        : evalConstNumber(e.els);
     case 'sizeoftype': return e.target.size;
     case 'sizeofexpr': return e.expr.type?.size ?? 0;
   }

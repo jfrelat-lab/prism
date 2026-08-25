@@ -106,7 +106,9 @@ console.log(`reference: ${ref.length} lines`);
 function resolver(name) {
   const full = join(work, basename(name));
   if (existsSync(full)) return { path: full, text: readFileSync(full, 'latin1') };
-  const std = HEADERS[basename(name)];
+  // The FULL name first: `sys/types.h` is its own key, and reducing to a basename looks up
+  // `types.h`, misses, and stubs a header that is right there.
+  const std = HEADERS[name] ?? HEADERS[basename(name)];
   return std === undefined ? null : { path: `<${name}>`, text: std };
 }
 

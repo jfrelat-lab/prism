@@ -84,6 +84,10 @@ export const TARGET_DEFINES = {
   __DATE__: '"Jan  1 1996"',
   __TIME__: '"00:00:00"',
 
+  // gcc predefines the memory-order constants alongside the __atomic builtins.
+  __ATOMIC_RELAXED: '0', __ATOMIC_CONSUME: '1', __ATOMIC_ACQUIRE: '2',
+  __ATOMIC_RELEASE: '3', __ATOMIC_ACQ_REL: '4', __ATOMIC_SEQ_CST: '5',
+
   __PRISM__: '1',
 };
 
@@ -138,6 +142,69 @@ export const BUILTINS = new Map(Object.entries({
 
   rand: { ret: I, params: [] },
   srand: { ret: V, params: [U] },
+  isalnum: { ret: I, params: [I] },
+  isalpha: { ret: I, params: [I] },
+  iscntrl: { ret: I, params: [I] },
+  isdigit: { ret: I, params: [I] },
+  isgraph: { ret: I, params: [I] },
+  islower: { ret: I, params: [I] },
+  isprint: { ret: I, params: [I] },
+  ispunct: { ret: I, params: [I] },
+  isspace: { ret: I, params: [I] },
+  isupper: { ret: I, params: [I] },
+  isxdigit: { ret: I, params: [I] },
+  tolower: { ret: I, params: [I] },
+  toupper: { ret: I, params: [I] },
+  // POSIX, taken from SQLite's own syscall table (its unix VFS lists every call it makes) and from
+  // Doom's i_system.c. See src/env/stdio.js — they all ride on the one file store.
+  access: { ret: I, params: [P, I] },
+  getcwd: { ret: P, params: [P, U] },
+  stat: { ret: I, params: [P, P] },
+  lstat: { ret: I, params: [P, P] },
+  fstat: { ret: I, params: [I, P] },
+  ftruncate: { ret: I, params: [I, I] },
+  fcntl: { ret: I, params: [I, I], variadic: true },
+  pread: { ret: I, params: [I, P, U, I] },
+  pwrite: { ret: I, params: [I, P, U, I] },
+  fchmod: { ret: I, params: [I, U] },
+  fchown: { ret: I, params: [I, U, U] },
+  fallocate: { ret: I, params: [I, I, I, I] },
+  mkdir: { ret: I, params: [P, U] },
+  rmdir: { ret: I, params: [P] },
+  geteuid: { ret: I, params: [] },
+  getpid: { ret: I, params: [] },
+  getpagesize: { ret: I, params: [] },
+  readlink: { ret: I, params: [P, P, U] },
+  ioctl: { ret: I, params: [I, U], variadic: true },
+  usleep: { ret: I, params: [U] },
+  sleep: { ret: U, params: [U] },
+  isatty: { ret: I, params: [I] },
+  mmap: { ret: P, params: [P, U, I, I, I, I] },
+  mremap: { ret: P, params: [P, U, U, I] },
+  munmap: { ret: I, params: [P, U] },
+  mprotect: { ret: I, params: [P, U, I] },
+  msync: { ret: I, params: [P, U, I] },
+  chmod: { ret: I, params: [P, U] },
+  umask: { ret: U, params: [U] },
+  fsync: { ret: I, params: [I] },
+  fdatasync: { ret: I, params: [I] },
+  sysconf: { ret: I, params: [I] },
+  getenv: { ret: P, params: [P] },
+  __builtin_clzll: { ret: I, params: [T.LLONG ?? U] },
+  __builtin_clz: { ret: I, params: [U] },
+  __builtin_ctz: { ret: I, params: [U] },
+  utimes: { ret: I, params: [P, P] },
+  gmtime: { ret: P, params: [P] },
+  nanosleep: { ret: I, params: [P, P] },
+  __builtin_bswap16: { ret: U, params: [U] },
+  __builtin_bswap32: { ret: U, params: [U] },
+  __atomic_load_n: { ret: I, params: [P, I] },
+  __atomic_store_n: { ret: V, params: [P, I, I] },
+  __atomic_fetch_add: { ret: I, params: [P, I, I] },
+  strspn: { ret: U, params: [P, P] },
+  strcspn: { ret: U, params: [P, P] },
+  lseek: { ret: I, params: [I, I, I] },
+  localtime: { ret: P, params: [P] },
   atof: { ret: D, params: [P] },
   atol: { ret: I, params: [P] },
   open: { ret: I, params: [P, I], variadic: true },
@@ -291,6 +358,12 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   const F = Object.create(null);
   factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
+  // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,
+  // so a call through the pointer lands where a direct call would.
+  for (const name of ctx.builtinRefs ?? []) {
+    const impl = M.rt[BUILTINS.get(name)?.impl ?? name];
+    if (typeof impl === 'function') mod.bindFunc(name, impl);
+  }
 
   installStdio(M);
   installPIT(installPorts(M), M);
@@ -366,8 +439,12 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
 
   // Pass 2: emit, with each unit's statics shadowing the shared names.
   const pieces = [], emitted = [];
+  // Shared across units: a builtin whose address is taken in ONE unit still needs binding once.
+  const builtinRefs = new Set();
+
   for (const p of parsed) {
     const ctx = {
+      builtinRefs,
       globals: overlay(sharedGlobals, p.globals),
       funcs: overlay(sharedFuncs, p.funcs),
       builtins: BUILTINS,
@@ -408,6 +485,12 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   const F = Object.create(null);
   factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
+  // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,
+  // so a call through the pointer lands where a direct call would.
+  for (const name of builtinRefs) {
+    const impl = M.rt[BUILTINS.get(name)?.impl ?? name];
+    if (typeof impl === 'function') mod.bindFunc(name, impl);
+  }
 
   // After emission, because it fills in the program's own `stdin`/`stdout`/`stderr` globals and those
   // addresses do not exist until the units have been linked.

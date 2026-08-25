@@ -1132,7 +1132,14 @@ function ce(e) {
     }
     case 'comma': throw new ConstError('comma is not allowed in a constant expression');
   }
-  throw new ConstError(`'${e.n}' is not a constant expression`);
+  // Name the thing, not just its node kind. "'ident' is not a constant expression" gave nothing to
+  // search for in a 270,000-line amalgamation; the identifier's own name points straight at it.
+  const what = e.n === 'ident' ? `identifier '${e.name}'`
+    : e.n === 'call' ? `a call to '${e.fn?.name ?? '?'}'`
+    : e.n === 'bin' ? `the operator '${e.op}'`
+    : e.n === 'unary' ? `the operator '${e.op}'`
+    : `'${e.n}'`;
+  throw new ConstError(`${what} is not a constant expression`);
 }
 
 /** Parse a whole translation unit from preprocessed tokens. */

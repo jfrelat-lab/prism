@@ -912,3 +912,28 @@ Three things worth keeping from this:
    shadow stack overflowed, and the failure would have looked like anything at all.
 3. **An invariant is worth more than a test.** "sp out == sp in" is checkable over every function in a
    real program, and it turned a mystery into a name in one run. `--audit-sp` stays in the tool.
+
+### What SQLite found that two games and 1775 corpus programs did not
+
+SQLite is 269,650 lines in one translation unit, with no platform layer and no data files. It was
+picked as a COMPILER test rather than a host test, and it earned that in one session — every item
+below is a defect it exposed, ranked by how it was found rather than by size:
+
+| Defect | Why nothing else caught it |
+|---|---|
+| **`const` on a pointer to an incomplete tag** broke the tag's later completion. `qualify()` cloned the record, so `struct A { const struct B *p; }; struct B { int v; };` left the clone empty for ever and `a->p->v` reported "no member". | MAME's mutually-referential pair had no `const`. The fix from that bug — complete the existing tag rather than replacing it — was correct and insufficient. |
+| **Comparisons and `?:` did not fold in static initialisers.** A static initialised with `0 == 1` was refused outright. | Both corpora have such programs, but they were already refused for other reasons; this one was masked. |
+| **Pointer arithmetic with a 64-bit index** emitted `Math.imul(x\|0, 1)` on a BigInt. | The BigInt representation is deliberately loud, and it was: "Cannot mix BigInt and other types". Nothing else indexed a buffer with a `long long`. |
+| **The address of a library function** had no address to take. SQLite's unix layer builds a table of syscall pointers so it can swap them under test. | Programs call libc; they rarely take its address. |
+| **`offsetof` in an ordinary expression** — the constant folder knew it, the emitter did not. | 38 SQLite functions use it; neither game does. |
+
+Two diagnostics were improved because a message named a node kind rather than a thing: `'ident' is not
+a constant expression` became `identifier 'EAGAIN' is not…`, and a refused static initialiser now
+describes the expression it refused. In a 270,000-line file, a node kind is not a search term.
+
+And one harness bug that had been sitting in four tools: a header resolver that reduced `sys/types.h`
+to `types.h` before consulting the table, stubbing a header that was right there. It surfaced as a
+parse error inside the stub, twenty lines from its cause.
+
+Net effect on the external corpora, from work that was aimed at SQLite alone:
+**c-testsuite 196 → 197, gcc.c-torture 1243 → 1255, still zero wrong answers.**

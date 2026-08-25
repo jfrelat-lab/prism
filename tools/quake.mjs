@@ -56,7 +56,9 @@ function resolver(name, angled, fromFile) {
   if (existsSync(local) && statSync(local).isFile()) {
     return { path: local, text: readFileSync(local, 'latin1') };
   }
-  const std = HEADERS[basename(name)];
+  // The FULL name first: `sys/types.h` is its own key, and reducing to a basename looks up
+  // `types.h`, misses, and stubs a header that is right there.
+  const std = HEADERS[name] ?? HEADERS[basename(name)];
   if (std !== undefined) return { path: `<${name}>`, text: std };
   // Diagnostic: stub and record, so one run reports every absent header instead of dying on the
   // first. Printed, never silent.

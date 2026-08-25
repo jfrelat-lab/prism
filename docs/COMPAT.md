@@ -5,11 +5,12 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 196/219 c-testsuite, 1243/1556 gcc torture |
+| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 197/219 c-testsuite, 1255/1556 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. |
 | **Quake** (`WinQuake/`, `id386=0`) | ✅ **RENDERS** — 69 units, 44,570 lines, **every function emits**, 1.72 MB of JavaScript. Loads `id1/pak0.pak`, runs its demos, and draws the game at 320x200 in the browser at ~26 fps. Game data is supplied by the user, never fetched. Sound and networking are Quake's own null drivers. |
+| **SQLite 3.53.4** (amalgamation) | 🟡 **COMPILES, OPENS A DATABASE** — 269,650 lines in ONE translation unit, **2542 functions**, 5.7 MB of emitted JavaScript in **1.5 s** (~180,000 lines/second). Reaches `sqlite3_exec` and stops inside the SQL parser: 3 of 2542 functions do not emit, and one of them is lemon's `yy_reduce`. No platform layer and no data files — where MAME and Quake test whether PRISM can HOST a program, this tests whether it can COMPILE one. |
 | Doom (`linuxdoom-1.10`) | ⛔ P4 |
 
 ### MAME 0.1, driver by driver

@@ -188,7 +188,7 @@ let nativeMs = 0, nativeOut = '(not run)';
 function resolver(name) {
   const full = join(work, name.replace(/^.*\//, ''));
   if (existsSync(full)) return { path: full, text: readFileSync(full, 'latin1') };
-  const std = HEADERS[name.replace(/^.*\//, '')];
+  const std = HEADERS[name] ?? HEADERS[name.replace(/^.*\//, '')];
   return std === undefined ? null : { path: `<${name}>`, text: std };
 }
 

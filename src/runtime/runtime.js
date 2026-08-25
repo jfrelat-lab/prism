@@ -198,6 +198,72 @@ function makeLibc(M) {
     rand: () => { M.randState = (Math.imul(M.randState, 1103515245) + 12345) | 0; return (M.randState >>> 16) & 0x7fff; },
     srand: (seed) => { M.randState = seed | 0; },
 
+    // ctype, C locale. EOF (-1) must answer false everywhere except tolower/toupper, which pass it
+    // through -- a program looping on getchar() relies on exactly that.
+    isalnum: (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ? 1 : 0,
+    isalpha: (c) => (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ? 1 : 0,
+    iscntrl: (c) => (c >= 0 && c < 32) || c === 127 ? 1 : 0,
+    isdigit: (c) => (c >= 48 && c <= 57) ? 1 : 0,
+    isgraph: (c) => (c > 32 && c < 127) ? 1 : 0,
+    islower: (c) => (c >= 97 && c <= 122) ? 1 : 0,
+    isprint: (c) => (c >= 32 && c < 127) ? 1 : 0,
+    ispunct: (c) => (c > 32 && c < 127 &&
+      !((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122))) ? 1 : 0,
+    isspace: (c) => c === 32 || (c >= 9 && c <= 13) ? 1 : 0,
+    isupper: (c) => (c >= 65 && c <= 90) ? 1 : 0,
+    isxdigit: (c) => (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102) ? 1 : 0,
+    tolower: (c) => (c >= 65 && c <= 90) ? c + 32 : c,
+    toupper: (c) => (c >= 97 && c <= 122) ? c - 32 : c,
+
+    /*
+     * gcc's byte-swap builtins. Real code reaches for them instead of writing the shifts, and SQLite
+     * does it in the hot path of every page read.
+     */
+    // Count leading zeros of a 64-bit value. Undefined for zero in C, and SQLite never passes zero.
+    __builtin_clzll: (v) => {
+      let x = BigInt.asUintN(64, typeof v === 'bigint' ? v : BigInt(v | 0));
+      if (x === 0n) return 64;
+      let n = 0;
+      while (x < 0x8000000000000000n) { x <<= 1n; n++; }
+      return n;
+    },
+    __builtin_clz: (v) => (v >>> 0) === 0 ? 32 : Math.clz32(v >>> 0),
+    __builtin_ctz: (v) => { const u = v >>> 0; if (!u) return 32; let n = 0; let x = u; while (!(x & 1)) { x >>>= 1; n++; } return n; },
+    utimes: () => 0,
+    gmtime: () => 0,
+    nanosleep: () => 0,
+
+    __builtin_bswap16: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,
+    __builtin_bswap32: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) |
+                               ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) | 0,
+
+    /*
+     * The atomics are PLAIN loads and stores here, and that is not a shortcut: the guest is one
+     * thread on one core, so there is nothing to order against. If PRISM ever runs guest code on
+     * more than one thread, these become wrong and must be revisited — recorded here rather than
+     * discovered then.
+     */
+    __atomic_load_n: (p, _order) => M.mod.dv.getInt32(p, true),
+    __atomic_store_n: (p, v, _order) => { M.mod.dv.setInt32(p, v | 0, true); },
+    __atomic_fetch_add: (p, v) => {
+      const old = M.mod.dv.getInt32(p, true);
+      M.mod.dv.setInt32(p, (old + (v | 0)) | 0, true);
+      return old;
+    },
+
+    strspn: (sPtr, acceptPtr) => {
+      const accept = new Set([...M.mod.cstr(acceptPtr)].map(c => c.charCodeAt(0)));
+      let n = 0;
+      while (M.u8[sPtr + n] && accept.has(M.u8[sPtr + n])) n++;
+      return n;
+    },
+    strcspn: (sPtr, rejectPtr) => {
+      const reject = new Set([...M.mod.cstr(rejectPtr)].map(c => c.charCodeAt(0)));
+      let n = 0;
+      while (M.u8[sPtr + n] && !reject.has(M.u8[sPtr + n])) n++;
+      return n;
+    },
+
     atof: (p) => { const v = parseFloat(M.mod.cstr(p)); return Number.isNaN(v) ? 0 : v; },
     atol: (p) => { const v = parseInt(M.mod.cstr(p), 10); return Number.isNaN(v) ? 0 : v | 0; },
 

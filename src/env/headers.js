@@ -29,6 +29,11 @@ extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 #define EOF (-1)
+#define BUFSIZ 8192
+#define FILENAME_MAX 4096
+#define FOPEN_MAX 64
+#define L_tmpnam 20
+#define TMP_MAX 238328
 int printf(const char *fmt, ...);
 int fprintf(FILE *stream, const char *fmt, ...);
 int sprintf(char *dst, const char *fmt, ...);
@@ -69,6 +74,8 @@ int scanf(const char *fmt, ...);
 `;
 
 const STDLIB = `
+char *getenv(const char *name);
+
 double atof(const char *s);
 long atol(const char *s);
 
@@ -109,6 +116,10 @@ int memcmp(const void *a, const void *b, size_t n);
 `;
 
 const MATH = `
+#define INFINITY (1.0e308 * 10.0)
+#define NAN (INFINITY - INFINITY)
+#define HUGE_VAL INFINITY
+
 #ifndef _PRISM_MATH_H
 #define _PRISM_MATH_H
 double sqrt(double x);
@@ -130,6 +141,9 @@ double fmod(double x, double y);
 
 // The i386 values, which is the whole reason this file cannot borrow the host's limits.h.
 const LIMITS = `
+#define PATH_MAX 4096
+#define NAME_MAX 255
+
 #ifndef _PRISM_LIMITS_H
 #define _PRISM_LIMITS_H
 #define CHAR_BIT 8
@@ -164,6 +178,11 @@ int printf(const char *fmt, ...);
 `;
 
 const STDINT = `
+#define INT64_C(v)  v ## LL
+#define UINT64_C(v) v ## ULL
+#define INT32_C(v)  v
+#define UINT32_C(v) v ## U
+
 #ifndef _PRISM_STDINT_H
 #define _PRISM_STDINT_H
 typedef signed char int8_t;
@@ -243,6 +262,17 @@ char *__prism_va_next(va_list *ap, unsigned size);
 `;
 
 const TIMEH = `
+struct tm {
+    int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst;
+};
+struct timespec { long tv_sec; long tv_nsec; };
+struct timeval  { long tv_sec; long tv_usec; };
+struct tm *localtime(const long *t);
+struct tm *gmtime(const long *t);
+int gettimeofday(struct timeval *tv, void *tz);
+int nanosleep(const struct timespec *req, struct timespec *rem);
+int utimes(const char *path, const struct timeval *times);
+
 #ifndef _PRISM_TIME_H
 #define _PRISM_TIME_H
 typedef unsigned long clock_t;
@@ -292,10 +322,52 @@ const ERRNO = `
  * backtick inside one ends it -- a trap this file has sprung twice now.)
  */
 int errno;
-#define ENOENT 2
-#define EACCES 13
-#define EEXIST 17
-#define EINVAL 22
+/*
+ * Linux/i386 numbering, because that is the ABI PRISM targets. Only the values a program is likely to
+ * NAME are here -- SQLite switches on EAGAIN and EINTR, and an undefined one reaches the parser as a
+ * bare identifier rather than as a number.
+ */
+#define EPERM   1
+#define ENOENT  2
+#define ESRCH   3
+#define EINTR   4
+#define EIO     5
+#define ENXIO   6
+#define E2BIG   7
+#define EBADF   9
+#define ECHILD  10
+#define EAGAIN  11
+#define EWOULDBLOCK EAGAIN
+#define ENOMEM  12
+#define EACCES  13
+#define EFAULT  14
+#define EBUSY   16
+#define EEXIST  17
+#define EXDEV   18
+#define ENODEV  19
+#define ENOTDIR 20
+#define EISDIR  21
+#define EINVAL  22
+#define ENFILE  23
+#define EMFILE  24
+#define ENOTTY  25
+#define ETXTBSY 26
+#define EFBIG   27
+#define ENOSPC  28
+#define ESPIPE  29
+#define EROFS   30
+#define EMLINK  31
+#define EPIPE   32
+#define EDOM    33
+#define ERANGE  34
+#define EDEADLK 35
+#define ENAMETOOLONG 36
+#define ENOLCK  37
+#define ENOSYS  38
+#define ENOTEMPTY 39
+#define ELOOP   40
+#define EOVERFLOW 75
+#define ETIMEDOUT 110
 #endif
 `;
 
@@ -309,7 +381,23 @@ const FCNTL = `
 #define O_TRUNC  0x200
 #define O_APPEND 0x400
 #define O_BINARY 0
+#define O_EXCL   0x80
+#define O_NOFOLLOW 0x20000
+#define O_NONBLOCK 0x800
+#define O_ACCMODE 3
 int open(const char *name, int flags, ...);
+int fcntl(int fd, int cmd, ...);
+#define F_GETFD 1
+#define F_SETFD 2
+#define F_GETFL 3
+#define F_SETFL 4
+#define F_SETLK 6
+#define F_SETLKW 7
+#define F_GETLK 5
+#define F_RDLCK 0
+#define F_WRLCK 1
+#define F_UNLCK 2
+struct flock { short l_type; short l_whence; long l_start; long l_len; int l_pid; };
 #endif
 `;
 
@@ -317,10 +405,35 @@ const UNISTD = `
 #ifndef _PRISM_UNISTD_H
 #define _PRISM_UNISTD_H
 #include <stddef.h>
+#include <sys/types.h>
 int close(int fd);
-int read(int fd, void *dst, size_t n);
-int write(int fd, const void *src, size_t n);
+ssize_t read(int fd, void *dst, size_t n);
+ssize_t write(int fd, const void *src, size_t n);
+ssize_t pread(int fd, void *dst, size_t n, off_t off);
+ssize_t pwrite(int fd, const void *src, size_t n, off_t off);
 int unlink(const char *name);
+int access(const char *path, int mode);
+char *getcwd(char *buf, size_t size);
+int ftruncate(int fd, off_t len);
+int fchmod(int fd, mode_t mode);
+int fchown(int fd, uid_t owner, gid_t group);
+int rmdir(const char *path);
+int geteuid(void);
+int getpid(void);
+int getpagesize(void);
+int readlink(const char *path, char *buf, size_t n);
+int usleep(unsigned int usec);
+unsigned int sleep(unsigned int seconds);
+int isatty(int fd);
+int fsync(int fd);
+int fdatasync(int fd);
+long sysconf(int name);
+#define _SC_PAGESIZE 30
+#define _SC_PAGE_SIZE 30
+#define F_OK 0
+#define X_OK 1
+#define W_OK 2
+#define R_OK 4
 #endif
 `;
 
@@ -345,12 +458,134 @@ int outp(int port, int value);
 #endif
 `;
 
+const CTYPE = `
+#ifndef _PRISM_CTYPE_H
+#define _PRISM_CTYPE_H
+/*
+ * The C locale, and only the C locale. Every one of these is a pure function of a byte value, so
+ * they are declared here and implemented in the runtime rather than as the lookup-table macros a
+ * real libc uses -- a table would have to live in guest memory for a program that takes their
+ * address, and nothing does.
+ */
+int isalnum(int c);
+int isalpha(int c);
+int iscntrl(int c);
+int isdigit(int c);
+int isgraph(int c);
+int islower(int c);
+int isprint(int c);
+int ispunct(int c);
+int isspace(int c);
+int isupper(int c);
+int isxdigit(int c);
+int tolower(int c);
+int toupper(int c);
+#endif
+`;
+
+const SYS_TYPES = `
+#ifndef _PRISM_SYS_TYPES_H
+#define _PRISM_SYS_TYPES_H
+#include <stddef.h>
+/*
+ * i386 System V widths. off_t is 32-bit here rather than the 64-bit largefile variant, because that
+ * is what a 1990s i386 build saw and PRISM targets that ABI; a program wanting large files would
+ * define _FILE_OFFSET_BITS and get a different type from a real libc, which is a decision to make
+ * when a program actually asks for it.
+ */
+typedef int pid_t;
+typedef long off_t;
+typedef long ssize_t;
+typedef unsigned int mode_t;
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+typedef unsigned long dev_t;
+typedef unsigned long ino_t;
+typedef unsigned int nlink_t;
+typedef long blksize_t;
+typedef long blkcnt_t;
+typedef long time_t;
+typedef unsigned int useconds_t;
+#endif
+`;
+
+const SYS_STAT = `
+#ifndef _PRISM_SYS_STAT_H
+#define _PRISM_SYS_STAT_H
+#include <sys/types.h>
+struct stat {
+    dev_t     st_dev;
+    ino_t     st_ino;
+    mode_t    st_mode;
+    nlink_t   st_nlink;
+    uid_t     st_uid;
+    gid_t     st_gid;
+    dev_t     st_rdev;
+    off_t     st_size;
+    blksize_t st_blksize;
+    blkcnt_t  st_blocks;
+    time_t    st_atime;
+    time_t    st_mtime;
+    time_t    st_ctime;
+};
+#define S_IFMT   0170000
+#define S_IFREG  0100000
+#define S_IFDIR  0040000
+#define S_IFCHR  0020000
+#define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
+#define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+#define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
+#define S_IFLNK  0120000
+#define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
+#define S_IRUSR 0400
+#define S_IWUSR 0200
+#define S_IXUSR 0100
+#define S_IRWXU 0700
+int stat(const char *path, struct stat *st);
+int fstat(int fd, struct stat *st);
+int lstat(const char *path, struct stat *st);
+int mkdir(const char *path, mode_t mode);
+int chmod(const char *path, mode_t mode);
+mode_t umask(mode_t mask);
+#endif
+`;
+
+const SYS_MMAN = `
+#ifndef _PRISM_SYS_MMAN_H
+#define _PRISM_SYS_MMAN_H
+#include <sys/types.h>
+#define PROT_NONE  0
+#define PROT_READ  1
+#define PROT_WRITE 2
+#define PROT_EXEC  4
+#define MAP_SHARED  1
+#define MAP_PRIVATE 2
+#define MAP_ANONYMOUS 0x20
+#define MAP_FAILED ((void *) -1)
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off);
+int munmap(void *addr, size_t len);
+int mprotect(void *addr, size_t len, int prot);
+int msync(void *addr, size_t len, int flags);
+#endif
+`;
+
+const SYS_IOCTL = `
+#ifndef _PRISM_SYS_IOCTL_H
+#define _PRISM_SYS_IOCTL_H
+int ioctl(int fd, unsigned long request, ...);
+#endif
+`;
+
 export const HEADERS = {
+  'ctype.h': CTYPE,
+  'sys/types.h': SYS_TYPES,
+  'sys/stat.h': SYS_STAT,
+  'sys/mman.h': SYS_MMAN,
+  'sys/ioctl.h': SYS_IOCTL,
   'pc.h': PCH,
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,
-  'sys/types.h': '',
   'setjmp.h': SETJMP,
   'time.h': TIMEH,
   'stdarg.h': STDARG,
