@@ -978,24 +978,84 @@ reading the emitted JavaScript, where `M.icall(_v_V_MarkRect, ...)` sits two lin
 Still open: starting a real level (`-warp 1 1`) now gets further and then loops in pure guest C, where
 the runtime-call profiler is blind by construction — no runtime calls, nothing to count.
 
-### Open: Doom stalls after ~25 frames of a real level
+### Safepoints: making a loop in pure guest C observable
 
-`-warp 1 1` starts E1M1 for real — `gamestate = GS_LEVEL`, `autostart = 1`, the renderer runs — and
-produces frames 5, 10, 15, 20, 25 all inside a tenth of a second, then stops. **Stalled, not slow**,
-which took a per-frame progress line to establish; a final report cannot tell the two apart, and I
-spent several rounds assuming "slow" from a timeout that was really a stall.
+Doom started E1M1 for real — `gamestate = GS_LEVEL`, the renderer running — produced frames 5, 10,
+15, 20, 25 all inside a tenth of a second, and then stopped. **Stalled, not slow**, which took a
+per-frame progress line to establish; a final report cannot tell those apart, and several rounds went
+by on an unmeasured "Doom is slow".
 
-Two false trails worth recording, because both were mine:
+Two false trails, both mine, kept because they are the shape of the mistake rather than its detail:
 
-* **"It must be the BigInt fixed-point maths."** Doom's `FixedMul` is `((long long)a * (long long)b)
-  >> 16`, and `long long` is a BigInt in tier-0, so this looked obvious. Measured: FixedMul, FixedDiv
-  and FixedDiv2 together are **45% of a 1 ms frame** — a few thousand calls, not millions. The
-  hypothesis was reasonable and simply wrong, and the only reason I believed it was an unmeasured
-  "Doom is slow".
-* **A Heisenbug.** Wrapping every function-table entry with a counter makes 40 frames complete;
-  without it, 40 frames never arrive. Rebinding the same entries WITHOUT wrapping does not help, so it
-  is not a stale binding. Unexplained, and recorded rather than guessed at.
+* **"It must be the BigInt fixed-point maths."** `FixedMul` is `((long long)a * (long long)b) >> 16`
+  and `long long` is a BigInt in tier-0, so this looked obvious. Measured: the three primitives are
+  **45% of a 1 ms frame** — thousands of calls, not millions.
+* **A Heisenbug.** Wrapping every function-table entry with a counter made 40 frames complete;
+  without it they never arrived. Rebinding the same entries without wrapping changed nothing.
 
-The instrument that will settle it does not exist yet: a loop in pure guest C is invisible to both
-profilers here, because one counts runtime services and the other counts cross-unit calls, and a
-stalled program is making neither.
+What was missing was not an idea but an **instrument**. Two profilers existed — one counting runtime
+services, one counting cross-unit calls — and a program spinning inside one C function is making
+neither kind of call, so both see a program doing nothing at all. The only place the host can regain
+control is the loop itself, which is what MIRAGE concluded when it studied the same problem: a
+safepoint **in** the emitted code, not a re-translation.
+
+`compileProgram(units, { safepoints: true })` emits, on every loop back edge,
+
+    if(--M.spBudget<0)M.sp_(ID);
+
+where ID indexes `mod.safepoints`, a table naming the function and the loop. The default handler just
+refills the budget. A harness replaces `M.sp_` to sample. It is off by default and it is not free —
+a decrement and a compare per iteration of every loop — and the same mechanism is what would let a
+Stop button interrupt a `while (1);` in the browser, which nothing can do today.
+
+It named the culprit on the first run:
+
+          7781820000 iterations  wipe_doMelt#72        <- the `for (i=0;i<width;i++)`
+            48640000 iterations  wipe_doMelt#73        <- the `while (ticks--)`
+              600000 iterations  R_InitTextureMapping#353
+
+The ratio between the two hot entries is exactly 160, which is `width/2` — one outer tick per 160
+inner iterations, and the outer loop running 48 million times for a `ticks` that should be 1. Doom's
+melting screen wipe, which is also what the eye had already reported as "un blink bizarre".
+
+### The zero that was not a date
+
+Reading `y[]` out of guest memory from **inside** the stalled loop — via the safepoint handler, so
+that nothing hot is wrapped and the Heisenbug is not disturbed — showed all 160 columns at 200, the
+screen height. The melt was **finished**. It was `while (ticks--)` on a negative `ticks`, counting
+down through the whole `int` range.
+
+`ticks` comes from `tics = nowtime - wipestart` in `D_Display`, off `I_GetTime`:
+
+    static int basetime = 0;
+    gettimeofday(&tp, &tzp);
+    if (!basetime) basetime = tp.tv_sec;
+    newtics = (tp.tv_sec-basetime)*TICRATE + tp.tv_usec*TICRATE/1000000;
+
+PRISM's deterministic `gettimeofday` started at **zero**. So `tv_sec` was 0 for the first 35 calls,
+`if (!basetime)` never fired, and on the 36th call `basetime` finally took a value — at which point
+`I_GetTime` jumped **backwards** by 35 tics. One negative subtraction later, four billion iterations.
+
+The fix is one constant: a `struct timeval` counts from 1970, so `tv_sec` is large on the very first
+call a program ever makes, and programs rely on that without saying so. `EPOCH_US` now sets the
+origin to 1997-02-05 for both the deterministic clock and `installRealClock`. Deterministic, so every
+gate gets the same answer as before; nonzero, so the guard fires when a real system would fire it.
+
+The general lesson, and the reason this is in TESTING rather than in a commit message: **a plausible
+default is not a faithful one.** Zero is the obvious starting value for a counter and the wrong one
+for a clock, and nothing short of a program that reads the clock would ever have shown it.
+
+Doom now runs E1M1 at 260 frames of about 1 ms each, `gametic` 1096, status bar and all.
+
+### Looking at the emitted JavaScript
+
+The claim that the emitted code is readable is only worth something if it is easy to check:
+
+```
+node tools/dump.mjs file.c                 the whole unit
+node tools/dump.mjs file.c --fn=main       one function
+node tools/dump.mjs file.c --safepoints    with the loop back-edge checks
+node tools/doom.mjs --fn=R_DrawColumn      one function out of a 62-unit program
+```
+
+For a real program the per-function view is the usable one: Doom is 1.11 MB of JavaScript.

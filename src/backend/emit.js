@@ -708,12 +708,14 @@ export class FunctionEmitter {
       case 'while': {
         this.out.push(`while(${this.#truth(s.cond)}){`);
         this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
+        if (this.ctx.safepoints) this.out.push(this.#safepoint());
         this.out.push('}');
         return;
       }
       case 'do': {
         this.out.push('do{');
         this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
+        if (this.ctx.safepoints) this.out.push(this.#safepoint());
         this.out.push(`}while(${this.#truth(s.cond)});`);
         return;
       }
@@ -725,6 +727,7 @@ export class FunctionEmitter {
         const step = s.step ? this.#rval(s.step).js : '';
         this.out.push(`for(;${cond};${step}){`);
         this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
+        if (this.ctx.safepoints) this.out.push(this.#safepoint());
         this.out.push('}');
         return;
       }
@@ -910,6 +913,27 @@ export class FunctionEmitter {
       }
     }
     throw new EmitError(`'${e.n}' is not an lvalue`);
+  }
+
+  /*
+   * A safepoint on a loop's back edge.
+   *
+   * This is the one thing that makes a loop in pure guest C observable. Neither profiler can see one:
+   * a program spinning in its own code calls no runtime service and crosses no unit boundary, so
+   * there is nothing to count. A check here is the only place the host can regain control.
+   *
+   * It is off by default and it is not free — a decrement and a compare on every iteration of every
+   * loop, which is exactly the cost MIRAGE measured when it studied this. Emitting it as a budget
+   * rather than a call keeps the common case to two operations and never leaves the loop.
+   *
+   * The general form of this is what would let Stop interrupt a `while (1);` — the same mechanism,
+   * a different handler.
+   */
+  #safepoint() {
+    if (!this.ctx.safepoints) return '';
+    const id = this.mod.safepoints.length;
+    this.mod.safepoints.push(`${this.decl.name}#${this.mod.safepoints.length}`);
+    return `if(--M.spBudget<0)M.sp_(${id});`;
   }
 
   #stringAddr(e) {

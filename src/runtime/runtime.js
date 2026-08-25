@@ -11,6 +11,26 @@ export class ExitCalled extends Error {
   constructor(code) { super(`exit(${code})`); this.code = code; }
 }
 
+/*
+ * The wall-clock origin, and it must NOT be zero.
+ *
+ * A UNIX `struct timeval` counts from 1970, so tv_sec is a large number on the first call a program
+ * ever makes. Programs rely on that without saying so. Doom's I_GetTime keeps its origin in a
+ * function-scope static and initialises it with
+ *
+ *     static int basetime = 0;
+ *     if (!basetime) basetime = tp.tv_sec;
+ *
+ * so a clock starting at zero leaves the guard un-taken for the first 35 calls, and then fires —
+ * at which point I_GetTime jumps BACKWARDS by 35 tics. Doom's screen wipe computes
+ * `tics = nowtime - wipestart` and passes it to `while (ticks--)`, which on a negative value counts
+ * down through the whole int range: four billion iterations, and a game that never draws again.
+ *
+ * A plausible date rather than 0, deterministic and fixed so every gate still gets the same answer.
+ * 1997-02-05, the day MAME 0.1 was released.
+ */
+const EPOCH_US = 855_100_800_000_000;
+
 export function makeMachine(mod = new Module()) {
   const M = {
     mod,
@@ -21,6 +41,14 @@ export function makeMachine(mod = new Module()) {
     heapEnd: 0,
     stdout: [],
     randState: 1,            // see rt.rand — deterministic on purpose
+    /*
+     * The safepoint budget. Emitted loops decrement it and call sp_ when it runs out; the default
+     * handler just refills it, so an uninstrumented run pays a decrement and nothing else. A harness
+     * replaces sp_ to sample which loop is running — see tools/doom.mjs.
+     */
+    spBudget: 1 << 30,
+    sp_(_id) { M.spBudget = 1 << 30; },
+
     clockTicks: 0,           // the deterministic clock, see rt.clock
     uclockTicks: 0n,         // ~1/60 s per call at the PIT rate
     funcs: mod.funcTable,
@@ -291,7 +319,7 @@ function makeLibc(M) {
      * loop. installRealClock replaces it where real time is wanted.
      */
     gettimeofday: (tv, _tz) => {
-      M.wallMicros = (M.wallMicros ?? 0) + 28571;
+      M.wallMicros = (M.wallMicros ?? EPOCH_US) + 28571;
       if (tv) {
         M.mod.dv.setInt32(tv, Math.floor(M.wallMicros / 1e6), true);
         M.mod.dv.setInt32(tv + 4, M.wallMicros % 1e6, true);
@@ -608,7 +636,8 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
    * "not a game, a blur" that the pacer exists to prevent.
    */
   M.rt.gettimeofday = (tv, _tz) => {
-    const us = advance();
+    // EPOCH_US for the same reason as the deterministic one: tv_sec must never be zero.
+    const us = advance() + EPOCH_US;
     if (tv) {
       M.mod.dv.setInt32(tv, Math.floor(us / 1e6), true);
       M.mod.dv.setInt32(tv + 4, Math.floor(us % 1e6), true);

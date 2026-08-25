@@ -44,6 +44,8 @@ export class Module {
     this.symbols = new Map();           // name -> {addr, size, type, kind}
     this.funcs = new Map();             // name -> {addr, fn|null, type}
     this.funcTable = [null];            // index 0 is the null function pointer
+    // One entry per emitted loop back edge, when safepoints are on. Names the loop for a report.
+    this.safepoints = [];
     this.strings = new Map();           // literal text -> addr, so identical literals share storage
   }
 
