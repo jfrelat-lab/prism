@@ -35,6 +35,41 @@ See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the ga
 
 | P1.7 | **Delete `src/env/osd.js`: make MAME compile its own `src/msdos/msdos.c`.** Today PRISM supplies a hand-written backend for MAME's eighteen `osdepend.h` functions. That does not modify MAME — substituting the platform file its own makefile selects per platform is what the abstraction is for — but the boundary is **per program**, which is the cost Emscripten imposes, merely moved from the game into PRISM. Emulating the ENVIRONMENT instead means every DJGPP+Allegro program comes along without a line of PRISM written for it.<br><br>The surface is **measured, not estimated** — `msdos.c` is 498 lines and this is everything it needs: **Allegro** 13 functions (`allegro_init install_keyboard set_gfx_mode set_color get_palette create_bitmap destroy_bitmap save_pcx readkey clear_keybuf poll_joystick initialise_joystick bmp_write_line`) plus `screen`, `key[]`, `BITMAP/PALETTE/RGB`, `GFX_*`; **SEAL** (`audio.h`) 17 `A*` functions, all stubbable; **DJGPP** `inportb`/`outportb` from `pc.h` and `_dosmemputl` from `sys/farptr.h`; and `scanf`.<br><br>Three things that make it far smaller than it looks, each verified by reading the file: (1) **no VGA register emulation is needed.** Both display paths are plain memory writes — the VESA one to an address OUR shim hands out through `bmp_write_line`, the mode-13h one to `0xa0000`, which is already a real address since the low megabyte is reserved. Nothing intercepts them, so MIRAGE's memory-dispatch cliff does not arise. (2) **`TwkUser.c` is included but never called** — its 8 `outportb` on the CRTC must compile, not work. (3) MAME 0.1 depends on **two** third-party libraries, not one: sound is SEAL, not Allegro. | M | The only compiler-level blocker is the `inportb`/`outportb` pair, because `pc.h` defines them as GNU inline asm — two intrinsics recognised by pattern (P5.1's approach), with one live call site. Not blocked behind all of P3.1/P5.1 as previously recorded. |
 
+## Hosts — which machine PRISM pretends to be
+
+A program of this era does not have *a* platform layer, it ships several: Quake carries `sys_dos.c`,
+`sys_linux.c`, `sys_sun.c` and `sys_win.c`, and picks one in its makefile. PRISM's job is to be one
+more entry in that list. So the question is not "how do we port this" but **which host do we choose,
+and what does that host cost.**
+
+The cost has a single measure, and it is worth stating as a rule:
+
+> **A host costs what the program reaches for BELOW the library boundary.**
+> Implementing an interface is a shim and is cheap. Answering a program that talks to hardware means
+> emulating a device — which is MIRAGE's job, and where PRISM stops being the cheap way round.
+
+Descriptors name the host (the `platform` field becomes `host`, layers move under `src/env/hosts/`).
+That is naming what already exists — `mame-osd`, `quake` — not a framework. **No host framework is to
+be designed before two programs demonstrably need the same host**; the rule against anticipation
+applies here more than anywhere, because a host abstraction invented up front would be shaped by
+imagination rather than by a linker's complaints.
+
+| Host | Surface, measured | Serves | Verdict |
+|---|---|---|---|
+| **Sun** | `sys_sun.c` is **352 lines** and calls almost nothing but ISO C that PRISM already has. The entire gap is **8 POSIX functions**: `gettimeofday getpagesize mmap mprotect munmap read select mkdir` — and `mmap` is only used to allocate the hunk, `mprotect` is a no-op, `getpagesize` is 4096. | Quake | ✅ **Start here.** The cheapest host by a wide margin, and written for a machine where `id386 = 0` — which is exactly the configuration PRISM already compiles. It brings a real `gettimeofday`-driven `main()`, which fixes game speed *from inside the program* instead of through the `+host_framerate` cvar the descriptor currently passes. |
+| **Linux** | `sys_linux.c` is 457 lines: Sun's set plus `sys/ipc`, `sys/shm`, `sys/wait`, `sys/mman`. Video is `vid_x.c`, ~25 Xlib calls including the XShm extension. | Quake **and Doom** | ✅ **The strategic one.** `linuxdoom-1.10` is the only Doom source that exists, so P4 requires this host whatever else happens. Its POSIX half is a superset of Sun's, so building Sun first is building this. |
+| **DOS** | `sys_dos.c` is 953 lines. Two asm intrinsics (`inportb`/`outportb` via `pc.h`), a software PIT (Sys_FloatTime latches channel 0 and reads the BIOS tick at 0x46C — no interrupt needed), DPMI shims that are mostly no-ops, and `real2ptr` which already works because the low megabyte is reserved. Video is far heavier: `vid_dos.c`/`vid_vga.c` program VGA registers and use tweaked modes, and `in_dos.c` hooks INT 9. | MAME (its ONLY backend) and Quake | 🟡 **Eventually, and in halves.** The system half is within reach once P5.1 exists — and those same two intrinsics unlock MAME's `msdos.c` (P1.7), so the piece is shared. The video half is a different project: registers and interrupts are device emulation, not shimming. |
+| **Windows** | `sys_win.c` is 893 lines and pulls in `winquake.h`, `conproc.h`, `resource.h` — the Win32 surface, DirectDraw/DIB, threads, the registry. | Quake only | ⛔ **No.** The largest surface for zero unique coverage: every program that ships a Windows layer ships a DOS or Unix one too. It would earn its place only for a program whose *only* source is Windows, and this project has none. |
+
+The ordering consequence contradicts the plan as written, so it is recorded here rather than left
+implicit: the plan put the DJGPP shim in P3 and POSIX+Xlib in P4, but POSIX is **cheaper and serves
+more targets**. Doom needs it regardless, Quake accepts it, and only MAME 0.1 — which has no Unix
+backend at all, being DOS-only 1997 code — needs DOS.
+
+One caveat to state before somebody expects otherwise: **an Xlib host shims the library, not the
+protocol.** `XOpenDisplay` returns a fake `Display *` and `XPutImage` lands in our framebuffer.
+Nothing speaks to a real X server, and nothing should.
+
 ## P2 · Performance
 
 | # | Task | Effort | Why |
