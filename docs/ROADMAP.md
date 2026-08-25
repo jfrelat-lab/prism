@@ -145,7 +145,7 @@ Nothing speaks to a real X server, and nothing should.
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| P5.1 | Inline `asm()` intrinsic table (pattern-matched), then a general path. | M | DJGPP's own headers need it before any game does. |
+| P5.1 | ✅ **DONE, and it did not need inline assembly at all.** The premise was wrong twice over, and the measurement that dissolved it took one command: **neither MAME's `msdos.c` nor Quake's `sys_dos.c` contains a single asm statement of its own** — sys_dos.c's only `__asm__` is a symbol label, not an instruction. Every port access in both goes through `pc.h`'s `inportb`/`outportb`, and PRISM SUPPLIES `pc.h`; declaring them as functions is a platform port, exactly like supplying `stdio.h`. Delivered instead: `src/env/ports.js`, the I/O seam using MIRAGE's own device contract (`onPortRead`/`onPortWrite`/`mem`) so its devices install unchanged, and `src/env/pit.js`, counter 0 plus the BIOS tick at 0x46C — the clock Quake's DOS build actually polls. Gated by `tools/gate-ports.mjs`, which has no oracle and says so: there is no PC I/O space on the container's Linux host, so it checks the device's contract instead. | — | done |
 | P5.2 | GAS `.s` subset → JS, to recover Quake's `id386=1` inner loops. | L | MIRAGE's x86 recompiler is both the fallback and the oracle. |
 
 ## Known risks (tracked, not forgotten)

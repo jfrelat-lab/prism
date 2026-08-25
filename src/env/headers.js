@@ -324,7 +324,29 @@ int unlink(const char *name);
 #endif
 `;
 
+const PCH = `
+#ifndef _PRISM_PC_H
+#define _PRISM_PC_H
+/*
+ * DJGPP's own pc.h defines these as GNU inline assembly, because on real hardware they are two
+ * instructions. PRISM supplies the header, so it declares them as functions and implements them in
+ * src/env/ports.js -- the same move as supplying stdio.h, and it is what keeps inline assembly off
+ * the critical path.
+ *
+ * Measured before deciding: neither MAME's msdos.c nor Quake's sys_dos.c contains one asm statement
+ * of its own. Every port access in both goes through this header.
+ */
+int inportb(int port);
+int inportw(int port);
+void outportb(int port, int value);
+void outportw(int port, int value);
+int inp(int port);
+int outp(int port, int value);
+#endif
+`;
+
 export const HEADERS = {
+  'pc.h': PCH,
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,

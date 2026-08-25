@@ -12,6 +12,8 @@ import { HEADERS } from './env/headers.js';
 import { osdBuiltins, installOSD } from './env/osd.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
+import { installPorts } from './env/ports.js';
+import { installPIT } from './env/pit.js';
 import { installConsole } from './env/console.js';
 
 /**
@@ -126,6 +128,14 @@ export const BUILTINS = new Map(Object.entries({
   fscanf: { ret: I, params: [P, P], variadic: true },
   sscanf: { ret: I, params: [P, P], variadic: true },
   scanf: { ret: I, params: [P], variadic: true },
+  // I/O ports — see src/env/ports.js, the seam MIRAGE's devices plug into.
+  inportb: { ret: I, params: [I] },
+  inportw: { ret: I, params: [I] },
+  outportb: { ret: V, params: [I, I] },
+  outportw: { ret: V, params: [I, I] },
+  inp: { ret: I, params: [I] },
+  outp: { ret: I, params: [I, I] },
+
   rand: { ret: I, params: [] },
   srand: { ret: V, params: [U] },
   atof: { ret: D, params: [P] },
@@ -283,6 +293,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   for (const name of emitted) mod.bindFunc(name, F[name]);
 
   installStdio(M);
+  installPIT(installPorts(M), M);
 
   return { M, F, src, mod, run: makeRunner(M, F, mod) };
 }
@@ -291,6 +302,7 @@ export { installOSD };
 export { installConsole };
 export { installStdio };
 export { installQuake };
+export { installPorts, installPIT };
 
 /**
  * Compile and link SEVERAL translation units into one module.
@@ -400,6 +412,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   // After emission, because it fills in the program's own `stdin`/`stdout`/`stderr` globals and those
   // addresses do not exist until the units have been linked.
   installStdio(M);
+  installPIT(installPorts(M), M);
 
   return { M, F, src, mod, failures, run: makeRunner(M, F, mod) };
 }
