@@ -1348,6 +1348,22 @@ export class FunctionEmitter {
       if (f) {
         const ft = f.type;
         const args = this.#callArgs(e, ft);
+        /*
+         * directCalls: an experiment, off by default, measuring one thing only.
+         *
+         * Every cross-function call normally goes through `F["name"]` on an object with as many
+         * properties as the program has functions, which V8 keeps in dictionary mode -- and
+         * `Builtin: LoadIC` is the largest accounted entry in the profile of the Z80 core. This
+         * emits a direct call to the emitted function's own identifier instead, which is only
+         * possible when the callee is DEFINED here: a declaration with no body resolves through F to
+         * a runtime binding or a throwing stub.
+         *
+         * The cost of turning it on is not speed, it is observability: every harness in tools/
+         * instruments a program by rebinding prog.F, and a direct call cannot see that.
+         */
+        if (this.ctx.directCalls && f.defined) {
+          return { js: `${jsIdent(f.name)}(${args.join(',')})`, type: ft?.ret ?? T.INT };
+        }
         // The LINKAGE name, not the source name: a file-scope `static` is mangled per translation
         // unit, and using the source name here called a function that was never bound.
         return { js: `F[${JSON.stringify(f.name)}](${args.join(',')})`, type: ft?.ret ?? T.INT };

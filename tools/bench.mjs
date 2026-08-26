@@ -231,12 +231,16 @@ function resolver(name) {
   return std === undefined ? null : { path: `<${name}>`, text: std };
 }
 
-console.log('\nPRISM tier-0 …');
+console.log(`\nPRISM tier-0${process.argv.includes('--direct-calls') ? ' (direct calls)' : ''} …`);
 const t0 = performance.now();
 const prog = compileProgram([
   { file: join(work, 'bench.c'), source: BENCH_C },
   { file: join(Z80DIR, 'Z80.c'), source: readFileSync(join(Z80DIR, 'Z80.c'), 'latin1') },
-], { defines: { LSB_FIRST: '1' }, resolve: resolver, memory: 64 * 1024 * 1024 });
+], {
+  defines: { LSB_FIRST: '1' }, resolve: resolver, memory: 64 * 1024 * 1024,
+  // --direct-calls: the dispatch experiment. See docs/TESTING.md; off by default.
+  directCalls: process.argv.includes('--direct-calls'),
+});
 const compileMs = performance.now() - t0;
 installStdio(prog.M, { files: { 'z80rom.bin': rom } });
 

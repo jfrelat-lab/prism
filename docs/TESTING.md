@@ -1311,3 +1311,22 @@ every harness in `tools/` rebinds `prog.F` to instrument a program, and direct c
 rebinding invisible. Measure before choosing -- the lesson of MIRAGE's three rejected memory-dispatch
 strategies is that a plausible optimisation built without a number is a plausible optimisation
 reverted.
+
+**Measured.** `bench.mjs --synthetic --direct-calls` emits a call to the emitted function's own
+identifier instead of `F["name"]`, for callees defined in the program:
+
+```
+F["name"]      7.16 · 7.02 · 6.29 M instr/s
+direct call   17.36 · 16.98 · 12.79 M instr/s
+```
+
+Roughly **2 to 2.5x**, on identical checksums, from a change that touches one line of the emitter.
+Against clang -O2 the gap goes from about 10x to about 5x. The lead was right, and the profiler's
+one visible entry was worth more than the 98% it could not see.
+
+It is still off by default, because the observability cost is real and there is a design that avoids
+paying it: emit a module-scope `let` per function, initialised from the function, and have calls go
+through that binding. A module-scope `let` is a monomorphic slot rather than a dictionary property,
+so it should keep most of the speed, and a `rebind` on the module can reassign it -- which restores
+exactly what the harnesses use `prog.F` for. Not built yet; recorded so the next person does not
+re-derive it.

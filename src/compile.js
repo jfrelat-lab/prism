@@ -393,7 +393,7 @@ export class CompileError extends Error {}
  * Compile one translation unit.
  * @returns {{M, F, src, run: (argv?: string[]) => {code: number, stdout: string}}}
  */
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = false } = {}) {
   const pp = new Preprocessor({
     defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
@@ -425,7 +425,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   }
 
   // Pass 2: emit. Static initialisers are written straight into the image where they are constant.
-  const ctx = { globals, funcs, builtins: BUILTINS, safepoints };
+  const ctx = { globals, funcs, builtins: BUILTINS, safepoints, directCalls };
   const pieces = [];
   const emitted = [];
   for (const d of unit.decls) {
@@ -488,7 +488,7 @@ export { installPorts, installPIT };
 // must stay loadable in a browser: the web shell imports these modules directly, unbundled.
 const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
 
-export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false } = {}) {
+export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = false } = {}) {
   const failures = [];
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -554,6 +554,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   for (const p of parsed) {
     const ctx = {
       safepoints,
+      directCalls,
       builtinRefs,
       globals: overlay(sharedGlobals, p.globals),
       funcs: overlay(sharedFuncs, p.funcs),
