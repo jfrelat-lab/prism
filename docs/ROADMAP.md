@@ -132,7 +132,7 @@ Nothing speaks to a real X server, and nothing should.
 |---|---|---|---|
 | ~~P3.1~~ | ✅ **DONE** — `src/env/headers-djgpp.js`: `go32.h sys/farptr.h sys/movedata.h dpmi.h dos.h io.h`, plus `pc.h` from P5.1. Written for MAME's `msdos.c` (P1.7) rather than for Quake, which is the ordering the roadmap did not predict. | M | The `outportb` premise was wrong — see P5.1. |
 | ~~P3.2~~ | ✅ **DONE** — `WinQuake/` compiles and runs: 1030 functions, 1.73 MB of JavaScript in 0.9 s, demo1 at **525 fps**. `id386=0` turned out NOT to be the switch: `TARGET_DEFINES` sets `__i386__`, so the tree had been built in the wrong configuration all along until `mergeDefines` learned that `null` means *undefine*. | M | |
-| P3.3 | **The real DOS platform units.** Quake currently builds with `sys_null.c vid_null.c snd_null.c in_null.c cd_null.c net_none.c` — id's own porting stubs, so it renders through `src/env/quake.js` publishing `vid_buffer` and has no real input, sound or timing. Moving to `sys_dos.c`/`vid_dos.c`/`vid_vga.c` means VGA registers and INT 9: device emulation, not shimming. | L | **This is where MIRAGE meets PRISM from below** — the convergence the plan describes. |
+| P3.3 | **The real DOS platform units for QUAKE.** Half of this arrived from an unexpected direction: Heretic and Hexen needed a Watcom/DOS4GW host, so `src/env/watcom.js` (int386, the vector table, DPMI, DMX), `src/env/crtstatus.js` (the 0x3DA retrace bit) and `src/env/vgadac.js` (the colour DAC) now exist, and **interrupt delivery works** — a registered handler is a function pointer PRISM can call, driven from the safepoint. Mode 13h needed no emulation at all: it is a linear framebuffer at an address PRISM already has.<br><br>What is left is Quake-specific: it still builds with id's own `*_null.c` porting stubs, and `vid_dos.c`/`vid_vga.c` use **tweaked** VGA modes — CRTC reprogramming, not mode 13h — which is the one piece none of this covers. | M | Smaller than it looked. The device count for a whole DOS game turned out to be **three**. |
 | P3.4 | A timedemo end to end; framebuffer diff against real Quake under DOSBox-X. | M | The timedemo runs and the fps are published (525 on demo1); the pixel diff against DOSBox-X is what is left. |
 
 ## P4 · Doom
@@ -142,12 +142,24 @@ Nothing speaks to a real X server, and nothing should.
 | ~~P4.1~~ | ✅ **DONE** — `src/env/x11.js`, the Xlib boundary (not the protocol), plus the POSIX half in `src/env/stdio.js`. `linuxdoom-1.10` compiles entirely unmodified: 62 units, 45,152 lines, 714 of 715 functions. | M | ⚠️ The DOS/Watcom Doom source was never released; this is the Linux/X11 tree, which is why the host is Xlib and not DOS. |
 | ~~P4.2~~ | ✅ **DONE, and better than the entry asked** — not just the title screen: `-warp 1 1` plays **E1M1**, 260 frames at ~1 ms each. The shareware WAD's demos do not play and Doom says why itself (`Demo is from a different game version!`). Sound needs P1.8. | M | The pixel diff against `DOOM.EXE` is not possible: MIRAGE cannot run Doom (DPMI), which is the whole reason PRISM exists. |
 
+## P6 · Raven (Heretic, Hexen)
+
+Not in the original plan. They arrived because Wolfenstein 3D turned out to be 16-bit segmented — a
+second ABI — and the question "what else is DOS but flat?" had an answer.
+
+| # | Task | Size | Notes |
+|---|---|---|---|
+| ~~P6.1~~ | ✅ **DONE — Heretic plays its attract loop.** Title, credits and the demo, 320x200 with the 3D renderer, monsters and the status bar. Both trees compile completely from their own makefiles (761 and 1,215 functions). `tools/raven.mjs`. | M | The whole DOS platform cost three devices; see P3.3. |
+| P6.2 | **Hexen is blocked on its own data, not on PRISM.** `P_SETUP.C:803` defaults every map's sky to `R_TextureNumForName("SKY1")` and the retail v1.1 WAD has no such texture — reading the WAD directly gives 148+1 textures, SKY2/3/4 and no SKY1. PRISM builds exactly those and looks them up exactly. Needs a WAD that has SKY1 (the shareware demo, or v1.0). | S | Recorded rather than worked around: patching the game or the data is the one thing this project does not do. |
+| P6.3 | **Input.** `deliverKeyboard` exists and calls the game's own `I_KeyboardISR`, which reads port 0x60 — but nothing queues a scan code yet, so the attract loop cannot be interrupted and the game cannot be played. The port seam needs a keyboard device. | S | The mechanism is proved; only the queue is missing. |
+| P6.4 | **Pace it, and put it in the browser.** The tic is delivered per N safepoint hits, which is deterministic but not 35 Hz. A real clock and the existing `web/` shell would make it playable. | M | Same host contract as MAME and Doom; the descriptor is the only new thing. |
+
 ## P5 · Native assembly
 
 | # | Task | Effort | Why |
 |---|---|---|---|
 | P5.1 | ✅ **DONE, and it did not need inline assembly at all.** The premise was wrong twice over, and the measurement that dissolved it took one command: **neither MAME's `msdos.c` nor Quake's `sys_dos.c` contains a single asm statement of its own** — sys_dos.c's only `__asm__` is a symbol label, not an instruction. Every port access in both goes through `pc.h`'s `inportb`/`outportb`, and PRISM SUPPLIES `pc.h`; declaring them as functions is a platform port, exactly like supplying `stdio.h`. Delivered instead: `src/env/ports.js`, the I/O seam using MIRAGE's own device contract (`onPortRead`/`onPortWrite`/`mem`) so its devices install unchanged, and `src/env/pit.js`, counter 0 plus the BIOS tick at 0x46C — the clock Quake's DOS build actually polls. Gated by `tools/gate-ports.mjs`, which has no oracle and says so: there is no PC I/O space on the container's Linux host, so it checks the device's contract instead. | — | done |
-| P5.2 | GAS `.s` subset → JS, to recover Quake's `id386=1` inner loops. | L | MIRAGE's x86 recompiler is both the fallback and the oracle. |
+| P5.2 | GAS `.s` subset → JS, to recover Quake's `id386=1` inner loops. Also Heretic and Hexen's `LINEAR.ASM`, whose `R_DrawColumn`/`R_DrawSpan` are currently sidestepped by compiling `R_DRAW.C` with `__WATCOMC__` undefined to select the C bodies the file already carries. | L | MIRAGE's x86 recompiler is both the fallback and the oracle. |
 
 ## Known risks (tracked, not forgotten)
 
