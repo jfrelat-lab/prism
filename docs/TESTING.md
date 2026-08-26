@@ -1330,3 +1330,33 @@ through that binding. A module-scope `let` is a monomorphic slot rather than a d
 so it should keep most of the speed, and a `rebind` on the module can reassign it -- which restores
 exactly what the harnesses use `prog.F` for. Not built yet; recorded so the next person does not
 re-derive it.
+
+
+### Three Watcom accommodations, and the one I declined to make
+
+Heretic and Hexen are Watcom C, and three constructs stood between PRISM and 118,000 lines of it.
+Each is recorded here because the *restraint* is the interesting part.
+
+**`__far`, `__near`, `__interrupt` as declaration specifiers.** Accepted and ignored, and that is
+correct *only* because these games target the 32-bit flat model: with one segment, `__far` describes
+nothing. They are emphatically not no-ops in a segmented program — Wolfenstein 3D uses `far` 451
+times and means it — so this is a parser allowance, never an ABI claim. `__interrupt` really does
+change a calling convention (save every register, return with IRET); ignoring it is safe only while
+nothing installs such a function as a real handler, which nothing can, because PRISM has no interrupt
+to deliver.
+
+**The same keywords INSIDE a declarator.** Watcom puts them before the star:
+
+    void (__interrupt __far *oldkeyboardisr)();          // Heretic, I_IBM.C:1282
+
+Standard C has no place for a qualifier there. Two changes, and the second was the one that mattered:
+skipping them in `#declarator`, and teaching `#parenIsParamList` that a Watcom keyword after `(` does
+**not** start a parameter list. Without the second, the paren was read as a parameter list precisely
+*because* the first change had made them keywords, and the error moved to the `(` — a fix creating a
+worse symptom than the bug.
+
+**Bare `far` / `near` — declined as keywords.** `int (far *function)();` appears once in 47,000
+lines. Making `far` and `near` keywords everywhere would break any program with a variable of that
+name, for one construct. Recognised only where nothing else can be meant: inside a declarator,
+immediately before a star. A dialect is a cost paid by every future program, so it should be bought
+one construct at a time.

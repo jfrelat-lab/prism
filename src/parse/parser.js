@@ -28,12 +28,34 @@ const KEYWORDS = new Set(['auto', 'break', 'case', 'char', 'const', 'continue', 
   'inline', 'restrict', '_Bool', '__inline', '__inline__', '__const', '__const__', '__volatile',
   '__volatile__', '__restrict', '__restrict__', '__signed', '__signed__', '__attribute__',
   '__extension__', '__typeof__', 'typeof', '__asm__', 'asm', '__alignof__', '__alignof',
-  '__builtin_offsetof', '__label__', '__complex__']);
+  '__builtin_offsetof', '__label__', '__complex__',
+  /*
+   * Watcom's memory-model and calling-convention keywords, which Raven's Heretic and Hexen use.
+   *
+   * Accepted and IGNORED, and that is correct here specifically because the target is the 32-bit
+   * flat model those games were built for (DOS/4GW): with one segment, `__far` and `__near` describe
+   * nothing. They are emphatically NOT no-ops in a 16-bit segmented program -- Wolfenstein 3D uses
+   * `far` 451 times and means it -- which is why this is a parser allowance and not an ABI claim.
+   *
+   * `__interrupt` DOES change a calling convention: the compiler saves every register and returns
+   * with IRET. Ignoring it is safe only while nothing installs such a function as a real handler,
+   * which nothing here can: PRISM has no interrupt to deliver. If that ever changes, this line is
+   * where the assumption was made.
+   */
+  '__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
+  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '__saveregs', '__export']);
 
 const STORAGE = new Set(['typedef', 'extern', 'static', 'auto', 'register']);
 const QUALS = new Set(['const', 'volatile', 'restrict', '__const', '__const__', '__volatile',
-  '__volatile__', '__restrict', '__restrict__']);
+  '__volatile__', '__restrict', '__restrict__',
+  // See the keyword list above: meaningless in a flat model, and only accepted for one.
+  '__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
+  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '__saveregs', '__export']);
 const FUNCSPEC = new Set(['inline', '__inline', '__inline__']);
+const BARE_MODEL = new Set(['far', 'near']);
+/** The subset of QUALS that Watcom also allows INSIDE a declarator; see #declarator. */
+const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
+  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '__saveregs', '__export']);
 
 export class Parser {
   /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
@@ -511,6 +533,18 @@ export class Parser {
 
   /** Parse a declarator, wrapping `base` as the suffixes unwind. Abstract declarators allowed. */
   #declarator(base, { abstract = false } = {}) {
+    /*
+     * Watcom puts its memory-model and convention keywords BEFORE the star, inside the declarator:
+     *
+     *     void (__interrupt __far *oldkeyboardisr)();      // Heretic, I_IBM.C:1282
+     *
+     * Standard C has no place for a qualifier there -- `const` after the star qualifies the pointer,
+     * and nothing goes in front of it. Skipped rather than modelled, for the reason the keyword list
+     * gives: in the flat model these games target, they describe nothing.
+     */
+    while (this.peek().k === ID
+      && (WATCOM_QUALS.has(this.peek().v) || this.#bareModelKeyword())) this.i++;
+
     // Pointers bind tightest to the left, so they wrap the base first.
     while (this.isP('*')) {
       this.i++;
@@ -606,11 +640,31 @@ export class Parser {
   }
 
   /** Does the `(` at the cursor open a parameter list rather than a nested declarator? */
+  /*
+   * Bare `far` / `near`, which Watcom also accepts and Heretic writes once: `int (far *function)();`
+   *
+   * NOT added to the keyword list, and the restraint is the point: `far` and `near` are perfectly
+   * ordinary identifiers, and making them keywords everywhere would break any program with a
+   * variable of that name -- for a construct that appears once in 47,000 lines. Recognised only
+   * where nothing else can be meant: inside a declarator, immediately before a star.
+   */
+  #bareModelKeyword() {
+    return BARE_MODEL.has(this.peek().v) && this.isP('*', 1);
+  }
+
   #parenIsParamList() {
     if (this.isP(')', 1)) return true;                       // `f()`
     if (this.isP('...', 1)) return true;
     const t = this.peek(1);
     if (t.k !== ID) return false;
+    /*
+     * A Watcom convention keyword after '(' does NOT start a parameter list -- it decorates the
+     * declarator inside it, as in `void (__interrupt __far *isr)()`. Without this the paren was read
+     * as a parameter list because these are keywords now, and the declaration failed to parse at the
+     * '(' rather than at anything meaningful.
+     */
+    if (WATCOM_QUALS.has(t.v)) return false;
+    if (BARE_MODEL.has(t.v) && this.isP('*', 2)) return false;   // `(far *fp)()`
     if (KEYWORDS.has(t.v)) return true;                      // a type specifier starts a param list
     return this.scope.isTypedef(t.v);
   }
