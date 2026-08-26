@@ -42,6 +42,9 @@ export class Parser {
     this.i = 0;
     this.scope = scope;
     this.file = file;
+    // #pragma pack state: the current maximum member alignment, and the stack push/pop use.
+    this.pack = null;
+    this.packStack = [];
   }
 
   // ---------------------------------------------------------------- token helpers
@@ -71,9 +74,48 @@ export class Parser {
       if (this.eatP(';')) continue;                       // stray semicolon, GNU-tolerated
       if (this.eatKw('__extension__')) continue;
       if (this.isKw('asm') || this.isKw('__asm__')) { decls.push(this.#topLevelAsm()); continue; }
+      if (this.isP('#')) { this.#pragma(); continue; }
       decls.push(...this.#declarationOrFunction());
     }
     return { n: 'unit', decls };
+  }
+
+  /**
+   * `#pragma ...`, which reaches the parser because the preprocessor passes pragmas through — as
+   * gcc -E does, and for the same reason: a pragma is a message to the COMPILER, not to the
+   * preprocessor.
+   *
+   * Only `pack` is acted on, and it has to be: it changes struct layout, which is the ABI, which is
+   * the one thing that must match gcc exactly or a program reading its own data by offset gets
+   * garbage. Everything else is skipped to the end of the line, which is what a compiler does with a
+   * pragma it does not recognise.
+   *
+   *   #pragma pack(n)         members align to min(natural, n)
+   *   #pragma pack()          back to the default
+   *   #pragma pack(push)      save the current value
+   *   #pragma pack(push, n)   save it and set n
+   *   #pragma pack(pop)       restore
+   */
+  #pragma() {
+    this.next();                                        // '#'
+    /*
+     * To the end of the LINE, and `bol` is the only reliable way to find it: the '#' the
+     * preprocessor synthesises carries no source location at all, so comparing line numbers made
+     * every token compare equal to `undefined` and the skip swallowed the next 64 tokens --
+     * declarations included. The failure looked like a parse error three declarations later.
+     */
+    const words = [];
+    while (!this.done && !this.peek().bol) words.push(this.next());
+    const text = words.map(t => t.v).join('');
+    const m = /^pragma\s*pack\((.*)\)$/.exec(text.replace(/\s+/g, ''));
+    if (!m) return;
+    const arg = m[1];
+    if (arg === '') { this.pack = null; return; }
+    if (arg === 'pop') { this.pack = this.packStack.pop() ?? null; return; }
+    if (arg === 'push') { this.packStack.push(this.pack); return; }
+    const push = /^push,(.+)$/.exec(arg);
+    if (push) { this.packStack.push(this.pack); this.pack = +push[1] || null; return; }
+    if (/^\d+$/.test(arg)) this.pack = +arg || null;
   }
 
   /**
@@ -359,7 +401,9 @@ export class Parser {
     this.expectP('}');
     const tail = this.#skipAttributeLike();
 
-    let built = T.record(kind, tag, members, { packed: tail.packed });
+    // `#pragma pack(n)` in force clamps every member to n; pack(1) is then exactly __packed__.
+    let built = T.record(kind, tag, members,
+      { packed: tail.packed, maxAlign: this.pack ?? null });
     if (tail.aligned) built = T.withAlign(built, tail.aligned);
     if (tag) {
       // Mutate the placeholder in place: anything that already captured it (a self-referential
@@ -1000,8 +1044,32 @@ export function findField(rec, name) {
   return null;
 }
 
+/**
+ * A C99 hexadecimal floating constant: 0x1.8p3 is 1.5 x 2^3.
+ *
+ * Worth its own function because JS has no syntax for one and `parseFloat` silently returns 0 for
+ * the whole thing — so a missing case here does not fail, it produces a wrong number. csmith's
+ * safe_math.h is full of them (`0x1.0p-100f`, `0x1.0p-924`) as exact powers of two chosen to test
+ * float overflow without rounding, which is precisely what a decimal literal cannot express.
+ *
+ * The exponent is mandatory in C, which is what makes 0x1p3 unambiguous against a suffix.
+ */
+function hexFloat(text) {
+  const m = text.match(/^0[xX]([0-9a-fA-F]*)(?:\.([0-9a-fA-F]*))?[pP]([-+]?[0-9]+)$/);
+  if (!m) return null;
+  const [, intPart = '', fracPart = '', expPart] = m;
+  if (!intPart && !fracPart) return null;
+  // Scale by whole powers of two, so a value that IS a power of two comes out exact.
+  const mantissa = Number(BigInt('0x' + (intPart + fracPart || '0')));
+  return mantissa * Math.pow(2, parseInt(expPart, 10) - 4 * fracPart.length);
+}
+
 function numberLiteral(t) {
   const text = t.v;
+  const hf = hexFloat(text.replace(/[fFlL]+$/, ''));
+  if (hf !== null) {
+    return { n: 'float', value: hf, type: /[fF]$/.test(text) ? T.scalar('float') : T.DOUBLE };
+  }
   if (/^[0-9]*\.|[0-9][0-9a-fA-F]*[pP][-+]|^\.[0-9]/.test(text) || /^[0-9.]+[eE][-+]?[0-9]/.test(text)
       || (/^[0-9]/.test(text) && /[fF]$/.test(text) && !/^0[xX]/.test(text))) {
     const v = parseFloat(text.replace(/[fFlL]+$/, ''));
@@ -1016,11 +1084,34 @@ function numberLiteral(t) {
   else v = BigInt(body);
   const uns = /[uU]/.test(suffix);
   const longs = (suffix.match(/[lL]/g) ?? []).length;
-  let type;
-  if (longs >= 2) type = uns ? T.ULLONG : T.LLONG;
-  else if (longs === 1) type = uns ? T.ULONG : T.LONG;
-  else if (uns) type = v > 0xffffffffn ? T.ULLONG : T.UINT;
-  else type = v > 0x7fffffffn ? (v > 0xffffffffn ? T.LLONG : T.UINT) : T.INT;
+
+  /*
+   * C99 6.4.4.1: an integer constant takes the FIRST type in a list that can represent it, and the
+   * list depends on the suffix AND on whether the constant was written in decimal.
+   *
+   * The base matters, and that is the part that was missing. A hexadecimal or octal constant may
+   * become unsigned; a decimal one may not. So `0xAD2A1758533D8CC8LL` -- larger than LLONG_MAX --
+   * is an UNSIGNED long long and therefore positive, where PRISM read it as a negative long long.
+   * csmith found it in the third program it generated: the comparison `1UL < 0xAD2A1758533D8CC8LL`
+   * went the other way, a branch was not taken, and one global ended the run holding 1 instead of 0.
+   *
+   * On i386 `long` and `int` are both 32 bits, so the long entries change the type's NAME without
+   * changing its width -- but they still have to be in the list, because the next candidate after
+   * `long` is `long long` and skipping it is how a 33-bit decimal constant wrongly became unsigned.
+   */
+  const decimal = !/^0[xXbB]/.test(body) && !/^0[0-7]/.test(body);
+  const fits = (t) => (t.signed ? v <= (1n << BigInt(t.size * 8 - 1)) - 1n : v <= (1n << BigInt(t.size * 8)) - 1n);
+  let candidates;
+  if (uns && longs >= 2) candidates = [T.ULLONG];
+  else if (uns && longs === 1) candidates = [T.ULONG, T.ULLONG];
+  else if (uns) candidates = [T.UINT, T.ULONG, T.ULLONG];
+  else if (longs >= 2) candidates = decimal ? [T.LLONG] : [T.LLONG, T.ULLONG];
+  else if (longs === 1) candidates = decimal ? [T.LONG, T.LLONG] : [T.LONG, T.ULONG, T.LLONG, T.ULLONG];
+  else if (decimal) candidates = [T.INT, T.LONG, T.LLONG];
+  else candidates = [T.INT, T.UINT, T.LONG, T.ULONG, T.LLONG, T.ULLONG];
+  // Nothing fits only for a decimal constant too large for long long; gcc takes unsigned long long
+  // there too, with a warning nobody reads.
+  const type = candidates.find(fits) ?? T.ULLONG;
   return { n: 'num', value: v, type };
 }
 

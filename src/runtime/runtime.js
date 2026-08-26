@@ -415,6 +415,33 @@ function makeLibc(M) {
     sqrt: Math.sqrt, sin: Math.sin, cos: Math.cos, tan: Math.tan, atan: Math.atan,
     atan2: Math.atan2, exp: Math.exp, log: Math.log, log10: Math.log10, pow: Math.pow,
     floor: Math.floor, ceil: Math.ceil, fabs: Math.abs,
+    /*
+     * The float family. Math.fround on the way out is not a nicety: the C library computes in the
+     * float type, and keeping double precision through fabsf would make PRISM's answer differ from
+     * gcc's in the last bits -- the exact class of bug the csmith differential is for.
+     */
+    sqrtf: (x) => Math.fround(Math.sqrt(x)), sinf: (x) => Math.fround(Math.sin(x)),
+    cosf: (x) => Math.fround(Math.cos(x)), tanf: (x) => Math.fround(Math.tan(x)),
+    atanf: (x) => Math.fround(Math.atan(x)),
+    atan2f: (y, x) => Math.fround(Math.atan2(y, x)),
+    expf: (x) => Math.fround(Math.exp(x)), logf: (x) => Math.fround(Math.log(x)),
+    log10f: (x) => Math.fround(Math.log10(x)),
+    powf: (x, y) => Math.fround(Math.pow(x, y)),
+    floorf: (x) => Math.fround(Math.floor(x)), ceilf: (x) => Math.fround(Math.ceil(x)),
+    fabsf: (x) => Math.fround(Math.abs(x)),
+    fmodf: (x, y) => Math.fround(x % y),
+    ldexp: (x, e) => x * Math.pow(2, e | 0),
+    ldexpf: (x, e) => Math.fround(x * Math.pow(2, e | 0)),
+    frexp: (x, ep) => {
+      if (x === 0 || !Number.isFinite(x)) { if (ep) M.mod.dv.setInt32(ep, 0, true); return x; }
+      const e = Math.ceil(Math.log2(Math.abs(x)));
+      let m = x / Math.pow(2, e), exp = e;
+      // log2 can land a bit off at the boundary; normalise into [0.5, 1).
+      while (Math.abs(m) >= 1) { m /= 2; exp++; }
+      while (Math.abs(m) < 0.5) { m *= 2; exp--; }
+      if (ep) M.mod.dv.setInt32(ep, exp, true);
+      return m;
+    },
     fmod: (a, b) => a % b,
   };
   return lib;

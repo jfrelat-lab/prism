@@ -97,6 +97,7 @@ export const TARGET_DEFINES = {
  * entry exists because a gate case referenced it.
  */
 const P = T.ptr(T.CHAR), I = T.INT, U = T.UINT, D = T.DOUBLE, V = T.VOID;
+const FLT = T.scalar('float');
 export const BUILTINS = new Map(Object.entries({
   printf: { ret: I, params: [P], variadic: true },
   fprintf: { ret: I, params: [P, P], variadic: true },
@@ -322,6 +323,20 @@ export const BUILTINS = new Map(Object.entries({
   exp: { ret: D, params: [D] }, log: { ret: D, params: [D] }, log10: { ret: D, params: [D] },
   pow: { ret: D, params: [D, D] }, floor: { ret: D, params: [D] }, ceil: { ret: D, params: [D] },
   fabs: { ret: D, params: [D] }, fmod: { ret: D, params: [D, D] },
+  /*
+   * The float family, declared as taking and returning FLOAT. That is not cosmetic: PRISM rounds a
+   * float store with Math.fround, and a builtin declared in double would keep the extra precision
+   * through the call -- which is exactly the kind of divergence csmith exists to find.
+   */
+  sqrtf: { ret: FLT, params: [FLT] }, sinf: { ret: FLT, params: [FLT] },
+  cosf: { ret: FLT, params: [FLT] }, tanf: { ret: FLT, params: [FLT] },
+  atanf: { ret: FLT, params: [FLT] }, atan2f: { ret: FLT, params: [FLT, FLT] },
+  expf: { ret: FLT, params: [FLT] }, logf: { ret: FLT, params: [FLT] },
+  log10f: { ret: FLT, params: [FLT] }, powf: { ret: FLT, params: [FLT, FLT] },
+  floorf: { ret: FLT, params: [FLT] }, ceilf: { ret: FLT, params: [FLT] },
+  fabsf: { ret: FLT, params: [FLT] }, fmodf: { ret: FLT, params: [FLT, FLT] },
+  ldexp: { ret: D, params: [D, I] }, ldexpf: { ret: FLT, params: [FLT, I] },
+  frexp: { ret: D, params: [D, P] },
 
   // gcc's torture suite calls the __builtin_ spelling rather than the library name — 124 programs
   // use __builtin_abort alone, which made it the single largest gap in the corpus. These are

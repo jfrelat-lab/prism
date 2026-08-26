@@ -154,6 +154,28 @@ double floor(double x);
 double ceil(double x);
 double fabs(double x);
 double fmod(double x, double y);
+/*
+ * The float family. Each is the double one rounded to float on the way out, which is what the C
+ * library guarantees and what Math.fround expresses exactly. Named because csmith's safe_math.h
+ * calls fabsf on every float operation it guards -- nothing hand-written here had ever needed one.
+ */
+float sqrtf(float x);
+float sinf(float x);
+float cosf(float x);
+float tanf(float x);
+float atanf(float x);
+float atan2f(float y, float x);
+float expf(float x);
+float logf(float x);
+float log10f(float x);
+float powf(float x, float y);
+float floorf(float x);
+float ceilf(float x);
+float fabsf(float x);
+float fmodf(float x, float y);
+double ldexp(double x, int e);
+float ldexpf(float x, int e);
+double frexp(double x, int *e);
 #endif
 `;
 
@@ -209,8 +231,28 @@ typedef short int16_t;
 typedef unsigned short uint16_t;
 typedef int int32_t;
 typedef unsigned int uint32_t;
+typedef long long int64_t;
+typedef unsigned long long uint64_t;
+typedef long long intmax_t;
+typedef unsigned long long uintmax_t;
 typedef int intptr_t;
 typedef unsigned int uintptr_t;
+typedef signed char int_fast8_t;
+typedef unsigned char uint_fast8_t;
+typedef int int_fast16_t;
+typedef unsigned int uint_fast16_t;
+typedef int int_fast32_t;
+typedef unsigned int uint_fast32_t;
+typedef long long int_fast64_t;
+typedef unsigned long long uint_fast64_t;
+typedef signed char int_least8_t;
+typedef unsigned char uint_least8_t;
+typedef short int_least16_t;
+typedef unsigned short uint_least16_t;
+typedef int int_least32_t;
+typedef unsigned int uint_least32_t;
+typedef long long int_least64_t;
+typedef unsigned long long uint_least64_t;
 #define INT8_MIN (-128)
 #define INT8_MAX 127
 #define UINT8_MAX 255
@@ -220,6 +262,23 @@ typedef unsigned int uintptr_t;
 #define INT32_MIN (-2147483647 - 1)
 #define INT32_MAX 2147483647
 #define UINT32_MAX 4294967295U
+/*
+ * The 64-bit half was missing entirely, which is only visible to a program that NAMES int64_t --
+ * every hand-written test and all four game targets use long long directly. csmith names it in the
+ * first hundred lines it emits.
+ */
+#define INT64_MIN  (-9223372036854775807LL - 1)
+#define INT64_MAX  9223372036854775807LL
+#define UINT64_MAX 18446744073709551615ULL
+#define INTMAX_MIN INT64_MIN
+#define INTMAX_MAX INT64_MAX
+#define UINTMAX_MAX UINT64_MAX
+#define INTPTR_MIN INT32_MIN
+#define INTPTR_MAX INT32_MAX
+#define UINTPTR_MAX UINT32_MAX
+#define PTRDIFF_MIN INT32_MIN
+#define PTRDIFF_MAX INT32_MAX
+#define SIZE_MAX UINT32_MAX
 #endif
 `;
 

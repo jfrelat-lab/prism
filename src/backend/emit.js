@@ -1044,6 +1044,11 @@ export class FunctionEmitter {
       const l = this.#lval(e);
       if (l.type.k === 'array') return { js: l.addr, type: T.ptr(l.type.of) };
       if (l.type.k === 'func') return { js: l.addr, type: T.ptr(l.type) };
+      // A record rvalue IS its address in tier-0, the same rule as an array's -- and `*p` on a
+      // struct or union pointer is a place that rule was missing. csmith reaches it constantly
+      // because it passes unions by value through pointers; the two sibling sites above already
+      // had the guard.
+      if (T.isRecord(l.type)) return { js: l.addr, type: l.type };
       return { js: loadExpr(l.addr, l.type), type: l.type };
     }
     const v = this.#rval(e.expr);
@@ -1425,14 +1430,42 @@ export class FunctionEmitter {
 
   // ------------------------------------------------------------- bitfields
 
+  /*
+   * A bitfield read.
+   *
+   * The fast path is a single 32-bit unit, which is what the layout produces for every ordinary
+   * struct. It is NOT what `#pragma pack(1)` produces: packing removes the alignment that kept a
+   * field inside one unit, so `int f:26` can start at bit 23 and run past the word boundary. That
+   * used to be refused outright, which csmith hit in one program in six.
+   *
+   * The general path works in BYTES, because bytes are the only unit that always contains the field
+   * -- at most five of them for a 32-bit-wide field -- and assembles them with multiplication rather
+   * than shifts: JS shifts are 32-bit, and five bytes is 40.
+   */
   #loadBitfield(l) {
     const f = l.bitfield;
-    const unitOff = (f.bitOffset >> 5) * 4;
     const shift = f.bitOffset & 31;
-    if (shift + f.width > 32) unsup('a bitfield straddling a 32-bit unit');
-    const raw = `D.getUint32((${l.addr}+${unitOff}|0),1)`;
-    if (f.type.signed) return `((${raw})<<${32 - shift - f.width}>>${32 - f.width})`;
-    return `(((${raw})>>>${shift})&${(2 ** f.width - 1) >>> 0})`;
+    if (shift + f.width <= 32) {
+      const unitOff = (f.bitOffset >> 5) * 4;
+      const raw = `D.getUint32((${l.addr}+${unitOff}|0),1)`;
+      if (f.type.signed) return `((${raw})<<${32 - shift - f.width}>>${32 - f.width})`;
+      return `(((${raw})>>>${shift})&${(2 ** f.width - 1) >>> 0})`;
+    }
+    if (f.width > 32) unsup('a bitfield wider than 32 bits');
+    const byteOff = f.bitOffset >> 3;
+    const bit = f.bitOffset & 7;
+    const nbytes = Math.ceil((bit + f.width) / 8);
+    const at = this.newTmp(); this.#declareTmp(at);
+    const parts = [];
+    for (let i = 0; i < nbytes; i++) parts.push(`M.u8[${at}+${i}]*${2 ** (8 * i)}`);
+    const raw = `(${parts.join('+')})`;
+    // Math.floor, not >>>: the assembled value can exceed 32 bits.
+    const field = `(Math.floor(${raw}/${2 ** bit})%${2 ** f.width})`;
+    const body = f.type.signed
+      // Sign-extend by hand; the value is a plain Number, so the <<>> trick is unavailable.
+      ? `(${field}>=${2 ** (f.width - 1)}?${field}-${2 ** f.width}:${field})`
+      : field;
+    return `(${at}=(${l.addr}+${byteOff}|0),${body})`;
   }
 
   #assignBitfield(l, e) {
@@ -1466,13 +1499,27 @@ const coerceTo = (v, t) => coerce(v.js, T.decay(v.type), t);
 
 /** Write one bitfield straight into the image, for a file-scope initialiser. */
 function writeStaticBitfield(mod, base, f, value) {
-  const unitOff = (f.bitOffset >> 5) * 4;
   const shift = f.bitOffset & 31;
-  if (shift + f.width > 32) unsup('a static bitfield straddling a 32-bit unit');
-  const mask = (((2 ** f.width - 1) >>> 0) << shift) >>> 0;
-  const at = base + unitOff;
-  const cur = mod.dv.getUint32(at, true);
-  mod.dv.setUint32(at, (((cur & ~mask) | ((value << shift) & mask)) >>> 0), true);
+  if (shift + f.width <= 32) {
+    const mask = (((2 ** f.width - 1) >>> 0) << shift) >>> 0;
+    const at = base + (f.bitOffset >> 5) * 4;
+    const cur = mod.dv.getUint32(at, true);
+    mod.dv.setUint32(at, (((cur & ~mask) | ((value << shift) & mask)) >>> 0), true);
+    return;
+  }
+  if (f.width > 32) unsup('a static bitfield wider than 32 bits');
+  // Byte-wise, the same arithmetic as bitfieldPoke but executed here instead of emitted.
+  const bit = f.bitOffset & 7;
+  const nbytes = Math.ceil((bit + f.width) / 8);
+  const at = base + (f.bitOffset >> 3);
+  const v = Number(value) >>> 0;
+  for (let i = 0; i < nbytes; i++) {
+    const lo = Math.max(0, bit - 8 * i);
+    const hi = Math.min(8, bit + f.width - 8 * i);
+    const keep = (~(((1 << hi) - (1 << lo)) & 0xff)) & 0xff;
+    const from = 8 * i - bit + lo;
+    mod.u8[at + i] = (mod.u8[at + i] & keep) | (((Math.floor(v / 2 ** from) << lo) & (~keep & 0xff)));
+  }
 }
 
 /** The type a bitfield read has after the integer promotions. */
@@ -1482,16 +1529,37 @@ function bitfieldPromoted(f) {
   return f.width < 32 ? T.INT : T.UINT;
 }
 
-/** The read-modify-write for one bitfield, shared by assignment and initialisation. */
+/**
+ * The read-modify-write for one bitfield, shared by assignment and initialisation.
+ *
+ * `unitOff` is what the caller adds to the object's address before poking, so the two paths below
+ * differ in their unit as well as in their arithmetic: a 32-bit word for the aligned case, the
+ * containing byte for the packed one.
+ */
 function bitfieldPoke(f, atVar, valVar) {
-  const unitOff = (f.bitOffset >> 5) * 4;
   const shift = f.bitOffset & 31;
-  if (shift + f.width > 32) unsup('a bitfield straddling a 32-bit unit');
-  const mask = (((2 ** f.width - 1) >>> 0) << shift) >>> 0;
-  return {
-    unitOff,
-    poke: `D.setUint32(${atVar},((D.getUint32(${atVar},1)&${(~mask) >>> 0})|((${valVar}<<${shift})&${mask}))>>>0,1)`,
-  };
+  if (shift + f.width <= 32) {
+    const mask = (((2 ** f.width - 1) >>> 0) << shift) >>> 0;
+    return {
+      unitOff: (f.bitOffset >> 5) * 4,
+      poke: `D.setUint32(${atVar},((D.getUint32(${atVar},1)&${(~mask) >>> 0})|((${valVar}<<${shift})&${mask}))>>>0,1)`,
+    };
+  }
+  if (f.width > 32) unsup('a bitfield wider than 32 bits');
+  // Byte-wise, for a field `#pragma pack` left straddling a word: only the bytes the field actually
+  // covers are touched, and only the bits inside them.
+  const bit = f.bitOffset & 7;
+  const nbytes = Math.ceil((bit + f.width) / 8);
+  const steps = [];
+  for (let i = 0; i < nbytes; i++) {
+    const lo = Math.max(0, bit - 8 * i);                       // first bit of this byte in the field
+    const hi = Math.min(8, bit + f.width - 8 * i);             // one past the last
+    const keep = (~(((1 << hi) - (1 << lo)) & 0xff)) & 0xff;   // bits of this byte NOT in the field
+    const from = 8 * i - bit + lo;                             // bit of the value that lands at `lo`
+    steps.push(`M.u8[${atVar}+${i}]=(M.u8[${atVar}+${i}]&${keep})|` +
+      `((Math.floor(${valVar}/${2 ** from})<<${lo})&${(~keep) & 0xff})`);
+  }
+  return { unitOff: f.bitOffset >> 3, poke: `(${steps.join(',')})` };
 }
 
 function unifyCond(a, b) {

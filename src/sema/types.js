@@ -56,8 +56,8 @@ export const enumType = (tag, consts) =>
  * Build a struct or union type. `members` are {name, type, bits?}; layout comes straight from
  * abi.js so there is exactly one place that knows the i386 rules.
  */
-export function record(kind, tag, members, { packed = false } = {}) {
-  const lay = (kind === 'union' ? layoutUnion : layoutStruct)(members, { packed });
+export function record(kind, tag, members, { packed = false, maxAlign = null } = {}) {
+  const lay = (kind === 'union' ? layoutUnion : layoutStruct)(members, { packed, maxAlign });
   return { k: kind, tag, ...lay, complete: true };
 }
 

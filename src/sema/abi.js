@@ -51,16 +51,19 @@ const roundUp = (v, a) => (a <= 1 ? v : Math.ceil(v / a) * a);
  * @param fields [{name, type, bits?}] — `bits` present (including 0) makes it a bitfield.
  *               An unnamed zero-width bitfield is {name: null, type, bits: 0}.
  * @param packed __attribute__((packed)): every member aligns to 1.
+ * @param maxAlign `#pragma pack(n)` in force: every member aligns to min(natural, n). pack(1) is
+ *                 then exactly `packed`, but pack(2) and pack(4) are not expressible any other way.
  * @returns {k:'struct', size, align, fields:[{...,offset,bitOffset?}], byName}
  */
-export function layoutStruct(fields, { packed = false } = {}) {
+export function layoutStruct(fields, { packed = false, maxAlign = null } = {}) {
+  const clamp = (a) => (maxAlign ? Math.min(a, maxAlign) : a);
   let bitPos = 0;          // current position, in BITS from the start of the struct
   let align = 1;
   const out = [];
 
   for (const f of fields) {
     const t = f.type;
-    const ta = packed ? 1 : t.align;
+    const ta = packed ? 1 : clamp(t.align);
 
     if (f.bits === undefined) {
       // Plain member: advance to the next byte, then to its alignment.
@@ -115,18 +118,19 @@ export function layoutStruct(fields, { packed = false } = {}) {
   }
 
   if (packed) align = 1;
+  if (maxAlign) align = Math.min(align, maxAlign);
   const size = roundUp(Math.ceil(bitPos / 8), align);
   const byName = {};
   for (const f of out) if (f.name) byName[f.name] = f;
-  return { k: 'struct', size, align, fields: out, byName, packed };
+  return { k: 'struct', size, align, fields: out, byName, packed, maxAlign };
 }
 
 /** Unions: every member at 0; size is the max member size rounded to the max alignment. */
-export function layoutUnion(fields, { packed = false } = {}) {
+export function layoutUnion(fields, { packed = false, maxAlign = null } = {}) {
   let size = 0, align = 1;
   const out = [];
   for (const f of fields) {
-    const ta = packed ? 1 : f.type.align;
+    const ta = packed ? 1 : (maxAlign ? Math.min(f.type.align, maxAlign) : f.type.align);
     const fs = f.bits !== undefined ? Math.ceil(f.bits / 8) : f.type.size;
     size = Math.max(size, fs);
     align = Math.max(align, ta);
@@ -138,7 +142,8 @@ export function layoutUnion(fields, { packed = false } = {}) {
       : { ...f, offset: 0 });
   }
   if (packed) align = 1;
+  if (maxAlign) align = Math.min(align, maxAlign);
   const byName = {};
   for (const f of out) if (f.name) byName[f.name] = f;
-  return { k: 'union', size: roundUp(size, align), align, fields: out, byName, packed };
+  return { k: 'union', size: roundUp(size, align), align, fields: out, byName, packed, maxAlign };
 }

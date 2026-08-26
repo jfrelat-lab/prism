@@ -1188,3 +1188,71 @@ Two compiler gaps fell out of compiling the server, both ordinary C89 that nothi
   cooperative rather than blocking. Implemented for fd 0, never blocking, and the timeout is ignored
   rather than honoured — there is one thread inside the guest, so a wait here would be a deadlock and
   not a wait. Every caller so far polls.
+
+
+## The Csmith differential (P0.7)
+
+```
+node tools/csmith-diff.mjs 100            # 100 random programs against gcc -O0/-O2
+node tools/csmith-diff.mjs --seed=3 --keep
+```
+
+Every other gate here is a corpus somebody wrote, and a corpus somebody wrote is finite in a shape a
+person imagined. Csmith generates C at random -- a couple of thousand lines each, full of the integer
+promotions, bitfield packing, type punning and struct-by-value passing that real code does by
+accident -- and every program ends by printing a CRC over its whole global state. Two compilers that
+agree on that number agree about everything the program touched.
+
+**A divergence is not automatically a PRISM bug.** The first thing the tool checks is whether gcc
+agrees with ITSELF at -O0 and -O2. A program where it does not is thrown out before PRISM sees it:
+that is undefined behaviour csmith let through, or a gcc bug, and neither is evidence about PRISM.
+
+### Reducing a divergence without a reducer
+
+`creduce` is not installed and did not turn out to be needed. Three techniques, in the order they got
+used on the first wrong answer:
+
+1. **The per-variable CRC.** Run the program with argv `1` and csmith prints the running checksum
+   after *every* global. The CRC is cumulative, so only the FIRST differing line matters -- the other
+   332 were downstream. One variable, `g_76`, out of 378.
+2. **Inverting the CRC.** The checksum before `g_76` matched, so the state going in was known.
+   Brute-forcing all 256 values of an `int8_t` through csmith's own `transparent_crc` -- in the
+   container, using csmith's code rather than a reimplementation -- says what each side actually
+   held: gcc 0, PRISM 1.
+3. **The block-path diff.** Csmith writes `/* block id: N */` on every basic block it emits. Adding
+   `printf("B%d\n", N)` at each one, in the SAME modified program given to both compilers, turns
+   execution into a comparable trace. First divergence: step 13 of 73, gcc entering block 156 where
+   PRISM went to 161.
+
+That is a printf-bisect between two compilers, and it took the search from 1,608 lines to one `if`.
+
+### What it found in the first forty programs
+
+Six defects, none of which 1,775 hand-written corpus programs and four game targets had reached:
+
+* **An integer constant's type ignored its base.** C99 6.4.4.1 gives each constant the first type in
+  a list that can represent it, and the list depends on the suffix *and* on whether the constant was
+  written in decimal: a hexadecimal constant may become unsigned, a decimal one may not. So
+  `0xAD2A1758533D8CC8LL` is larger than LLONG_MAX and is therefore an **unsigned** long long, which
+  makes it positive. PRISM read it as a negative long long, `1UL < 0xAD2A1758533D8CC8LL` went the
+  wrong way, a branch was skipped and one global ended the run holding 1 instead of 0. **This was the
+  wrong answer.** The others below are refusals, which are loud; this one was silent.
+* **`#pragma pack` did nothing.** The preprocessor passed pragmas through, as gcc -E does, and the
+  parser then met a `#` it had no rule for. Implemented for real rather than skipped, because packing
+  changes struct layout, which is the ABI: `pack(1)`, `pack(2)`, `push` and `pop` all match gcc.
+* **Bitfields could not straddle a 32-bit unit.** The whole implementation assumed a field lived
+  inside one word, which is true of every ordinary struct and false the moment `#pragma pack(1)`
+  removes the alignment that guaranteed it. Now byte-wise: at most five bytes for a 32-bit field,
+  assembled with multiplication because a JS shift is 32-bit and five bytes is 40.
+* **`stdint.h` had no 64-bit half.** No `int64_t`, no `INT64_MAX`. Invisible to every hand-written
+  test and all four games, which use `long long` directly; csmith names `int64_t` in its first
+  hundred lines.
+* **C99 hexadecimal floating constants.** `0x1.0p-100f` is 2^-100 exactly, which is why csmith's
+  safe_math.h uses them for float overflow tests. PRISM's lexer had no rule, and the failure mode was
+  the bad kind: `parseFloat` returns 0 for one rather than refusing.
+* **The float math family.** `fabsf` and its fifteen siblings, declared as taking and returning
+  `float` rather than double -- not cosmetic, since PRISM rounds a float store with `Math.fround` and
+  a builtin declared in double would keep the extra precision through the call.
+* **A record rvalue through a dereference.** `*p` on a struct or union pointer went down the scalar
+  load path. The rule that a record rvalue IS its address was already applied at the two sibling
+  sites and missing here.
