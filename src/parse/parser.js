@@ -223,7 +223,7 @@ export class Parser {
         // and a string literal sizes the array by its bytes plus the NUL.
         let type = d.type;
         if (type.k === 'array' && type.n === null && init) {
-          if (init.n === 'initlist') type = T.array(type.of, initListExtent(init));
+          if (init.n === 'initlist') type = T.array(type.of, initListExtent(init, type.of));
           else if (init.expr?.n === 'str') {
             // Sized in ELEMENTS, so a wide literal in a wchar_t[] gets the same count as its
             // characters rather than four times as many.
@@ -987,6 +987,13 @@ export class Parser {
         this.i++;
         const field = this.expectId();
         let rec = e.type;
+        /*
+         * `->` decays its operand first: an ARRAY of structs is a valid left side, because it decays
+         * to a pointer. Without the decay the field was never found and the member's type silently
+         * became `int` -- so `sizeof(cases->c)` answered 4 instead of 32, and c-testsuite's 00205
+         * (a snippet of the J interpreter) printed one array element instead of four.
+         */
+        if (arrow && rec) rec = T.decay(rec);
         if (arrow && rec?.k === 'ptr') rec = rec.to;
         const f = rec && T.isRecord(rec) ? findField(rec, field) : null;
         e = { n: 'member', base: e, field, arrow, type: f?.type ?? T.INT, offset: f?.offset ?? null };
@@ -1169,15 +1176,70 @@ function numberLiteral(t) {
   return { n: 'num', value: v, type };
 }
 
-/** How many elements a brace initialiser actually reaches, designators included. */
-export function initListExtent(init) {
+/**
+ * How many elements a brace initialiser actually reaches, designators and BRACE ELISION included.
+ *
+ * Counting top-level items is right only when each element takes one. With elision an aggregate
+ * element swallows several, and getting this wrong is not a layout detail -- it is the array's
+ * length, so `sizeof(a)/sizeof(a[0])` comes out wrong and every loop over the table runs too long.
+ * c-testsuite's 00205 (a snippet of the J interpreter) writes ten seven-field structs as seventy
+ * bare scalars; counted item by item it became a 63-element array and printed 505 lines to gcc's 72.
+ *
+ * The decisions here are syntactic only -- is the item a braced list, is it a string literal -- and
+ * they MUST match `#elidable` in src/backend/emit.js, which makes the same calls when it writes the
+ * bytes. Two walkers, one rule; if they disagree the length and the contents disagree.
+ */
+export function initListExtent(init, elemType = null) {
   let idx = 0, max = 0;
-  for (const it of init.items) {
+  for (let i = 0; i < init.items.length;) {
+    const it = init.items[i];
     if (it.designators?.[0]?.index !== undefined) idx = it.designators[0].index;
+    if (elemType && !it.designators && it.value.n !== 'initlist' && elidesInto(elemType, it)) {
+      const next = consumeElided(elemType, init.items, i);
+      i = next > i ? next : i + 1;
+    } else {
+      i++;
+    }
     idx++;
     if (idx > max) max = idx;
   }
   return max;
+}
+
+/** Does this item begin an ELIDED initialiser for `type` — an aggregate given a bare expression? */
+function elidesInto(type, it) {
+  if (type.k !== 'array' && type.k !== 'struct' && type.k !== 'union') return false;
+  let e = it.value.expr;
+  while (e && e.n === 'cast') e = e.expr;
+  if (!e) return false;
+  // A string literal is a complete initialiser for a character array, not one of its elements.
+  if (e.n === 'str' && type.k === 'array' && type.of.k === 'scalar'
+      && (type.of.size === 1 || type.of.size === 4)) return false;
+  return true;
+}
+
+/** The index of the first item an elided `type` does NOT take, starting at `i`. */
+function consumeElided(type, items, i) {
+  if (type.k === 'array') {
+    const n = type.n ?? 0;
+    for (let k = 0; k < n && i < items.length; k++) {
+      if (items[i].designators) return i;
+      if (items[i].value.n === 'initlist') i++;
+      else if (elidesInto(type.of, items[i])) i = consumeElided(type.of, items, i);
+      else i++;
+    }
+    return i;
+  }
+  const named = (type.fields ?? []).filter(f => f.name && f.width !== 0);
+  const upto = type.k === 'union' ? Math.min(1, named.length) : named.length;
+  for (let k = 0; k < upto && i < items.length; k++) {
+    if (items[i].designators) return i;
+    if (items[i].value.n === 'initlist') i++;
+    else if (named[k].bits !== undefined) i++;
+    else if (elidesInto(named[k].type, items[i])) i = consumeElided(named[k].type, items, i);
+    else i++;
+  }
+  return i;
 }
 
 /** The length of a string literal in ELEMENTS — wide units for `L"…"`, bytes otherwise.

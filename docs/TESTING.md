@@ -1360,3 +1360,40 @@ lines. Making `far` and `near` keywords everywhere would break any program with 
 name, for one construct. Recognised only where nothing else can be meant: inside a declarator,
 immediately before a star. A dialect is a cost paid by every future program, so it should be bought
 one construct at a time.
+
+
+### Brace elision, and a rewrite that had to be undone
+
+Heretic writes its tables the way most C does:
+
+    struct { mobjtype_t type; int speed[2]; } MonsterMissileInfo[] = {
+        { MT_IMPBALL, 10, 20 },        // speed[] takes the 10 and the 20, with no braces of its own
+
+That is brace elision (C89 6.7.8p17), and tier-0 refused it: the bare `10` was handed to `int[2]`.
+
+**The first attempt rewrote `#staticList` as a clean stream** — items consumed by whoever needs
+them, no one-to-one matching. It was shorter, it read better, and it broke three things the
+one-to-one version had right, all of which the c-testsuite gate caught as **wrong answers where
+there had been none**: designators that go backwards (`{ .b = 2, .a = 1 }` lost the `.a`, because the
+loop was bounded by the member cursor), array designators with holes, and flattened anonymous unions.
+
+Worse than any single break: two programs went from *refused* to *compiled and wrong*. A loud failure
+became a silent one, which is the only direction that actually matters.
+
+So the rewrite was thrown away and elision was grafted onto the proven walk instead — one extra
+branch, taken only when an aggregate member meets a non-braced item. The lesson is not "do not
+refactor": it is that a rewrite of code whose correctness lives in its edge cases must be measured
+against those edge cases before it is believed, and the cheapest way to be wrong is to find the new
+version more elegant.
+
+Two further defects fell out of it, both only visible once elision made the programs compile:
+
+* **`sizeof(a->c)` where `a` is an array.** `->` decays its left operand, and PRISM did not — so the
+  field was never found and the member's type silently became `int`. `sizeof(cases->c)` answered 4
+  instead of 32, and a loop over a four-element array ran once.
+* **The array's LENGTH ignored elision.** `initListExtent` counted top-level items, so ten
+  seven-field structs written as seventy bare scalars became a 63-element array. The contents were
+  byte-identical to gcc and the program still printed 505 lines to gcc's 72. The counter and
+  `#elidable` now make the same syntactic decisions and say so in both files: two walkers, one rule.
+
+c-testsuite: 199 → **201 of 219, still zero wrong answers.**

@@ -475,7 +475,29 @@ export class FunctionEmitter {
     if (T.isRecord(type)) {
       // Bitfields ARE initialisable members and must not be filtered out: skipping them left
       // `struct { signed s:3; unsigned u:3; } x = {-1,-1}` completely unwritten.
-      const named = type.fields.filter(f => f.name && f.width !== 0);
+      /*
+       * The members an initialiser list walks, one per OFFSET.
+       *
+       * An anonymous union is flattened into its parent's field list by the parser, which is what
+       * makes `v.c` resolve without a path -- but it also loses the grouping, and positional
+       * initialisation needs it:
+       *
+       *     struct { int a, b; union { int c, d; }; struct S1 s; } v = {1, 2, 3, {4, 5}};
+       *
+       * Here `c` and `d` share an offset and between them take ONE item; the braced pair belongs to
+       * `s`. Without the grouping the pair went to `d`, which overwrote `c` -- a silently wrong
+       * object where the previous code had at least refused. Two members at one offset inside a
+       * struct can only have come from a union.
+       */
+      const seen = new Set();
+      const named = type.fields.filter((f) => {
+        if (!f.name || f.width === 0) return false;
+        if (type.k === 'struct') {
+          if (seen.has(f.offset)) return false;
+          seen.add(f.offset);
+        }
+        return true;
+      });
       let k = 0;
       for (const it of init.items) {
         let f = named[k];
@@ -509,7 +531,7 @@ export class FunctionEmitter {
       if (this.#staticScalar(addr, type, init.expr)) return;
     }
     if (init.n === 'initlist') { this.#staticList(addr, type, init); return; }
-    unsup(`a non-constant static initialiser (${describeExpr(init.expr ?? init)})`);
+    unsup(`a non-constant static initialiser (${describeExpr(init.expr ?? init)}) [type ${T.typeName(type)}]`);
   }
 
   /** One constant scalar, pointer or string into the image. Returns false if not constant. */
@@ -635,7 +657,17 @@ export class FunctionEmitter {
       case 'index': {
         const base = this.#lvalAddrConst(e.base) ?? this.#addrConst(e.base);
         if (base === null) return null;
-        const bt = T.decay(e.base.type ?? T.INT);
+        /*
+         * The element size, and it cannot always come from the expression's own type: nothing
+         * annotates an `ident` node inside a file-scope initialiser, so `&S_sfx[69]` -- Heretic's
+         * sound table pointing at its own entries -- arrived here with no type and was refused.
+         * The declaration knows, so ask it.
+         */
+        let bt = T.decay(e.base.type ?? T.INT);
+        if (bt.k !== 'ptr' && e.base.n === 'ident') {
+          const g = this.ctx.globals?.get(e.base.name) ?? this.locals?.get(e.base.name);
+          if (g?.type) bt = T.decay(g.type);
+        }
         if (bt.k !== 'ptr') return null;
         let n;
         try { n = evalConstNumber(e.index); } catch { return null; }
@@ -646,14 +678,34 @@ export class FunctionEmitter {
     return null;
   }
 
+  /**
+   * A file-scope brace initialiser, written straight into the image.
+   *
+   * Members are matched one-to-one against items, EXCEPT that an aggregate member handed a
+   * non-braced item consumes as many following items as it needs. That is brace elision (C89
+   * 6.7.8p17), and it is how most tables of structs are actually written:
+   *
+   *     struct { mobjtype_t type; int speed[2]; } MonsterMissileInfo[] = {
+   *         { MT_IMPBALL, 10, 20 },        // speed[] takes the 10 and the 20, with no braces
+   *
+   * It is grafted onto the one-to-one walk rather than replacing it. Rewriting this as a pure stream
+   * looked cleaner and broke three things the one-to-one version had right -- designators that go
+   * backwards, flattened anonymous unions, and array designators with holes -- so the elision is
+   * confined to the one branch that needs it.
+   */
   #staticList(addr, type, init) {
     if (type.k === 'array') {
       let idx = 0;
-      for (const it of init.items) {
+      for (let i = 0; i < init.items.length; i++) {
+        const it = init.items[i];
         if (it.designators) idx = it.designators[0].index ?? idx;
-        if (it.value.n === 'initlist') this.#staticList(addr + idx * type.of.size, type.of, it.value);
-        else if (!this.#staticScalar(addr + idx * type.of.size, type.of, it.value.expr)) {
-          unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)})`);
+        if (it.value.n === 'initlist') {
+          this.#staticList(addr + idx * type.of.size, type.of, it.value);
+        } else if (this.#elidable(type.of, it)) {
+          i = this.#staticElided(addr + idx * type.of.size, type.of, init.items, i) - 1;
+        } else if (!this.#staticScalar(addr + idx * type.of.size, type.of, it.value.expr)) {
+          unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
+            `into element ${idx} of type ${T.typeName(type.of)}`);
         }
         idx++;
       }
@@ -662,9 +714,14 @@ export class FunctionEmitter {
     if (T.isRecord(type)) {
       // Bitfields are initialisable here too. The dynamic path was fixed first and this one was
       // not, so `struct s x = { -123, -456 };` at file scope still wrote nothing (gcc's bitfld-4.c).
-      const named = type.fields.filter(f => f.name && f.width !== 0);
+      const named = type.fields.filter(f => f.width !== 0
+        // An ANONYMOUS struct or union member is initialised positionally like any other; it just
+        // has no name to be designated by. Dropping it gave its item to the NEXT member and left the
+        // union unwritten (c-testsuite 00050).
+        && (f.name || (f.bits === undefined && T.isRecord(f.type))));
       let k = 0;
-      for (const it of init.items) {
+      for (let i = 0; i < init.items.length; i++) {
+        const it = init.items[i];
         let f = named[k];
         if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
         if (!f) break;
@@ -677,14 +734,100 @@ export class FunctionEmitter {
           writeStaticBitfield(this.mod, addr, f, v);
         } else if (it.value.n === 'initlist') {
           this.#staticList(addr + f.offset, f.type, it.value);
+        } else if (this.#elidable(f.type, it)) {
+          i = this.#staticElided(addr + f.offset, f.type, init.items, i) - 1;
         } else if (!this.#staticScalar(addr + f.offset, f.type, it.value.expr)) {
-          unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)})`);
+          unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
+            `into field '${f.name}' of type ${T.typeName(f.type)}`);
         }
         k = named.indexOf(f) + 1;
       }
       return;
     }
     if (init.items.length) this.#staticScalar(addr, type, init.items[0].value.expr);
+  }
+
+  /**
+   * Would this member take its initialiser from the enclosing list, with no braces of its own?
+   *
+   * Only for an aggregate given a bare expression — and NOT for a character array given a string
+   * literal, which is a complete initialiser for the whole array rather than one element of it:
+   * `{ "-phopow", &S_sfx[9], 32 }` fills `char name[8]` from the string and moves on.
+   */
+  #elidable(type, it) {
+    if (type.k !== 'array' && !T.isRecord(type)) return false;
+    if (it.designators) return false;
+    /*
+     * REFUSE a struct that contains a flattened anonymous union.
+     *
+     * The parser folds an anonymous union's members into the parent's field list, which is what
+     * makes `v.c` resolve without a path -- and it destroys the grouping that positional
+     * initialisation needs: `{1, 2, 3, {4, 5}}` must give the 3 to the union and the pair to the
+     * next member, but a flat list of a, b, c, d, s gives the pair to `d` and overwrites `c`.
+     *
+     * Two named fields at one offset inside a struct can only have come from a union. Refusing keeps
+     * the failure LOUD, which is the whole point: before elision existed this shape was refused, and
+     * making it compile-but-wrong would have been a strictly worse outcome.
+     */
+    if (type.k === 'struct') {
+      const at = new Set();
+      for (const f of type.fields) {
+        if (!f.name || f.width === 0) continue;
+        if (at.has(f.offset)) return false;
+        at.add(f.offset);
+      }
+    }
+    let e = it.value.expr;
+    while (e && e.n === 'cast') e = e.expr;
+    if (!e) return false;
+    if (e.n === 'str' && type.k === 'array' && type.of.k === 'scalar'
+        && (type.of.size === 1 || type.of.size === 4)) return false;
+    return true;
+  }
+
+  /**
+   * Fill one elided aggregate from `items` starting at `i`, and return the index of the first item
+   * it did not take. Recurses, because elision nests: a struct of arrays takes scalars all the way
+   * down.
+   */
+  #staticElided(addr, type, items, i) {
+    if (type.k === 'array') {
+      const n = type.n ?? 0;
+      for (let idx = 0; idx < n && i < items.length; idx++) {
+        const it = items[i];
+        if (it.designators) return i;                 // a designator belongs to the outer object
+        if (it.value.n === 'initlist') { this.#staticList(addr + idx * type.of.size, type.of, it.value); i++; }
+        else if (this.#elidable(type.of, it)) i = this.#staticElided(addr + idx * type.of.size, type.of, items, i);
+        else if (this.#staticScalar(addr + idx * type.of.size, type.of, it.value.expr)) i++;
+        else unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
+          `into element ${idx} of type ${T.typeName(type.of)}`);
+      }
+      return i;
+    }
+    // A union takes exactly one item, into its first member.
+    const named = type.fields.filter(f => f.width !== 0
+        // An ANONYMOUS struct or union member is initialised positionally like any other; it just
+        // has no name to be designated by. Dropping it gave its item to the NEXT member and left the
+        // union unwritten (c-testsuite 00050).
+        && (f.name || (f.bits === undefined && T.isRecord(f.type))));
+    const upto = type.k === 'union' ? Math.min(1, named.length) : named.length;
+    for (let k = 0; k < upto && i < items.length; k++) {
+      const it = items[i];
+      if (it.designators) return i;
+      const f = named[k];
+      if (f.flexible) unsup('initialising a flexible array member');
+      if (f.bits !== undefined) {
+        let v;
+        try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
+        writeStaticBitfield(this.mod, addr, f, v);
+        i++;
+      } else if (it.value.n === 'initlist') { this.#staticList(addr + f.offset, f.type, it.value); i++; }
+      else if (this.#elidable(f.type, it)) i = this.#staticElided(addr + f.offset, f.type, items, i);
+      else if (this.#staticScalar(addr + f.offset, f.type, it.value.expr)) i++;
+      else unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
+        `into field '${f.name}' of type ${T.typeName(f.type)}`);
+    }
+    return i;
   }
 
   #stmt(s, escaped) {
