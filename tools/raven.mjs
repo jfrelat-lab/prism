@@ -26,6 +26,9 @@ import { fileURLToPath } from 'node:url';
 import { compileProgram } from '../src/compile.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
+import { installCrtStatus } from '../src/env/crtstatus.js';
+import { installVgaDac } from '../src/env/vgadac.js';
+import { writeIndexedPng } from './png.mjs';
 import { installWatcom } from '../src/env/watcom.js';
 import { HEADERS } from '../src/env/headers.js';
 import { WATCOM_VARS } from '../src/env/headers-watcom.js';
@@ -84,7 +87,27 @@ function resolver(name) {
   return { path: `<missing:${name}>`, text: '' };
 }
 
-const units = unitNames.map(f => ({ file: join(DIR, f), source: readFileSync(join(DIR, f), 'latin1') }));
+/*
+ * R_DRAW.C is compiled with `__WATCOMC__` UNDEFINED, and nothing else is.
+ *
+ * The inner rendering loops -- R_DrawColumn, R_DrawSpan -- have C bodies in that file, behind
+ *
+ *     #ifndef __WATCOMC__
+ *
+ * because Watcom takes them from LINEAR.ASM instead. This is the same switch as Quake's `id386=0`:
+ * the source ships both, and a build selects one. It is stated here rather than buried because the
+ * identity macro is doing double duty -- everywhere else `__WATCOMC__` selects the DOS platform,
+ * which I_IBM.C genuinely needs (its `externdata_t` exists only under it), so it cannot simply be
+ * left undefined for the whole program.
+ *
+ * Until PRISM compiles the assembly (roadmap P5.2), this is what makes the renderer exist at all.
+ */
+const C_RENDERER = new Set(['r_draw.c']);
+const units = unitNames.map(f => ({
+  file: join(DIR, f),
+  source: readFileSync(join(DIR, f), 'latin1'),
+  ...(C_RENDERER.has(f.toLowerCase()) ? { defines: { __WATCOMC__: null } } : {}),
+}));
 units.push({ file: 'prism-watcom-vars.c', source: WATCOM_VARS });
 console.log(`${units.reduce((n, u) => n + u.source.split('\n').length, 0).toLocaleString('en')} lines`);
 
@@ -97,6 +120,8 @@ try {
     resolve: resolver,
     memory: 96 * 1024 * 1024,
     pack: 1,                       // CCOPTS /zp1
+    // --safepoints: make a loop in the game's own C observable. See docs/TESTING.md.
+    safepoints: process.argv.includes('--safepoints'),
     collect: true,
   });
 } catch (e) {
@@ -136,8 +161,60 @@ if (process.argv.includes('--run')) {
     console.log(`data from ${dataArg}: ${Object.keys(files).length} files`);
   }
   installStdio(program.M, { files });
-  installPorts(program.M);
+  const machine = installPorts(program.M);
+  // 0x3DA. Without it I_WaitVBL never returns: the game's whole sense of time passing is bit 3.
+  installCrtStatus(machine);
+  // The colour DAC: without it the framebuffer is 64,000 indices into nothing.
+  const dac = installVgaDac(machine);
   const host = installWatcom(program.M);
+
+  /*
+   * --safepoints: sample which loop the game is in. A DOS game that stops making progress is almost
+   * always waiting on an interrupt that nothing drives, and that wait is a loop in its own C -- no
+   * call, no service, invisible to every other profiler here.
+   */
+  /*
+   * Drive the timer interrupt from the safepoint.
+   *
+   * This is the same conclusion MAME's keyboard reached from the other direction: a DOS program's
+   * asynchronous events arrive while it is inside a loop of its own C, and a safepoint is the ONLY
+   * place this runtime can interrupt one. `TryRunTics` calls no service and reads no port -- it
+   * spins on `ticcount`, which only the ISR writes -- so nothing outside can see it happening.
+   *
+   * The rate is expressed in safepoint hits rather than in seconds because that is what is
+   * available deterministically. It is not the real 35 Hz; it is a tic every N iterations of guest
+   * code, which is enough to make the game advance and reproducible run to run.
+   */
+  const TICK_EVERY = +(opt('tick') ?? 40);
+  let sinceTick = 0;
+  const driveTimer = () => {
+    if (++sinceTick < TICK_EVERY) return;
+    sinceTick = 0;
+    host.deliverTimer();
+  };
+
+  if (process.argv.includes('--safepoints')) {
+    const table = program.mod.safepoints;
+    const hits = new Map();
+    const EVERY = +(opt('budget') ?? 20000);
+    program.M.spBudget = EVERY;
+    const deadline = +(opt('seconds') ?? 20) * 1000;
+    const started = performance.now();
+    let n = 0;
+    program.M.sp_ = (id) => {
+      program.M.spBudget = EVERY;
+      driveTimer();
+      hits.set(id, (hits.get(id) ?? 0) + 1);
+      if ((++n & 63) !== 0 || performance.now() - started < deadline) return;
+      console.log(`\n[safepoints] after ${(deadline / 1000).toFixed(0)} s: ` +
+        `${host.state.ticks} timer interrupts, vectors ` +
+        `${[...host.state.vectors.keys()].map(k => '0x' + k.toString(16)).join(' ') || 'none'}`);
+      for (const [k, c] of [...hits].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+        console.log(`  ${String(c * EVERY).padStart(14)} iterations  ${table[k]}`);
+      }
+      process.exit(0);
+    };
+  }
 
   // Live output: the start-up banner is the only progress report there is before a frame exists.
   const write = program.M.write.bind(program.M);
@@ -152,10 +229,18 @@ if (process.argv.includes('--run')) {
     console.log((e.stack || '').split('\n').slice(1, 14).join('\n'));
   }
   const s = host.state;
+  console.log(`timer interrupts delivered: ${s.ticks}`);
   console.log(`video mode ${s.mode === null ? '(none set)' : '0x' + s.mode.toString(16)} · ` +
     `${s.width}x${s.height} · vectors installed: ${[...s.vectors.keys()].map(k => '0x' + k.toString(16)).join(' ') || 'none'}`);
   const px = program.M.u8.subarray(s.pixels, s.pixels + s.width * s.height);
   let nz = 0;
   for (const b of px) if (b) nz++;
-  console.log(`framebuffer at 0x${s.pixels.toString(16)}: ${nz} non-zero pixels of ${px.length}`);
+  const pens = new Set(px).size;
+  console.log(`framebuffer at 0x${s.pixels.toString(16)}: ${nz} non-zero pixels of ${px.length}, ` +
+    `${pens} distinct colours`);
+  const png = opt('png');
+  if (png) {
+    writeIndexedPng(png, { pixels: px, width: s.width, height: s.height, palette: dac.palette });
+    console.log(`wrote ${png} (${s.width}x${s.height})`);
+  }
 }

@@ -306,6 +306,14 @@ export const BUILTINS = new Map(Object.entries({
   abort: { ret: V, params: [] },
   atoi: { ret: I, params: [P] },
   atol: { ret: T.LONG, params: [P] },
+  // Watcom #pragma aux intrinsics; see src/runtime/runtime.js. A program's own definition wins.
+  FixedMul: { ret: I, params: [I, I] },
+  FixedDiv2: { ret: I, params: [I, I] },
+  stricmp: { ret: I, params: [P, P] },
+  strcmpi: { ret: I, params: [P, P], impl: 'stricmp' },
+  strnicmp: { ret: I, params: [P, P, U] },
+  strupr: { ret: P, params: [P] },
+  strlwr: { ret: P, params: [P] },
   strtol: { ret: T.LONG, params: [P, P, I] },
   strtoul: { ret: T.ULONG, params: [P, P, I] },
   abs: { ret: I, params: [I] },
@@ -505,7 +513,18 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   // Parse every unit first: pass 1 must see all declarations before any body is emitted.
   const parsed = [];
   for (const u of units) {
-    const pp = new Preprocessor({ defines: mergeDefines(TARGET_DEFINES, defines), resolve: resolver });
+    /*
+     * Per-unit defines, layered over the program's.
+     *
+     * A makefile compiles some files differently -- Heretic's own compiles `i_ibm.c` with a
+     * different option line from every other file -- so one `defines` for a whole program is not
+     * how these builds actually work. `null` UNDEFINES, which is what selects a source's C fallback
+     * where the compiler's own identity macro selects assembly.
+     */
+    const pp = new Preprocessor({
+      defines: mergeDefines(mergeDefines(TARGET_DEFINES, defines), u.defines ?? {}),
+      resolve: resolver,
+    });
     const tokens = pp.run(u.source, u.file);
     const { unit, scope } = parse(tokens, { file: u.file, pack });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });

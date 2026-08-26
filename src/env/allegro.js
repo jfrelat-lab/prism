@@ -351,27 +351,7 @@ export function installAllegro(M, {
     delay: () => 0,
     filelength: () => -1,
 
-    /** DOS's case-insensitive compare, which msdos.c parses its command line with. */
-    stricmp: (a, b) => {
-      const x = mod.cstr(a).toLowerCase(), y = mod.cstr(b).toLowerCase();
-      return x < y ? -1 : x > y ? 1 : 0;
-    },
   };
-  api.strcmpi = api.stricmp;
-  /*
-   * The rest of the DOS string family. Not Allegro's -- they are the compiler's runtime, and Watcom,
-   * Borland and DJGPP all ship them -- but they live here beside stricmp rather than in a fourth
-   * file for one function each.
-   */
-  api.strnicmp = (a, b, n) => {
-    const x = mod.cstr(a).slice(0, n | 0).toLowerCase();
-    const y = mod.cstr(b).slice(0, n | 0).toLowerCase();
-    return x < y ? -1 : x > y ? 1 : 0;
-  };
-  api.strupr = (p) => { writeBack(p, mod.cstr(p).toUpperCase()); return p; };
-  api.strlwr = (p) => { writeBack(p, mod.cstr(p).toLowerCase()); return p; };
-  // In place, and only over the bytes that were already there: these return their own argument.
-  const writeBack = (p, str) => { for (let i = 0; i < str.length; i++) M.u8[p + i] = str.charCodeAt(i) & 0xff; };
 
   /*
    * ---- the mixer.
@@ -640,8 +620,5 @@ export function allegroBuiltins(T) {
     _farnspeekl: f(T.ULONG, T.ULONG),
     delay: f(V, U), filelength: f(T.LONG, I),
 
-    stricmp: f(I, P, P), strnicmp: f(I, P, P, U),
-    strupr: f(P, P), strlwr: f(P, P),
-    strcmpi: { ret: I, params: [P, P], impl: 'stricmp' },
   };
 }

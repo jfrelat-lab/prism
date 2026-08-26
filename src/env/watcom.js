@@ -58,6 +58,7 @@ export function installWatcom(M, {
     text: [],                // what the program wrote through graph.h, for a harness to read
     retrace: 0,
     services: [],            // TSM timer services registered but not yet driven
+    ticks: 0,                // timer interrupts delivered
   };
   M.watcom = state;
 
@@ -121,8 +122,14 @@ export function installWatcom(M, {
      * nothing to install it into -- and recorded rather than discarded, because a recorded handler
      * can be CALLED. That is the whole mechanism by which this host delivers an interrupt.
      */
-    _dos_setvect: (num, fn) => { state.vectors.set(num | 0, fn >>> 0); return 0; },
-    _dos_getvect: (num) => state.vectors.get(num | 0) ?? 0,
+    /*
+     * The vector table. Bit 15 is DOS4GW's "this is an IRQ, not a software interrupt" flag --
+     * Heretic installs its keyboard handler as `_dos_setvect(0x8000 | KEYBOARDINT, ...)` -- so it is
+     * masked off before storing. Keeping it would file the handler under 0x8009 and leave
+     * deliverKeyboard looking for a vector 9 that was never there.
+     */
+    _dos_setvect: (num, fn) => { state.vectors.set((num | 0) & 0xff, fn >>> 0); return 0; },
+    _dos_getvect: (num) => state.vectors.get((num | 0) & 0xff) ?? 0,
     _dos_irqenable: () => 0,
     _dos_irqdisable: () => 0,
     _enable: () => 0,
@@ -228,6 +235,38 @@ export function installWatcom(M, {
    * to do is queue the code and call the function. Nothing about the game is special-cased: it is
    * its own ISR, running its own code.
    */
+  /**
+   * Deliver a timer interrupt: call the handler the program installed on vector 8.
+   *
+   * `IO_TimerISR` is four lines -- `ticcount++` and an EOI to the PIC -- and `ticcount` is the
+   * game's ENTIRE notion of time. Nothing else advances it, so without this `TryRunTics` waits for a
+   * tic that never comes; the safepoint profiler found it there after 280 million iterations.
+   *
+   * Rate is the caller's business, because it is the caller that knows what clock exists. Heretic
+   * reprograms PIT channel 0 for 35 Hz and counts on that; a host with a real clock should call this
+   * at 35 Hz, and a deterministic harness at whatever rate makes its frame budget.
+   */
+  function deliverTimer() {
+    let fired = false;
+    // Vector 8, the PC timer interrupt...
+    const isr = state.vectors.get(0x08);
+    if (isr) { M.icall(isr, []); fired = true; }
+    /*
+     * ...and DMX's timer services, which is where the tic ACTUALLY comes from in these games.
+     * Heretic's own `IO_StartupTimer()` call is commented out in its source; time arrives instead
+     * through `TSM_NewService(I_TimerISR, 35, 255, 0)` in I_SOUND.C, registered with the sound
+     * library. Driving only vector 8 delivered zero interrupts and the game waited for ever --
+     * which is the kind of thing you find by reading the game's source, not by assuming a PC.
+     */
+    for (const fn of state.services) {
+      if (!fn) continue;
+      M.icall(fn, []);
+      fired = true;
+    }
+    if (fired) state.ticks++;
+    return fired;
+  }
+
   function deliverKeyboard(scan) {
     const isr = state.vectors.get(0x09);
     if (!isr) return false;
@@ -245,7 +284,7 @@ export function installWatcom(M, {
   }
 
   Object.assign(M.rt, api);
-  M.watcomHost = { state, deliverKeyboard, publishGeometry, keys, onPresent, stopAfterFrames };
+  M.watcomHost = { state, deliverKeyboard, deliverTimer, publishGeometry, keys, onPresent, stopAfterFrames };
   return M.watcomHost;
 }
 

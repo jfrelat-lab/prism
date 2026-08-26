@@ -163,6 +163,46 @@ function makeLibc(M) {
     calloc: (n, sz) => { const p = malloc(Math.imul(n, sz)); M.zero(p, Math.imul(n, sz)); return p; },
     exit: (code) => { throw new ExitCalled(code | 0); },
     abort: () => { throw new Trap('abort() called'); },
+    /*
+     * The DOS string family. Not any one library's -- Watcom, Borland and DJGPP all ship them, and
+     * MAME, Heretic and Hexen all call them -- so they belong in the runtime rather than beside the
+     * shim that happened to need them first. They lived in src/env/allegro.js until Heretic, which
+     * installs no Allegro, died on `stricmp is not a function` while opening its WAD.
+     */
+    stricmp: (a, b) => {
+      const x = M.cstr(a).toLowerCase(), y = M.cstr(b).toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    },
+    strnicmp: (a, b, n) => {
+      const x = M.cstr(a).slice(0, n | 0).toLowerCase(), y = M.cstr(b).slice(0, n | 0).toLowerCase();
+      return x < y ? -1 : x > y ? 1 : 0;
+    },
+    // In place, over the bytes already there, returning their own argument.
+    strupr: (p) => { const s = M.cstr(p).toUpperCase(); for (let i = 0; i < s.length; i++) M.u8[p + i] = s.charCodeAt(i) & 0xff; return p; },
+    strlwr: (p) => { const s = M.cstr(p).toLowerCase(); for (let i = 0; i < s.length; i++) M.u8[p + i] = s.charCodeAt(i) & 0xff; return p; },
+
+    /*
+     * Watcom `#pragma aux` intrinsics, DERIVED from the instruction sequences Heretic and Hexen
+     * declare in DOOMDEF.H rather than guessed at from the names:
+     *
+     *   FixedMul   imul ebx ; shrd eax,edx,16          edx:eax = a*b signed, then the 64-bit pair
+     *                                                  shifted right 16 into eax  ->  (a*b) >> 16
+     *   FixedDiv2  cdq ; shld edx,eax,16 ; sal eax,16  edx:eax = a << 16 sign-extended,
+     *              ; idiv ebx                          then divided by b  ->  (a << 16) / b
+     *
+     * These games DECLARE the two functions and never define them in C, so they resolve here. A
+     * program that defines its own wins, because a definition beats a builtin -- which is what keeps
+     * Doom on its own m_fixed.c versions.
+     *
+     * BigInt because both intermediates are genuinely 64-bit: `a*b` overflows int32 for any pair
+     * whose product exceeds 2^31, which is most of them in a renderer.
+     */
+    FixedMul: (a, b) => Number(BigInt.asIntN(32, (BigInt(a | 0) * BigInt(b | 0)) >> 16n)),
+    FixedDiv2: (a, b) => {
+      if ((b | 0) === 0) return (a | 0) < 0 ? -2147483648 : 2147483647;   // idiv would trap; saturate
+      return Number(BigInt.asIntN(32, (BigInt(a | 0) << 16n) / BigInt(b | 0)));
+    },
+
     atoi: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
 
     /*
