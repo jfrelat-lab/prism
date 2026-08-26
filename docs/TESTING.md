@@ -1256,3 +1256,24 @@ Six defects, none of which 1,775 hand-written corpus programs and four game targ
 * **A record rvalue through a dereference.** `*p` on a struct or union pointer went down the scalar
   load path. The rule that a record rvalue IS its address was already applied at the two sibling
   sites and missing here.
+
+
+### The refusals csmith left behind, and one that was a trap
+
+Two causes accounted for every remaining PRISM failure in the first forty programs.
+
+**Compound assignment to a bitfield** was refused outright. It is a read, an operation in the
+*promoted* type, and a store back, and the promotion is the part that makes a bitfield different:
+`unsigned f:3` promotes to `int`, so `f -= 1` on a zero field computes -1 in int and truncates to 7,
+never to a three-bit borrow. `bitfieldPromoted` already encoded that rule, so the arithmetic just had
+to happen there.
+
+**`'comma' is not an lvalue`** looked like the two GNU extensions `(a, b) = x` and `(a = b) = c`, and
+implementing those would have been wrong: gcc removed them years ago and **gcc 12 rejects both**, so
+PRISM would have started accepting programs the reference refuses — a divergence in the one direction
+no gate looks at. Checking with the oracle before implementing is what caught it.
+
+What csmith actually writes is `(a, s).f` and `(s = t).f` on RECORDS, which is ordinary C. Neither
+result is an lvalue; tier-0 simply needs an address for a record, for exactly the reason the
+struct-valued `?:` beside it needed one. Restricted to records, it stays a tier-0 implementation
+detail rather than a dialect — and the scalar forms are still refused, as gcc refuses them.

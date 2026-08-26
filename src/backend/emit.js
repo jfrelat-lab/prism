@@ -899,6 +899,29 @@ export class FunctionEmitter {
        * SQLite's generated parser writes exactly this shape, and refusing it left the entire SQL
        * parser unimplemented.
        */
+      /*
+       * A record-valued comma or assignment: `(a, s).f` and `(s = t).f` are both ordinary C, and
+       * neither result is an lvalue -- but tier-0 needs an ADDRESS for a record all the same, for
+       * exactly the reason the `cond` case below explains.
+       *
+       * Deliberately NOT the GNU lvalue extensions. `(a, b) = x` and `(a = b) = c` on scalars were
+       * removed from gcc years ago and gcc 12 rejects them, so accepting them here would make PRISM
+       * compile programs the reference will not -- a divergence in the direction no gate looks.
+       * Restricting to records keeps this a tier-0 implementation detail rather than a dialect.
+       */
+      case 'comma': {
+        // The parser leaves a comma's own type null, so the type is the RIGHT operand's.
+        if (!T.isRecord(e.type ?? e.b?.type ?? T.INT)) break;
+        const left = this.#rval(e.a);
+        const l = this.#lval(e.b);
+        return { ...l, addr: `(${left.js},${l.addr})` };
+      }
+      case 'assign': {
+        if (!T.isRecord(e.type ?? T.INT)) break;
+        const done = this.#rval(e);          // performs the assignment
+        const l = this.#lval(e.lhs);         // then the object it wrote to
+        return { ...l, addr: `(${done.js},${l.addr})` };
+      }
       case 'cond': {
         if (!T.isRecord(e.type ?? T.INT)) break;
         const off = this.slot(e.type.size, e.type.align);
@@ -1469,11 +1492,23 @@ export class FunctionEmitter {
   }
 
   #assignBitfield(l, e) {
-    if (e.op !== '=') unsup('compound assignment to a bitfield');
     const f = l.bitfield;
     const v = this.newTmp(); this.#declareTmp(v);
     const at = this.newTmp(); this.#declareTmp(at);
-    const rhs = this.#rvalCoerced(e.rhs, f.type);
+    /*
+     * `b.f += x` is a read, an operation in the PROMOTED type, and a store back -- and the promotion
+     * is where a bitfield differs from anything else: `unsigned f:3` promotes to `int`, so
+     * `f -= 1` on a zero field is -1 in int and then truncates to 7, not to some 3-bit borrow.
+     * bitfieldPromoted already knows that rule, so the arithmetic simply happens there.
+     */
+    const rhs = e.op === '='
+      ? this.#rvalCoerced(e.rhs, f.type)
+      : coerce(
+          this.#binaryWithValue(
+            { js: this.#loadBitfield(l), type: bitfieldPromoted(f) },
+            this.#rval(e.rhs), e.op.slice(0, -1),
+          ).js,
+          bitfieldPromoted(f), f.type);
     const { unitOff, poke } = bitfieldPoke(f, at, v);
     // The result is the field READ BACK, not `v`: assigning 1081 to a `signed int m:11` yields -967,
     // and `(l.m = j) == j` must therefore be false (gcc's 921016-1.c).
