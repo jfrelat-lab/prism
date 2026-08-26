@@ -85,7 +85,7 @@ ensureHeaders();
 console.log(oracle.version());
 console.log(`${count} program${count === 1 ? '' : 's'} from seed ${start}\n`);
 
-const results = { agree: 0, ubSkipped: 0, mismatch: [], failed: [] };
+const results = { agree: 0, ubSkipped: 0, noRef: 0, mismatch: [], failed: [] };
 const t0 = performance.now();
 
 for (let i = 0; i < count; i++) {
@@ -97,8 +97,8 @@ for (let i = 0; i < count; i++) {
   const o0 = oracle.csmithRun(source, '-O0');
   const o2 = oracle.csmithRun(source, '-O2');
   if (o0.code !== 0 || !o0.checksum) {
-    results.ubSkipped++;
-    console.log(`seed ${seed}: gcc could not run it (${o0.stderr.split('\n')[0].slice(0, 60)}) — skipped`);
+    results.noRef++;
+    console.log(`seed ${seed}: gcc produced no checksum (exit ${o0.code}) — skipped, no reference`);
     continue;
   }
   if (o0.checksum !== o2.checksum) {
@@ -136,8 +136,10 @@ for (let i = 0; i < count; i++) {
 }
 
 const secs = (performance.now() - t0) / 1000;
-console.log(`\n${results.agree}/${count} agree with gcc · ${results.ubSkipped} skipped ` +
-  `(gcc disagreed with itself) · ${results.failed.length} PRISM could not run · ` +
+// The two kinds of skip are different facts and were reported as one, which read as "gcc is
+// inconsistent" when what actually happened was "gcc produced no reference at all".
+console.log(`\n${results.agree}/${count} agree with gcc · ${results.ubSkipped} skipped (gcc -O0 != -O2) · ` +
+  `${results.noRef} skipped (no gcc reference) · ${results.failed.length} PRISM could not run · ` +
   `${results.mismatch.length} WRONG ANSWERS`);
 console.log(`${secs.toFixed(0)} s, ${(secs / count).toFixed(1)} s per program`);
 
