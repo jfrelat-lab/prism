@@ -10,6 +10,7 @@ import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.j
 import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
+import { watcomBuiltins } from './env/watcom.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
 import { installPorts } from './env/ports.js';
@@ -305,6 +306,8 @@ export const BUILTINS = new Map(Object.entries({
   abort: { ret: V, params: [] },
   atoi: { ret: I, params: [P] },
   atol: { ret: T.LONG, params: [P] },
+  strtol: { ret: T.LONG, params: [P, P, I] },
+  strtoul: { ret: T.ULONG, params: [P, P, I] },
   abs: { ret: I, params: [I] },
   labs: { ret: T.LONG, params: [T.LONG] },
   strlen: { ret: U, params: [P] },
@@ -386,6 +389,8 @@ export const BUILTINS = new Map(Object.entries({
  * against. Kept next to their implementation in src/env/allegro.js.
  */
 for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
+// The Watcom/DOS4GW runtime Heretic and Hexen call; see src/env/watcom.js.
+for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 
@@ -393,13 +398,13 @@ export class CompileError extends Error {}
  * Compile one translation unit.
  * @returns {{M, F, src, run: (argv?: string[]) => {code: number, stdout: string}}}
  */
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = false } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = false, pack = null } = {}) {
   const pp = new Preprocessor({
     defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
-  const { unit, scope } = parse(tokens, { file });
+  const { unit, scope } = parse(tokens, { file, pack });
 
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -488,7 +493,7 @@ export { installPorts, installPIT };
 // must stay loadable in a browser: the web shell imports these modules directly, unbundled.
 const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
 
-export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = false } = {}) {
+export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = false, pack = null } = {}) {
   const failures = [];
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -502,7 +507,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   for (const u of units) {
     const pp = new Preprocessor({ defines: mergeDefines(TARGET_DEFINES, defines), resolve: resolver });
     const tokens = pp.run(u.source, u.file);
-    const { unit, scope } = parse(tokens, { file: u.file });
+    const { unit, scope } = parse(tokens, { file: u.file, pack });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
   }
 

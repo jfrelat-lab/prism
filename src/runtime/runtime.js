@@ -164,6 +164,43 @@ function makeLibc(M) {
     exit: (code) => { throw new ExitCalled(code | 0); },
     abort: () => { throw new Trap('abort() called'); },
     atoi: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
+
+    /*
+     * strtol / strtoul, and the part that is not optional is `endptr`: a program parses a list by
+     * calling strtol in a loop and advancing over what it consumed, so a version that returns the
+     * right number and the wrong end pointer loops for ever.
+     *
+     * base 0 means "guess from the prefix" -- 0x hex, leading 0 octal, otherwise decimal -- which is
+     * why this cannot just be parseInt with a radix.
+     */
+    strtol: (p, endp, base) => {
+      const r = M.rt.__strtoNum(p, endp, base | 0, true);
+      return Math.max(-2147483648, Math.min(2147483647, r)) | 0;
+    },
+    strtoul: (p, endp, base) => M.rt.__strtoNum(p, endp, base | 0, false) >>> 0,
+    __strtoNum(p, endp, base, signed) {
+      const s = M.cstr(p);
+      let i = 0;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      let sign = 1;
+      if (s[i] === '+' || s[i] === '-') { if (s[i] === '-') sign = -1; i++; }
+      let b = base;
+      if ((b === 0 || b === 16) && s[i] === '0' && (s[i + 1] === 'x' || s[i + 1] === 'X')) { b = 16; i += 2; }
+      else if (b === 0 && s[i] === '0') { b = 8; i++; }
+      else if (b === 0) b = 10;
+      const digits = '0123456789abcdefghijklmnopqrstuvwxyz'.slice(0, b);
+      const start = i;
+      let v = 0;
+      while (i < s.length) {
+        const d = digits.indexOf(s[i].toLowerCase());
+        if (d < 0) break;
+        v = v * b + d;
+        i++;
+      }
+      // No digits at all: the end pointer goes back to the ORIGINAL string, not past the sign.
+      if (endp) M.mod.dv.setInt32(endp, p + (i === start ? 0 : i), true);
+      return i === start ? 0 : sign * v;
+    },
     atol: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
     labs: (v) => Math.abs(v | 0) | 0,
     abs: (v) => Math.abs(v | 0) | 0,

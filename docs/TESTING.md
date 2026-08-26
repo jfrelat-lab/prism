@@ -1397,3 +1397,60 @@ Two further defects fell out of it, both only visible once elision made the prog
   `#elidable` now make the same syntactic decisions and say so in both files: two walkers, one rule.
 
 c-testsuite: 199 → **201 of 219, still zero wrong answers.**
+
+
+### Heretic and Hexen: reading the makefile, and two options that change the program
+
+```
+node tools/raven.mjs --game=heretic
+node tools/raven.mjs --game=hexen --run --data=<dir with the WAD>
+```
+
+The unit list comes from each game's own **makefile**, not from a directory listing, and that is not
+tidiness. Both trees carry dead files — `NETOLD.C`, `OLDD_NET.C`, `G_OLD.C` — that no build has
+compiled since 1995 and that do not compile at all. Reading the makefile is the difference between
+"the program does not build" and "a backup file does not build", and the first report was the second
+thing.
+
+It also has to read the whole file, not just the `LOCOBJS`/`GLOBOBJS` variables, because Heretic's
+link rule is
+
+    tic.exe : $(LOCOBJS) $(GLOBOBJS) i_ibm.obj
+
+and `i_ibm.obj` — the one file holding every machine dependency, and `main` — is named nowhere else.
+Missing it produced 47 "undeclared identifier" failures that looked like a header problem.
+
+Two options in `CCOPTS` change the program and are honoured:
+
+* **`/zp1`**, pack structures on byte boundaries. Every struct in the program changes size, so
+  nothing read out of a WAD lands in the right field without it. `compileProgram` takes a `pack`
+  option that seeds the same state `#pragma pack` sets — a compiler option, not a source edit, the
+  same standing as MAME's missing `-DX86_ASM`.
+* **`/ei`**, enums are int, which is already PRISM's model.
+
+### What a DOS platform actually costs
+
+`I_IBM.C` is 2,204 lines and the roadmap expected it to need VGA register emulation and interrupt
+delivery. Measured first, as with Wolf3D, and both expectations were wrong in the same direction:
+
+    int386(0x10, ax=0x13);                       // set mode 13h
+    pcscreen = destscreen = (byte *)0xa0000;     // ...and then write to a FLAT pointer
+
+Mode 13h is a linear framebuffer at an address PRISM already has, because the low megabyte is part
+of the image. Everything the game draws is an ordinary store. The whole external surface is:
+`int386`/`int386x`/`segread` over a `union REGS`, the interrupt vector table, two DPMI calls
+(memory info and allocate), the `graph.h` banner, and DMX for sound — plus four ports, of which
+0x3DA (retrace) and 0x201 (joystick) are reads and the rest are page-flip plumbing for a mode this
+host does not emulate.
+
+`union REGS` is the piece worth care: Watcom's is three views of the SAME sixteen bytes (`x.eax`,
+`w.ax`, `h.al`), and I_IBM.C uses all three on one variable in consecutive statements. The header and
+the shim read the same offsets from opposite sides.
+
+**And the interrupt is deliverable.** `_dos_setvect(9, isr)` hands over a function pointer, and PRISM
+can call it — `I_KeyboardISR` then reads port 0x60 and fills the game's own ring buffer, running its
+own code. That is the mechanism, wired but not yet driven.
+
+Four small libc gaps fell out, all found by compiling rather than by guessing: `strtol`/`strtoul`
+(with `endptr`, without which a parse loop never advances), `strnicmp`, `strupr`, and `FP_OFF`/
+`FP_SEG` as flat-model identities.

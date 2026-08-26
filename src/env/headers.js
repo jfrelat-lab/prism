@@ -9,6 +9,7 @@
 // would show up as a wrong argument width in a printf and be blamed on the emitter.
 
 import { DJGPP_HEADERS } from './headers-djgpp.js';
+import { WATCOM_HEADERS, WATCOM_DOS_H } from './headers-watcom.js';
 
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
@@ -110,6 +111,8 @@ long labs(long v);
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 #endif
+long strtol(const char *s, char **end, int base);
+unsigned long strtoul(const char *s, char **end, int base);
 `;
 
 const STRING = `
@@ -1114,6 +1117,13 @@ int raise(int sig);
   'pc.h': PCH,
   // The DOS/DJGPP set, so MAME's own src/msdos/msdos.c compiles as its makefile intends.
   ...DJGPP_HEADERS,
+  /*
+   * Watcom's set, for Raven's Heretic and Hexen. `dos.h` comes LAST on purpose: DJGPP's is only
+   * `pc.h` plus `delay`, and Watcom's is a superset of it -- union REGS, int386, the vector table.
+   * One dos.h that satisfies both beats two that cannot coexist under one name.
+   */
+  ...WATCOM_HEADERS,
+  'dos.h': WATCOM_DOS_H,
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,

@@ -59,13 +59,20 @@ const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt',
 
 export class Parser {
   /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
-  constructor(tokens, { scope = new T.Scope(), file = '<input>' } = {}) {
+  constructor(tokens, { scope = new T.Scope(), file = '<input>', pack = null } = {}) {
     this.ts = tokens.filter(t => t.k !== 'pm');
     this.i = 0;
     this.scope = scope;
     this.file = file;
-    // #pragma pack state: the current maximum member alignment, and the stack push/pop use.
-    this.pack = null;
+    /*
+     * #pragma pack state: the current maximum member alignment, and the stack push/pop use.
+     *
+     * `pack` seeds it for a whole build, which is a compiler OPTION and not a source change --
+     * Watcom's /zp1, and Raven's makefiles pass it for Heretic and Hexen. Getting it wrong is not
+     * subtle: every struct in the program changes size, so nothing read out of a WAD lands in the
+     * right field.
+     */
+    this.pack = pack;
     this.packStack = [];
   }
 
