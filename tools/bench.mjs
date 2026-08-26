@@ -32,14 +32,49 @@ const Z80DIR = join(MAME, 'src', 'Z80');
 const STEPS = +(process.argv.find(a => a.startsWith('--steps='))?.slice(8) ?? 2_000_000);
 const romDir = process.argv.find(a => a.startsWith('--roms='))?.slice(7);
 
-if (!romDir || !existsSync(romDir)) {
-  console.error('usage: node tools/bench.mjs --roms=<dir with pacman.6e .6f .6h .6j> [--steps=N]');
+if (!romDir && !process.argv.includes('--synthetic')) {
+  console.error('usage: node tools/bench.mjs --roms=<dir with pacman.6e .6f .6h .6j> [--steps=N]\n' +
+    '   or: node tools/bench.mjs --synthetic [--steps=N]');
   process.exit(2);
 }
 
+/*
+ * --synthetic: a Z80 program written HERE instead of a game ROM.
+ *
+ * The headline performance number used to need copyrighted data, which meant it could not be
+ * reproduced on a fresh clone -- a gate nobody else can run is a claim, not a measurement. This is
+ * a mix chosen to exercise the paths a real ROM exercises rather than to look fast: memory read and
+ * write, 8- and 16-bit ALU with flags, a taken branch, a call and a return.
+ *
+ *   0000  31 00 20   LD SP,2000h
+ *   0003  21 00 30   LD HL,3000h     ; a RAM pointer
+ *   0006  01 34 12   LD BC,1234h
+ *   0009  11 78 56   LD DE,5678h
+ *   000C  7E         LD A,(HL)
+ *   000D  3C         INC A
+ *   000E  77         LD (HL),A
+ *   000F  09         ADD HL,BC
+ *   0010  EB         EX DE,HL
+ *   0011  CD 20 00   CALL 0020h
+ *   0014  A9         XOR C
+ *   0015  FE 40      CP 40h
+ *   0017  20 F3      JR NZ,000Ch     ; the hot loop
+ *   0019  C3 03 00   JP 0003h
+ *   0020  0C         INC C
+ *   0021  C9         RET
+ *
+ * NOT comparable to the ROM-driven number: it is a different workload, and both are published
+ * separately rather than blended.
+ */
+const SYNTHETIC = [
+  0x31, 0x00, 0x20, 0x21, 0x00, 0x30, 0x01, 0x34, 0x12, 0x11, 0x78, 0x56,
+  0x7E, 0x3C, 0x77, 0x09, 0xEB, 0xCD, 0x20, 0x00, 0xA9, 0xFE, 0x40, 0x20, 0xF3,
+  0xC3, 0x03, 0x00,
+];
+
 // --- the ROM image
 const rom = new Uint8Array(0x4000);
-{
+if (romDir) {
   let off = 0;
   for (const p of ['pacman.6e', 'pacman.6f', 'pacman.6h', 'pacman.6j']) {
     const hit = readdirSync(romDir).find(f => f.toLowerCase() === p);
@@ -47,6 +82,9 @@ const rom = new Uint8Array(0x4000);
     rom.set(new Uint8Array(readFileSync(join(romDir, hit))).subarray(0, 0x1000), off);
     off += 0x1000;
   }
+} else {
+  rom.set(SYNTHETIC, 0);
+  rom[0x20] = 0x0C; rom[0x21] = 0xC9;      // INC C / RET, at the CALL target
 }
 
 /*

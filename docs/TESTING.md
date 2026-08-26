@@ -1277,3 +1277,37 @@ What csmith actually writes is `(a, s).f` and `(s = t).f` on RECORDS, which is o
 result is an lvalue; tier-0 simply needs an address for a record, for exactly the reason the
 struct-valued `?:` beside it needed one. Restricted to records, it stays a tier-0 implementation
 detail rather than a dialect — and the scalar forms are still refused, as gcc refuses them.
+
+
+### The perf number no longer needs a ROM, and a lead on where the time goes
+
+`tools/bench.mjs --synthetic` runs a Z80 program written in the tool instead of a game ROM. The
+headline performance figure used to require copyrighted data, which meant it could not be reproduced
+on a fresh clone -- and a gate nobody else can run is a claim, not a measurement. The synthetic
+program is chosen to exercise what a real ROM exercises (memory read and write, 8- and 16-bit ALU
+with flags, a taken branch, a call and a return), and both sides still print the same checksum, so
+they demonstrably did identical work.
+
+It is **not** comparable to the 9.5x measured on Pac-Man, and is published separately rather than
+blended: same algorithm, different instruction mix.
+
+```
+4 M steps:  clang -O2 115.6 M instr/s · PRISM 5.2 M instr/s   → 22.2x
+8 M steps:  ...                                               → 12.5x
+```
+
+That spread is itself information: half the gap at 4 M steps is JIT warm-up, not steady-state cost.
+Any future claim about tier-1 has to be made at a workload long enough for that to have amortised.
+
+**The V8 profiler is blind here**, and for the same structural reason both earlier profilers were:
+the emitted code lives in an `eval`, so 98.3% of ticks are unattributed. What IS visible is
+suggestive rather than conclusive, and worth recording as a lead rather than acted on: the largest
+accounted entry is `Builtin: LoadIC` at 157 ticks -- more than `Z80_Execute` itself at 73. Every
+cross-function call in the emitted code is `F["name"]` on an object with a thousand-odd properties,
+which is a dictionary lookup, and there are 1,357 such sites in 516 kB of output.
+
+If that is the cost, it is cheap to remove and needs no IR. But it also collides with something real:
+every harness in `tools/` rebinds `prog.F` to instrument a program, and direct calls would make that
+rebinding invisible. Measure before choosing -- the lesson of MIRAGE's three rejected memory-dispatch
+strategies is that a plausible optimisation built without a number is a plausible optimisation
+reverted.
