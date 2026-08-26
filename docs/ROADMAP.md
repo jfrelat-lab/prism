@@ -119,28 +119,28 @@ Nothing speaks to a real X server, and nothing should.
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| P2.1 | **IR + escape analysis / mem2reg** — now justified by a measurement: 9.5× off native, with every memory access going through a DataView and every local that is address-taken living on the shadow stack. The single largest lever, and the one MIRAGE deliberately deferred (its roadmap D5). | L | Re-measure with `npm run bench` after each step; do not trust a ratio whose reference side has not been checked for stability. | 
+| P2.1 | **IR + escape analysis / mem2reg**, now with a measured head start. `--direct-calls` (emit a call to the function's own identifier instead of `F["name"]` on a thousand-property object) is **2–2.5× on its own**, taking the gap to clang -O2 from ~10× to ~5× — one line of the emitter. It is off by default only because harnesses instrument by rebinding `prog.F`; the fix is a module-scope `let` per function plus a `rebind`. Do that first, then the IR: every remaining memory access goes through a DataView and every address-taken local lives in the heap. | L | Csmith (P0.7) is the net that makes optimising safe: tier-0 == tier-1 is now checkable. |
 | P2.2 | Alignment inference, GVN on address arithmetic, LICM, inlining. | L | |
 | P2.3 | **tier-0 → tier-1 promotion** + inline caches on function pointers. | M | |
 | P1.6 | **A live-C mode in the shell** — edit a translation unit in the page, recompile, restart. Cheap *because* `source` mode already compiles in the browser: the compiler is already there, `resolve` already serves from an in-memory tree, and a compile is 700 ms for MAME. What it needs is an editor pane, an overlay over the fetched tree so an edit shadows the served file, and error locations mapped back to a line. It is the mode where PRISM's premise is visible to a person rather than argued: change a line of 1997 C and watch it take effect. Note it is exclusive to `source` mode — a `bundle` (P2.5) has no source to edit. | M | Not on the critical path to Quake or Doom. Do it when the compiler stops being the thing that needs attention. |
 | P2.5 | **Two load modes, over one serialised IR.** Today the shell always compiles from source in the page. Once P2.1 gives us an IR, add a second mode: `source` (fetch C, compile in-page, promote to tier-1 at run time — the only mode where editing a `.c` file is visible immediately) and `bundle` (fetch a prebuilt artifact and start instantly). **The bundle's payload is the IR, not the emitted JavaScript** — that is the whole design constraint. Shipping only emitted tier-0 would cap a cached program at tier-0 for ever, which buys start-up at the price of the performance ceiling and turns PRISM into a worse Emscripten. With the IR present, tier-1 re-emits at run time exactly as it does in `source` mode. Artifact = {serialised per-function IR, resolved type/layout table, the static memory image, the symbol and function-table map, the platform layer it requires, **and the compiler's own version hash**}. Invariant, same discipline as tier-0 == tier-1: a `gate-bundle` must show a bundle run and a source run producing identical state frame for frame. | L | Start-up cost only becomes real with Quake: MAME is 6.3k lines → 0.45 MB of JS in ~700 ms, so Quake's 44.6k lines extrapolates to seconds and megabytes — an estimate, flagged as one, to be measured rather than assumed. |
-| P2.4 | ✅ **DONE** — `tools/bench.mjs`. **PRISM tier-0 is ~9.5× slower than clang -O2 native** on MAME's Z80 core (24–25 M instr/s vs 228–231), stable across a 4× workload change, same checksum both sides. Better than the 30× the plan feared. The containerised gcc is 15× slower than native and is useless as a speed reference. | — | done |
+| ~~P2.4~~ | ✅ **DONE** — `tools/bench.mjs`, and it no longer needs a ROM (`--synthetic`). Two workloads published separately: **~9.5×** slower than clang -O2 on MAME's Z80 core with Pac-Man, **~10×** on the synthetic mix. Half the gap at short workloads is JIT warm-up. | M | And a measured lead: `--direct-calls` is **2–2.5×**, see P2.1. |
 
 ## P3 · Quake
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| P3.1 | **DJGPP shim**: `dpmi.h`, `pc.h`, `sys/farptr.h`, `sys/movedata.h`, `go32.h`. | M | `outportb` in `pc.h` **is** inline asm — first customer of the intrinsic table. |
-| P3.2 | Build `WinQuake/` with `id386=0` (the C equivalents of all 21 `.s` files; a build switch, not a source edit). | M | |
-| P3.3 | VGA 13h + VESA through MIRAGE's `vga.js`, PIT timer, keyboard; sound stubbed. | M | |
-| P3.4 | A timedemo end to end; framebuffer diff against real Quake under DOSBox-X; fps published. | M | |
+| ~~P3.1~~ | ✅ **DONE** — `src/env/headers-djgpp.js`: `go32.h sys/farptr.h sys/movedata.h dpmi.h dos.h io.h`, plus `pc.h` from P5.1. Written for MAME's `msdos.c` (P1.7) rather than for Quake, which is the ordering the roadmap did not predict. | M | The `outportb` premise was wrong — see P5.1. |
+| ~~P3.2~~ | ✅ **DONE** — `WinQuake/` compiles and runs: 1030 functions, 1.73 MB of JavaScript in 0.9 s, demo1 at **525 fps**. `id386=0` turned out NOT to be the switch: `TARGET_DEFINES` sets `__i386__`, so the tree had been built in the wrong configuration all along until `mergeDefines` learned that `null` means *undefine*. | M | |
+| P3.3 | **The real DOS platform units.** Quake currently builds with `sys_null.c vid_null.c snd_null.c in_null.c cd_null.c net_none.c` — id's own porting stubs, so it renders through `src/env/quake.js` publishing `vid_buffer` and has no real input, sound or timing. Moving to `sys_dos.c`/`vid_dos.c`/`vid_vga.c` means VGA registers and INT 9: device emulation, not shimming. | L | **This is where MIRAGE meets PRISM from below** — the convergence the plan describes. |
+| P3.4 | A timedemo end to end; framebuffer diff against real Quake under DOSBox-X. | M | The timedemo runs and the fps are published (525 on demo1); the pixel diff against DOSBox-X is what is left. |
 
 ## P4 · Doom
 
 | # | Task | Effort | Why |
 |---|---|---|---|
-| P4.1 | **POSIX + Xlib shim** for `linuxdoom-1.10`. | M | ⚠️ The DOS/Watcom Doom source was never released; `id-Software/DOOM` is the Linux/X11 tree. `i_video.c` uses ~15 Xlib calls. A "Doom for DJGPP" tree would be a modified derivative — against the project's whole premise. |
-| P4.2 | Title screen + demo loop; pixel diff against `mirage/games/DOOM/DOOM.EXE`. | M | |
+| ~~P4.1~~ | ✅ **DONE** — `src/env/x11.js`, the Xlib boundary (not the protocol), plus the POSIX half in `src/env/stdio.js`. `linuxdoom-1.10` compiles entirely unmodified: 62 units, 45,152 lines, 714 of 715 functions. | M | ⚠️ The DOS/Watcom Doom source was never released; this is the Linux/X11 tree, which is why the host is Xlib and not DOS. |
+| ~~P4.2~~ | ✅ **DONE, and better than the entry asked** — not just the title screen: `-warp 1 1` plays **E1M1**, 260 frames at ~1 ms each. The shareware WAD's demos do not play and Doom says why itself (`Demo is from a different game version!`). Sound needs P1.8. | M | The pixel diff against `DOOM.EXE` is not possible: MIRAGE cannot run Doom (DPMI), which is the whole reason PRISM exists. |
 
 ## P5 · Native assembly
 
