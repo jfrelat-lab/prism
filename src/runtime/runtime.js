@@ -224,9 +224,22 @@ function makeLibc(M) {
       while (i < s.length && /\s/.test(s[i])) i++;
       let sign = 1;
       if (s[i] === '+' || s[i] === '-') { if (s[i] === '-') sign = -1; i++; }
+      /*
+       * The base prefix, and the trap is that a lone "0" is a COMPLETE octal constant.
+       *
+       * Consuming the leading zero as a prefix and then looking for digits made strtol("0", &end, 0)
+       * report no conversion at all, leaving `end` at the start -- which is exactly the check every
+       * caller makes. Hexen's SC_GetNumber does `strtol(s, &stopper, 0); if (*stopper != 0) error`
+       * and refused its own SNDINFO script at the first zero.
+       *
+       * So the zero is never consumed as a prefix: base 8 is selected and the digit loop takes it.
+       * "0x" not followed by a hex digit is likewise the number 0 with `end` at the 'x'.
+       */
+      const isHexDigit = (c) => c !== undefined && /[0-9a-fA-F]/.test(c);
       let b = base;
-      if ((b === 0 || b === 16) && s[i] === '0' && (s[i + 1] === 'x' || s[i + 1] === 'X')) { b = 16; i += 2; }
-      else if (b === 0 && s[i] === '0') { b = 8; i++; }
+      if ((b === 0 || b === 16) && s[i] === '0' && (s[i + 1] === 'x' || s[i + 1] === 'X')
+          && isHexDigit(s[i + 2])) { b = 16; i += 2; }
+      else if (b === 0 && s[i] === '0') b = 8;
       else if (b === 0) b = 10;
       const digits = '0123456789abcdefghijklmnopqrstuvwxyz'.slice(0, b);
       const start = i;

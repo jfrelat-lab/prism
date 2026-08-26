@@ -241,11 +241,70 @@ export function installStdio(M, {
       while (/[0-9]/.test(fmt[i])) width += fmt[i++];
       while ('hlL'.includes(fmt[i])) i++;
       const conv = fmt[i];
-      const max = width ? +width : Infinity;
 
-      if (skipSpace() < 0) return assigned || -1;
+      /*
+       * `%[...]` -- a SCANSET. The delimiters are part of the conversion, so the format cursor has
+       * to move past them here rather than in the loop's `i++`.
+       *
+       * Three rules that are easy to get wrong and all of which real formats use: a leading `^`
+       * negates, a `]` in the FIRST position is a literal `]` rather than the end, and `a-z` is a
+       * range unless the `-` is first or last. Hexen's SC_MAN.C reads its scripts with these.
+       */
+      let scanset = null;
+      if (conv === '[') {
+        let j = i + 1;
+        const negate = fmt[j] === '^';
+        if (negate) j++;
+        let body = '';
+        if (fmt[j] === ']') { body += ']'; j++; }        // a leading ] is a literal
+        while (j < fmt.length && fmt[j] !== ']') body += fmt[j++];
+        i = j;                                          // the loop's i++ steps past the ]
+        const set = new Set();
+        for (let k = 0; k < body.length; k++) {
+          if (body[k] === '-' && k > 0 && k < body.length - 1) {
+            for (let c = body.charCodeAt(k - 1) + 1; c <= body.charCodeAt(k + 1); c++) {
+              set.add(String.fromCharCode(c));
+            }
+            k++;
+          } else set.add(body[k]);
+        }
+        scanset = { negate, set };
+      }
+
+      const max = width ? +width : (conv === 'c' ? 1 : Infinity);
+
+      /*
+       * `%c` and `%[` do NOT skip leading whitespace -- they are the two conversions that can match
+       * it. Skipping first made `%c` read the character after a space and `%[^\n]` read an empty
+       * string at the start of every line.
+       */
+      if (conv !== 'c' && conv !== '[') {
+        if (skipSpace() < 0) return assigned || -1;
+      }
       let tok = '';
-      if (conv === 's') {
+      if (conv === 'c') {
+        for (let k = 0; k < max; k++) {
+          const c = getc();
+          if (c < 0) break;
+          tok += String.fromCharCode(c);
+        }
+        /*
+         * Nothing at all is end of input. A SHORT read is not a failure: C99 calls it a matching
+         * failure, but glibc assigns what it got and glibc is the reference here -- `sscanf("abc",
+         * "%2s%2c", a, c)` returns 2 with one character in c, and PRISM returned 1 until this was
+         * checked against gcc rather than against the standard.
+         */
+        if (!tok.length) return assigned || -1;
+      } else if (scanset) {
+        for (;;) {
+          const c = getc();
+          if (c < 0) break;
+          const ch = String.fromCharCode(c);
+          if (scanset.set.has(ch) === scanset.negate) { ungetc(c); break; }
+          tok += ch;
+          if (tok.length >= max) break;
+        }
+      } else if (conv === 's') {
         for (;;) {
           const c = getc();
           if (c < 0) break;
@@ -253,8 +312,18 @@ export function installStdio(M, {
           tok += String.fromCharCode(c);
           if (tok.length >= max) break;
         }
-      } else if ('dioux'.includes(conv) || 'efg'.includes(conv)) {
-        const numeric = 'efg'.includes(conv) ? /[-+0-9.eE]/ : /[-+0-9a-fA-FxX]/;
+      } else if ('diouxX'.includes(conv) || 'efgEG'.includes(conv)) {
+        /*
+         * The characters each conversion may consume, per conversion rather than one set for all.
+         * A single permissive set let `%d` swallow hex digits, so `sscanf("abc123def", "%[^0-9]%d%[a-z]")`
+         * read "123def" as its integer and the third conversion found nothing left to match.
+         */
+        const numeric =
+          'efgEG'.includes(conv) ? /[-+0-9.eE]/ :
+          'xX'.includes(conv) ? /[-+0-9a-fA-FxX]/ :
+          conv === 'o' ? /[-+0-7]/ :
+          conv === 'i' ? /[-+0-9a-fA-FxX]/ :          // %i takes a 0x prefix, so it needs the hex set
+          /[-+0-9]/;
         for (;;) {
           const c = getc();
           if (c < 0) break;
@@ -270,13 +339,17 @@ export function installStdio(M, {
       if (suppress) continue;
 
       const dst = args[ai++] | 0;
-      if (conv === 's') {
+      if (conv === 'c') {
+        // Exactly the bytes read, and NO terminator: %c fills a char array, not a string.
+        u8().set(enc.encode(tok), dst);
+      } else if (conv === 's' || scanset) {
         const bytes = enc.encode(tok);
         u8().set(bytes, dst); u8()[dst + bytes.length] = 0;
       } else if ('efg'.includes(conv)) {
         dv.setFloat32(dst, Math.fround(parseFloat(tok)), true);
       } else {
-        dv.setInt32(dst, parseInt(tok, conv === 'x' ? 16 : conv === 'o' ? 8 : 10) | 0, true);
+        const radix = 'xX'.includes(conv) ? 16 : conv === 'o' ? 8 : conv === 'i' ? 0 : 10;
+        dv.setInt32(dst, (radix === 0 ? Number(tok) : parseInt(tok, radix)) | 0, true);
       }
       assigned++;
     }

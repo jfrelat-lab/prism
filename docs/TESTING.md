@@ -1454,3 +1454,35 @@ own code. That is the mechanism, wired but not yet driven.
 Four small libc gaps fell out, all found by compiling rather than by guessing: `strtol`/`strtoul`
 (with `endptr`, without which a parse loop never advances), `strnicmp`, `strupr`, and `FP_OFF`/
 `FP_SEG` as flat-model identities.
+
+
+### Two libc bugs Hexen found, and why gcc beat the standard
+
+Hexen would not start, and neither cause was in the game.
+
+**`scanf` had no scansets.** `%[^\n]`, `%[a-z]`, `%[]x]` — Hexen's `SC_MAN.C` reads its scripts with
+them. Three rules that formats really use and that are easy to get wrong: a leading `^` negates, a
+`]` in the FIRST position is a literal rather than the end, and `a-z` is a range unless the `-` is
+first or last. `%c` came with it, and both share the property that separates them from every other
+conversion: **they do not skip leading whitespace**, because they are the two that can match it.
+
+Fixing them exposed an older one. A single permissive character set served every numeric conversion,
+so `%d` accepted hex digits: `sscanf("abc123def", "%[^0-9]%d%[a-z]")` read `123def` as its integer
+and the third conversion found nothing left. Each conversion now has its own set.
+
+**`strtol` mis-read a lone zero.** With base 0 it consumed the leading `0` as an octal PREFIX and
+then looked for digits, found none, and reported no conversion — leaving `endptr` at the start, which
+is exactly the check every caller makes:
+
+    sc_Number = strtol(sc_String, &stopper, 0);
+    if (*stopper != 0) I_Error("SC_GetNumber: Bad numeric constant \"%s\"", sc_String);
+
+Hexen refused its own SNDINFO script at the first zero. The zero is never consumed as a prefix now;
+base 8 is selected and the digit loop takes it. `"0x"` with no hex digit after it is likewise the
+number 0 with `endptr` at the `x`.
+
+**And one place the standard was the wrong reference.** C99 says a `%c` that reads fewer characters
+than its field width is a matching failure. glibc assigns what it got: `sscanf("abc", "%2s%2c", a, c)`
+returns 2, not 1. PRISM followed the standard and disagreed with the oracle — and the oracle is what
+every gate here compares against, so the oracle wins. Ten `strtol` cases and six `sscanf` cases now
+match gcc exactly, character for character.
