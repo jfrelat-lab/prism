@@ -694,6 +694,24 @@ export class FunctionEmitter {
    * confined to the one branch that needs it.
    */
   #staticList(addr, type, init) {
+    /*
+     * `{ "ARTIBOX" }` -- a string literal in braces, initialising a whole character array.
+     *
+     * The braces belong to the ARRAY, not to its first element, so the string fills the object the
+     * way it would without them. Heretic's status bar is a table of these:
+     *
+     *     char patcharti[][10] = { {"ARTIBOX"}, {"ARTIINVU"}, ... };
+     *
+     * Read element by element instead, the string decayed to its ADDRESS and the low byte of that
+     * address landed in patcharti[i][0] -- so the game asked its WAD for a lump called "K" and died.
+     * The unbraced form was already handled in #elidable; this is the same rule one level in.
+     */
+    if (type.k === 'array' && type.of.k === 'scalar' && (type.of.size === 1 || type.of.size === 4)
+        && init.items.length === 1 && !init.items[0].designators) {
+      let e = init.items[0].value?.expr;
+      while (e && e.n === 'cast') e = e.expr;
+      if (e && e.n === 'str') { this.#staticScalar(addr, type, e); return; }
+    }
     if (type.k === 'array') {
       let idx = 0;
       for (let i = 0; i < init.items.length; i++) {
