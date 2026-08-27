@@ -118,14 +118,26 @@ function makeResolver(dir, { caseInsensitive = false, include = null } = {}, mis
   };
   return function resolver(name, angled, fromFile) {
     const want = basename(name);
-    // The path as WRITTEN first (`Z80/Z80.h` is a real relative path), then the basename.
-    const path = find(name, angled ? null : fromFile) ?? find(want, angled ? null : fromFile);
-    if (path) {
-      return { path, text: readFileSync(path, 'latin1') };
-    }
-    // The FULL name first: `sys/types.h` is its own key, and reducing to a basename looks up
-    // `types.h`, misses, and stubs a header that is right there.
-    const std = HEADERS[name] ?? HEADERS[want];
+    const from = angled ? null : fromFile;
+    /*
+     * Order matters, and OpenDUNE is what proved it.
+     *
+     * The path as WRITTEN comes first -- `Z80/Z80.h` is a real relative path, and a quoted include
+     * resolves against the including file before anything else. Then the STANDARD header by its full
+     * name, and only after that the basename fallback, which exists for DOS trees that write
+     * `sys\types.h`.
+     *
+     * Letting the basename fallback run before the standard table means `<sys/types.h>` reduces to
+     * `types.h` and finds OpenDUNE's `include/types.h`, so `ssize_t` never gets declared and PRISM's
+     * own unistd.h fails to parse. A header in the tree may shadow a standard one when the program
+     * asks for it BY THAT NAME, never by accident of its basename.
+     */
+    const path = find(name, from);
+    if (path) return { path, text: readFileSync(path, 'latin1') };
+    if (HEADERS[name] !== undefined) return { path: `<${name}>`, text: HEADERS[name] };
+    const loose = find(want, from);
+    if (loose) return { path: loose, text: readFileSync(loose, 'latin1') };
+    const std = HEADERS[want];
     if (std !== undefined) return { path: `<${name}>`, text: std };
     // Stub and record, so ONE run reports every absent header instead of dying on the first.
     // Printed by the caller, never silent.

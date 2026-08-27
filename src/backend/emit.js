@@ -646,7 +646,24 @@ export class FunctionEmitter {
         return null;
       }
       case 'member': {
-        if (e.arrow) return null;
+        /*
+         * Through a POINTER, which is constant whenever the pointer is -- and that is the offsetof
+         * idiom, written by hand because C89 had no offsetof worth using:
+         *
+         *     #define offset(c, m) (((size_t)&((c *)8)->m) - 8)      // OpenDUNE, saveload.h:29
+         *
+         * The base is 8 rather than 0 to keep a null-dereference warning quiet; the subtraction
+         * takes it back out. Refusing this refused every save/load table in the program.
+         */
+        if (e.arrow) {
+          let base = this.#addrConst(e.base);
+          if (base === null) { try { base = evalConstNumber(e.base); } catch { return null; } }
+          const pt = T.decay(e.base.type ?? T.INT);
+          const rec = pt.k === 'ptr' ? pt.to : null;
+          if (!rec || !T.isRecord(rec)) return null;
+          const f = findField(rec, e.field);
+          return f && f.bits === undefined ? base + f.offset : null;
+        }
         const base = this.#lvalAddrConst(e.base);
         if (base === null) return null;
         const rec = e.base.type;

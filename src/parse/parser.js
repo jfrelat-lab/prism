@@ -43,19 +43,22 @@ const KEYWORDS = new Set(['auto', 'break', 'case', 'char', 'const', 'continue', 
    * where the assumption was made.
    */
   '__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
-  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '__saveregs', '__export']);
+  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '_loadds', '__saveregs', '_saveregs',
+  '__export', '_export']);
 
 const STORAGE = new Set(['typedef', 'extern', 'static', 'auto', 'register']);
 const QUALS = new Set(['const', 'volatile', 'restrict', '__const', '__const__', '__volatile',
   '__volatile__', '__restrict', '__restrict__',
   // See the keyword list above: meaningless in a flat model, and only accepted for one.
   '__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
-  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '__saveregs', '__export']);
+  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '_loadds', '__saveregs', '_saveregs',
+  '__export', '_export']);
 const FUNCSPEC = new Set(['inline', '__inline', '__inline__']);
 const BARE_MODEL = new Set(['far', 'near']);
 /** The subset of QUALS that Watcom also allows INSIDE a declarator; see #declarator. */
 const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
-  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '__saveregs', '__export']);
+  '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '_loadds', '__saveregs', '_saveregs',
+  '__export', '_export']);
 
 export class Parser {
   /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
@@ -656,7 +659,16 @@ export class Parser {
    * where nothing else can be meant: inside a declarator, immediately before a star.
    */
   #bareModelKeyword() {
-    return BARE_MODEL.has(this.peek().v) && this.isP('*', 1);
+    if (!BARE_MODEL.has(this.peek().v)) return false;
+    if (this.isP('*', 1)) return true;                       // `int (far *function)();`
+    /*
+     * `void _loadds far mouse_handler(...)` -- OpenDUNE's DOS mouse callback. Same restraint: a
+     * declarator is being parsed, so a bare `far` followed by a plain identifier can only be the
+     * memory model. An identifier that IS a typedef is left alone, because `far x;` would then be a
+     * declaration of x with type far.
+     */
+    const next = this.peek(1);
+    return next.k === ID && !KEYWORDS.has(next.v) && !this.scope.isTypedef(next.v);
   }
 
   #parenIsParamList() {
@@ -724,6 +736,17 @@ export class Parser {
     try {
       while (!this.isP('}') && !this.done) {
         if (this.eatKw('__label__')) { while (!this.eatP(';') && !this.done) this.i++; continue; }
+        /*
+         * A pragma inside a body. It reaches the parser because the preprocessor passes pragmas
+         * through, and until now only file scope knew to skip one -- so OpenDUNE's DOS mouse
+         * callback, which opens with `#pragma aux mouse_handler parm [EAX] [EBX] ...` as its FIRST
+         * statement, stopped the parse on a '#' in an expression.
+         *
+         * Ignoring that particular pragma is honest rather than convenient: it names a register
+         * calling convention for a routine only the real-mode mouse driver ever calls, through a
+         * callback this host does not make.
+         */
+        if (this.isP('#')) { this.#pragma(); continue; }
         if (this.#startsDeclaration()) items.push(...this.#declarationOrFunction());
         else items.push(this.statement());
       }

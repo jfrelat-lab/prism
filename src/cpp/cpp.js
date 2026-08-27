@@ -43,6 +43,8 @@ export class Preprocessor {
     this.includeDepth = 0;
     this.maxIncludeDepth = opts.maxIncludeDepth ?? 200;
     this.pragmaOnce = new Set();
+    // #pragma push_macro/pop_macro: one saved-definition stack per macro name.
+    this.macroStacks = new Map();
     this.dynamic = new Set(['__FILE__', '__LINE__', '__COUNTER__']);
     for (const [k, v] of Object.entries(opts.defines ?? {})) this.defineText(k, v);
   }
@@ -189,6 +191,29 @@ export class Preprocessor {
   #pragma(rest, loc, ctx) {
     if (rest.length && rest[0].k === ID && rest[0].v === 'once') {
       if (loc?.file) this.pragmaOnce.add(loc.file);
+      return;
+    }
+    /*
+     * push_macro / pop_macro, which are PREPROCESSOR pragmas and must never reach the parser.
+     *
+     * A stack per name: push saves the current definition, or the fact that there was none, and pop
+     * puts it back. The operand is taken from the raw tokens rather than expanded, which c-testsuite
+     * 00206 checks directly -- it defines macros CALLED pop_macro and push_macro first, and expects
+     * that to change nothing.
+     */
+    if (rest.length && rest[0].k === ID && (rest[0].v === 'push_macro' || rest[0].v === 'pop_macro')) {
+      const str = rest.find(t => t.k === STR);
+      const name = str && String(str.v).replace(/^L?"|"$/g, '');
+      if (name) {
+        const stack = this.macroStacks.get(name) ?? [];
+        if (rest[0].v === 'push_macro') {
+          stack.push(this.macros.has(name) ? this.macros.get(name) : undefined);
+          this.macroStacks.set(name, stack);
+        } else if (stack.length) {
+          const prev = stack.pop();
+          if (prev === undefined) this.macros.delete(name); else this.macros.set(name, prev);
+        }
+      }
       return;
     }
     // Everything else survives into the output, the way gcc -E passes pragmas through.

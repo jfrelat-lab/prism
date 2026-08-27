@@ -1745,3 +1745,33 @@ here:
 Nothing here is visible without a hook, because `null/sys_null.c`'s `Sys_ConsoleOutput` is empty.
 Wrapping `M.rt.vsprintf` shows every message the program formats — which is how the colormap error
 was read at all.
+
+### OpenDUNE compiles
+
+```
+node tools/build.mjs opendune.json
+```
+
+84 units, 46,169 lines, 834 functions, 11 unemitted. It is a REIMPLEMENTATION, so it proves PRISM
+handles a large modern-C DOS program — not that it runs unmodified 1990s source the way Quake,
+Heretic and MAME do.
+
+Four PRISM gaps surfaced, each small and each worth the trip:
+
+* **`<sys/types.h>` lost to a basename match.** The resolver's basename fallback exists for DOS trees
+  that write `sys\types.h`; running it before the standard table made `<sys/types.h>` find OpenDUNE's
+  own `include/types.h`, so `ssize_t` was never declared and PRISM's `unistd.h` failed to parse. A
+  tree header may shadow a standard one when the program asks for it BY THAT NAME, never by accident
+  of its basename.
+* **`_loadds` and a bare `far` before an identifier** — `void _loadds far mouse_handler(...)`. PRISM
+  already ignored `__loadds` and accepted `far` before a star.
+* **A pragma inside a function body**, which the mouse callback opens with. Only file scope knew to
+  skip one.
+* **`&((c *)8)->m`** — `saveload.h:29`'s hand-rolled offsetof, base 8 to keep a null-dereference
+  warning quiet. Refusing it refused every save/load table in the program.
+
+And one regression, caught by the gate and not by reading: skipping pragmas in a body turned
+c-testsuite 00206 from a REFUSAL into a WRONG ANSWER, because `#pragma push_macro`/`pop_macro` were
+being silently discarded. They are preprocessor pragmas and now never reach the parser — a stack per
+macro name, with the operand read from the raw tokens, which is what that test checks by defining
+macros called `push_macro` and `pop_macro` first. 201 → **202/219, still zero wrong answers**.
