@@ -206,6 +206,14 @@ export function installStdio(M, {
 
   function writeByte(fp, b) {
     const f = fp | 0;
+    /*
+     * A SINK is a FILE* that is not a file: today that means the write end of a pipe to another
+     * PRISM program (src/env/popen.js). It is checked first because a sink's token is deliberately
+     * outside the file store, so `fileOf` would miss it and the bytes would go to stdout -- which is
+     * precisely what Doom's sound commands did before this existed.
+     */
+    const sink = M.streamSinks?.get(f);
+    if (sink) { sink(b); return; }
     if (f === STDOUT || f === STDERR || !fileOf(fp)) { M.write(String.fromCharCode(b)); return; }
     const h = fileOf(fp);
     grow(h, h.pos + 1);

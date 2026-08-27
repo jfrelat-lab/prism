@@ -40,7 +40,7 @@ const DSP_FD = 0x7300_0001;      // a descriptor no file store will ever hand ou
  * Install the device. Wraps whatever `open`/`ioctl`/`write`/`close` are already in place, so a
  * program that writes files AND plays sound keeps both — install this after src/env/stdio.js.
  */
-export function installDsp(M, { publish = null } = {}) {
+export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
   const prev = {
     open: M.rt.open, close: M.rt.close, write: M.rt.write, ioctl: M.rt.ioctl,
   };
@@ -124,6 +124,27 @@ export function installDsp(M, { publish = null } = {}) {
     const bytes = n | 0;
     const bytesPerFrame = 2 * audio.channels;
     let frames = Math.floor(bytes / bytesPerFrame);
+    /*
+     * blockWhenFull: WAIT for the consumer instead of dropping.
+     *
+     * Dropping is right for a game -- a program that cannot keep up should sound rough, not run
+     * rough -- and wrong for a dedicated sound server, whose only job is to keep a buffer full and
+     * which has no clock of its own. Doom's sndserver free-ran at whatever speed the host could
+     * manage and lost 400,000 samples in four hundred submits, the sound effect among them.
+     *
+     * And it is what the call really does: `write(audio_fd, …)` to a real /dev/dsp blocks until the
+     * card has room. The DAC is what paces a sound server, so waiting here is not a workaround, it
+     * is the missing clock.
+     */
+    if (blockWhenFull && publish) {
+      let spins = 0;
+      while (room() < frames) {
+        const read = Atomics.load(publish.ctrl, SLOT.AUDIO_READ);
+        // A bounded wait, so a consumer that has gone away cannot wedge the program for ever.
+        Atomics.wait(publish.ctrl, SLOT.AUDIO_READ, read, 50);
+        if (++spins > 200) break;
+      }
+    }
     const free = room();
     if (frames > free) { audio.dropped += frames - free; frames = Math.max(free, 0); }
     if (frames <= 0) return bytes;

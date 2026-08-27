@@ -1592,3 +1592,59 @@ Worth recording because each produced a plausible-looking number that was wrong:
 
 The rule underneath all three: a gate that reports 20/20 while quietly discarding 16 cases is
 reporting the harness, not the compiler.
+
+
+## Two processes (P1.8)
+
+```
+node tools/doomsnd.mjs --data=<dir with DOOM1.WAD> --inject=1a,20,7f,80 --wav=/tmp/doom.wav
+```
+
+Doom runs in this thread, `corpus/DOOM/sndserv/` runs in a worker, and they are connected by
+`src/env/pipe.js`. Neither program is modified and neither is interleaved.
+
+**A worker rather than a coroutine, because neither `main` ever returns.** Doom spins in
+`D_DoomLoop`, the server in `while (!done)`. Interleaving them would mean calling their internals
+instead of running them — writing the part of the program that decides what to do next — which is the
+one thing this project does not do. Two threads and a shared ring cost nothing conceptually and the
+programs stay whole.
+
+Two details of the pipe come straight from the two programs. It carries **bytes, not messages**: the
+writer is `fprintf(sndserver, "p%2.2x%2.2x%2.2x%2.2x\n", …)` and the reader is `read(0, buf, 1)` then
+`read(0, buf, 9)`, and neither knows where the other's writes ended. And `pending` is separate from
+`read` because the reader **polls** — a zero-timeout `select` on fd 0 must be able to ask without
+consuming.
+
+`popen` does not start anything. The caller has already started the other program; `popen` matches a
+command line to it and returns a FILE* whose writes go into the pipe. It also answers the check Doom
+makes first:
+
+    if (!access(buffer, X_OK)) { strcat(buffer, " -quiet"); sndserver = popen(buffer, "w"); }
+    else fprintf(stderr, "Could not start sound server [%s]\n", buffer);
+
+Without that, the else branch ran and the pipe was never created — a silent, correct-looking "no
+sound server" for a host that had one running in another thread.
+
+### The missing piece was a clock
+
+With everything connected the result was still silence, and the counters said why: **400,000 samples
+dropped in four hundred submits.** A game has a clock — it throttles itself to its own frame rate —
+and a sound server has none. It free-ran at whatever speed the host could manage, filled the ring
+instantly, and everything after the first 16k samples was thrown away, the sound effect among it.
+
+So `installDsp` gained `blockWhenFull`, and it is not a workaround: `write()` to a real `/dev/dsp`
+blocks until the card has room. **The DAC is what paces a sound server.** Supplying that pacing is
+supplying the clock the program was written to run on. Dropping remains the default, because for a
+game it is right — a program that cannot keep up should sound rough, not run rough.
+
+With it: peak 24576, nothing dropped, and the effect audible in the WAV.
+
+### Isolating the halves
+
+Getting there needed `--inject`, which writes one command straight into the pipe in Doom's own
+format. It separates "the pipe and the second process work" from "Doom asked for a sound", and those
+two failures look identical from a silent WAV. They were tested together at first, and the silence
+was read as a broken pipe for two rounds.
+
+What is still missing is only the trigger: with `-warp 1 1` and no input Doom stands still, and the
+shareware WAD's demos will not play (`Demo is from a different game version!`).
