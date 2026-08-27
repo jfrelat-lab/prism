@@ -104,6 +104,8 @@ void *realloc(void *p, size_t n);
 void free(void *p);
 void exit(int code);
 void abort(void);
+long random(void);
+void srandom(unsigned seed);
 int atoi(const char *s);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 int putenv(char *s);
@@ -771,6 +773,14 @@ typedef unsigned long VisualID;
 typedef unsigned long KeySym;
 typedef unsigned long Time;
 typedef struct _XGC *GC;
+struct _XVisual {
+    void *ext_data;
+    VisualID visualid;
+    int class;
+    unsigned long red_mask, green_mask, blue_mask;
+    int bits_per_rgb;
+    int map_entries;
+};
 typedef struct _XVisual Visual;
 typedef int Status;
 typedef int Bool;
@@ -843,12 +853,24 @@ typedef struct { int type; unsigned long serial; Bool send_event; Display *displ
 typedef struct { int type; unsigned long serial; Bool send_event; Display *display;
                  Window window; int x, y, width, height, count; } XExposeEvent;
 
+typedef struct {
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    Window event, window;
+    int x, y, width, height, border_width;
+    Window above;
+    Bool override_redirect;
+} XConfigureEvent;
+
 typedef union _XEvent {
     int type;
     XKeyEvent xkey;
     XButtonEvent xbutton;
     XMotionEvent xmotion;
     XExposeEvent xexpose;
+    XConfigureEvent xconfigure;
     long pad[24];
 } XEvent;
 
@@ -952,6 +974,16 @@ int XAutoRepeatOff(Display *d);
 int XMapWindow(Display *d, Window w);
 VisualID XVisualIDFromVisual(Visual *v);
 Status XMatchVisualInfo(Display *d, int screen, int depth, int class, XVisualInfo *info);
+XVisualInfo *XGetVisualInfo(Display *d, long mask, XVisualInfo *template, int *nitems);
+Visual *XDefaultVisual(Display *d, int screen);
+int XDestroyWindow(Display *d, Window w);
+int XFreeColormap(Display *d, Colormap c);
+#define DefaultVisual(d, s) XDefaultVisual(d, s)
+#define VisualIDMask       0x1
+#define VisualScreenMask   0x4
+#define VisualDepthMask    0x8
+#define VisualClassMask    0x10
+
 Window XCreateWindow(Display *d, Window parent, int x, int y, unsigned int w, unsigned int h,
                      unsigned int border, int depth, unsigned int class, Visual *visual,
                      unsigned long mask, XSetWindowAttributes *attrs);
@@ -1035,6 +1067,31 @@ const KEYSYMDEF = `
 #define XK_equal 0x003d
 #define XK_asciitilde 0x007e
 #define XK_KP_Subtract 0xffad
+/*
+ * The navigation and keypad block, from keysymdef.h. Doom read the keyboard through a dozen keysyms;
+ * Quake II's rw_x11.c binds the whole cluster, keypad included, because it lets you bind them.
+ */
+#define XK_Home 0xff50
+#define XK_Page_Up 0xff55
+#define XK_Page_Down 0xff56
+#define XK_End 0xff57
+#define XK_Execute 0xff62
+#define XK_Insert 0xff63
+#define XK_KP_Enter 0xff8d
+#define XK_KP_Home 0xff95
+#define XK_KP_Left 0xff96
+#define XK_KP_Up 0xff97
+#define XK_KP_Right 0xff98
+#define XK_KP_Down 0xff99
+#define XK_KP_Page_Up 0xff9a
+#define XK_KP_Page_Down 0xff9b
+#define XK_KP_End 0xff9c
+#define XK_KP_Begin 0xff9d
+#define XK_KP_Insert 0xff9e
+#define XK_KP_Delete 0xff9f
+#define XK_KP_Multiply 0xffaa
+#define XK_KP_Add 0xffab
+#define XK_KP_Divide 0xffaf
 #define XK_KP_Equal 0xffbd
 #endif
 `;
@@ -1203,6 +1260,28 @@ int raise(int sig);
 #define SIGCHLD 17
 // DJGPP's numeric-coprocessor signal, which Quake installs a handler for.
 #define SIGNOFP 20
+
+/*
+ * sigaction, in glibc's i386 layout -- a program declares one on its stack and reads back what it
+ * saved, so the SIZE and the field ORDER are the contract, not the semantics. Quake II's rw_x11.c
+ * does exactly that: sigaction(SIGINT, 0, &sa) to fetch, then sets sa_handler and installs it, so
+ * that Ctrl-C turns keyboard auto-repeat back on before the process dies.
+ *
+ * No signal is ever delivered here, so what is installed is remembered and never called. That is the
+ * same honesty as the interrupt vector tables in watcom.js and go32.js -- except that those exist to
+ * be CALLED later, and this one has no source of signals behind it at all.
+ */
+typedef unsigned long sigset_t[32];
+struct sigaction {
+    __sighandler_t sa_handler;
+    sigset_t sa_mask;
+    int sa_flags;
+    void (*sa_restorer)(void);
+};
+int sigaction(int sig, const struct sigaction *act, struct sigaction *old);
+int sigemptyset(sigset_t *set);
+int sigfillset(sigset_t *set);
+int sigaddset(sigset_t *set, int sig);
 `,
   'ctype.h': CTYPE,
   'sys/types.h': SYS_TYPES,

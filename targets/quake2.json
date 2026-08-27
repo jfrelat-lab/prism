@@ -49,7 +49,6 @@
       "server/sv_world.c",
       "game/q_shared.c",
       "null/vid_null.c",
-      "null/swimp_null.c",
       "null/in_null.c",
       "null/snddma_null.c",
       "null/cd_null.c",
@@ -70,7 +69,8 @@
   },
   "env": [
     "stdio",
-    "dl"
+    "dl",
+    "x11"
   ],
   "_modules": "Quake II is THREE shared objects in a real build and stays three here, each with its own external namespace -- which is the only way qcommon/common.c:101, game/g_main.c:154 and ref_soft/r_main.c:1410 can each keep their own Com_Printf, routed through their own import struct. A module sees its own symbols and the main one's, which is ELF's rule for a shared object against the executable's globals; everything else reaches it through the struct of function pointers the program hands it. What travels the other way is the module's EXPORTS, read from the program's own .def file -- `EXPORTS GetRefAPI` and `EXPORTS GetGameAPI`, one symbol each.",
   "modules": {
@@ -92,9 +92,11 @@
         "ref_soft/r_rast.c",
         "ref_soft/r_scan.c",
         "ref_soft/r_sprite.c",
-        "ref_soft/r_surf.c"
+        "ref_soft/r_surf.c",
+        "linux/rw_x11.c"
       ],
-      "exportsFrom": "ref_soft/ref_soft.def"
+      "exportsFrom": "ref_soft/ref_soft.def",
+      "_rw": "linux/rw_x11.c is REF_SOFT_OBJS too -- the makefile builds ref_softx.so from the same renderer plus this one file. It is what ALLOCATES the surface: null/swimp_null.c is empty bodies and its SWimp_SetMode returns nothing, so vid.buffer stayed 0. rw_x11.c does it with XCreateImage, over the Xlib PRISM already had for Doom."
     },
     "game": {
       "_doc": "linux/Makefile.i386's GAME_OBJS. q_shared.c and m_flash.c are NOT repeated here even though the real build compiles them into the game too: a module already sees the main one's symbols, which is where those live.",
@@ -151,6 +153,6 @@
   },
   "_net": "null/ has no network stub -- Quake 1 shipped net_none.c and Quake II did not -- and the engine's own loopback, which is what single player runs on, lives INSIDE the platform file (NET_GetLoopPacket in linux/net_udp.c). So the faithful move is the program's own file with the OS calls stubbed, not a hand-written null layer: the loopback path touches no socket at all.",
   "_data": "Its own demo, which id distributed freely: q2-314-demo-x86.exe, 39,015,499 bytes, sha1 5b4dedc59ceee306956a3e48a8bdf6dd33bc91ed, from the GWDG mirror of ftp.idsoftware.com/idstuff/quake2/. It is a plain zip; Install/Data/baseq2/ is the tree, and baseq2/pak0.pak is 49,951,322 bytes holding 1106 files. It lives OUTSIDE the repository, in a directory the user names, like every other target's data.",
-  "_blocked": "Runs: it dlopens its game module, connects a client over the loopback, spawns a player and plays demos/q2demo1.dm2 -- 'Quake2 Initialized', 'Installation'. What it does NOT do is draw. null/swimp_null.c is a set of empty bodies, and its SWimp_SetMode returns nothing at all, so vid.buffer stays 0 and ref_soft has no surface. Every real refresh implementation allocates it: linux/rw_x11.c does it with XCreateImage, over the Xlib PRISM already has for Doom. That is the next step, and it is the program's own file again rather than anything written here.",
-  "_platform": "linux/sys_linux.c rather than null/sys_null.c, and the reason is the game. The refresh had direct-link glue (null/vid_null.c calls GetRefAPI in process); the game has none anywhere in the tree, and null/sys_null.c:37 simply returns NULL for it. linux/sys_linux.c:196 is the only Sys_GetGameAPI that does the real thing -- dlopen(gamei386.so), dlsym(GetGameAPI) -- so the faithful path is the program's own file over a dlopen that resolves against PRISM's symbol table."
+  "_platform": "linux/sys_linux.c rather than null/sys_null.c, and the reason is the game. The refresh had direct-link glue (null/vid_null.c calls GetRefAPI in process); the game has none anywhere in the tree, and null/sys_null.c:37 simply returns NULL for it. linux/sys_linux.c:196 is the only Sys_GetGameAPI that does the real thing -- dlopen(gamei386.so), dlsym(GetGameAPI) -- so the faithful path is the program's own file over a dlopen that resolves against PRISM's symbol table.",
+  "_state": "Renders. 109 units, 88,161 lines, 2142 functions, nothing unemitted; 320x240, 177 distinct colours, ~144 frames/s on the demo. Three modules bridged where the program bridges them: the refresh through GetRefAPI (null/vid_null.c's direct-link glue), the game through dlopen/dlsym over PRISM's symbol table. linux/rw_x11.c is what gives ref_soft a surface -- null/swimp_null.c's SWimp_SetMode returns nothing at all, so vid.buffer stayed 0."
 }

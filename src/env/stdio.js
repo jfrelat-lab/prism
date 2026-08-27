@@ -45,6 +45,9 @@ export function installStdio(M, {
   function norm(name) { return String(name).replace(/\\/g, '/').toLowerCase(); }
 
   // Open directories. The base keeps a DIR handle clear of a file descriptor's range.
+  // Installed signal actions, remembered because a caller reads back what it stored.
+  const signals = new Map();
+
   const dirs = [];
   const DIR_BASE = 0x7000;
 
@@ -591,13 +594,54 @@ export function installStdio(M, {
      * game library, which on a real system drops the privileges of a setuid binary; there are none
      * to drop.
      */
+    /*
+     * sigaction. Nothing here raises a signal, so a handler is REMEMBERED and never called -- and
+     * remembering it is what the caller checks: rw_x11.c fetches the current action, edits it and
+     * installs it back, so a fetch that returned garbage would install garbage.
+     */
+    sigaction: (sig, act, old) => {
+      const SIZE = 4 + 128 + 4 + 4;
+      if (old) {
+        const prev = signals.get(sig | 0);
+        if (prev) M.u8.set(prev, old); else M.u8.fill(0, old, old + SIZE);
+      }
+      if (act) signals.set(sig | 0, M.u8.slice(act, act + SIZE));
+      return 0;
+    },
+    sigemptyset: (set) => { M.u8.fill(0, set, set + 128); return 0; },
+    sigfillset: (set) => { M.u8.fill(0xff, set, set + 128); return 0; },
+    sigaddset: () => 0,
+
     getuid: () => 0, geteuid: () => 0, getgid: () => 0, getegid: () => 0,
     setuid: () => 0, seteuid: () => 0, setgid: () => 0, setegid: () => 0,
     setreuid: () => 0, setregid: () => 0,
 
-    mmap: () => -1,
-    mremap: () => -1,
-    munmap: () => 0,
+    /*
+     * ANONYMOUS mmap is memory, and a program of this era asks for memory that way when it wants a
+     * lot of it at once. Quake II's Hunk_Begin (linux/q_shlinux.c:20) reserves 16 MB with
+     * MAP_PRIVATE|MAP_ANONYMOUS and calls Sys_Error if it comes back -1, which is where a build with
+     * this stubbed out stopped: 'unable to virtual allocate 16777216 bytes'.
+     *
+     * A FILE mapping still fails, and that is not laziness -- the file layer here has no address for
+     * a file's contents to live at, and a caller that gets -1 for one has a read() path to fall back
+     * on. SQLite takes exactly that path.
+     */
+    mmap: (_addr, length, _prot, _flags, fd, _off) => {
+      if ((fd | 0) !== -1) return -1;                 // a file mapping, which this cannot serve
+      const p = M.rt.malloc(length >>> 0);
+      if (!p) return -1;
+      M.u8.fill(0, p, p + (length >>> 0));            // an anonymous mapping reads as zeroes
+      return p;
+    },
+    /*
+     * mremap SHRINKING in place, which is the only use here: Hunk_End hands back everything the hunk
+     * did not use and requires the base to be unchanged (`if (n != membase) Sys_Error`). Returning
+     * the same pointer is therefore not a shortcut, it is the contract; the tail simply stays
+     * allocated, which costs address space this host has and a real one did not.
+     */
+    mremap: (addr, _oldSize, _newSize, _flags) => addr,
+    munmap: (addr) => { if (addr) M.rt.free(addr); return 0; },
+    mprotect: () => 0,
 
     /*
      * Directories, derived rather than stored: the file table is a flat map of paths, so the entries

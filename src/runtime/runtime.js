@@ -393,7 +393,12 @@ function makeLibc(M) {
      * mis-filing as fopen, and for the same reason: this is ISO C, not one program's.
      */
     rand: () => { M.randState = (Math.imul(M.randState, 1103515245) + 12345) | 0; return (M.randState >>> 16) & 0x7fff; },
+    // random/srandom are BSD's names for the same generator, and a program that wants a
+    // longer period than rand's is entitled to assume it gets one. It does not here; what it
+    // does get is the same sequence, which is what matters for reproducing a run.
+    random: (...a) => lib.rand(...a),
     srand: (seed) => { M.randState = seed | 0; },
+    srandom: (seed) => lib.srand(seed),
 
     // ctype, C locale. EOF (-1) must answer false everywhere except tolower/toupper, which pass it
     // through -- a program looping on getchar() relies on exactly that.

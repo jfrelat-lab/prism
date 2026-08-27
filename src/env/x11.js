@@ -76,6 +76,38 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
     XAutoRepeatOff: () => 0,
     XMapWindow: () => { events.push({ type: 12 /* Expose */, count: 0 }); return 0; },
     XVisualIDFromVisual: () => 1,
+    XDefaultVisual: () => 1,
+    XDestroyWindow: () => 0,
+    XFreeColormap: () => 0,
+
+    /*
+     * XGetVisualInfo returns an ARRAY, and its caller keeps the pointer: Quake II's rw_x11.c holds
+     * `x_visinfo` for the life of the window and reads `->depth` on every mode change. So this
+     * allocates rather than filling a caller's struct, which is the one real difference from
+     * XMatchVisualInfo above.
+     *
+     * One visual, 8-bit PseudoColor, which is what ref_soft asks for -- it is a palettised renderer
+     * and `pwidth = x_visinfo->depth / 8` has to come out 1.
+     */
+    XGetVisualInfo: (_dpy, _mask, _template, nitemsPtr) => {
+      // struct XVisualInfo { Visual *visual; VisualID visualid; int screen, depth, class;
+      //                      unsigned long red_mask, green_mask, blue_mask;
+      //                      int colormap_size, bits_per_rgb; }
+      const SIZE = 40;
+      const p = M.rt.malloc(SIZE);
+      if (!p) return 0;
+      M.u8.fill(0, p, p + SIZE);
+      dv().setInt32(p + 0, 1, true);        // a non-null Visual *
+      dv().setInt32(p + 4, 1, true);        // visualid
+      dv().setInt32(p + 8, 0, true);        // screen
+      dv().setInt32(p + 12, 8, true);       // depth
+      dv().setInt32(p + 16, 3, true);       // class = PseudoColor
+      dv().setInt32(p + 32, 256, true);     // colormap_size
+      dv().setInt32(p + 36, 8, true);       // bits_per_rgb
+      if (nitemsPtr) dv().setInt32(nitemsPtr, 1, true);
+      return p;
+    },
+
 
     /** A visual is always available and always 8-bit PseudoColor, which is what Doom asks for. */
     XMatchVisualInfo: (_dpy, _screen, depth, _class, vinfo) => {

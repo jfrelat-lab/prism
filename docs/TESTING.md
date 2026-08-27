@@ -1841,3 +1841,35 @@ gave it, `game$GetGameAPI`. The soname it matches on is `gamei386.so`, which the
 `null/swimp_null.c` is a file of empty bodies whose `SWimp_SetMode` returns nothing at all, so
 ref_soft never gets a surface. Every real refresh implementation allocates one — `linux/rw_x11.c`
 with `XCreateImage`, over the Xlib PRISM already has for Doom.
+
+### Quake II renders
+
+```
+node tools/quake2.mjs --data=<dir with baseq2/> --frames=120 --png=/tmp/q2.png
+```
+
+320x240, 76,800 of 76,800 pixels non-zero, **177 distinct colours**, ~144 frames/s on the demo — the
+Installation level with the HUD reading health 92 and ammo 20.
+
+`linux/rw_x11.c` is what gives ref_soft a surface at all: `null/swimp_null.c`'s `SWimp_SetMode`
+returns nothing whatsoever, so `vid.buffer` stayed 0 and every draw went to low memory. It cost four
+Xlib entry points Doom never used (`XGetVisualInfo`, `XDefaultVisual`, `XDestroyWindow`,
+`XFreeColormap`), 21 keysyms, a `Visual` with its colour masks, `XConfigureEvent`, and
+`struct sigaction` — which rw_x11.c fetches, edits and installs back so Ctrl-C can restore keyboard
+auto-repeat, so a fetch returning garbage would have installed garbage.
+
+But the thing standing between a blank buffer and a picture was none of those. It was **anonymous
+`mmap`**, which PRISM returned -1 for on principle:
+
+```
+> unable to virtual allocate 16777216 bytes
+```
+
+`Hunk_Begin` (`linux/q_shlinux.c:20`) reserves 16 MB with `MAP_PRIVATE|MAP_ANONYMOUS` and calls
+`Sys_Error` when it comes back -1. A FILE mapping still fails — the file layer has no address for a
+file's contents to live at, and a caller that gets -1 for one has a `read()` path to fall back on,
+which is the path SQLite takes. `mremap` returns the same base because `Hunk_End` requires it
+(`if (n != membase) Sys_Error`), so the unused tail simply stays allocated.
+
+The picture is the renderer's own output, read from `ref_soft$vid.buffer` before the platform does
+anything with it, with the palette from `sw_state.currentpalette`.
