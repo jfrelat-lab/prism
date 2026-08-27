@@ -52,3 +52,22 @@ of the three are not what one assumes.
 
 The ordering consequence — MAME 0.1 first, Doom last — is the reverse of the obvious one, and it
 comes from these three rows.
+
+## Candidate targets, surveyed
+
+Surveyed by reading the actual released trees, not from memory. The question that decides each one
+is always the same, and it is the question Quake's `id386=0` and Heretic's `#ifndef __WATCOMC__`
+already answered: **does the program's own source ship a C equivalent of its assembly?** If it does,
+a build selects it and nothing is modified. If it does not, the target waits for P5.2.
+
+| candidate | environment | assembly | verdict |
+|---|---|---|---|
+| **Quake II** (`id-Software/Quake-2`) | C, Win32/Linux — reuses Doom's POSIX side | `ref_soft/` pairs every `.asm` with a `.c` (`r_draw.c`/`r_drawa.asm`, `r_edge.c`/`r_edgea.asm`, `r_scan.c`/`r_scana.asm`, `r_polyse.c`/`r_polysa.asm`): the SAME `id386` switch as Quake 1 | **strongest candidate.** One real obstacle, nameable now: the refresh is a DLL (`ref_soft.def`, `dlopen` on Linux), so the engine loads its renderer instead of linking it. PRISM has a symbol table, so shimming `dlopen` over a statically linked pair is plausible — the same shape as Doom's `popen`. It also ships a `null/` platform, exactly like `sys_null.c`. |
+| **Build / Duke Nukem 3D** (`fabiensanglard/vanilla_duke3D`) | Watcom + DOS4GW — the Heretic shim, already built | `SRC/A.ASM` has **`drawing_routines/A.C`, Ken Silverman's own C port, written June 1996 to help the Mac and console port teams** — the id386=0 pattern by another name | **viable, with two caveats stated in his own readme.** A.C is not an exact replacement: `vlineasm4`/`mvlineasm4` are gone and ENGINE.C was simplified alongside it, so this is the author's variant, not the shipped PC build. And `ksqrt`/`krecip` are C replacements of `nsqrtasm`/`krecipasm` that his movement code depends on — recorded demos go out of sync against the original. That matters directly: a pixel diff against the real game would be diffing two different programs. `PRAGMAS.H` is ~100 Watcom `#pragma aux` routines; PRISM already derives `FixedMul`/`FixedDiv2` from that construct for Heretic. |
+| **Rise of the Triad** (`videogamepreservation/rott`) | Watcom + DOS4GW — the Heretic shim | 9 `.ASM` files (`RT_DR_A`, `RT_SC_A`, `RT_VH_A`, `RT_FC_A`, `RT_ENG`, `TEXTURE`, `F_SCALE`, `R_SCALE`, `RAND`) and **RT_DRAW.C has no asm-versus-C switch at all** — the assembly is mandatory | **blocked on P5.2.** The environment is free (its `AUDIO_WF.LIB`/`SPBALL.LIB` are prebuilt libraries, the same boundary as DMX), so it becomes cheap the day the assembler exists. Also the 32-bit Wolfenstein lineage, so no 16-bit ABI. |
+| **Wolfenstein 3D** | Borland C, 16-bit real mode | 1117 inline `asm` statements in 15 of 26 units, 10 `.ASM` files, 68 uses of `_seg` | **furthest away**, and for three separate reasons. See ROADMAP P7.2: `sizeof(int) == 2` is part of its DATA format, not just its CPU (`maptype` is 38 bytes under Borland, 48 under i386, so every field after `planestart` moves). |
+
+Not yet surveyed, named so the list is a list and not a memory: Descent (Watcom, 32-bit), Shadow
+Warrior (same Build engine, so the same answer as Duke3D), later MAME releases while they were still
+C (a scaling target, not a new environment), and the non-games — Lua, NetHack — which would stress
+the libc and the file layer rather than the video path.
