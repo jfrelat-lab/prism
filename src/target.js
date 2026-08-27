@@ -78,6 +78,26 @@ function unitNames(target, dir) {
   throw new Error(`target '${target.name}': units needs one of list, glob, fromMakefile`);
 }
 
+/**
+ * A module-definition file's export list, which is the program's OWN statement of what crosses the
+ * boundary. `ref_soft/ref_soft.def` is four words -- `EXPORTS` then `GetRefAPI` -- and `game.def` is
+ * the same shape. Reading it beats writing the list here for the same reason reading a MAKEFILE
+ * beats listing units here.
+ */
+function exportsFromDef(path) {
+  const text = readFileSync(path, 'latin1');
+  const out = [];
+  let inExports = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.replace(/;.*$/, '').trim();
+    if (!line) continue;
+    if (/^EXPORTS$/i.test(line)) { inExports = true; continue; }
+    if (/^[A-Z]+$/.test(line) && !inExports) continue;
+    if (inExports) out.push(line.split(/\s+/)[0]);
+  }
+  return out;
+}
+
 /** An #include resolver over one source tree plus PRISM's own headers. */
 function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing) {
   // Where to look, in order. `include` exists because MAME's tree is not flat: its makefile passes
@@ -154,6 +174,19 @@ export function targetUnits(target, root) {
     const over = perUnit[f.toLowerCase()];
     return { file: full, source: readFileSync(full, 'latin1'), ...(over ? { defines: over } : {}) };
   });
+  /*
+   * Extra MODULES: a program that is several shared objects in a real build stays several here, each
+   * with its own external namespace. Quake II is three -- the engine, ref_soft, game -- and each
+   * defines its own Com_Printf.
+   */
+  for (const [name, m] of Object.entries(target.modules ?? {})) {
+    if (name.startsWith('_')) continue;
+    for (const f of m.units ?? []) {
+      const full = join(dir, f);
+      if (!existsSync(full)) throw new Error(`target '${target.name}': module ${name} missing unit ${f}`);
+      units.push({ file: full, source: readFileSync(full, 'latin1'), module: name });
+    }
+  }
   for (const { name, source } of envVars(target.env)) {
     units.push({ file: `prism-${name}-vars.c`, source });
   }
@@ -182,7 +215,16 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const { units, dir, asm } = targetUnits(target, root);
   const missing = new Set();
   const c = { ...(target.compile ?? {}), ...overrides };
+  // What each extra module makes visible to the main one, from the program's own .def file.
+  const moduleExports = {};
+  for (const [name, m] of Object.entries(target.modules ?? {})) {
+    if (name.startsWith('_')) continue;
+    moduleExports[name] = m.exportsFrom
+      ? exportsFromDef(resolvePath(dir, m.exportsFrom))
+      : (m.exports ?? []);
+  }
   const program = compileProgram(units, {
+    exports: moduleExports,
     defines: target.defines ?? {},
     resolve: makeResolver(dir, target, missing),
     memory: (c.memory ?? 64) * 1024 * 1024,

@@ -1717,3 +1717,31 @@ additions and one platform variable, and not one compiler change:
 C body of every routine with an assembly twin. A build option, not a source edit.
 
 It does not RUN yet, and the reason is worth reading: see ROADMAP P7.3.
+
+### Quake II reaches its own data check
+
+```
+node tools/build.mjs quake2.json
+```
+
+62 units, 50,194 lines, 1144 functions, nothing unemitted — and it now RUNS to
+`Couldn't load pics/colormap.pcx`, which is the right place for a run with no game data. On the way
+it prints `Console initialized.`, initialises the network layer, and crosses into
+`ref_soft$GetRefAPI`.
+
+Three things had to be true, and each is the program's own statement rather than a decision made
+here:
+
+* **Modules.** Quake II is three shared objects, so it is three modules. Each keeps its own external
+  namespace and sees the main module's for what it does not define; only what its `.def` file
+  EXPORTS travels the other way. `dlopen` turned out to be unnecessary — `null/vid_null.c` is
+  titled DIRECT LINK GLUE and calls `GetRefAPI` in process.
+* **`linux/net_udp.c`, not a hand-written null layer.** `null/` has no network stub (Quake 1 shipped
+  `net_none.c`; Quake II did not), and single player runs on a loopback that lives INSIDE the
+  platform file. The loopback path touches no socket, so the program's own file with the OS calls
+  stubbed is both the faithful and the shorter answer.
+* Two platform variables id's own null platform omits: `in_joystick` and `stdin_active`.
+
+Nothing here is visible without a hook, because `null/sys_null.c`'s `Sys_ConsoleOutput` is empty.
+Wrapping `M.rt.vsprintf` shows every message the program formats — which is how the colormap error
+was read at all.

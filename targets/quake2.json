@@ -3,47 +3,96 @@
   "title": "QUAKE II 3.19 (ref_soft, C_ONLY)",
   "dir": "corpus/Quake2",
   "fetch": "git clone --depth 1 https://github.com/id-Software/Quake-2.git corpus/Quake2",
-
   "_doc": "Twice the program Quake 1 is, and the point of picking it: it needs no environment PRISM does not already have, so it turns 'does this scale?' from a question into a measurement.",
-
   "_defines": "C_ONLY is id's OWN switch, and a cleaner one than Quake 1's: q_shared.h:42 reads `#if (defined _M_IX86 || defined __i386__) && !defined C_ONLY`, so defining it selects the portable C body of every routine that has an assembly twin -- r_draw.c/r_drawa.asm, r_edge.c/r_edgea.asm, r_scan.c/r_scana.asm, r_polyse.c/r_polysa.asm. A build option, not a source edit.",
-  "defines": { "C_ONLY": "1" },
-
+  "defines": {
+    "C_ONLY": "1"
+  },
   "_units": "The object lists of linux/Makefile.i386, with the null platform in place of the Linux one. Each shared object of a real build is linked in ONCE here, so q_shared.c and glob.c -- which the makefile compiles separately into quake2 and into ref_soft.so -- appear a single time.",
   "units": {
     "list": [
-      "qcommon/cmd.c", "qcommon/cmodel.c", "qcommon/common.c", "qcommon/crc.c", "qcommon/cvar.c",
-      "qcommon/files.c", "qcommon/md4.c", "qcommon/net_chan.c", "qcommon/pmove.c",
-
-      "client/cl_cin.c", "client/cl_ents.c", "client/cl_fx.c", "client/cl_input.c", "client/cl_inv.c",
-      "client/cl_main.c", "client/cl_parse.c", "client/cl_pred.c", "client/cl_tent.c",
-      "client/cl_scrn.c", "client/cl_view.c", "client/console.c", "client/keys.c", "client/menu.c",
-      "client/qmenu.c", "game/m_flash.c",
-      "client/snd_dma.c", "client/snd_mem.c", "client/snd_mix.c",
-
-      "server/sv_ccmds.c", "server/sv_ents.c", "server/sv_game.c", "server/sv_init.c",
-      "server/sv_main.c", "server/sv_send.c", "server/sv_user.c", "server/sv_world.c",
-
+      "qcommon/cmd.c",
+      "qcommon/cmodel.c",
+      "qcommon/common.c",
+      "qcommon/crc.c",
+      "qcommon/cvar.c",
+      "qcommon/files.c",
+      "qcommon/md4.c",
+      "qcommon/net_chan.c",
+      "qcommon/pmove.c",
+      "client/cl_cin.c",
+      "client/cl_ents.c",
+      "client/cl_fx.c",
+      "client/cl_input.c",
+      "client/cl_inv.c",
+      "client/cl_main.c",
+      "client/cl_parse.c",
+      "client/cl_pred.c",
+      "client/cl_tent.c",
+      "client/cl_scrn.c",
+      "client/cl_view.c",
+      "client/console.c",
+      "client/keys.c",
+      "client/menu.c",
+      "client/qmenu.c",
+      "game/m_flash.c",
+      "client/snd_dma.c",
+      "client/snd_mem.c",
+      "client/snd_mix.c",
+      "server/sv_ccmds.c",
+      "server/sv_ents.c",
+      "server/sv_game.c",
+      "server/sv_init.c",
+      "server/sv_main.c",
+      "server/sv_send.c",
+      "server/sv_user.c",
+      "server/sv_world.c",
       "game/q_shared.c",
-
-      "ref_soft/r_aclip.c", "ref_soft/r_alias.c", "ref_soft/r_bsp.c", "ref_soft/r_draw.c",
-      "ref_soft/r_edge.c", "ref_soft/r_image.c", "ref_soft/r_light.c", "ref_soft/r_main.c",
-      "ref_soft/r_misc.c", "ref_soft/r_model.c", "ref_soft/r_part.c", "ref_soft/r_poly.c",
-      "ref_soft/r_polyse.c", "ref_soft/r_rast.c", "ref_soft/r_scan.c", "ref_soft/r_sprite.c",
-      "ref_soft/r_surf.c",
-
-      "null/vid_null.c", "null/swimp_null.c", "null/in_null.c", "null/snddma_null.c",
-      "null/cd_null.c", "null/sys_null.c"
+      "null/vid_null.c",
+      "null/swimp_null.c",
+      "null/in_null.c",
+      "null/snddma_null.c",
+      "null/cd_null.c",
+      "null/sys_null.c",
+      "linux/net_udp.c"
     ]
   },
-
   "_null": "null/ is not a stub set here, it is the DIRECT LINK: null/vid_null.c is titled 'DIRECT LINK GLUE' and calls GetRefAPI in-process, where linux/vid_so.c and win32/vid_dll.c dlopen ref_soft.so for it. So this build needs no dlopen. What null/ does NOT give is the game: null/sys_null.c:37 has Sys_GetGameAPI return NULL, so game/ compiles but the server cannot reach it.",
-
-  "_blocked": "Compiles completely -- 61 units, 49,653 lines, 1121 functions, 0 unemitted -- and stops at RUN time on the thing that makes Quake II Quake II: it is THREE shared objects, and each one defines its own Com_Printf and Sys_Error routed through its own import struct (qcommon/common.c:101, game/g_main.c:154, ref_soft/r_main.c:1410). Flattened into one program they collide, the renderer's won, and the engine printed through a refimport_t that was still zero -- reached as `M.icall(0)` from Cmd_Exec_f's `couldn't exec %s`. The fix is not to pick a winner, it is per-module symbol namespaces plus dlopen over PRISM's own symbol table. See ROADMAP P7.3.",
-
   "_inline": "What every real platform's in_*.c defines and id's own null platform does not -- linux/in_linux.c:6 and win32/in_win.c:55 both have exactly this line. cvar_t is left incomplete on purpose: only the pointer is needed here. It stays NULL, because a platform's IN_Init is what registers it and null/in_null.c's is empty -- so opening the Options menu would dereference NULL, in id's own null build just as much as in this one. Faithful, and stated rather than papered over.",
-  "inline": { "prism-platform-vars.c": "#include \"game/q_shared.h\"\ncvar_t *in_joystick;\n" },
-
-  "compile": { "memory": 512, "collect": true },
-  "env": ["stdio"]
+  "inline": {
+    "prism-platform-vars.c": "#include \"game/q_shared.h\"\n/* linux/in_linux.c:6 and win32/in_win.c:55 both define this; id's own null platform does not. */\ncvar_t *in_joystick;\n/* linux/sys_linux.c's, read by net_udp.c to decide whether the console is worth polling. */\nqboolean stdin_active = false;\n"
+  },
+  "compile": {
+    "memory": 512,
+    "collect": true
+  },
+  "env": [
+    "stdio"
+  ],
+  "_modules": "Quake II is THREE shared objects in a real build and stays three here, each with its own external namespace -- which is the only way qcommon/common.c:101, game/g_main.c:154 and ref_soft/r_main.c:1410 can each keep their own Com_Printf, routed through their own import struct. A module sees its own symbols and the main one's, which is ELF's rule for a shared object against the executable's globals; everything else reaches it through the struct of function pointers the program hands it. What travels the other way is the module's EXPORTS, read from the program's own .def file -- `EXPORTS GetRefAPI` and `EXPORTS GetGameAPI`, one symbol each.",
+  "modules": {
+    "ref_soft": {
+      "units": [
+        "ref_soft/r_aclip.c",
+        "ref_soft/r_alias.c",
+        "ref_soft/r_bsp.c",
+        "ref_soft/r_draw.c",
+        "ref_soft/r_edge.c",
+        "ref_soft/r_image.c",
+        "ref_soft/r_light.c",
+        "ref_soft/r_main.c",
+        "ref_soft/r_misc.c",
+        "ref_soft/r_model.c",
+        "ref_soft/r_part.c",
+        "ref_soft/r_poly.c",
+        "ref_soft/r_polyse.c",
+        "ref_soft/r_rast.c",
+        "ref_soft/r_scan.c",
+        "ref_soft/r_sprite.c",
+        "ref_soft/r_surf.c"
+      ],
+      "exportsFrom": "ref_soft/ref_soft.def"
+    }
+  },
+  "_net": "null/ has no network stub -- Quake 1 shipped net_none.c and Quake II did not -- and the engine's own loopback, which is what single player runs on, lives INSIDE the platform file (NET_GetLoopPacket in linux/net_udp.c). So the faithful move is the program's own file with the OS calls stubbed, not a hand-written null layer: the loopback path touches no socket at all."
 }

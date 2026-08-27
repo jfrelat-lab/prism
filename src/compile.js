@@ -549,7 +549,9 @@ export { installPorts, installPIT };
 // must stay loadable in a browser: the web shell imports these modules directly, unbundled.
 const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
 
-export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null } = {}) {
+export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, exports: moduleExports = {} } = {}) {
+  // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
+  const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   const failures = [];
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -578,8 +580,27 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
   }
 
-  // Pass 1: place every name. A static gets a private linkage name; the rest are shared.
-  const sharedGlobals = new Map(), sharedFuncs = new Map();
+  /*
+   * Pass 1: place every name.
+   *
+   * A static gets a private linkage name. The rest are shared -- but shared WITHIN A MODULE, not
+   * across the program, because a program of this era is often several shared objects and they do
+   * not see each other's globals.
+   *
+   * Quake II is the case that forced this. qcommon/common.c, game/g_main.c and ref_soft/r_main.c
+   * each define Com_Printf, routed through their own import struct, because in a real build they
+   * are three .so files that never meet. Flattened into one namespace they collide and the last one
+   * silently wins -- the engine ends up printing through a refimport_t full of zeros.
+   *
+   * The visibility rule below is ELF's, not an invention: a shared object sees its own symbols and
+   * the executable's globals, and everything else it needs arrives through the struct of function
+   * pointers the program hands it. A module's EXPORTS -- read from the program's own .def file --
+   * are the only names that travel the other way.
+   */
+  const moduleNames = [...new Set(parsed.map(p => p.module ?? 'main'))];
+  const MAIN = moduleNames[0];
+  const perModule = new Map(moduleNames.map(m => [m, { globals: new Map(), funcs: new Map() }]));
+  const sharedGlobals = perModule.get(MAIN).globals, sharedFuncs = perModule.get(MAIN).funcs;
 
   /*
    * The objects LIBC provides, defined whether or not any translation unit declares them.
@@ -596,20 +617,24 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   for (const p of parsed) {
     p.globals = new Map();
     p.funcs = new Map();
+    const home = perModule.get(p.module ?? 'main');
+    // A non-main module's external names are qualified, so two modules may each define Com_Printf
+    // and each get its own body -- which is what the separate .so files of a real build give them.
+    const qualify = (n) => ((p.module ?? 'main') === MAIN ? n : `${p.module}\u0024${n}`);
     for (const d of p.unit.decls) {
       const internal = d.storage === 'static';
       if (d.n === 'vardecl') {
-        const link = internal ? `${p.tag}$${d.name}` : d.name;
+        const link = internal ? `${p.tag}$${d.name}` : qualify(d.name);
         if (d.type.k === 'func') {
-          (internal ? p.funcs : sharedFuncs).set(d.name, mod.defineFunc(link, d.type));
+          (internal ? p.funcs : home.funcs).set(d.name, mod.defineFunc(link, d.type));
           continue;
         }
         // `extern int x;` with no initialiser declares; it does not define.
         if (d.storage === 'extern' && !d.init) continue;
         const sym = mod.defineGlobal(link, d.type);
-        (internal ? p.globals : sharedGlobals).set(d.name, { addr: sym.addr, type: d.type });
+        (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type: d.type });
       } else if (d.n === 'func') {
-        const link = internal ? `${p.tag}$${d.name}` : d.name;
+        const link = internal ? `${p.tag}$${d.name}` : qualify(d.name);
         const fn = mod.defineFunc(link, d.type);
         /*
          * A SECOND definition of an external name, which a real linker refuses and this silently
@@ -623,12 +648,12 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
          * won, so the engine printed through a refimport_t that was still zero.
          */
         if (!internal && fn.defined) {
-          duplicates.push({ name: d.name, unit: basename(p.file) });
+          duplicates.push({ name: d.name, unit: basename(p.file), module: p.module ?? MAIN });
         }
         // A DEFINITION, not just a prototype: the distinction decides whether a call reaches the
         // program's own code or a runtime builtin of the same name.
         fn.defined = true;
-        (internal ? p.funcs : sharedFuncs).set(d.name, fn);
+        (internal ? p.funcs : home.funcs).set(d.name, fn);
       }
     }
   }
@@ -638,13 +663,62 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   // Shared across units: a builtin whose address is taken in ONE unit still needs binding once.
   const builtinRefs = new Set();
 
+  /*
+   * What each module can SEE, built once.
+   *
+   * A module sees its own externals, then the main module's -- ELF's rule, where a shared object
+   * resolves against the executable's globals for anything it does not define itself. The main
+   * module sees, in addition, the names other modules EXPORT: `EXPORTS GetRefAPI` in
+   * ref_soft/ref_soft.def and `EXPORTS GetGameAPI` in game/game.def, one symbol each. That export
+   * list is the program's own file, not a list written here.
+   */
+  const visible = new Map();
+  /*
+   * A DECLARATION must not shadow a DEFINITION from further out.
+   *
+   * ref_soft includes q_shared.h, which prototypes Swap_Init, so pass 1 gave ref_soft a
+   * module-qualified name for a function whose only body is in the main module. Overlaying blindly
+   * made every ref_soft call reach `ref_soft$Swap_Init`, which nothing defines. A prototype claims
+   * nothing; only a body does.
+   */
+  const preferDefined = (outer, inner) => {
+    const m = new Map(outer);
+    for (const [k, v] of inner) {
+      if (v?.defined || !(outer.get(k)?.defined)) m.set(k, v);
+    }
+    return m;
+  };
+  for (const m of moduleNames) {
+    const own = perModule.get(m), main = perModule.get(MAIN);
+    if (m !== MAIN) {
+      visible.set(m, {
+        globals: overlay(main.globals, own.globals),
+        funcs: preferDefined(main.funcs, own.funcs),
+      });
+      continue;
+    }
+    // The main module additionally sees what the others EXPORT -- unless it defines the name itself.
+    const globals = new Map(own.globals), exported = new Map();
+    for (const other of moduleNames) {
+      if (other === MAIN) continue;
+      for (const name of exportsOf.get(other) ?? []) {
+        const f = perModule.get(other).funcs.get(name);
+        if (f) exported.set(name, f);
+        const g = perModule.get(other).globals.get(name);
+        if (g && !globals.has(name)) globals.set(name, g);
+      }
+    }
+    visible.set(m, { globals, funcs: preferDefined(own.funcs, exported) });
+  }
+
   for (const p of parsed) {
+    const seen = visible.get(p.module ?? MAIN);
     const ctx = {
       safepoints,
       directCalls,
       builtinRefs,
-      globals: overlay(sharedGlobals, p.globals),
-      funcs: overlay(sharedFuncs, p.funcs),
+      globals: overlay(seen.globals, p.globals),
+      funcs: overlay(seen.funcs, p.funcs),
       builtins: BUILTINS,
     };
     for (const d of p.unit.decls) {

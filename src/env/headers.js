@@ -446,6 +446,19 @@ int errno;
 #define EPIPE   32
 #define EDOM    33
 #define ERANGE  34
+/*
+ * The socket errnos, with Linux's i386 numbers -- the ABI PRISM targets, so these are its values and
+ * not a plausible set. Quake II's net_udp.c compares errno against ECONNREFUSED and EWOULDBLOCK to
+ * decide whether a failed recvfrom is fatal, which is the ordinary way a UDP program of this era
+ * tells "no packet" from "the network is broken".
+ */
+#define EADDRINUSE      98
+#define EADDRNOTAVAIL   99
+#define ENETDOWN        100
+#define ENETUNREACH     101
+#define ECONNRESET      104
+#define ECONNREFUSED    111
+#define EINPROGRESS     115
 #define EDEADLK 35
 #define ENAMETOOLONG 36
 #define ENOLCK  37
