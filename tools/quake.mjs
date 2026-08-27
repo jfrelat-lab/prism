@@ -25,6 +25,7 @@ import { installCrtStatus } from '../src/env/crtstatus.js';
 import { installVgaDac } from '../src/env/vgadac.js';
 import { installKbd8042 } from '../src/env/kbd8042.js';
 import { installGo32 } from '../src/env/go32.js';
+import { installPIT } from '../src/env/pit.js';
 import { writeIndexedPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -306,6 +307,14 @@ if (process.argv.includes('--run')) {
     installCrtStatus(machine);                 // VGA_WaitVsync spins on bit 3 of 0x3DA
     dac = installVgaDac(machine);              // VGA_SetPalette writes 0x3C8/0x3C9
     program.M.kbd = installKbd8042(machine);   // in_dos.c's handler reads 0x60
+    /*
+     * The clock. Sys_FloatTime latches PIT counter 0 and reads the BIOS tick at 0x46C -- it POLLS,
+     * so PRISM needs a counter and not an interrupt controller, and src/env/pit.js was written for
+     * exactly this read. Real microseconds, because a program timing itself against a made-up clock
+     * measures nothing; the null build's Sys_FloatTime returned `t += 0.1` and made its own timedemo
+     * fiction.
+     */
+    installPIT(machine, program.M, { micros: () => performance.now() * 1000 });
     dosHost = installGo32(program.M);
     const write = program.M.write.bind(program.M);
     program.M.write = (str) => { process.stdout.write(str); write(str); };
@@ -316,14 +325,35 @@ if (process.argv.includes('--run')) {
    * asynchronous events arrive while it is inside a loop of its own C, and this is the only moment
    * the host has.
    */
-  let frames = 0;
+  /*
+   * The frame boundary, which is also the only moment this host has to deliver an interrupt: a DOS
+   * program's asynchronous events arrive while it is inside a loop of its own C.
+   *
+   * --keys=esc,enter,down taps keys through the game's OWN handler. `dos_registerintr(9, TrapKey)`
+   * put TrapKey behind the protected-mode vector; TrapKey reads port 0x60 and fills Quake's own ring
+   * buffer. PRISM queues the code and calls the function, and touches nothing else.
+   */
+  const KEYNAMES = {
+    esc: 0x01, enter: 0x1c, space: 0x39, up: 0x48, down: 0x50, left: 0x4b, right: 0x4d,
+    ctrl: 0x1d, y: 0x15, n: 0x31, tab: 0x0f, tilde: 0x29, f1: 0x3b,
+  };
+  const keyScript = (opt2('keys') ?? '').split(',').map(k => k.trim()).filter(Boolean)
+    .map(k => KEYNAMES[k.toLowerCase()] ?? parseInt(k, 16));
+  const KEY_EVERY = +(opt2('keyevery') ?? 20);
+  let frames = 0, keyAt = 0;
   const FRAMES = +(opt2('frames') ?? 0);
-  if (DOS && FRAMES) {
+  if (DOS) {
     const inner = program.F.VID_Update;
     const w = function (...a) {
       const r = inner.apply(this, a);
-      dosHost.deliver(0x08);                        // the timer, if in_dos.c installed one
-      if (++frames >= FRAMES) throw new Error('__frames_done');
+      if (keyAt < keyScript.length && frames > 0 && frames % KEY_EVERY === 0) {
+        const code = keyScript[keyAt++] & 0x7f;
+        // A press and a release, one interrupt each, because that is what the hardware sends.
+        for (const c of [code, code | 0x80]) { program.M.kbd.push(c); dosHost.deliver(0x09); }
+        console.log(`[key] 0x${code.toString(16)} at frame ${frames}`);
+      }
+      if (FRAMES && ++frames >= FRAMES) throw new Error('__frames_done');
+      if (!FRAMES) frames++;
       return r;
     };
     program.F.VID_Update = w; program.mod.bindFunc('VID_Update', w);
