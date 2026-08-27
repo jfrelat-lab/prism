@@ -86,6 +86,8 @@ export class Module {
     const f = this.funcs.get(name) ?? this.defineFunc(name, null);
     f.fn = jsFn;
     this.funcTable[f.index] = jsFn;
+    // And the module-scope binding a direct call names, which no table lookup passes through.
+    this.rebindEmitted?.(name, jsFn);
     return f;
   }
 

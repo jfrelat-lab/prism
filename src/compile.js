@@ -413,7 +413,41 @@ export class CompileError extends Error {}
  * Compile one translation unit.
  * @returns {{M, F, src, run: (argv?: string[]) => {code: number, stdout: string}}}
  */
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = false, pack = null } = {}) {
+/*
+ * The module epilogue: every emitted function published on `F`, plus a rebinder.
+ *
+ * `F` is how every harness in tools/ instruments a program -- replace `prog.F["R_DrawColumn"]` and
+ * the next call goes to the wrapper. A DIRECT call cannot see that: it names the emitted function's
+ * own binding, which is exactly why it is 2-2.5x faster than a property load off a thousand-property
+ * object V8 keeps in dictionary mode. So the module hands back a function that assigns to that
+ * binding, and `F`'s properties become accessors that drive it. Instrumentation keeps working,
+ * unchanged, and the calls stay direct.
+ *
+ * A function DECLARATION creates a MUTABLE binding, in strict mode too, so `foo = wrapper` is legal
+ * and no `let` is needed. A switch rather than an object of setters: the latter would allocate one
+ * closure per function at start-up, a cost every program pays to serve the few that instrument.
+ */
+const moduleEpilogue = (emitted) =>
+  emitted.map(n => `F[${JSON.stringify(n)}]=${jsIdent(n)};`).join('\n') +
+  '\nreturn function(n,fn){switch(n){\n' +
+  emitted.map(n => `case ${JSON.stringify(n)}:${jsIdent(n)}=fn;return true;`).join('\n') +
+  '\n}\nreturn false;};\n';
+
+/** Make `prog.F[name] = fn` reach the module-scope binding a direct call resolves to. */
+function wireRebind(F, mod, emitted, rebind) {
+  if (typeof rebind !== 'function') return;
+  mod.rebindEmitted = rebind;
+  for (const name of emitted) {
+    let cur = F[name];
+    Object.defineProperty(F, name, {
+      configurable: true, enumerable: true,
+      get: () => cur,
+      set: (fn) => { cur = fn; rebind(name, fn); mod.bindFunc(name, fn); },
+    });
+  }
+}
+
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null } = {}) {
   const pp = new Preprocessor({
     defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
@@ -464,7 +498,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   const src = `"use strict";\nreturn function(M,F,D){\n${pieces.join('\n')}\n` +
     // The KEY is the C name; the value is the JavaScript identifier, which differs whenever the C
     // name is a JS reserved word (`in`, `new`, `class`…).
-    `${emitted.map(n => `F[${JSON.stringify(n)}]=${jsIdent(n)};`).join('\n')}\n};`;
+    `${moduleEpilogue(emitted)}};`;
 
   let factory;
   try {
@@ -473,8 +507,9 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
     throw new CompileError(`emitted JavaScript did not compile: ${e.message}\n${numbered(src)}`);
   }
   const F = Object.create(null);
-  factory(M, F, mod.dv);
+  const rebind = factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
+  wireRebind(F, mod, emitted, rebind);
   // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,
   // so a call through the pointer lands where a direct call would.
   for (const name of ctx.builtinRefs ?? []) {
@@ -508,7 +543,7 @@ export { installPorts, installPIT };
 // must stay loadable in a browser: the web shell imports these modules directly, unbundled.
 const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
 
-export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = false, pack = null } = {}) {
+export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null } = {}) {
   const failures = [];
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -616,7 +651,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
 
   finalizeHeap(M);
   const src = '"use strict";\nreturn function(M,F,D){\n' + pieces.join('\n') + '\n' +
-    emitted.map(n => `F[${JSON.stringify(n)}]=${jsIdent(n)};`).join('\n') + '\n};';
+    moduleEpilogue(emitted) + '};';
 
   let factory;
   try {
@@ -625,8 +660,9 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
     throw new CompileError(`emitted JavaScript did not compile: ${e.message}`);
   }
   const F = Object.create(null);
-  factory(M, F, mod.dv);
+  const rebind = factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
+  wireRebind(F, mod, emitted, rebind);
   // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,
   // so a call through the pointer lands where a direct call would.
   for (const name of builtinRefs) {
