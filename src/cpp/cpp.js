@@ -346,7 +346,18 @@ export class Preprocessor {
 
       if (!m.fn) {
         const hs = hsUnion(t.hs, new Set([m.name]));
-        const repl = this.#subst(m, [], hs, false, depth).map(x => clone(x, { hs: hsUnion(x.hs, hs) }));
+        /*
+         * The replacement tokens take the INVOCATION's location, not the definition's.
+         *
+         * `__FILE__` and `__LINE__` inside a macro body must report where the macro was USED --
+         * which is the whole point of a `LOG(...)` or `assert(...)` macro living in a header. PRISM
+         * reported the header and its line, so every such message named the wrong place; the
+         * whole-file cpp gate found it on Doom's am_map.c against gcc.
+         *
+         * It also makes an error inside an expansion point at the line the user wrote.
+         */
+        const repl = this.#subst(m, [], hs, false, depth)
+          .map(x => clone(x, { hs: hsUnion(x.hs, hs), loc: t.loc }));
         if (repl.length) repl[0] = clone(repl[0], { ws: t.ws, bol: t.bol });
         ts.splice(i, 1, ...repl);
         if (!repl.length && i < ts.length) ts[i] = clone(ts[i], { ws: ts[i].ws || t.ws, bol: ts[i].bol || t.bol });
@@ -363,7 +374,8 @@ export class Preprocessor {
       const closeTok = ts[parsed.end - 1];
       // The hide set of the result: (name's ∩ close-paren's) ∪ {macro}
       const hs = hsUnion(hsIntersect(t.hs, closeTok.hs), new Set([m.name]));
-      const repl = this.#subst(m, parsed.args, hs, parsed.varPresent, depth).map(x => clone(x, { hs: hsUnion(x.hs, hs) }));
+      const repl = this.#subst(m, parsed.args, hs, parsed.varPresent, depth)
+        .map(x => clone(x, { hs: hsUnion(x.hs, hs), loc: t.loc }));
       if (repl.length) repl[0] = clone(repl[0], { ws: t.ws, bol: t.bol });
       ts.splice(i, parsed.end - i, ...repl);
       if (!repl.length && i < ts.length) ts[i] = clone(ts[i], { ws: ts[i].ws || t.ws, bol: ts[i].bol || t.bol });

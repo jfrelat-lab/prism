@@ -1543,3 +1543,52 @@ Retracted. The value here is not the millisecond saved by not doing it; it is th
 argument with no constant factor attached is a hypothesis, and this is the second time in this
 project one has evaporated on contact with a measurement (the first was MIRAGE's D6). The instinct
 to fix a known-quadratic loop is strong enough that the entry had to warn its own author.
+
+
+## The cpp gate on whole files (P0.3c)
+
+```
+node tools/gate-cpp-files.mjs [--limit=N] [--verbose] [filter]
+```
+
+**287 of 287 whole translation units from five programs match `gcc -E` token for token.** Doom,
+Heretic, Hexen, MAME 0.1 and Quake — real units, real include paths, thousands of macros deep.
+
+`tools/gate-cpp.mjs` compares self-contained snippets on purpose: it tests the preprocessor and
+nothing else. This tests it on what it is actually asked to do, and the whole difficulty is making
+the comparison mean anything, which comes down to one thing: **gcc must be given PRISM's headers, not
+its own.** Otherwise the diff is glibc's `stdio.h` against PRISM's and says nothing. So the headers
+are written to disk, gcc runs with `-nostdinc` and `-undef`, and PRISM's TARGET_DEFINES are handed to
+it as a prelude header — both sides then start from the same text and the same macro table, and every
+difference left is a preprocessing difference.
+
+### What it found on its first run
+
+**`__FILE__` and `__LINE__` inside a macro reported the DEFINITION site, not the expansion site.**
+
+    #define WHERE() __FILE__, __LINE__      // in h.h
+    ...
+    use(WHERE());                           // in m.c, line 3
+
+gcc says `"m.c", 3`. PRISM said `"h.h", 1`. Every `LOG(...)`, `assert(...)` or `I_Error(...)` macro
+that lives in a header — which is all of them — named the wrong place. The fix is one clause: a
+macro's replacement tokens take the INVOCATION's location, which is what gcc does and what also makes
+an error inside an expansion point at the line the user wrote.
+
+### Three harness bugs, each of which looked like a result
+
+Worth recording because each produced a plausible-looking number that was wrong:
+
+* **`.C` in upper case is C++ to gcc.** Heretic and Hexen name their sources that way, so every one of
+  their units was "skipped: gcc refused them" with a puzzling `cannot execute cc1plus`. `-x c` took
+  the pass rate from 20/20 with 16 skipped to 36/36 with none.
+* **A missing newline swallowed a case.** gcc's output does not always end in one, so the `===RC`
+  marker glued itself to the last line, the regex missed it, and the case vanished as "no oracle
+  output" — which reads like a missing result rather than a harness bug.
+* **A skipped case is not a passing case.** Half the corpus was unusable because gcc refuses a unit
+  outright when a header is missing, where PRISM stubs it empty. Writing the same empty file where
+  gcc will find it makes both sides read the same nothing; 33 headers are stubbed that way, and they
+  are listed on every run rather than counted.
+
+The rule underneath all three: a gate that reports 20/20 while quietly discarding 16 cases is
+reporting the harness, not the compiler.
