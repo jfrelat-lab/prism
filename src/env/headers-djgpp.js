@@ -27,6 +27,38 @@ void _dosmemputb(const void *buffer, int length, unsigned long offset);
 void _dosmemputw(const void *buffer, int length, unsigned long offset);
 void _dosmemputl(const void *buffer, int length, unsigned long offset);
 void movedata(unsigned srcsel, unsigned srcoff, unsigned dstsel, unsigned dstoff, unsigned n);
+
+/*
+ * The go32 half: real-mode interrupt simulation and protected-mode vectors. A _go32_dpmi_seginfo
+ * carries a handler both ways -- a selector/offset pair going out, a wrapper coming back -- which is
+ * why registering an interrupt takes a struct rather than a function pointer.
+ *
+ * (No backticks in this comment: these header strings are JS template literals, and the trap this
+ * file already warns about has now been sprung three times.)
+ */
+/*
+ * DJGPP spells the first field size for a memory request and size_or_mask for an interrupt
+ * wrapper -- one word with two jobs, which its own header expresses as a union. dos_v2.c writes
+ * info.size, so that is the name; the alias is here so either spelling compiles.
+ */
+typedef struct { union { unsigned long size; unsigned long size_or_mask; }; unsigned long pm_offset;
+                 unsigned short pm_selector, rm_offset, rm_segment; } _go32_dpmi_seginfo;
+typedef struct { unsigned long edi, esi, ebp, res, ebx, edx, ecx, eax;
+                 unsigned short flags, es, ds, fs, gs, ip, cs, sp, ss; } __go32_dword_regs;
+typedef union { __go32_dword_regs d; } _go32_dpmi_registers;
+
+unsigned long _go32_rmcb_stack_size;
+unsigned long _go32_interrupt_stack_size;
+
+int _go32_dpmi_simulate_int(int vector, _go32_dpmi_registers *regs);
+int _go32_dpmi_set_protected_mode_interrupt_vector(int vector, _go32_dpmi_seginfo *info);
+int _go32_dpmi_get_protected_mode_interrupt_vector(int vector, _go32_dpmi_seginfo *info);
+int _go32_dpmi_allocate_iret_wrapper(_go32_dpmi_seginfo *info);
+int _go32_dpmi_free_iret_wrapper(_go32_dpmi_seginfo *info);
+int _go32_dpmi_allocate_dos_memory(_go32_dpmi_seginfo *info);
+int _go32_dpmi_free_dos_memory(_go32_dpmi_seginfo *info);
+unsigned long _go32_dpmi_remaining_physical_memory(void);
+unsigned long _go32_dpmi_remaining_virtual_memory(void);
 #endif
 `;
 
@@ -212,11 +244,99 @@ unsigned int AWriteAudioData(LPAUDIOWAVE lpWave, unsigned long dwOffset, unsigne
 #endif
 `;
 
+
+/*
+ * DJGPP's DPMI and go32 interfaces, as Quake's DOS platform uses them.
+ *
+ * The list is measured, not imagined: twenty-four symbols across `sys_dos.c vid_dos.c vid_vga.c
+ * vid_ext.c in_dos.c snd_dos.c dos_v2.c`, and nothing else. `dos_v2.c` is the important one -- it
+ * implements ALL of dosisms.h (dos_int86, dos_registerintr, dos_getmemory, real2ptr...) on top of
+ * these, so PRISM supplies the floor and Quake's own code supplies the rest.
+ *
+ * `__dpmi_regs` is a union of three views of one 50-byte block, the same shape as Watcom's
+ * `union REGS` and for the same reason: a program sets `x.ax` and reads `h.bh` on the same variable.
+ * The layout here is DJGPP's, which orders the 32-bit view edi..eax and appends the segment and
+ * flag registers -- a real-mode call frame, not a register file.
+ */
+const DPMI_H = `
+#ifndef _PRISM_DPMI_H
+#define _PRISM_DPMI_H
+
+typedef struct { unsigned long edi, esi, ebp, res, ebx, edx, ecx, eax;
+                 unsigned short flags, es, ds, fs, gs, ip, cs, sp, ss; } __dpmi_dword_regs;
+typedef struct { unsigned short di, di_hi, si, si_hi, bp, bp_hi, res, res_hi,
+                                bx, bx_hi, dx, dx_hi, cx, cx_hi, ax, ax_hi,
+                                flags, es, ds, fs, gs, ip, cs, sp, ss; } __dpmi_word_regs;
+typedef struct { unsigned char bl, bh, blh1, blh2, dl, dh, dlh1, dlh2,
+                               cl, ch, clh1, clh2, al, ah, alh1, alh2; } __dpmi_byte_regs;
+typedef union { __dpmi_dword_regs d; __dpmi_word_regs x; __dpmi_byte_regs h; } __dpmi_regs;
+
+typedef struct { unsigned long handle, size, address; } __dpmi_meminfo;
+typedef struct { unsigned long largest_available_free_block_in_bytes;
+                 unsigned long maximum_unlocked_page_allocation_in_pages;
+                 unsigned long maximum_locked_page_allocation_in_pages;
+                 unsigned long linear_address_space_size_in_pages;
+                 unsigned long total_number_of_unlocked_pages;
+                 unsigned long total_number_of_free_pages;
+                 unsigned long total_number_of_physical_pages;
+                 unsigned long free_linear_address_space_in_pages;
+                 unsigned long size_of_paging_file_partition_in_pages;
+                 unsigned long reserved[3]; } __dpmi_free_mem_info;
+
+/*
+ * TENTATIVE definitions, not externs, for the same reason errno.h gives: these are objects the DJGPP
+ * runtime provides, no PRISM translation unit defines them, and C89's common-symbol rule merges
+ * tentative definitions across units by name. An extern with no definition anywhere reaches the
+ * emitter as an undeclared identifier instead.
+ *
+ * __djgpp_conventional_base is 0 and __djgpp_selector_limit is the whole image, which is the truth
+ * in a flat model with the low megabyte inside it -- not a convenient answer.
+ */
+int __dpmi_error;
+unsigned long __djgpp_base_address;
+unsigned long __djgpp_selector_limit;
+unsigned long __djgpp_conventional_base;
+
+int __dpmi_int(int vector, __dpmi_regs *regs);
+int __dpmi_lock_linear_region(__dpmi_meminfo *info);
+int __dpmi_unlock_linear_region(__dpmi_meminfo *info);
+int __dpmi_physical_address_mapping(__dpmi_meminfo *info);
+int __dpmi_get_free_memory_information(__dpmi_free_mem_info *info);
+#include <go32.h>
+#endif
+`;
+
+const NEARPTR_H = `
+#ifndef _PRISM_NEARPTR_H
+#define _PRISM_NEARPTR_H
+#include <dpmi.h>
+/*
+ * Near pointers. On real DJGPP this asks the extender to drop segment limits so a flat pointer can
+ * reach conventional memory; PRISM's whole image already IS flat, with the low megabyte in it, so
+ * the answer is yes and the base is zero -- which is the truth here rather than a convenience.
+ */
+int __djgpp_nearptr_enable(void);
+void __djgpp_nearptr_disable(void);
+#endif
+`;
+
+const DIR_H = `
+#ifndef _PRISM_DIR_H
+#define _PRISM_DIR_H
+#include <unistd.h>
+#define MAXPATH 260
+int findfirst(const char *path, void *ff, int attrib);
+int findnext(void *ff);
+#endif
+`;
+
 export const DJGPP_HEADERS = {
   'go32.h': GO32,
   'sys/farptr.h': FARPTR,
   'sys/movedata.h': GO32,
-  'dpmi.h': '#ifndef _PRISM_DPMI_H\n#define _PRISM_DPMI_H\n#include <go32.h>\n#endif\n',
+  'dpmi.h': DPMI_H,
+  'sys/nearptr.h': NEARPTR_H,
+  'dir.h': DIR_H,
   'dos.h': DOSH,
   'io.h': IOH,
   'allegro.h': ALLEGRO,

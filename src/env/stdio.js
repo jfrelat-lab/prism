@@ -377,6 +377,10 @@ export function installStdio(M, {
     const fp = api.fopen(namePtr, M.mod.intern([...enc.encode(mode), 0]));
     return fp ? fp : -1;                       // a descriptor IS a FILE* here; nothing else looks
   };
+  // getche is getchar that echoes; getwd is getcwd without the size that made it safe.
+  api.getche = () => { const c = readChar(); if (c >= 0) M.write(String.fromCharCode(c)); return c; };
+  api.getwd = (buf) => api.getcwd(buf, 4096);
+
   api.close = (fd) => api.fclose(fd);
   api.write = (fd, src, n) => { api.fwrite(src, 1, n, fd); return n | 0; };
   // fd 0 is stdin. It is a distinct number from the FILE* stdin above, and a program that mixes the

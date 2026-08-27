@@ -203,6 +203,24 @@ function makeLibc(M) {
       return Number(BigInt.asIntN(32, (BigInt(a | 0) << 16n) / BigInt(b | 0)));
     },
 
+    /*
+     * atexit RECORDS rather than ignores, and rt.exit runs the list: a program that cleans up on the
+     * way out is entitled to have that happen. Quake's Sys_Shutdown is registered this way.
+     */
+    atexit: (fn) => { (M.atexitList ??= []).push(fn >>> 0); return 0; },
+    /*
+     * sbrk, over the same brk the guest malloc uses -- so a program that mixes them (Quake asks
+     * sbrk(0) to find the heap top) sees one consistent heap rather than two.
+     */
+    sbrk: (delta) => {
+      const prev = M.heap;
+      const d = delta | 0;
+      if (d === 0) return prev;
+      if (M.heap + d > M.heapEnd) return -1;
+      M.heap += d;
+      return prev;
+    },
+
     atoi: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
 
     /*

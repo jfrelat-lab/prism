@@ -11,6 +11,7 @@ import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
 import { watcomBuiltins } from './env/watcom.js';
+import { go32Builtins } from './env/go32.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
 import { installPorts } from './env/ports.js';
@@ -314,6 +315,10 @@ export const BUILTINS = new Map(Object.entries({
   strnicmp: { ret: I, params: [P, P, U] },
   strupr: { ret: P, params: [P] },
   strlwr: { ret: P, params: [P] },
+  getche: { ret: I, params: [] },
+  getwd: { ret: P, params: [P] },
+  atexit: { ret: I, params: [P] },
+  sbrk: { ret: P, params: [I] },
   strtol: { ret: T.LONG, params: [P, P, I] },
   strtoul: { ret: T.ULONG, params: [P, P, I] },
   abs: { ret: I, params: [I] },
@@ -399,6 +404,8 @@ export const BUILTINS = new Map(Object.entries({
 for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
 // The Watcom/DOS4GW runtime Heretic and Hexen call; see src/env/watcom.js.
 for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
+// DJGPP's DPMI floor, which Quake's dos_v2.c builds all of dosisms.h on; see src/env/go32.js.
+for (const [k, v] of Object.entries(go32Builtins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 

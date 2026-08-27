@@ -20,6 +20,12 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compileProgram, installStdio } from '../src/compile.js';
 import { HEADERS } from '../src/env/headers.js';
+import { installPorts } from '../src/env/ports.js';
+import { installCrtStatus } from '../src/env/crtstatus.js';
+import { installVgaDac } from '../src/env/vgadac.js';
+import { installKbd8042 } from '../src/env/kbd8042.js';
+import { installGo32 } from '../src/env/go32.js';
+import { writeIndexedPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(ROOT, 'corpus', 'Quake', 'WinQuake');
@@ -46,7 +52,21 @@ const ENGINE = [
 ];
 
 // … and Quake's own null platform drivers instead of the Linux/SVGAlib ones.
-const PLATFORM = ['sys_null.c', 'vid_null.c', 'snd_null.c', 'cd_null.c', 'net_none.c', 'in_null.c'];
+/*
+ * Two platform configurations, both id's own.
+ *
+ * `*_null.c` is the porting stub set Quake ships for exactly this situation: no real input, sound or
+ * timing. `--dos` selects the units the game actually shipped with. It is not a one-for-one swap:
+ * `snd_null.c` also DEFINES the sound cvars and `shm`, which the engine and the menu reference, so
+ * dropping it means picking up Quake's real sound core as well as its DOS driver. The null build was
+ * missing a third of the program, not just its output stage.
+ */
+const PLATFORM_NULL = ['sys_null.c', 'vid_null.c', 'snd_null.c', 'cd_null.c', 'net_none.c', 'in_null.c'];
+const PLATFORM_DOS = ['sys_dos.c', 'vid_dos.c', 'vid_vga.c', 'vid_ext.c', 'vregset.c',
+  'snd_dos.c', 'snd_dma.c', 'snd_mem.c', 'snd_mix.c',
+  'cd_audio.c', 'net_none.c', 'in_dos.c', 'dos_v2.c'];
+const DOS = process.argv.includes('--dos');
+const PLATFORM = DOS ? PLATFORM_DOS : PLATFORM_NULL;
 
 const UNITS = [...ENGINE, ...PLATFORM];
 
@@ -83,6 +103,15 @@ for (const f of UNITS) {
 }
 
 units.push({ file: 'prism-platform-vars.c', source: PLATFORM_VARS });
+/*
+ * What the linker and the assembler provide in a real DJGPP build. A real .c file rather than a
+ * string in this tool -- it is C, so it belongs in a C file, and tools/quake-dos-vars.c says why
+ * each routine can be what it is.
+ */
+if (DOS) {
+  const p = join(ROOT, 'tools/quake-dos-vars.c');
+  units.push({ file: p, source: readFileSync(p, 'latin1') });
+}
 
 const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
 console.log(`Quake (WinQuake, id386=0) — ${units.length} translation units, ${loc.toLocaleString('en')} lines`);
@@ -262,15 +291,71 @@ if (process.argv.includes('--audit-sp')) {
   }
 }
 
+const opt2 = (n) => process.argv.find(a => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? null;
+
 if (process.argv.includes('--run')) {
   installStdio(program.M, { files });
+  /*
+   * The DOS host: the same three devices Heretic needed, plus DJGPP's DPMI floor. Quake's default
+   * video mode programs NO VGA registers -- vgavidmodes[0] carries an empty register set -- so the
+   * framebuffer is ordinary memory at 0xa0000 and nothing here emulates a CRTC.
+   */
+  let dosHost = null, dac = null;
+  if (DOS) {
+    const machine = installPorts(program.M);
+    installCrtStatus(machine);                 // VGA_WaitVsync spins on bit 3 of 0x3DA
+    dac = installVgaDac(machine);              // VGA_SetPalette writes 0x3C8/0x3C9
+    program.M.kbd = installKbd8042(machine);   // in_dos.c's handler reads 0x60
+    dosHost = installGo32(program.M);
+    const write = program.M.write.bind(program.M);
+    program.M.write = (str) => { process.stdout.write(str); write(str); };
+  }
+  /*
+   * A frame cap, because Quake's main loop never returns. VID_Update is where a frame is presented,
+   * which is also where the timer and keyboard interrupts are delivered -- a DOS program's
+   * asynchronous events arrive while it is inside a loop of its own C, and this is the only moment
+   * the host has.
+   */
+  let frames = 0;
+  const FRAMES = +(opt2('frames') ?? 0);
+  if (DOS && FRAMES) {
+    const inner = program.F.VID_Update;
+    const w = function (...a) {
+      const r = inner.apply(this, a);
+      dosHost.deliver(0x08);                        // the timer, if in_dos.c installed one
+      if (++frames >= FRAMES) throw new Error('__frames_done');
+      return r;
+    };
+    program.F.VID_Update = w; program.mod.bindFunc('VID_Update', w);
+  }
   try {
-    const r = program.run(['quake', '-nosound']);
+    const extra = (opt2('args') ?? '').split(/\s+/).filter(Boolean);
+    const r = program.run(['quake', '-nosound', ...extra]);
     console.log(`\nexit ${r.code}`);
     // The whole of it. Truncating at 4000 characters cut the line that said WHY the program stopped,
     // and made a self-inflicted mystery out of a printed error message.
     console.log(r.stdout);
   } catch (e) {
-    console.log(`\n✗ ran and threw: ${e.message}`);
+    if (e.message === '__frames_done') console.log(`\nstopped after ${frames} frames`);
+    else {
+      console.log(`\n✗ ran and threw: ${e.message}`);
+      console.log((e.stack || '').split('\n').slice(1, 10).join('\n'));
+    }
+  }
+  if (dosHost) {
+    const st = dosHost.state;
+    console.log(`video mode ${st.mode === null ? '(none set)' : '0x' + st.mode.toString(16)} · ` +
+      `vectors ${[...st.vectors.keys()].map(v => '0x' + v.toString(16)).join(' ') || 'none'} · ` +
+      `${st.locked} locked regions`);
+    const px = program.M.u8.subarray(0xa0000, 0xa0000 + 320 * 200);
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    console.log(`framebuffer at 0xa0000: ${nz} non-zero pixels of ${px.length}, ` +
+      `${new Set(px).size} distinct colours`);
+    const png = opt2('png');
+    if (png) {
+      writeIndexedPng(png, { pixels: px, width: 320, height: 200, palette: dac.palette });
+      console.log(`wrote ${png}`);
+    }
   }
 }

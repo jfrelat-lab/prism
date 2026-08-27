@@ -376,7 +376,7 @@ const SETJMP = `
 #ifndef _PRISM_SETJMP_H
 #define _PRISM_SETJMP_H
 /*
- * jmp_buf is an ARRAY, as every real setjmp.h makes it, so that \`jmp_buf b;\` declares storage and
+ * jmp_buf is an ARRAY, as every real setjmp.h makes it, so that \jmp_buf b;\ declares storage and
  * passing it decays to a pointer. PRISM stores two words in it: the shadow-stack frame that called
  * setjmp, and the resume point inside that function.
  */
@@ -536,6 +536,20 @@ void outportb(int port, int value);
 void outportw(int port, int value);
 int inp(int port);
 int outp(int port, int value);
+/*
+ * getche and getwd, the two DOS/BSD spellings Quake's sys_dos.c reaches for. getwd is getcwd with no
+ * size argument -- the reason it was removed from POSIX -- so the buffer is assumed large enough,
+ * which is what the caller assumed too.
+ */
+int getche(void);
+char *getwd(char *buf);
+/*
+ * enable/disable are DJGPP's sti and cli. There are no interrupts to mask here -- a handler runs
+ * only when this host calls it -- so they are declared for the programs that bracket critical
+ * sections with them and do nothing, which is the truthful answer rather than a convenient one.
+ */
+void enable(void);
+void disable(void);
 #endif
 `;
 
@@ -1108,6 +1122,8 @@ int raise(int sig);
 #define SIGALRM 14
 #define SIGTERM 15
 #define SIGCHLD 17
+// DJGPP's numeric-coprocessor signal, which Quake installs a handler for.
+#define SIGNOFP 20
 `,
   'ctype.h': CTYPE,
   'sys/types.h': SYS_TYPES,
