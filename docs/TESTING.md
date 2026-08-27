@@ -1775,3 +1775,38 @@ c-testsuite 00206 from a REFUSAL into a WRONG ANSWER, because `#pragma push_macr
 being silently discarded. They are preprocessor pragmas and now never reach the parser — a stack per
 macro name, with the operand read from the raw tokens, which is what that test checks by defining
 macros called `push_macro` and `pop_macro` first. 201 → **202/219, still zero wrong answers**.
+
+### Quake II's data, and how far it gets on it
+
+The data is id's own freely distributed demo. It is never fetched by a tool here and never enters
+the repository — like every other target, it is read from a directory the user names:
+
+```
+curl -o q2-314-demo-x86.exe \
+  https://ftp.gwdg.de/pub/misc/ftp.idsoftware.com/idstuff/quake2/q2-314-demo-x86.exe
+unzip -qo q2-314-demo-x86.exe 'Install/Data/baseq2/*' && mv Install/Data/baseq2 .
+```
+
+39,015,499 bytes, sha1 `5b4dedc59ceee306956a3e48a8bdf6dd33bc91ed`. It is a plain zip, and
+`baseq2/pak0.pak` is 49,951,322 bytes holding 1106 files.
+
+With it, Quake II gets a long way:
+
+```
+> Added packfile ./baseq2/pak0.pak (1106 files)
+> execing default.cfg
+> Console initialized.
+> 768k surface cache
+> ref_soft version: SOFT 0.01
+> failed to load game DLL
+```
+
+The renderer initialises. What stops it is the THIRD module. `null/sys_null.c:37` has
+`Sys_GetGameAPI` return NULL, and the demo's own `default.cfg` starts a demo map immediately, so
+`SV_DemoMap_f → SV_Map → SV_InitGame → SV_InitGameProgs` wants the game DLL at start-up rather than
+only when a map loads.
+
+Unlike the refresh, the game has no direct-link glue anywhere in the tree: `linux/sys_linux.c:196`
+dlopens `gamei386.so` and dlsyms `GetGameAPI`. So the `dlopen` that P7.3 turned out not to need for
+`ref_soft` is exactly what `game/` does need — over PRISM's own symbol table, where
+`game$GetGameAPI` already has an address.
