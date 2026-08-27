@@ -1486,3 +1486,35 @@ than its field width is a matching failure. glibc assigns what it got: `sscanf("
 returns 2, not 1. PRISM followed the standard and disagreed with the oracle — and the oracle is what
 every gate here compares against, so the oracle wins. Ten `strtol` cases and six `sscanf` cases now
 match gcc exactly, character for character.
+
+
+### The third device, and why the keyboard is not a device problem
+
+```
+node tools/raven.mjs --game=heretic --run --safepoints --tick=1 --budget=5000 \
+     --keys=esc,down,down,enter --data=<dir with the WAD>
+```
+
+`src/env/kbd8042.js` is ports 0x60 and 0x64 and about forty lines, because almost nothing about a
+DOS keyboard happens in the controller. The game installs an interrupt handler and the handler reads
+one byte:
+
+    void __interrupt I_KeyboardISR (void) {                     // Heretic, I_IBM.C
+        keyboardque[kbdhead & (KBDQUESIZE-1)] = lastpress = _inbyte(0x60);
+        kbdhead++;
+        _outbyte(0x20, 0x20);
+    }
+
+So the host's job is two halves that must meet: put a code where 0x60 will read it, and CALL the
+handler. Either alone is silent — a code with no interrupt is never read, an interrupt with no code
+makes the game read the previous one again — which is why `deliverKeyboard` does both and neither is
+exposed separately.
+
+Two decisions worth naming. An empty queue returns the LAST code rather than zero, because a real
+controller holds its output buffer and 0 is a meaningful set-1 code (overrun) that some handlers act
+on: inventing one is worse than repeating the truth. And a keypress is TWO interrupts, the code and
+the code with bit 7 set, because that is what the hardware sends and what the game's release
+detection needs.
+
+PRISM never touches `keyboardque`. Escape opens the menu, Down/Down/Enter reaches the load/save
+submenu, and every one of those transitions happened inside the game's own code.

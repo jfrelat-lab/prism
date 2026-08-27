@@ -28,6 +28,7 @@ import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
 import { installCrtStatus } from '../src/env/crtstatus.js';
 import { installVgaDac } from '../src/env/vgadac.js';
+import { installKbd8042 } from '../src/env/kbd8042.js';
 import { writeIndexedPng } from './png.mjs';
 import { installWatcom } from '../src/env/watcom.js';
 import { HEADERS } from '../src/env/headers.js';
@@ -166,6 +167,8 @@ if (process.argv.includes('--run')) {
   installCrtStatus(machine);
   // The colour DAC: without it the framebuffer is 64,000 indices into nothing.
   const dac = installVgaDac(machine);
+  // The keyboard controller. The game's own ISR reads port 0x60; this is what puts a code there.
+  program.M.kbd = installKbd8042(machine);
   const host = installWatcom(program.M);
 
   /*
@@ -185,12 +188,36 @@ if (process.argv.includes('--run')) {
    * available deterministically. It is not the real 35 Hz; it is a tic every N iterations of guest
    * code, which is enough to make the game advance and reproducible run to run.
    */
+  /*
+   * --keys=esc,enter,down,...: tap keys at intervals, as a person would.
+   *
+   * Delivered from the same safepoint as the timer, because a keypress arrives while the game is
+   * inside a loop of its own C -- which is the whole reason the safepoint exists.
+   */
+  const KEYNAMES = {
+    esc: 0x01, enter: 0x1c, space: 0x39, up: 0x48, down: 0x50, left: 0x4b, right: 0x4d,
+    y: 0x15, n: 0x31, tab: 0x0f, f1: 0x3b, one: 0x02, two: 0x03, three: 0x04, use: 0x39,
+  };
+  const keyScript = (opt('keys') ?? '').split(',').map(k => k.trim()).filter(Boolean)
+    .map(k => KEYNAMES[k.toLowerCase()] ?? parseInt(k, 16));
+  const KEY_EVERY = +(opt('keyevery') ?? 400);
+  let sinceKey = 0, keyAt = 0;
+  const driveKeys = () => {
+    if (keyAt >= keyScript.length) return;
+    if (++sinceKey < KEY_EVERY) return;
+    sinceKey = 0;
+    const code = keyScript[keyAt++];
+    host.tapKey(code);
+    console.log(`[key] tapped 0x${code.toString(16)} (${keyAt}/${keyScript.length})`);
+  };
+
   const TICK_EVERY = +(opt('tick') ?? 40);
   let sinceTick = 0;
   const driveTimer = () => {
     if (++sinceTick < TICK_EVERY) return;
     sinceTick = 0;
     host.deliverTimer();
+    driveKeys();
   };
 
   if (process.argv.includes('--safepoints')) {
@@ -229,7 +256,7 @@ if (process.argv.includes('--run')) {
     console.log((e.stack || '').split('\n').slice(1, 14).join('\n'));
   }
   const s = host.state;
-  console.log(`timer interrupts delivered: ${s.ticks}`);
+  console.log(`interrupts delivered: ${s.ticks} timer, ${s.keys} keyboard`);
   console.log(`video mode ${s.mode === null ? '(none set)' : '0x' + s.mode.toString(16)} · ` +
     `${s.width}x${s.height} · vectors installed: ${[...s.vectors.keys()].map(k => '0x' + k.toString(16)).join(' ') || 'none'}`);
   const px = program.M.u8.subarray(s.pixels, s.pixels + s.width * s.height);

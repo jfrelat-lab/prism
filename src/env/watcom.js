@@ -59,6 +59,7 @@ export function installWatcom(M, {
     retrace: 0,
     services: [],            // TSM timer services registered but not yet driven
     ticks: 0,                // timer interrupts delivered
+    keys: 0,                 // keyboard interrupts delivered
   };
   M.watcom = state;
 
@@ -267,12 +268,27 @@ export function installWatcom(M, {
     return fired;
   }
 
-  function deliverKeyboard(scan) {
+  /**
+   * Deliver a keyboard interrupt: queue the scan code where port 0x60 will read it, then call the
+   * handler the program installed.
+   *
+   * `kbd` is the controller from src/env/kbd8042.js. The two halves have to meet -- a code with no
+   * interrupt is never read, and an interrupt with no code makes the game read the previous one
+   * again -- which is why they are one function rather than two.
+   */
+  function deliverKeyboard(scan, kbd = M.kbd) {
     const isr = state.vectors.get(0x09);
-    if (!isr) return false;
-    M.ports?.queueScancode?.(scan);
+    if (!isr || !kbd) return false;
+    kbd.push(scan);
     M.icall(isr, []);
+    state.keys++;
     return true;
+  }
+
+  /** A key down and then up, one interrupt each, which is what a keypress actually is. */
+  function tapKey(code, kbd = M.kbd) {
+    const c = code & 0x7f;
+    return deliverKeyboard(c, kbd) && deliverKeyboard(c | 0x80, kbd);
   }
 
   function publishGeometry() {
@@ -284,7 +300,7 @@ export function installWatcom(M, {
   }
 
   Object.assign(M.rt, api);
-  M.watcomHost = { state, deliverKeyboard, deliverTimer, publishGeometry, keys, onPresent, stopAfterFrames };
+  M.watcomHost = { state, deliverKeyboard, tapKey, deliverTimer, publishGeometry, keys, onPresent, stopAfterFrames };
   return M.watcomHost;
 }
 
