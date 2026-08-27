@@ -95,6 +95,15 @@ console.log(`${target.title ?? target.name} — ${units.length} translation unit
   `${loc.toLocaleString('en')} lines, ${Object.keys(program.F).length} functions in ${secs} s`);
 if (asm?.length) console.log(`  ${asm.length} assembly objects skipped: ${asm.join(' ')}`);
 if (missingHeaders.length) console.log(`  headers stubbed: ${missingHeaders.join(' ')}`);
+/*
+ * A duplicate external definition is not a warning to skim past: every emitted function shares one
+ * JavaScript scope, so the last one wins and calls emitted BEFORE it also go to it.
+ */
+if (program.duplicates?.length) {
+  console.log(`  ${program.duplicates.length} duplicate external definitions -- the LAST one wins ` +
+    `for the whole program:`);
+  for (const d of program.duplicates) console.log(`    ${d.name}  (redefined in ${d.unit})`);
+}
 if (program.failures?.length) {
   const by = new Map();
   for (const f of program.failures) by.set(f.message, (by.get(f.message) ?? 0) + 1);

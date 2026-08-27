@@ -116,6 +116,9 @@ function makeLibc(M) {
 
   const strlenAt = (p) => { let n = 0; while (u8()[p + n] !== 0) n++; return n; };
 
+  // strtok's static saved pointer. See strtok below for why it cannot live in a stack frame.
+  let strtokSaved = 0;
+
   const lib = {
     // --- stdio
     printf: (fmt, args) => { const s = format(M, fmt, args ?? []); M.write(s); return s.length; },
@@ -274,6 +277,24 @@ function makeLibc(M) {
     },
     atol: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
     labs: (v) => Math.abs(v | 0) | 0,
+    /*
+     * qsort, and the reason it is not two lines: the comparator is the GUEST's, so every comparison
+     * is an indirect call back into compiled code, and the elements are bytes in the heap rather than
+     * JS values.
+     *
+     * Sorting an index array and then permuting is what keeps this honest -- swapping through a
+     * scratch buffer as the C would means moving `size` bytes per swap, and JS's own sort gives no
+     * access to the swap. The comparator sees the real addresses either way, which is what a caller
+     * that compares pointers-into-the-struct depends on.
+     */
+    qsort: (base, n, size, cmp) => {
+      n = n >>> 0; size = size >>> 0;
+      if (n < 2 || size === 0) return;
+      const idx = Array.from({ length: n }, (_, i) => i);
+      idx.sort((a, b) => M.icall(cmp, [base + a * size, base + b * size]) | 0);
+      const tmp = M.u8.slice(base, base + n * size);
+      for (let i = 0; i < n; i++) M.u8.set(tmp.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
+    },
     abs: (v) => Math.abs(v | 0) | 0,
 
     // --- string
@@ -307,6 +328,42 @@ function makeLibc(M) {
         if (u8()[p + i] === c) return p + i;
         if (u8()[p + i] === 0) return 0;
       }
+    },
+
+    strncat: (d, s, n) => {
+      const e = d + strlenAt(d);
+      let i = 0;
+      for (; i < n && u8()[s + i]; i++) u8()[e + i] = u8()[s + i];
+      u8()[e + i] = 0;                        // ALWAYS terminated -- unlike strncpy, which is not
+      return d;
+    },
+    strdup: (s) => {
+      const n = strlenAt(s) + 1;
+      const p = lib.malloc(n);
+      if (p) M.u8.copyWithin(p, s, s + n);
+      return p;
+    },
+    /*
+     * strtok, with its state: the standard says the saved pointer is static, and a caller relies on
+     * it -- `strtok(s, d)` then `strtok(NULL, d)` until it returns NULL. Quake II's Cmd_TokenizeString
+     * and its config parsing both walk a buffer that way, so the state has to persist across calls
+     * and cannot live on a JS stack frame.
+     */
+    strtok: (s, delim) => {
+      const isDelim = (ch) => {
+        for (let i = 0; u8()[delim + i]; i++) if (u8()[delim + i] === ch) return true;
+        return false;
+      };
+      let p = s ? s : strtokSaved;
+      if (!p) return 0;
+      while (u8()[p] && isDelim(u8()[p])) p++;   // leading delimiters are not a token
+      if (!u8()[p]) { strtokSaved = 0; return 0; }
+      const start = p;
+      while (u8()[p] && !isDelim(u8()[p])) p++;
+      // The separator is OVERWRITTEN with a NUL: strtok modifies its input, which is why a caller
+      // must never hand it a string literal.
+      if (u8()[p]) { u8()[p] = 0; strtokSaved = p + 1; } else strtokSaved = 0;
+      return start;
     },
     memcpy: (d, s, n) => { M.copy(d, s, n); return d; },
     memmove: (d, s, n) => { M.copy(d, s, n); return d; },
@@ -521,6 +578,7 @@ function makeLibc(M) {
 
     // --- math (double in, double out; the emitter has already coerced)
     sqrt: Math.sqrt, sin: Math.sin, cos: Math.cos, tan: Math.tan, atan: Math.atan,
+    asin: Math.asin, acos: Math.acos,
     atan2: Math.atan2, exp: Math.exp, log: Math.log, log10: Math.log10, pow: Math.pow,
     floor: Math.floor, ceil: Math.ceil, fabs: Math.abs,
     /*

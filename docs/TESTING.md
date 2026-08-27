@@ -1695,3 +1695,25 @@ The check that made this trustworthy was not that it builds, it is that it build
 A target describes the BUILD and the ENVIRONMENT. It does not describe instrumentation — Quake's
 frame cap and key script, Doom's fire trigger, the audio drain wrap the program's own functions to
 watch it run, and putting those in JSON would be game logic in a config file.
+
+### Quake II compiles
+
+```
+node tools/build.mjs quake2.json
+```
+
+61 translation units, 49,653 lines, 1121 functions, **nothing unemitted**. It took six libc
+additions and one platform variable, and not one compiler change:
+
+* `strdup`, `strncat`, `strtok`, `qsort`, `asin`/`acos`, `putenv`. `qsort` is the only one with any
+  depth — the comparator is the GUEST's, so every comparison is an indirect call back into compiled
+  code and the elements are bytes in the heap. Sorting an index array and permuting keeps that
+  honest; JS's own sort gives no access to the swap.
+* `in_joystick`, which `linux/in_linux.c:6` and `win32/in_win.c:55` both define and id's own null
+  platform does not.
+
+`C_ONLY` is id's own switch and a cleaner one than Quake 1's: `q_shared.h:42` reads
+`#if (defined _M_IX86 || defined __i386__) && !defined C_ONLY`, so defining it selects the portable
+C body of every routine with an assembly twin. A build option, not a source edit.
+
+It does not RUN yet, and the reason is worth reading: see ROADMAP P7.3.

@@ -565,6 +565,20 @@ export function installStdio(M, {
       return interned.get(name);
     },
     setenv: (namePtr, valPtr) => { environment[M.mod.cstr(namePtr)] = M.mod.cstr(valPtr); interned.delete(M.mod.cstr(namePtr)); return 0; },
+    /*
+     * putenv takes ONE string, "NAME=value", and the POSIX version keeps the caller's storage rather
+     * than copying it. Nothing here depends on that aliasing -- Quake II calls it once, on a buffer
+     * it never touches again -- so this copies, and says so instead of implying otherwise.
+     */
+    putenv: (strPtr) => {
+      const kv = M.mod.cstr(strPtr);
+      const eq = kv.indexOf('=');
+      if (eq < 0) { delete environment[kv]; interned.delete(kv); return 0; }
+      const name = kv.slice(0, eq);
+      environment[name] = kv.slice(eq + 1);
+      interned.delete(name);
+      return 0;
+    },
     localtime: () => 0,          // no calendar here; a caller must handle NULL, and SQLite does
 
     mmap: () => -1,

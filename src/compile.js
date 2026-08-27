@@ -262,6 +262,7 @@ export const BUILTINS = new Map(Object.entries({
   fdatasync: { ret: I, params: [I] },
   sysconf: { ret: I, params: [I] },
   getenv: { ret: P, params: [P] },
+  putenv: { ret: I, params: [P] },
   setenv: { ret: I, params: [P, P, I] },
   __builtin_clzll: { ret: I, params: [T.LLONG ?? U] },
   __builtin_clz: { ret: I, params: [U] },
@@ -330,12 +331,17 @@ export const BUILTINS = new Map(Object.entries({
   strcmp: { ret: I, params: [P, P] },
   strncmp: { ret: I, params: [P, P, U] },
   strchr: { ret: P, params: [P, I] },
+  strncat: { ret: P, params: [P, P, U] },
+  strdup: { ret: P, params: [P] },
+  strtok: { ret: P, params: [P, P] },
+  qsort: { ret: T.VOID, params: [P, U, U, P] },
   memcpy: { ret: P, params: [P, P, U] },
   memmove: { ret: P, params: [P, P, U] },
   memset: { ret: P, params: [P, I, U] },
   memcmp: { ret: I, params: [P, P, U] },
   sqrt: { ret: D, params: [D] }, sin: { ret: D, params: [D] }, cos: { ret: D, params: [D] },
   tan: { ret: D, params: [D] }, atan: { ret: D, params: [D] }, atan2: { ret: D, params: [D, D] },
+  asin: { ret: D, params: [D] }, acos: { ret: D, params: [D] },
   exp: { ret: D, params: [D] }, log: { ret: D, params: [D] }, log10: { ret: D, params: [D] },
   pow: { ret: D, params: [D, D] }, floor: { ret: D, params: [D] }, ceil: { ret: D, params: [D] },
   fabs: { ret: D, params: [D] }, fmod: { ret: D, params: [D, D] },
@@ -586,6 +592,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
    * common-symbol rule that already merges tentative definitions between units.
    */
   sharedGlobals.set('errno', { addr: mod.defineGlobal('errno', T.INT).addr, type: T.INT });
+  const duplicates = [];
   for (const p of parsed) {
     p.globals = new Map();
     p.funcs = new Map();
@@ -604,6 +611,20 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
       } else if (d.n === 'func') {
         const link = internal ? `${p.tag}$${d.name}` : d.name;
         const fn = mod.defineFunc(link, d.type);
+        /*
+         * A SECOND definition of an external name, which a real linker refuses and this silently
+         * took the last of. Worth catching rather than tolerating: emitted functions all share one
+         * JavaScript scope, so a duplicate `function foo(){}` shadows the earlier one and every call
+         * in the program -- including calls emitted before it -- goes to the wrong body.
+         *
+         * Quake II is what found this. qcommon/common.c, game/g_main.c and ref_soft/r_main.c each
+         * define Com_Printf, routed to their own import struct, because in a real build they are
+         * three separate shared objects that never meet. Flattened into one program, the renderer's
+         * won, so the engine printed through a refimport_t that was still zero.
+         */
+        if (!internal && fn.defined) {
+          duplicates.push({ name: d.name, unit: basename(p.file) });
+        }
         // A DEFINITION, not just a prototype: the distinction decides whether a call reaches the
         // program's own code or a runtime builtin of the same name.
         fn.defined = true;
@@ -675,7 +696,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   installStdio(M);
   installPIT(installPorts(M), M);
 
-  return { M, F, src, mod, failures, run: makeRunner(M, F, mod) };
+  return { M, F, src, mod, failures, duplicates, run: makeRunner(M, F, mod) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */
