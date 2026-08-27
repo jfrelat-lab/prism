@@ -1,0 +1,125 @@
+// build.mjs — build any target in targets/, from its JSON alone.
+//
+//   node tools/build.mjs targets/quake.json                       # compile only, report
+//   node tools/build.mjs targets/quake.json:null                  # a named variant
+//   node tools/build.mjs targets/heretic.json --run --data=<dir>
+//   node tools/build.mjs --list
+//
+// This replaces the BUILD half of quake.mjs, raven.mjs, mame.mjs and doomsnd.mjs: four hand-written
+// copies of the same six decisions. What it does not replace is the other half of those tools --
+// each program's own instrumentation. Quake's frame cap and key script, Doom's fire trigger, the
+// audio drain: those wrap the program's functions to watch it run, and a JSON file describing them
+// would be game logic in a config file.
+//
+// So the honest split is: every target COMPILES here, and a target with nothing program-specific to
+// do also RUNS here. The rest keep their tool, which now calls buildTarget() instead of restating
+// the build.
+
+import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadTarget, buildTarget } from '../src/target.js';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const TARGETS = join(ROOT, 'targets');
+const argv = process.argv.slice(2);
+const opt = (n, d = null) => argv.find(a => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
+const flag = (n) => argv.includes(`--${n}`);
+
+if (flag('list') || argv.length === 0) {
+  console.log('targets:');
+  for (const f of readdirSync(TARGETS).filter(f => f.endsWith('.json')).sort()) {
+    const t = JSON.parse(readFileSync(join(TARGETS, f), 'utf8'));
+    const vs = Object.keys(t.variants ?? {}).filter(k => !k.startsWith('_'));
+    const have = existsSync(join(ROOT, t.dir)) ? '' : '  (source tree absent)';
+    console.log(`  targets/${f.padEnd(16)} ${t.title ?? t.name}${vs.length ? `  [${vs.join(' ')}]` : ''}${have}`);
+  }
+  process.exit(0);
+}
+
+// `path.json:variant` -- one argument, because the variant is part of naming the target.
+const [file, variant] = argv[0].split(':');
+let target;
+try {
+  target = loadTarget(file.includes('/') ? join(ROOT, file) : join(TARGETS, file), variant ?? null);
+  if (!variant && target.default) target = loadTarget(join(ROOT, file), target.default);
+} catch (e) {
+  console.error(String(e.message));
+  process.exit(2);
+}
+
+if (!existsSync(join(ROOT, target.dir))) {
+  console.error(`source tree absent: ${target.dir}`);
+  if (target.fetch) console.error(`fetch it with:\n  ${target.fetch}`);
+  process.exit(2);
+}
+
+/*
+ * The data directory, read from a directory the USER names and nowhere else. No tool here fetches
+ * game data, and none of it enters the repository.
+ */
+const files = {};
+const dataArg = opt('data');
+if (dataArg) {
+  const walk = (d, prefix = '') => {
+    for (const e of readdirSync(d)) {
+      const full = join(d, e);
+      if (statSync(full).isDirectory()) walk(full, `${prefix}${e}/`);
+      else files[`${prefix}${e}`] = new Uint8Array(readFileSync(full));
+    }
+  };
+  walk(dataArg);
+}
+
+const t0 = performance.now();
+let built;
+try {
+  built = buildTarget(target, {
+    root: ROOT,
+    compile: { safepoints: flag('safepoints'), ...(opt('memory') ? { memory: +opt('memory') } : {}) },
+    envExtra: {
+      stdio: { files },
+      // A real clock, because a program that times itself with a fake one measures fiction.
+      pit: { micros: () => performance.now() * 1000 },
+    },
+  });
+} catch (e) {
+  console.error(`${target.name}: ${e.message}`);
+  process.exit(1);
+}
+const { program, env, units, asm, missingHeaders } = built;
+const secs = ((performance.now() - t0) / 1000).toFixed(1);
+
+const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
+console.log(`${target.title ?? target.name} — ${units.length} translation units, ` +
+  `${loc.toLocaleString('en')} lines, ${Object.keys(program.F).length} functions in ${secs} s`);
+if (asm?.length) console.log(`  ${asm.length} assembly objects skipped: ${asm.join(' ')}`);
+if (missingHeaders.length) console.log(`  headers stubbed: ${missingHeaders.join(' ')}`);
+if (program.failures?.length) {
+  const by = new Map();
+  for (const f of program.failures) by.set(f.message, (by.get(f.message) ?? 0) + 1);
+  console.log(`  ${program.failures.length} functions could not be emitted (they throw IF CALLED):`);
+  for (const [m, n] of [...by].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
+    console.log(`    ${String(n).padStart(4)}  ${m}`);
+  }
+}
+console.log(`  environment: ${Object.keys(env).filter(k => k !== 'machine').join(' ')}`);
+console.log(`  data: ${Object.keys(files).length} files from ${dataArg ?? '(none given)'}`);
+
+const dumpTo = opt('dump');
+if (dumpTo) { writeFileSync(dumpTo, program.src); console.log(`  wrote ${dumpTo} (${(program.src.length / 1e6).toFixed(1)} MB of JavaScript)`); }
+
+if (!flag('run')) process.exit(0);
+
+/*
+ * Running with no instrumentation at all: the program gets its argv and goes. A program that never
+ * returns needs a tool that knows where to interrupt it -- which is exactly the program-specific
+ * half that stays in tools/.
+ */
+const args = (opt('args') ?? '').split(/\s+/).filter(Boolean);
+console.log(`\nrunning: ${target.name} ${args.join(' ')}`);
+try {
+  program.run([target.name, ...args]);
+} catch (e) {
+  console.log(`exited: ${e.message}`);
+}

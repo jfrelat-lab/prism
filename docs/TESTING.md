@@ -1674,3 +1674,24 @@ Two things about getting it, both of which cost a run:
 
 It is also the second real workload for P2.1, and the first that is a whole game rather than a CPU
 core: optimising against one workload is the surest way to optimise *that workload*.
+
+### Any target, from its JSON alone
+
+```
+node tools/build.mjs --list
+node tools/build.mjs quake.json:dos
+node tools/build.mjs heretic.json --run --data=<dir>
+```
+
+The check that made this trustworthy was not that it builds, it is that it builds the SAME thing:
+
+| target | hand-written harness | `tools/build.mjs` |
+|---|---|---|
+| quake:dos | 77 units, 51,391 lines, 1169 fns, 2 headers stubbed | identical |
+| heretic | 44 + 1 units, 43,394 lines, 761 fns | identical |
+| mame01 | 19 units, 6,859 lines, 913 fns | identical |
+| doom | 715 fns | identical |
+
+A target describes the BUILD and the ENVIRONMENT. It does not describe instrumentation — Quake's
+frame cap and key script, Doom's fire trigger, the audio drain wrap the program's own functions to
+watch it run, and putting those in JSON would be game logic in a config file.

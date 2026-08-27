@@ -1,0 +1,15 @@
+{
+  "name": "doom",
+  "title": "DOOM (linuxdoom-1.10, POSIX + Xlib)",
+  "dir": "corpus/DOOM/linuxdoom-1.10",
+  "fetch": "git clone --depth 1 https://github.com/id-Software/DOOM.git corpus/DOOM",
+
+  "_doc": "The one target here that is not a DOS program. The Watcom DOS Doom was never published, so the only original source is the Linux one, and the faithful path is to compile it intact and shim POSIX + Xlib. A 'Doom DJGPP' would be a derivative -- which is the one thing this project does not build.",
+
+  "units": { "glob": "*.c" },
+  "defines": { "NORMALUNIX": "1", "LINUX": "1" },
+  "compile": { "memory": 128, "collect": true },
+
+  "_env": "Doom delegates sound to a SEPARATE PROCESS -- `sndserver = popen(\"./sndserver \", \"w\")` in i_sound.c, with #define SNDSERV 1 at doomdef.h:84. So popen is not a convenience here, it is the sound architecture. The second process itself is a target of its own (sndserv.json).",
+  "env": ["stdio", "x11", "popen"]
+}

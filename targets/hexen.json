@@ -1,0 +1,25 @@
+{
+  "name": "hexen",
+  "title": "Hexen (Raven, Watcom C / DOS4GW)",
+  "dir": "corpus/Hexen",
+  "fetch": "git clone --depth 1 https://github.com/videogamepreservation/hexen.git corpus/Hexen",
+
+  "_units": "The program's OWN object list, which is better than any list written here: it is the build the authors actually ran. Read from the WHOLE makefile, not just LOCOBJS/GLOBOBJS -- the link rule is `tic.exe : $(LOCOBJS) $(GLOBOBJS) i_ibm.obj`, so the one file holding every machine dependency, and main, is named nowhere else.",
+  "units": { "fromMakefile": "MAKEFILE" },
+
+  "_defines": "__WATCOMC__ selects the DOS paths; __386__ the flat model. Both are the compiler's own identity macros, and I_IBM.C genuinely needs them -- its externdata_t exists only under __WATCOMC__.",
+  "defines": { "__WATCOMC__": "1100", "__386__": "1" },
+
+  "_unitDefines": "R_DRAW.C alone is compiled with __WATCOMC__ UNDEFINED. Its inner rendering loops -- R_DrawColumn, R_DrawSpan -- have C bodies behind `#ifndef __WATCOMC__` because Watcom takes them from LINEAR.ASM instead. Same switch as Quake's id386=0: the source ships both and a build selects one. Until PRISM compiles the assembly (P5.2) this is what makes the renderer exist at all.",
+  "unitDefines": { "r_draw.c": { "__WATCOMC__": null } },
+
+  "_caseInsensitive": "The tree writes `DoomDef.h` for `DOOMDEF.H`. A case-sensitive filesystem will not forgive that; DOS never had to.",
+  "caseInsensitive": true,
+
+  "_compile": "pack 1 is the makefile's CCOPTS /zp1 -- byte alignment, so EVERY struct in the program changes size. Not a detail: it is the on-disk layout of the game's own saved games and its lump structures.",
+  "compile": { "memory": 96, "pack": 1, "collect": true },
+
+  "env": ["stdio", "crtstatus", "vgadac", "kbd8042", "pit", "watcom"],
+
+  "_blocked": "Hexen builds and runs but stops on its OWN data, not on PRISM. P_SETUP.C:803 defaults every map's sky to R_TextureNumForName(\"SKY1\"), and the retail v1.1 WAD has no SKY1 -- 148 textures, SKY2/3/4, no SKY1 (read straight out of the WAD; PRISM's lookup verified exact, SKY2->72, X_WATER4->147, absent->-1). Patching the game or its data is the one thing this project does not do. See ROADMAP P6.2."
+}
