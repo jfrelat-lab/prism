@@ -1873,3 +1873,33 @@ which is the path SQLite takes. `mremap` returns the same base because `Hunk_End
 
 The picture is the renderer's own output, read from `ref_soft$vid.buffer` before the platform does
 anything with it, with the palette from `sw_state.currentpalette`.
+
+### OpenDUNE runs to its data check
+
+```
+node tools/opendune.mjs [--data=<dir holding DATA/>] --frames=200 --png=/tmp/od.png
+```
+
+```
+OpenDUNE — 84 units, 46,169 lines, 834 functions
+opendune.ini file not found.
+Cannot initialise files. Does DATA\ directory exist ?
+```
+
+That is Dune II's own data, which this project does not fetch.
+
+One thing about the harness is worth keeping: `src/os/error.c`'s `Error`/`Warning`/`Debug` go to
+stderr through **`vfprintf`**, not through `vsprintf`. Hooking the formatter — which is what showed
+every message Quake II printed — showed nothing here, and made a program that had exited *with a
+message* look like one that had exited in silence. Hooking `M.write` is what a program using the
+FILE layer needs.
+
+Behind the data, two things, both read out of the source rather than guessed:
+
+* `get_bios_keyboard_status` is a `#pragma aux` with an assembly **body** — INT 16h AH=11h, then
+  AH=10h — not a calling convention. So it is declared and never defined (`program.F` has no entry
+  for it) while `Video_Tick` calls it inside a `for(;;)`. Same slot as the Watcom `FixedMul` and
+  `FixedDiv2` already transcribed for Heretic.
+* `Video_Init` refuses to start without a mouse: `int386(0x33)` with AX=0 must answer 0xFFFF or it
+  `Error`s and returns false, and it then installs a real-mode callback with AX=0x0C. Dune II is
+  mouse-driven, so supplying a mouse is supplying a device — the same as the DAC and the 8042.

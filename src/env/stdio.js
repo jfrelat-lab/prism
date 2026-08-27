@@ -485,7 +485,13 @@ export function installStdio(M, {
     getuid: () => 0,
     getgid: () => 0,
     mkdir: () => 0,
+    // Watcom and MSVC spell it with the underscore, and OpenDUNE's File_MakeDirectory calls that
+    // name under __WATCOMC__. Both succeed: directories here are derived from paths, so there is
+    // nothing to create and nothing that can fail.
+    _mkdir: () => 0,
+    _rmdir: () => 0,
     rmdir: () => 0,
+    chdir: () => 0,
     readlink: () => -1,
     ioctl: () => -1,
     /*

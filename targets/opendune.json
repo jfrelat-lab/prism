@@ -117,5 +117,7 @@
     "pit",
     "watcom"
   ],
-  "_include": "Makefile.wc passes /i=..\\include and nothing else. Adding src/ as well looks harmless and is not: <string.h> then finds OpenDUNE's own src/string.h instead of the libc one. The makefile's .c search path is for SOURCES, not includes."
+  "_include": "Makefile.wc passes /i=..\\include and nothing else. Adding src/ as well looks harmless and is not: <string.h> then finds OpenDUNE's own src/string.h instead of the libc one. The makefile's .c search path is for SOURCES, not includes.",
+  "_state": "Compiles completely -- 84 units, 46,169 lines, 834 functions, nothing unemitted -- and runs to 'Cannot initialise files. Does DATA\\\\ directory exist ?', which is Dune II's own data and not something this project fetches. Point --data at a directory holding DATA/.",
+  "_next": "Two things stand between data and a picture, both read out of the source rather than guessed. (1) get_bios_keyboard_status is a #pragma aux with an assembly BODY, not a calling convention -- INT 16h AH=11h then AH=10h -- so it is DECLARED and never defined, and Video_Tick calls it in a for(;;). Same slot as the Watcom FixedMul/FixedDiv2 already transcribed for Heretic. (2) Video_Init requires a mouse: int386(0x33) with AX=0 must answer 0xFFFF or it Errors out and returns false, and it then installs a real-mode callback with AX=0x0C. Dune II is mouse-driven, so supplying a mouse is supplying a device, the same as the DAC and the 8042."
 }
