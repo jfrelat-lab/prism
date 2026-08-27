@@ -245,6 +245,16 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     safepoints: !!c.safepoints,
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
   });
-  const env = buildEnv(program.M, target.env ?? ['stdio'], envExtra);
+  /*
+   * A module's SONAME is what the program asks dlopen for -- linux/Makefile.i386 builds
+   * `gamei386.$(SHLIBEXT)` and sys_linux.c requests exactly that string. Passed to the `dl`
+   * environment so it can answer without the target repeating itself.
+   */
+  const sonames = {};
+  for (const [name, m] of Object.entries(target.modules ?? {})) {
+    if (!name.startsWith('_') && m.soname) sonames[m.soname] = name;
+  }
+  const env = buildEnv(program.M, target.env ?? ['stdio'],
+    { ...envExtra, dl: { modules: sonames, ...(envExtra.dl ?? {}) } });
   return { program, env, units, dir, asm, missingHeaders: [...missing] };
 }

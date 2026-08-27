@@ -28,6 +28,7 @@ import { installAllegro, ALLEGRO_VARS } from './allegro.js';
 import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
+import { installDl } from './dl.js';
 import { installConsole } from './console.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
@@ -62,6 +63,8 @@ export const ENV = {
   x11: { install: (M, _c, o) => installX11(M, o) },
   popen: { install: (M, _c, o) => installPopen(M, o) },
   dsp: { install: (M, _c, o) => installDsp(M, o) },
+  // dlopen over PRISM's symbol table: the modules are the target's, passed by buildTarget.
+  dl: { install: (M, _c, o) => installDl(M, o) },
 };
 
 /**

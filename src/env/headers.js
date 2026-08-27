@@ -482,6 +482,8 @@ const FCNTL = `
 #define O_BINARY 0
 #define O_EXCL   0x80
 #define O_NOFOLLOW 0x20000
+#define FNDELAY  O_NONBLOCK
+#define O_NDELAY O_NONBLOCK
 #define O_NONBLOCK 0x800
 #define O_ACCMODE 3
 int open(const char *name, int flags, ...);
@@ -500,6 +502,59 @@ struct flock { short l_type; short l_whence; long l_start; long l_len; int l_pid
 #endif
 `;
 
+
+/*
+ * dirent.h -- d_name and nothing else.
+ *
+ * The other members are not omitted for brevity: this host has no inodes and no directory offsets,
+ * so d_ino and d_off could only be invented. Every reader in the corpus uses d_name alone.
+ */
+const DIRENT = `
+#ifndef _PRISM_DIRENT_H
+#define _PRISM_DIRENT_H
+struct dirent { char d_name[256]; };
+typedef struct __prism_DIR DIR;
+DIR *opendir(const char *path);
+struct dirent *readdir(DIR *d);
+int closedir(DIR *d);
+#endif
+`;
+
+
+/*
+ * dlfcn.h. The flags are glibc's values; nothing here acts on them, because nothing is loaded --
+ * see src/env/dl.js for why a program can still dlopen part of itself.
+ */
+const DLFCN = `
+#ifndef _PRISM_DLFCN_H
+#define _PRISM_DLFCN_H
+#define RTLD_LAZY   0x0001
+#define RTLD_NOW    0x0002
+#define RTLD_GLOBAL 0x0100
+#define RTLD_LOCAL  0x0000
+void *dlopen(const char *path, int flags);
+void *dlsym(void *handle, const char *name);
+int   dlclose(void *handle);
+char *dlerror(void);
+#endif
+`;
+
+/*
+ * mntent.h, for the one thing Quake II uses it for: walking /etc/mtab to find a mounted CD-ROM.
+ * There are no mounts here, so setmntent reports none and the search finds nothing -- which is the
+ * same outcome as a machine with no CD in the drive, and the program handles that.
+ */
+const MNTENT = `
+#ifndef _PRISM_MNTENT_H
+#define _PRISM_MNTENT_H
+#include <stdio.h>
+struct mntent { char *mnt_fsname, *mnt_dir, *mnt_type, *mnt_opts; int mnt_freq, mnt_passno; };
+FILE *setmntent(const char *file, const char *mode);
+struct mntent *getmntent(FILE *stream);
+int endmntent(FILE *stream);
+#endif
+`;
+
 const UNISTD = `
 #ifndef _PRISM_UNISTD_H
 #define _PRISM_UNISTD_H
@@ -511,7 +566,11 @@ ssize_t write(int fd, const void *src, size_t n);
 ssize_t pread(int fd, void *dst, size_t n, off_t off);
 ssize_t pwrite(int fd, const void *src, size_t n, off_t off);
 int unlink(const char *name);
+void _exit(int code);
 int access(const char *path, int mode);
+int getuid(void); int geteuid(void); int getgid(void); int getegid(void);
+int setuid(int uid); int seteuid(int uid); int setgid(int gid); int setegid(int gid);
+int setreuid(int r, int e); int setregid(int r, int e);
 char *getcwd(char *buf, size_t size);
 int ftruncate(int fd, off_t len);
 int fchmod(int fd, mode_t mode);
@@ -1163,6 +1222,10 @@ int raise(int sig);
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,
+  'dirent.h': DIRENT,
+  'dlfcn.h': DLFCN,
+  'mntent.h': MNTENT,
+  'sys/dirent.h': DIRENT,
   'setjmp.h': SETJMP,
   'time.h': TIMEH,
   'stdarg.h': STDARG,

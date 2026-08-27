@@ -165,6 +165,10 @@ function makeLibc(M) {
     malloc, free, realloc,
     calloc: (n, sz) => { const p = malloc(Math.imul(n, sz)); M.zero(p, Math.imul(n, sz)); return p; },
     exit: (code) => { throw new ExitCalled(code | 0); },
+    // _exit skips atexit handlers and stdio flushing. Neither survives leaving the program here, so
+    // the distinction has no observable effect -- but the name has to exist, because Quake II's
+    // signal handler calls it rather than exit, deliberately.
+    _exit: (code) => { throw new ExitCalled(code | 0); },
     abort: () => { throw new Trap('abort() called'); },
     /*
      * The DOS string family. Not any one library's -- Watcom, Borland and DJGPP all ship them, and

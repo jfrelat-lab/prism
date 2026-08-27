@@ -12,6 +12,7 @@ import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
 import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
+import { dlBuiltins } from './env/dl.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
 import { installPorts } from './env/ports.js';
@@ -262,7 +263,15 @@ export const BUILTINS = new Map(Object.entries({
   fdatasync: { ret: I, params: [I] },
   sysconf: { ret: I, params: [I] },
   getenv: { ret: P, params: [P] },
+  opendir: { ret: P, params: [P] },
+  readdir: { ret: P, params: [P] },
+  closedir: { ret: I, params: [P] },
   putenv: { ret: I, params: [P] },
+  getuid: { ret: I, params: [] }, geteuid: { ret: I, params: [] },
+  getgid: { ret: I, params: [] }, getegid: { ret: I, params: [] },
+  setuid: { ret: I, params: [I] }, seteuid: { ret: I, params: [I] },
+  setgid: { ret: I, params: [I] }, setegid: { ret: I, params: [I] },
+  setreuid: { ret: I, params: [I, I] }, setregid: { ret: I, params: [I, I] },
   setenv: { ret: I, params: [P, P, I] },
   __builtin_clzll: { ret: I, params: [T.LLONG ?? U] },
   __builtin_clz: { ret: I, params: [U] },
@@ -305,6 +314,7 @@ export const BUILTINS = new Map(Object.entries({
   realloc: { ret: P, params: [P, U] },
   free: { ret: V, params: [P] },
   exit: { ret: V, params: [I] },
+  _exit: { ret: V, params: [I] },
   abort: { ret: V, params: [] },
   atoi: { ret: I, params: [P] },
   atol: { ret: T.LONG, params: [P] },
@@ -412,6 +422,7 @@ for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
 for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
 // DJGPP's DPMI floor, which Quake's dos_v2.c builds all of dosisms.h on; see src/env/go32.js.
 for (const [k, v] of Object.entries(go32Builtins(T))) BUILTINS.set(k, v);
+for (const [k, v] of Object.entries(dlBuiltins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 

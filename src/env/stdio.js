@@ -44,6 +44,10 @@ export function installStdio(M, {
 
   function norm(name) { return String(name).replace(/\\/g, '/').toLowerCase(); }
 
+  // Open directories. The base keeps a DIR handle clear of a file descriptor's range.
+  const dirs = [];
+  const DIR_BASE = 0x7000;
+
   /**
    * DOS matched file names case-insensitively and both games rely on it: MAME's ladybug driver asks
    * for `lb1.cpu` while its own readme says `LB1.CPU`, and Quake's pak files mix cases freely. An
@@ -581,9 +585,62 @@ export function installStdio(M, {
     },
     localtime: () => 0,          // no calendar here; a caller must handle NULL, and SQLite does
 
+    /*
+     * User and group ids. There is one user here and it owns everything, so 0 is not a stand-in for
+     * root -- it is the only id that exists. Quake II calls setreuid/setegid before dlopening its
+     * game library, which on a real system drops the privileges of a setuid binary; there are none
+     * to drop.
+     */
+    getuid: () => 0, geteuid: () => 0, getgid: () => 0, getegid: () => 0,
+    setuid: () => 0, seteuid: () => 0, setgid: () => 0, setegid: () => 0,
+    setreuid: () => 0, setregid: () => 0,
+
     mmap: () => -1,
     mremap: () => -1,
     munmap: () => 0,
+
+    /*
+     * Directories, derived rather than stored: the file table is a flat map of paths, so the entries
+     * of a directory are the distinct first path components under its prefix. A name with more
+     * separators after it contributes its SUBDIRECTORY name once, which is what a reader expects to
+     * see and what Quake II's Sys_FindFirst walks to enumerate mods and save games.
+     *
+     * `struct dirent` here is d_name alone, at offset 0 -- see the dirent.h in src/env/headers.js.
+     * The DIR handle is an index into a table on this side; the guest only ever passes it back.
+     */
+    opendir: (pathPtr) => {
+      const want = norm(M.mod.cstr(pathPtr)).replace(/\/+$/, '');
+      const prefix = want ? want + '/' : '';
+      const names = new Set();
+      for (const key of store.keys()) {
+        if (prefix && !key.startsWith(prefix)) continue;
+        const rest = key.slice(prefix.length);
+        if (!rest) continue;
+        names.add(rest.split('/')[0]);
+      }
+      // A directory with no entries is still a directory IF something lives under it; a path that
+      // matches nothing at all is not, and opendir must say so.
+      if (!names.size) return 0;
+      const h = dirs.length;
+      dirs.push({ names: [...names].sort(), i: 0 });
+      return DIR_BASE + h;
+    },
+    readdir: (handle) => {
+      const d = dirs[(handle | 0) - DIR_BASE];
+      if (!d || d.i >= d.names.length) return 0;
+      const name = d.names[d.i++];
+      // One reusable buffer per DIR, as a real readdir returns storage it owns.
+      if (!d.buf) d.buf = M.rt.malloc(260);
+      const bytes = enc.encode(name.slice(0, 255));
+      M.u8.set(bytes, d.buf);
+      M.u8[d.buf + bytes.length] = 0;
+      return d.buf;
+    },
+    closedir: (handle) => {
+      const d = dirs[(handle | 0) - DIR_BASE];
+      if (d) { if (d.buf) M.rt.free(d.buf); dirs[(handle | 0) - DIR_BASE] = null; }
+      return 0;
+    },
   });
 
   Object.assign(M.rt, api);

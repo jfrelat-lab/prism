@@ -1810,3 +1810,34 @@ Unlike the refresh, the game has no direct-link glue anywhere in the tree: `linu
 dlopens `gamei386.so` and dlsyms `GetGameAPI`. So the `dlopen` that P7.3 turned out not to need for
 `ref_soft` is exactly what `game/` does need — over PRISM's own symbol table, where
 `game$GetGameAPI` already has an address.
+
+### Quake II initialises and plays its demo
+
+```
+node tools/build.mjs quake2.json          # 109 units, 87,098 lines, 2120 functions
+```
+
+With `~/quake2/baseq2` as its data it reaches, in its own words:
+
+```
+> Added packfile ./baseq2/pak0.pak (1106 files)
+> ref_soft version: SOFT 0.01
+> ====== Quake2 Initialized ======
+> 0.0.0.0:0: client_connect
+> Player\male/grunt
+> demos/q2demo1.dm2
+> Installation
+```
+
+Three modules, each with its own namespace, bridged exactly where the program bridges them: the
+refresh through `GetRefAPI` (direct-link glue), the game through `dlopen`/`dlsym`.
+
+`src/env/dl.js` is the piece that made the game reachable, and it loads nothing — everything is
+already linked. `dlopen` names a module and `dlsym` returns the address of the linkage name pass 1
+gave it, `game$GetGameAPI`. The soname it matches on is `gamei386.so`, which the target takes from
+`linux/Makefile.i386` and `sys_linux.c` asks for by that exact string.
+
+**It does not draw, and that was verified rather than assumed:** `vid.buffer` is 0 after 13 frames.
+`null/swimp_null.c` is a file of empty bodies whose `SWimp_SetMode` returns nothing at all, so
+ref_soft never gets a surface. Every real refresh implementation allocates one — `linux/rw_x11.c`
+with `XCreateImage`, over the Xlib PRISM already has for Doom.

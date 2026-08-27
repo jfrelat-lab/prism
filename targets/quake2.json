@@ -53,21 +53,24 @@
       "null/in_null.c",
       "null/snddma_null.c",
       "null/cd_null.c",
-      "null/sys_null.c",
+      "linux/sys_linux.c",
+      "linux/q_shlinux.c",
+      "linux/glob.c",
       "linux/net_udp.c"
     ]
   },
   "_null": "null/ is not a stub set here, it is the DIRECT LINK: null/vid_null.c is titled 'DIRECT LINK GLUE' and calls GetRefAPI in-process, where linux/vid_so.c and win32/vid_dll.c dlopen ref_soft.so for it. So this build needs no dlopen. What null/ does NOT give is the game: null/sys_null.c:37 has Sys_GetGameAPI return NULL, so game/ compiles but the server cannot reach it.",
   "_inline": "What every real platform's in_*.c defines and id's own null platform does not -- linux/in_linux.c:6 and win32/in_win.c:55 both have exactly this line. cvar_t is left incomplete on purpose: only the pointer is needed here. It stays NULL, because a platform's IN_Init is what registers it and null/in_null.c's is empty -- so opening the Options menu would dereference NULL, in id's own null build just as much as in this one. Faithful, and stated rather than papered over.",
   "inline": {
-    "prism-platform-vars.c": "#include \"game/q_shared.h\"\n/* linux/in_linux.c:6 and win32/in_win.c:55 both define this; id's own null platform does not. */\ncvar_t *in_joystick;\n/* linux/sys_linux.c's, read by net_udp.c to decide whether the console is worth polling. */\nqboolean stdin_active = false;\n"
+    "prism-platform-vars.c": "#include \"game/q_shared.h\"\n/* linux/in_linux.c:6 and win32/in_win.c:55 both define this; id's own null platform does not. */\ncvar_t *in_joystick;\n/* linux/sys_linux.c's, read by net_udp.c to decide whether the console is worth polling. */\nqboolean stdin_active = false;\n/*\n * The keyboard pump, which rw_x11.c and rw_svgalib.c set when they open a window. The null\n * refresh opens none, so it stays NULL -- and sys_linux.c calls it only through a guard.\n */\nvoid (*KBD_Update_fp)(void);\n"
   },
   "compile": {
     "memory": 512,
     "collect": true
   },
   "env": [
-    "stdio"
+    "stdio",
+    "dl"
   ],
   "_modules": "Quake II is THREE shared objects in a real build and stays three here, each with its own external namespace -- which is the only way qcommon/common.c:101, game/g_main.c:154 and ref_soft/r_main.c:1410 can each keep their own Com_Printf, routed through their own import struct. A module sees its own symbols and the main one's, which is ELF's rule for a shared object against the executable's globals; everything else reaches it through the struct of function pointers the program hands it. What travels the other way is the module's EXPORTS, read from the program's own .def file -- `EXPORTS GetRefAPI` and `EXPORTS GetGameAPI`, one symbol each.",
   "modules": {
@@ -92,9 +95,62 @@
         "ref_soft/r_surf.c"
       ],
       "exportsFrom": "ref_soft/ref_soft.def"
+    },
+    "game": {
+      "_doc": "linux/Makefile.i386's GAME_OBJS. q_shared.c and m_flash.c are NOT repeated here even though the real build compiles them into the game too: a module already sees the main one's symbols, which is where those live.",
+      "units": [
+        "game/g_ai.c",
+        "game/p_client.c",
+        "game/g_cmds.c",
+        "game/g_svcmds.c",
+        "game/g_combat.c",
+        "game/g_func.c",
+        "game/g_items.c",
+        "game/g_main.c",
+        "game/g_misc.c",
+        "game/g_monster.c",
+        "game/g_phys.c",
+        "game/g_save.c",
+        "game/g_spawn.c",
+        "game/g_target.c",
+        "game/g_trigger.c",
+        "game/g_turret.c",
+        "game/g_utils.c",
+        "game/g_weapon.c",
+        "game/m_actor.c",
+        "game/m_berserk.c",
+        "game/m_boss2.c",
+        "game/m_boss3.c",
+        "game/m_boss31.c",
+        "game/m_boss32.c",
+        "game/m_brain.c",
+        "game/m_chick.c",
+        "game/m_flipper.c",
+        "game/m_float.c",
+        "game/m_flyer.c",
+        "game/m_gladiator.c",
+        "game/m_gunner.c",
+        "game/m_hover.c",
+        "game/m_infantry.c",
+        "game/m_insane.c",
+        "game/m_medic.c",
+        "game/m_move.c",
+        "game/m_mutant.c",
+        "game/m_parasite.c",
+        "game/m_soldier.c",
+        "game/m_supertank.c",
+        "game/m_tank.c",
+        "game/p_hud.c",
+        "game/p_trail.c",
+        "game/p_view.c",
+        "game/p_weapon.c"
+      ],
+      "soname": "gamei386.so",
+      "exportsFrom": "game/game.def"
     }
   },
   "_net": "null/ has no network stub -- Quake 1 shipped net_none.c and Quake II did not -- and the engine's own loopback, which is what single player runs on, lives INSIDE the platform file (NET_GetLoopPacket in linux/net_udp.c). So the faithful move is the program's own file with the OS calls stubbed, not a hand-written null layer: the loopback path touches no socket at all.",
   "_data": "Its own demo, which id distributed freely: q2-314-demo-x86.exe, 39,015,499 bytes, sha1 5b4dedc59ceee306956a3e48a8bdf6dd33bc91ed, from the GWDG mirror of ftp.idsoftware.com/idstuff/quake2/. It is a plain zip; Install/Data/baseq2/ is the tree, and baseq2/pak0.pak is 49,951,322 bytes holding 1106 files. It lives OUTSIDE the repository, in a directory the user names, like every other target's data.",
-  "_blocked": "With its data, Quake II mounts pak0.pak, execs its own default.cfg, brings up the console and initialises the software renderer ('ref_soft version: SOFT 0.01', '768k surface cache'). It then stops on the THIRD module: null/sys_null.c:37 has Sys_GetGameAPI return NULL, and the demo's default.cfg runs a demo map at start-up, so SV_DemoMap_f -> SV_Map -> SV_InitGame -> SV_InitGameProgs asks for the game DLL immediately rather than only when a map loads. Unlike the refresh, this one has no direct-link glue: linux/sys_linux.c:196 dlopens gamei386.so and dlsyms GetGameAPI. So the dlopen that P7.3 turned out not to need for ref_soft IS what game/ needs."
+  "_blocked": "Runs: it dlopens its game module, connects a client over the loopback, spawns a player and plays demos/q2demo1.dm2 -- 'Quake2 Initialized', 'Installation'. What it does NOT do is draw. null/swimp_null.c is a set of empty bodies, and its SWimp_SetMode returns nothing at all, so vid.buffer stays 0 and ref_soft has no surface. Every real refresh implementation allocates it: linux/rw_x11.c does it with XCreateImage, over the Xlib PRISM already has for Doom. That is the next step, and it is the program's own file again rather than anything written here.",
+  "_platform": "linux/sys_linux.c rather than null/sys_null.c, and the reason is the game. The refresh had direct-link glue (null/vid_null.c calls GetRefAPI in process); the game has none anywhere in the tree, and null/sys_null.c:37 simply returns NULL for it. linux/sys_linux.c:196 is the only Sys_GetGameAPI that does the real thing -- dlopen(gamei386.so), dlsym(GetGameAPI) -- so the faithful path is the program's own file over a dlopen that resolves against PRISM's symbol table."
 }
