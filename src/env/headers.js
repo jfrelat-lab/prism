@@ -9,7 +9,7 @@
 // would show up as a wrong argument width in a printf and be blamed on the emitter.
 
 import { DJGPP_HEADERS } from './headers-djgpp.js';
-import { WATCOM_HEADERS, WATCOM_DOS_H } from './headers-watcom.js';
+import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js';
 
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
@@ -131,6 +131,8 @@ char *strcat(char *d, const char *s);
 int strcmp(const char *a, const char *b);
 int strncmp(const char *a, const char *b, size_t n);
 char *strchr(const char *s, int c);
+char *strpbrk(const char *s, const char *accept);
+char *strrchr(const char *s, int c);
 char *strncat(char *d, const char *s, size_t n);
 char *strdup(const char *s);
 char *strtok(char *s, const char *delim);
@@ -1298,6 +1300,7 @@ int sigaddset(sigset_t *set, int sig);
    */
   ...WATCOM_HEADERS,
   'dos.h': WATCOM_DOS_H,
+  'i86.h': WATCOM_I86_H,
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,

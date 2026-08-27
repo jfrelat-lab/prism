@@ -341,6 +341,13 @@ function makeLibc(M) {
       u8()[e + i] = 0;                        // ALWAYS terminated -- unlike strncpy, which is not
       return d;
     },
+    /** The first character of `s` that appears in `accept`, or NULL -- not the first `accept`. */
+    strpbrk: (s, accept) => {
+      for (let i = 0; u8()[s + i]; i++) {
+        for (let j = 0; u8()[accept + j]; j++) if (u8()[s + i] === u8()[accept + j]) return s + i;
+      }
+      return 0;
+    },
     strdup: (s) => {
       const n = strlenAt(s) + 1;
       const p = lib.malloc(n);

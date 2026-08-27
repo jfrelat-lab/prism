@@ -149,11 +149,36 @@ export const WATCOM_HEADERS = {
   'graph.h': GRAPH_H,
   'conio.h': CONIO_H,
   'dmx.h': DMX_H,
-  'direct.h': '#ifndef _PRISM_DIRECT_H\n#define _PRISM_DIRECT_H\nint chdir(const char *p);\nint mkdir(const char *p);\n#endif\n',
+  /*
+   * Watcom's direct.h, which is where a Watcom program looks for BOTH the directory-creation calls
+   * and the traversal ones -- OpenDUNE's src/os/readdir.c includes <direct.h> under __WATCOMC__ and
+   * <dirent.h> everywhere else, for the same DIR and readdir.
+   *
+   * Leaving DIR undeclared did not fail at the include: `DIR *dp = opendir(path)` parsed as a
+   * MULTIPLICATION and failed much later as "not an lvalue", in a function whose source contains no
+   * such expression.
+   */
+  'direct.h': `
+#ifndef _PRISM_DIRECT_H
+#define _PRISM_DIRECT_H
+struct dirent { char d_name[256]; };
+typedef struct __prism_DIR DIR;
+DIR *opendir(const char *path);
+struct dirent *readdir(DIR *d);
+int closedir(DIR *d);
+int chdir(const char *p);
+int mkdir(const char *p);
+int _mkdir(const char *p);
+int rmdir(const char *p);
+#endif
+`,
 };
 
 /** The Watcom `dos.h`, kept apart because src/env/headers-djgpp.js also defines one. */
 export const WATCOM_DOS_H = DOSH_WATCOM;
+
+/* i86.h carries the same REGS/int386 declarations; OpenDUNE's video_dos.c includes only it. */
+export const WATCOM_I86_H = DOSH_WATCOM;
 
 /**
  * The data the ASSEMBLY provides.

@@ -1054,7 +1054,16 @@ export class FunctionEmitter {
           recAddr = l.addr;
         }
         const f = findField(rec, e.field);
-        if (!f) throw new EmitError(`'${T.typeName(rec)}' has no member '${e.field}'`);
+        if (!f) {
+          /*
+           * What it DOES have, because the interesting case is never a typo -- it is a tag that
+           * resolved to a different or an unfinished type, and the member list says which at a
+           * glance instead of after an hour of reading headers.
+           */
+          const have = rec.complete === false ? '(incomplete)'
+            : (rec.fields ?? []).map(x => x.name ?? '<anon>').join(' ') || '(no members)';
+          throw new EmitError(`'${T.typeName(rec)}' has no member '${e.field}' -- it has: ${have}`);
+        }
         if (f.bits !== undefined) return { addr: recAddr, type: f.type, bitfield: f };
         return { addr: `(${recAddr}+${f.offset}|0)`, type: f.type };
       }
@@ -1113,7 +1122,13 @@ export class FunctionEmitter {
         };
       }
     }
-    throw new EmitError(`'${e.n}' is not an lvalue`);
+    /*
+     * An AST node name and nothing else is not a diagnostic. `'bin' is not an lvalue` sent me
+     * reading a whole file for a variable called bin; the loc every node already carries says which
+     * line, and the operator says which expression.
+     */
+    const where = e.loc ? ` at ${e.loc.file}:${e.loc.line}` : '';
+    throw new EmitError(`'${e.n}'${e.op ? ` (${e.op})` : ''} is not an lvalue${where}`);
   }
 
   /*

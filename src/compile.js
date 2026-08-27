@@ -352,6 +352,7 @@ export const BUILTINS = new Map(Object.entries({
   strchr: { ret: P, params: [P, I] },
   strncat: { ret: P, params: [P, P, U] },
   strdup: { ret: P, params: [P] },
+  strpbrk: { ret: P, params: [P, P] },
   strtok: { ret: P, params: [P, P] },
   qsort: { ret: T.VOID, params: [P, U, U, P] },
   memcpy: { ret: P, params: [P, P, U] },
@@ -649,8 +650,18 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
           (internal ? p.funcs : home.funcs).set(d.name, mod.defineFunc(link, d.type));
           continue;
         }
-        // `extern int x;` with no initialiser declares; it does not define.
-        if (d.storage === 'extern' && !d.init) continue;
+        /*
+         * `extern int x;` with no initialiser declares; it does not define. But it does state the
+         * TYPE this unit will use, which is not always the type the defining unit used.
+         *
+         * OpenDUNE is the case. src/script/script.c defines `struct Team *g_scriptCurrentTeam;`
+         * without ever including team.h, so its struct Team is incomplete; src/script/team.c
+         * declares the same object with team.h in scope and writes `g_scriptCurrentTeam->members`.
+         * Both are legal C -- a linker matches NAMES, and each translation unit compiles against the
+         * declaration in front of it. Making every unit inherit the definer's type made the member
+         * access fail in the unit that could see the members.
+         */
+        if (d.storage === 'extern' && !d.init) { (p.externDecls ??= []).push(d); continue; }
         const sym = mod.defineGlobal(link, d.type);
         (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type: d.type });
       } else if (d.n === 'func') {
@@ -729,6 +740,19 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
       }
     }
     visible.set(m, { globals, funcs: preferDefined(own.funcs, exported) });
+  }
+
+  /*
+   * Each unit's own declarations of objects it does not define: same address, its own type. Done
+   * after `visible`, because that is when every definition has an address to point at.
+   */
+  for (const p of parsed) {
+    const seen = visible.get(p.module ?? MAIN);
+    for (const d of p.externDecls ?? []) {
+      if (d.type?.k === 'func' || p.globals.has(d.name)) continue;
+      const shared = seen.globals.get(d.name);
+      if (shared) p.globals.set(d.name, { addr: shared.addr, type: d.type });
+    }
   }
 
   for (const p of parsed) {
