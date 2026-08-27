@@ -1648,3 +1648,29 @@ was read as a broken pipe for two rounds.
 
 What is still missing is only the trigger: with `-warp 1 1` and no input Doom stands still, and the
 shareware WAD's demos will not play (`Demo is from a different game version!`).
+
+
+### Quake times itself: 694 fps
+
+```
+node tools/quake.mjs --dos --run --data=<dir> --args="-mem 16 +timedemo demo1" \
+     --frames=1400 --keys=space --png=/tmp/q.png
+```
+
+`969 FRAMES  1.4 SECONDS  694.2 FPS`, printed by Quake on its own console.
+
+The number could not exist before the DOS build. `sys_null.c`'s `Sys_FloatTime` returns `t += 0.1` —
+a counter, not a clock — so everything the program measured about itself, timedemo included, was
+fiction, and only a wall clock outside it meant anything. `sys_dos.c` reads a real PIT, so this is
+Quake's own measurement of Quake.
+
+Two things about getting it, both of which cost a run:
+
+* **Quake waits for a keypress at start-up** (`Press a key.` under the MSCDEX notice), so a
+  `+timedemo` on the command line sits behind it. One `space` through the game's own TrapKey moves
+  it along.
+* **The result is on the CONSOLE, not on stdout.** `Con_Printf` draws to the framebuffer. Grepping
+  the log for "fps" found nothing twice while the answer was sitting in the PNG.
+
+It is also the second real workload for P2.1, and the first that is a whole game rather than a CPU
+core: optimising against one workload is the surest way to optimise *that workload*.
