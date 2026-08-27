@@ -1518,3 +1518,28 @@ detection needs.
 
 PRISM never touches `keyboardque`. Escape opens the menu, Down/Down/Enter reaches the load/save
 submenu, and every one of those transitions happened inside the game's own code.
+
+
+### A task retracted rather than done: P0.3b
+
+The preprocessor expands macros by rewriting its work list in place with `splice()`, which is
+quadratic when a macro grows the list. The roadmap entry said so — and also said **do not start this
+before measuring it**, because the premise was an asymptotic argument with no number attached.
+
+Measured, by counting the elements every splice actually moves and timing them:
+
+```
+Doom      62 units ·  587k tokens · 721 ms total ·  2 ms in splice (0.3%) ·  14.1M moved,  24x tokens
+Hexen     56 units · 1203k tokens · 613 ms total · 49 ms in splice (8.0%) · 133.6M moved, 111x tokens
+Heretic   48 units ·  701k tokens · 319 ms total ·  4 ms in splice (1.1%) ·  28.3M moved,  40x tokens
+```
+
+The quadratic behaviour is real and it scales exactly as predicted — 111x the token count on the
+largest tree. And it does not matter: `splice` on a contiguous array is a memmove, and moving 133
+million pointers costs 49 ms. Preprocessing is about 0.6 s of a 2.2 s build, so the whole opportunity
+is under 1% of a build.
+
+Retracted. The value here is not the millisecond saved by not doing it; it is that an asymptotic
+argument with no constant factor attached is a hypothesis, and this is the second time in this
+project one has evaporated on contact with a measurement (the first was MIRAGE's D6). The instinct
+to fix a known-quadratic loop is strong enough that the entry had to warn its own author.
