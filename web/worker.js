@@ -262,21 +262,40 @@ async function start({ program, control, data, argv }) {
      * The rate is counted in safepoint hits rather than in seconds because that is what is available
      * deterministically here, and it is what makes a run reproducible.
      */
-    const TICK_EVERY = program.tickEvery || 40;
+    /*
+     * The tic rate comes from the CLOCK, not from a count of safepoints.
+     *
+     * Counting safepoint hits is what tools/raven.mjs does, and it is right there: a headless run
+     * wants determinism, not real time. In front of a person the opposite is true -- Heretic's world
+     * advances one tic per interrupt, so N tics per second IS the speed of the game, and a rate tied
+     * to how fast the host happens to run made it play far too fast.
+     */
+    const TIC_HZ = program.ticHz || 35;
     const BUDGET = program.safepointBudget || 20000;
-    let sinceTick = 0;
+    const usPerTic = 1e6 / TIC_HZ;
+    let nextTic = 0;
     prog.M.spBudget = BUDGET;
     prog.M.sp_ = () => {
       prog.M.spBudget = BUDGET;
-      if (++sinceTick < TICK_EVERY) return;
-      sinceTick = 0;
-      host.deliverTimer();
-      // A keypress arrives while the game is inside that same loop, so it is delivered from the same
-      // place -- as a scan code through the 8042, which is where the program looks for one.
-      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
-        if (e.scan) host.deliverKeyboard(e.scan, e.down);
-      }
       if (Atomics.load(ctrl, SLOT.STOP)) throw new Error('__stopped');
+      const now = performance.now() * 1000;
+      if (now < nextTic) return;
+      // Catch up at most a few tics: a page that was in a background tab must not then run the game
+      // at a thousand tics a second to make up for it.
+      if (nextTic === 0 || now - nextTic > 10 * usPerTic) nextTic = now;
+      nextTic += usPerTic;
+      host.deliverTimer();
+      /*
+       * A keypress arrives while the game is inside that same loop, so it is delivered from the same
+       * place -- as a scan code through the 8042, which is where the program looks for one.
+       *
+       * The release bit is part of the SCAN CODE, not a separate argument: deliverKeyboard's second
+       * parameter is the keyboard object, and passing `down` there made the game throw
+       * "kbd.push is not a function" the moment a key was pressed.
+       */
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        if (e.scan) host.deliverKeyboard(e.down ? e.scan : (e.scan | 0x80));
+      }
     };
   } else {
     /*

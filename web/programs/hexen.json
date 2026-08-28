@@ -31,5 +31,5 @@
   ],
   "safepoints": true,
   "safepointsNote": "These games get their TIME from an interrupt and wait for it inside a loop of their own C -- Heretic's TryRunTics spins on `ticcount`, which only the ISR writes. A safepoint is the only place this runtime can reach into such a loop, so without them the game waits for ever and looks exactly like a hang.",
-  "tickEvery": 40
+  "ticHz": 35
 }
