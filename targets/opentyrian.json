@@ -1,0 +1,20 @@
+{
+  "name": "opentyrian",
+  "title": "OpenTyrian (C, SDL2)",
+  "dir": "corpus/OpenTyrian/src",
+  "fetch": "git clone --depth 1 https://github.com/OpenTyrian/OpenTyrian.git corpus/OpenTyrian",
+  "_doc": "A REIMPLEMENTATION, like OpenDUNE -- so it says PRISM handles a large modern-C program, not that it runs unmodified 1990s source. What makes it worth the trip is its DATA: Tyrian 2.1 was released as freeware by its author, so unlike Dune II there is nothing to own.",
+  "_state": "Compiled ONLY, on purpose. With SDL2 declared and nothing implemented, the undefined-symbol report says exactly which of the 79 SDL functions grep finds are actually CALLED -- which is the number an implementation should aim at, and it is smaller.",
+  "units": {
+    "glob": "*.c"
+  },
+  "include": [],
+  "compile": {
+    "memory": 128,
+    "collect": true
+  },
+  "env": [
+    "stdio"
+  ],
+  "_units": "The makefile is one line: SRCS := $(wildcard src/*.c). No subdirectories."
+}

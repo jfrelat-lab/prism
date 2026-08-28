@@ -224,6 +224,13 @@ export function targetUnits(target, root) {
   const dir = resolvePath(root, target.dir);
   if (!existsSync(dir)) throw new Error(`target '${target.name}': source tree missing: ${dir}`);
   const { names, asm } = unitNames(target, dir);
+  // Zero units is a target-file mistake -- a glob pointing at the wrong directory, almost always --
+  // and it used to surface as "Cannot read properties of undefined (reading 'globals')" from inside
+  // the linker.
+  if (!names.length) {
+    throw new Error(`target '${target.name}': no translation units under ${dir} ` +
+      `(units: ${JSON.stringify(target.units)})`);
+  }
   const perUnit = target.unitDefines ?? {};
   const units = names.map((f) => {
     const full = join(dir, f);

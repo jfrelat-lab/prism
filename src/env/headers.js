@@ -10,6 +10,7 @@
 
 import { DJGPP_HEADERS } from './headers-djgpp.js';
 import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js';
+import { SDL2_HEADERS } from './headers-sdl2.js';
 
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
@@ -1299,6 +1300,8 @@ int sigaddset(sigset_t *set, int sig);
    * One dos.h that satisfies both beats two that cannot coexist under one name.
    */
   ...WATCOM_HEADERS,
+  // SDL2, for the Open* family. See src/env/headers-sdl2.js.
+  ...SDL2_HEADERS,
   'dos.h': WATCOM_DOS_H,
   'i86.h': WATCOM_I86_H,
   'errno.h': ERRNO,
