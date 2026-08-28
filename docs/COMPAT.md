@@ -71,3 +71,22 @@ Not yet surveyed, named so the list is a list and not a memory: Descent (Watcom,
 Warrior (same Build engine, so the same answer as Duke3D), later MAME releases while they were still
 C (a scaling target, not a new environment), and the non-games — Lua, NetHack — which would stress
 the libc and the file layer rather than the video path.
+
+## Doom's demos: why no WAD will ever play them
+
+`g_game.c:1589` rejects a demo whose first byte is not `VERSION`, and `doomdef.h:33` says
+`enum { VERSION = 110 }` — the LINUX port's version, 1.10.
+
+The byte tracks the release, which two shareware WADs of IDENTICAL size settle between them:
+
+```
+DOOM1.WAD  4,196,020 bytes   DEMO1/2/3 first byte = 108      (1.8)
+DOOM1.WAD  4,196,020 bytes   DEMO1/2/3 first byte = 109      (1.9)
+```
+
+1.9 is the last DOS release, and the 1.10 source shipped no WAD of its own, so nothing carries a
+110 demo. This is not a shareware-versus-retail question and a different WAD does not fix it. Play
+with `-warp 1 1`, which is what tools/doomsnd.mjs does; the attract loop is the only thing lost.
+
+I first stated this as a deduction from Doom's version history. It is now two measurements and a
+mechanism, which is a different kind of claim.
