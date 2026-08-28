@@ -82,8 +82,13 @@ The byte tracks the release, which two shareware WADs of IDENTICAL size settle b
 ```
 DOOM1.WAD   4,196,020 bytes   shareware   DEMO1-3 first byte = 108      (1.8)
 DOOM1.WAD   4,196,020 bytes   shareware   DEMO1-3 first byte = 109      (1.9)
-DOOM.WAD   12,408,292 bytes   RETAIL      DEMO1-4 first byte = 109      (Ultimate Doom)
+DOOM.WAD   11,159,840 bytes   RETAIL      DEMO1-3 first byte = 109      (registered, E1-E3)
+DOOM.WAD   12,408,292 bytes   RETAIL      DEMO1-4 first byte = 109      (Ultimate Doom, E1-E4)
 ```
+
+Four WADs, and the registered one is worth a note: archive.org dates that item 1993-12, which is the
+GAME's release date and not the build's -- the WAD inside is 1.9, with demo lumps byte-for-byte the
+same size as Ultimate Doom's. A catalogue date is not a version.
 
 The retail WAD was checked because a deduction is not a measurement, and it carries the same byte as
 its shareware sibling of the same release. Running on it closes the loop in the program's own words:
