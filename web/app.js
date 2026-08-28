@@ -179,6 +179,23 @@ $('loadServer').onclick = async () => {
 // long as the finger is down.
 let keyboard = null;
 
+/*
+ * Fullscreen, on the STAGE rather than the canvas: see the CSS for why. Keyboard input keeps working
+ * because the handler is on the window, not on an element that loses focus -- but the focus does
+ * have to leave the args field, which is why it is blurred here. A keystroke swallowed by a text
+ * input is exactly what made the first browser run look like a dead keyboard.
+ */
+$('fullscreen').onclick = () => {
+  const stage = $('stage');
+  if (document.fullscreenElement) { document.exitFullscreen?.(); return; }
+  (stage.requestFullscreen?.() ?? Promise.reject(new Error('no fullscreen API')))
+    .then(() => document.activeElement?.blur?.())
+    .catch((e) => log(`fullscreen refused: ${e.message}`, 'warn'));
+};
+addEventListener('fullscreenchange', () => {
+  $('fullscreen').textContent = document.fullscreenElement ? 'Windowed' : 'Fullscreen';
+});
+
 addEventListener('keydown', (e) => {
   if (!views || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || '')) return;
   const sc = scancodeForEvent(e);
