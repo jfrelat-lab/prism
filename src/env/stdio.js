@@ -601,7 +601,26 @@ export function installStdio(M, {
       interned.delete(name);
       return 0;
     },
-    localtime: () => 0,          // no calendar here; a caller must handle NULL, and SQLite does
+    /*
+     * A real calendar, filled into ONE static struct tm -- which is what localtime returns and why a
+     * caller must copy before calling again.
+     *
+     * It used to return NULL, on the grounds that a caller must handle it and SQLite does. Then
+     * OpenTyrian's xmas_time() wrote `localtime(&now)->tm_mon == 11` and dereferenced it, which is
+     * ordinary C: localtime only returns NULL when the time cannot be represented. There is no time
+     * zone here, so localtime and gmtime are the same function -- said rather than implied.
+     */
+    localtime: (tp) => {
+      const secs = tp ? (M.mod.dv.getInt32(tp, true) >>> 0) : Math.floor(M.rt.time(0));
+      if (!M.__tm) { M.__tm = M.rt.malloc(9 * 4); }
+      const d = new Date(secs * 1000);
+      const f = [d.getUTCSeconds(), d.getUTCMinutes(), d.getUTCHours(), d.getUTCDate(),
+                 d.getUTCMonth(), d.getUTCFullYear() - 1900, d.getUTCDay(),
+                 Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000) - 1, 0];
+      for (let i = 0; i < 9; i++) M.mod.dv.setInt32(M.__tm + i * 4, f[i] | 0, true);
+      return M.__tm;
+    },
+    gmtime: (tp) => api.localtime(tp),
 
     /*
      * User and group ids. There is one user here and it owns everything, so 0 is not a stand-in for

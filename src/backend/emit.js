@@ -523,6 +523,35 @@ export class FunctionEmitter {
     }
   }
 
+  /**
+   * Run the ordinary initialiser walk, but collect its statements instead of emitting them.
+   *
+   * This reuses every case #initDynamic already handles -- designators, brace elision, bitfields,
+   * nested aggregates -- rather than growing a second, thinner implementation that would drift from
+   * it. What it cannot reuse is a statement that is not a single expression: a loop or a block does
+   * not fit inside a comma. That is refused BY NAME rather than hoisted, because hoisting would
+   * silently move when the initialisers run.
+   */
+  #captureInit(at, type, init) {
+    const saved = this.out;
+    this.out = [];
+    let captured;
+    try {
+      this.#initDynamic(at, type, init);
+      captured = this.out;
+    } finally { this.out = saved; }
+    const steps = [];
+    for (const line of captured) {
+      const t = String(line).trim();
+      if (!t) continue;
+      if (t.includes('\n') || /^(if|for|while|do|switch|\{)/.test(t) || t.endsWith('{')) {
+        throw new EmitError('a compound literal whose initialiser needs a statement, not an expression');
+      }
+      steps.push(t.replace(/;$/, ''));
+    }
+    return steps;
+  }
+
   /** Public: the driver uses this for file-scope initialisers too. */
   initStatic(addr, type, init) {
     // Static initialisers are written into the image at link time where they are constant, and
@@ -1109,6 +1138,24 @@ export class FunctionEmitter {
         const l = this.#lval(e.lhs);         // then the object it wrote to
         return { ...l, addr: `(${done.js},${l.addr})` };
       }
+      /*
+       * A COMPOUND LITERAL, `(T){ ... }`. C99 6.5.2.5 makes it an lvalue with automatic storage and
+       * the lifetime of the enclosing block, so a frame slot is not an implementation convenience --
+       * it is the storage the standard describes.
+       *
+       * The initialisation is emitted IN PLACE, as a comma expression, rather than hoisted ahead of
+       * the statement. That matters when the literal sits inside a branch or a `?:`: hoisting would
+       * run its initialisers whether or not the branch is taken, and initialisers can have side
+       * effects. OpenTyrian's file.c returns `(File){ f, errno, f == NULL }`, which reads errno.
+       */
+      case 'compound': {
+        const t = e.type;
+        if (!t || t.size == null) throw new EmitError('a compound literal of incomplete type');
+        const off = this.slot(t.size, t.align);
+        const at = `(_fp+${off}|0)`;
+        const steps = this.#captureInit(at, t, e.init);
+        return { addr: steps.length ? `(${steps.join(',')},${at})` : at, type: t };
+      }
       case 'cond': {
         if (!T.isRecord(e.type ?? T.INT)) break;
         const off = this.slot(e.type.size, e.type.align);
@@ -1244,7 +1291,17 @@ export class FunctionEmitter {
         return { js: String(t.size), type: T.UINT };
       }
       case 'alignoftype': return { js: String(e.target.align), type: T.UINT };
-      case 'offsetof': case 'compound': case 'stmtexpr':
+      /*
+       * As an rvalue. A record IS its address here -- that is how every record-valued expression
+       * travels in tier-0, and it is what lets `return (File){...}` reach the sret buffer. A scalar
+       * compound literal, `(int){3}`, is read back out of its slot.
+       */
+      case 'compound': {
+        const l = this.#lval(e);
+        if (T.isRecord(l.type) || l.type.k === 'array') return { js: l.addr, type: l.type };
+        return { js: loadExpr(l.addr, l.type), type: l.type };
+      }
+      case 'offsetof': case 'stmtexpr':
         return unsup(`'${e.n}'`);
     }
     throw new EmitError(`cannot emit expression '${e.n}'`);
@@ -1536,7 +1593,21 @@ export class FunctionEmitter {
           const rest = args.slice(rt.params.length);
           return { js: `M.rt.${impl}(${[...fixed, `[${rest.join(',')}]`].join(',')})`, type: rt.ret };
         }
-        return { js: `M.rt.${impl}(${args.join(',')})`, type: rt.ret };
+        /*
+         * The PROGRAM's prototype governs the result type when both say pointer.
+         *
+         * A builtin table cannot name `struct tm *` -- the struct belongs to whichever program
+         * declared it -- so localtime is listed as returning a generic pointer, and that was
+         * overruling `struct tm *localtime(const time_t *)` from PRISM's own time.h. The member
+         * access then failed with "'char' has no member 'tm_mon'".
+         *
+         * Restricted to pointer-for-pointer on purpose. The float family declares sqrtf as taking
+         * and returning FLOAT precisely so a store rounds, and that must keep winning over a
+         * program that prototypes it in double.
+         */
+        const declared = f?.type?.ret;
+        const ret = (declared && declared.k === 'ptr' && rt.ret?.k === 'ptr') ? declared : rt.ret;
+        return { js: `M.rt.${impl}(${args.join(',')})`, type: ret };
       }
       if (f) {
         const ft = f.type;
