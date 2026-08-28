@@ -220,6 +220,16 @@ if (process.argv.includes('--run')) {
     driveKeys();
   };
 
+  /*
+   * Without safepoints this game cannot be driven at all: the timer interrupt is delivered FROM a
+   * safepoint, because that is the only place an asynchronous event reaches a program sitting inside
+   * a loop of its own C. A run with no flag therefore waits for ever, and looks exactly like a hang.
+   * It cost an hour and a bisection to the first commit of the session before I read this file.
+   */
+  if (!process.argv.includes('--safepoints')) {
+    console.log('note: no --safepoints, so no timer interrupt is delivered and the game will wait ' +
+      'for ever. Add --safepoints to run it.');
+  }
   if (process.argv.includes('--safepoints')) {
     const table = program.mod.safepoints;
     const hits = new Map();
