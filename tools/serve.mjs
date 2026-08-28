@@ -20,6 +20,7 @@ import { createServer } from 'node:http';
 import { readFile, stat, readdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadTarget, targetUnits } from '../src/target.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const port = +(process.argv.find(a => a.startsWith('--port='))?.slice(7) ?? 8080);
@@ -69,6 +70,68 @@ const server = createServer(async (req, res) => {
   let path = decodeURIComponent(url.pathname);
 
   try {
+    /*
+     * A TARGET, resolved.
+     *
+     * The browser used to carry its own description of every program in web/programs/*.json -- a
+     * third schema beside targets/*.json and the harnesses in tools/, and therefore a third thing to
+     * keep in step. This server runs in Node, so it can use src/target.js itself: it applies the
+     * unit rules (a list, a glob, or the program's own MAKEFILE), the per-unit defines and the
+     * generated units, and hands the browser the ANSWER rather than the rules.
+     *
+     * Sources are not inlined here. The worker already fetches the corpus, and doing it twice would
+     * mean the page waiting on one large response instead of many cached small ones.
+     */
+    if (path === '/__target') {
+      const name = (url.searchParams.get('name') || '').replace(/[^A-Za-z0-9_.:-]/g, '');
+      const [file, variant] = name.split(':');
+      headers(res, TYPES['.json']);
+      try {
+        const target = loadTarget(join(ROOT, 'targets', `${file}.json`), variant || null);
+        const resolved = variant || !target.default
+          ? target : loadTarget(join(ROOT, 'targets', `${file}.json`), target.default);
+        const { units, dir, asm } = targetUnits(resolved, ROOT);
+        const rel = (f) => f.startsWith(ROOT) ? f.slice(ROOT.length + 1) : f;
+        res.end(JSON.stringify({
+          name: resolved.name,
+          title: resolved.title ?? resolved.name,
+          dir: rel(dir),
+          // A unit is a path to fetch, or -- for the generated and inline ones -- its own source.
+          units: units.map(u => (u.source !== undefined && !u.file.startsWith(ROOT)
+            ? { file: u.file, source: u.source, defines: u.defines, module: u.module }
+            : { file: rel(u.file), defines: u.defines, module: u.module })),
+          defines: resolved.defines ?? {},
+          include: (resolved.include ?? []).map(d => `${rel(dir)}/${d}`),
+          caseInsensitive: !!resolved.caseInsensitive,
+          compile: resolved.compile ?? {},
+          env: resolved.env ?? ['stdio'],
+          modules: Object.fromEntries(Object.entries(resolved.modules ?? {})
+            .filter(([k]) => !k.startsWith('_'))
+            .map(([k, m]) => [k, { soname: m.soname ?? null }])),
+          asm,
+        }));
+      } catch (e) {
+        res.writeHead(404).end(JSON.stringify({ error: String(e.message) }));
+      }
+      return;
+    }
+
+    /** Which targets exist, for the picker. */
+    if (path === '/__targets') {
+      const files = (await readdir(join(ROOT, 'targets')).catch(() => []))
+        .filter(f => f.endsWith('.json'));
+      const out = [];
+      for (const f of files) {
+        const t = JSON.parse(await readFile(join(ROOT, 'targets', f), 'utf8'));
+        const variants = Object.keys(t.variants ?? {}).filter(k => !k.startsWith('_'));
+        const present = await stat(join(ROOT, t.dir)).then(() => true, () => false);
+        out.push({ name: f.replace(/\.json$/, ''), title: t.title ?? t.name, variants, present });
+      }
+      headers(res, TYPES['.json']);
+      res.end(JSON.stringify({ targets: out }));
+      return;
+    }
+
     // The listing the worker needs to know what a corpus contains.
     if (path === '/__ls') {
       const dir = safeJoin(ROOT, url.searchParams.get('dir') || '');

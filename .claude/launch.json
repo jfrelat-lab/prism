@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "prism",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "tools/serve.mjs",
+        "--port=8080",
+        "--data=/Users/julienfrelat/quake,/Users/julienfrelat/Projects/mirage/games/DOOM"
+      ],
+      "port": 8080
+    }
+  ]
+}
