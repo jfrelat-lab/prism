@@ -4,18 +4,19 @@
   "dir": "corpus/OpenTyrian/src",
   "fetch": "git clone --depth 1 https://github.com/OpenTyrian/OpenTyrian.git corpus/OpenTyrian",
   "_doc": "A REIMPLEMENTATION, like OpenDUNE -- so it says PRISM handles a large modern-C program, not that it runs unmodified 1990s source. What makes it worth the trip is its DATA: Tyrian 2.1 was released as freeware by its author, so unlike Dune II there is nothing to own.",
-  "_state": "Compiles and RUNS on src/env/sdl2.js. The 70 entry points it calls were counted by PRISM's own undefined-symbol report, not by grep, and implemented in the proportions that report gave: half bookkeeping, the work in 13 pixel calls and 7 audio ones.",
+  "_state": "Renders its title menu: 640x400, 202,143 non-black pixels of 256,000. Stops at JE_main, which is one of the six functions tier-0 still cannot emit -- two declarations of the same name in sibling blocks, in a function that needs control-flow flattening.",
   "units": {
     "glob": "*.c"
   },
   "include": [],
   "compile": {
-    "memory": 128,
+    "memory": 512,
     "collect": true
   },
   "env": [
     "stdio",
     "sdl2"
   ],
-  "_units": "The makefile is one line: SRCS := $(wildcard src/*.c). No subdirectories."
+  "_units": "The makefile is one line: SRCS := $(wildcard src/*.c). No subdirectories.",
+  "_data": "Tyrian 2.1, released as FREEWARE by its author -- tyrian21.zip, 4,754,048 bytes, 106 files, from camanis.net/tyrian. Like every target, read from a directory the user names and never in the repository."
 }

@@ -341,8 +341,36 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
      * saying that, and it is TRUE here rather than convenient -- a caller that got 1 would then run
      * its own resampler over data that is already in the right shape.
      */
-    SDL_BuildAudioCVT: () => 0,
-    SDL_ConvertAudio: () => 0,
+    SDL_BuildAudioCVT: (cvt, srcFormat, _sc, srcRate, dstFormat, _dc, dstRate) => {
+      if (!cvt) return -1;
+      /*
+       * Returning 0 -- "no conversion needed" -- is not the whole contract. Real SDL ALWAYS fills
+       * the struct: len_mult 1, len_ratio 1.0, rate_incr 1.0, and the two formats. A caller then
+       * sizes its buffer with `len * cvt.len_mult`.
+       *
+       * Leaving those fields alone meant the caller multiplied by whatever was on its stack, and
+       * OpenTyrian asked malloc for 4,294,550,356 bytes -- which is -416,940 read as unsigned. The
+       * struct is packed, so these offsets are SDL's exactly; see headers-sdl2.js.
+       */
+      const d = dv();
+      d.setInt32(cvt + 0, 0, true);                       // needed
+      d.setUint16(cvt + 4, srcFormat & 0xffff, true);     // src_format
+      d.setUint16(cvt + 6, dstFormat & 0xffff, true);     // dst_format
+      d.setFloat64(cvt + 8, (dstRate | 0) && (srcRate | 0) ? dstRate / srcRate : 1, true);
+      d.setUint32(cvt + 16, 0, true);                     // buf
+      d.setInt32(cvt + 20, 0, true);                      // len
+      d.setInt32(cvt + 24, 0, true);                      // len_cvt
+      d.setInt32(cvt + 28, 1, true);                      // len_mult
+      d.setFloat64(cvt + 32, 1, true);                    // len_ratio
+      d.setInt32(cvt + 80, 0, true);                      // filter_index
+      return 0;
+    },
+    /** needed was 0, so the data is already in shape: len_cvt is len, unchanged. */
+    SDL_ConvertAudio: (cvt) => {
+      if (!cvt) return -1;
+      dv().setInt32(cvt + 24, dv().getInt32(cvt + 20, true), true);
+      return 0;
+    },
   };
 
   /** Ask the program to fill one audio buffer, the way a device thread would. */

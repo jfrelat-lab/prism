@@ -58,3 +58,33 @@ export function writeIndexedPng(path, { pixels, width, height, palette }) {
   ]));
   return path;
 }
+
+/**
+ * A TRUECOLOUR framebuffer, as SDL hands one over: 4 bytes per pixel, and on a little-endian host
+ * SDL_PIXELFORMAT_RGB888 puts them in memory as B, G, R, X. Two bytes per pixel is RGB565.
+ */
+export function writeRgbPng(path, { bytes, width, height, bpp = 4, pitch = null }) {
+  const stride = pitch ?? width * bpp;
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  let o = 0;
+  for (let y = 0; y < height; y++) {
+    raw[o++] = 0;
+    for (let x = 0; x < width; x++) {
+      const i = y * stride + x * bpp;
+      if (bpp === 4) { raw[o++] = bytes[i + 2]; raw[o++] = bytes[i + 1]; raw[o++] = bytes[i]; }
+      else {
+        const v = bytes[i] | (bytes[i + 1] << 8);
+        raw[o++] = ((v >> 11) & 0x1f) << 3;
+        raw[o++] = ((v >> 5) & 0x3f) << 2;
+        raw[o++] = (v & 0x1f) << 3;
+      }
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  writeFileSync(path, Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
+  ]));
+}
