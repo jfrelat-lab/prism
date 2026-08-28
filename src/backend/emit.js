@@ -1542,6 +1542,21 @@ export class FunctionEmitter {
         const ft = f.type;
         const args = this.#callArgs(e, ft);
         /*
+         * A call to a name that is DECLARED and never DEFINED, and is not a runtime builtin either.
+         * It compiles -- the call goes through F, which is exactly what a real linker's undefined
+         * symbol would not do -- and then fails at run time as `F.name is not a function`.
+         *
+         * OpenDUNE is why this is recorded. `get_bios_keyboard_status` has its body in a Watcom
+         * `#pragma aux`, which PRISM ignores, so the build reported "nothing unemitted" and the gap
+         * appeared only when Video_Tick called it. A linker names its undefined symbols; so should
+         * this. It is also the on-ramp to compiling the assembly: cross this list with the .asm
+         * objects a makefile lists and you have exactly what the assembler was providing.
+         */
+        if (!f.defined) {
+          const where = this.ctx.undefinedCalls;
+          if (where) (where.get(f.name) ?? where.set(f.name, new Set()).get(f.name)).add(this.ctx.unit ?? '?');
+        }
+        /*
          * directCalls: an experiment, off by default, measuring one thing only.
          *
          * Every cross-function call normally goes through `F["name"]` on an object with as many

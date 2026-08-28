@@ -104,6 +104,19 @@ if (program.duplicates?.length) {
     `for the whole program:`);
   for (const d of program.duplicates) console.log(`    ${d.name}  (redefined in ${d.unit})`);
 }
+/*
+ * Undefined symbols, which a linker names and this used to swallow. They compile; they fail when
+ * called. Nearly always they are what an ASSEMBLY file was providing, so the list beside the skipped
+ * .asm objects above is the whole answer to "what does this build still need?".
+ */
+if (program.undefined?.length) {
+  console.log(`  ${program.undefined.length} symbols declared and called but NEVER DEFINED ` +
+    `(they fail when called):`);
+  for (const u of program.undefined.slice(0, 20)) {
+    console.log(`    ${u.name.padEnd(32)} called from ${u.units.join(' ')}`);
+  }
+  if (program.undefined.length > 20) console.log(`    … and ${program.undefined.length - 20} more`);
+}
 if (program.failures?.length) {
   const by = new Map();
   for (const f of program.failures) by.set(f.message, (by.get(f.message) ?? 0) + 1);

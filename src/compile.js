@@ -264,6 +264,9 @@ export const BUILTINS = new Map(Object.entries({
   mremap: { ret: P, params: [P, U, U, I] },
   munmap: { ret: I, params: [P, U] },
   mprotect: { ret: I, params: [P, U, I] },
+  setmntent: { ret: P, params: [P, P] },
+  getmntent: { ret: P, params: [P] },
+  endmntent: { ret: I, params: [P] },
   msync: { ret: I, params: [P, U, I] },
   chmod: { ret: I, params: [P, U] },
   umask: { ret: U, params: [U] },
@@ -669,7 +672,21 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
         const sym = mod.defineGlobal(link, d.type);
         (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type: d.type });
       } else if (d.n === 'func') {
-        const link = internal ? `${p.tag}$${d.name}` : qualify(d.name);
+        /*
+         * A definition with NO storage class keeps the INTERNAL linkage of a prior static
+         * declaration in the same unit -- C99 6.2.2p4. Heretic writes exactly that:
+         *
+         *     static void DrawMainBar(void);      // SB_BAR.C:39
+         *     void DrawMainBar(void)              // SB_BAR.C:909
+         *
+         * Treating the definition as external gave the name TWO objects, `SB_BAR$DrawMainBar` and
+         * `DrawMainBar`, and every call in the file resolved to the static one -- which nothing
+         * defined. It compiled and then threw when called. Quake II's qmenu.c does the same for
+         * eight of its own drawing routines.
+         */
+        const priorStatic = d.storage !== 'extern' && p.funcs.has(d.name);
+        const isInternal = internal || priorStatic;
+        const link = isInternal ? `${p.tag}$${d.name}` : qualify(d.name);
         const fn = mod.defineFunc(link, d.type);
         /*
          * A SECOND definition of an external name, which a real linker refuses and this silently
@@ -682,13 +699,13 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
          * three separate shared objects that never meet. Flattened into one program, the renderer's
          * won, so the engine printed through a refimport_t that was still zero.
          */
-        if (!internal && fn.defined) {
+        if (!isInternal && fn.defined) {
           duplicates.push({ name: d.name, unit: basename(p.file), module: p.module ?? MAIN });
         }
         // A DEFINITION, not just a prototype: the distinction decides whether a call reaches the
         // program's own code or a runtime builtin of the same name.
         fn.defined = true;
-        (internal ? p.funcs : home.funcs).set(d.name, fn);
+        (isInternal ? p.funcs : home.funcs).set(d.name, fn);
       }
     }
   }
@@ -697,6 +714,8 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   const pieces = [], emitted = [];
   // Shared across units: a builtin whose address is taken in ONE unit still needs binding once.
   const builtinRefs = new Set();
+  // name -> the units that CALL it, for every name declared here and defined nowhere.
+  const undefinedCalls = new Map();
 
   /*
    * What each module can SEE, built once.
@@ -765,6 +784,8 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
       safepoints,
       directCalls,
       builtinRefs,
+      undefinedCalls,
+      unit: basename(p.file),
       globals: overlay(seen.globals, p.globals),
       funcs: overlay(seen.funcs, p.funcs),
       builtins: BUILTINS,
@@ -818,7 +839,13 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   installStdio(M);
   installPIT(installPorts(M), M);
 
-  return { M, F, src, mod, failures, duplicates, run: makeRunner(M, F, mod) };
+  /*
+   * Sorted by name so a rebuild produces the same list, and carrying the units that call each one --
+   * which is what says whether a gap is one file's problem or the program's.
+   */
+  const undefined_ = [...undefinedCalls].map(([name, units]) => ({ name, units: [...units].sort() }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { M, F, src, mod, failures, duplicates, undefined: undefined_, run: makeRunner(M, F, mod) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */

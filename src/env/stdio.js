@@ -523,6 +523,15 @@ export function installStdio(M, {
     isatty: () => 0,
     getpid: () => 1,
     mprotect: () => 0,
+
+    /*
+     * /etc/mtab, which Quake II walks looking for a mounted CD-ROM. There are no mounts here, so the
+     * table opens as empty and the search finds nothing -- the same outcome as a machine with no CD
+     * in the drive, which the program already handles.
+     */
+    setmntent: () => 0,
+    getmntent: () => 0,
+    endmntent: () => 0,
     msync: () => 0,
     chmod: () => 0,
     umask: () => 0,
