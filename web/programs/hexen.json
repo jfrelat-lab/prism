@@ -1,0 +1,35 @@
+{
+  "title": "Hexen",
+  "target": "hexen",
+  "platform": "watcom",
+  "fps": 35,
+  "subtitle": "Raven, 1995 · 70,000 lines — compiles and runs; its retail WAD has no SKY1 (see ROADMAP P6.2)",
+  "needsData": {
+    "hint": "Hexen's own HEXEN.WAD"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Space",
+      "use"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "Enter",
+      "select"
+    ]
+  ],
+  "safepoints": true,
+  "safepointsNote": "These games get their TIME from an interrupt and wait for it inside a loop of their own C -- Heretic's TryRunTics spins on `ticcount`, which only the ISR writes. A safepoint is the only place this runtime can reach into such a loop, so without them the game waits for ever and looks exactly like a hang.",
+  "tickEvery": 40
+}

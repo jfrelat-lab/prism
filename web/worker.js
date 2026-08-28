@@ -16,6 +16,12 @@ import { installPorts } from '../src/env/ports.js';
 import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
 import { installConsole } from '../src/env/console.js';
+import { installPorts as installPortMachine } from '../src/env/ports.js';
+import { installCrtStatus } from '../src/env/crtstatus.js';
+import { installVgaDac } from '../src/env/vgadac.js';
+import { installKbd8042 } from '../src/env/kbd8042.js';
+import { installPIT } from '../src/env/pit.js';
+import { installWatcom } from '../src/env/watcom.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
   from '../src/env/webhost.js';
@@ -34,6 +40,35 @@ self.onmessage = async (e) => {
 };
 
 async function start({ program, control, data, argv }) {
+  /*
+   * A descriptor may carry the BUILD or merely name a target that does.
+   *
+   * targets/*.json is the one description Node already builds from; the server resolves it -- unit
+   * rules, per-unit defines, generated units -- and hands back the answer, so the page does not grow
+   * a second copy of rules that would drift from the first. A descriptor with no `target` is the
+   * older kind and keeps working unchanged.
+   */
+  if (program.target) {
+    const r = await fetch(`/__target?name=${encodeURIComponent(program.target)}`);
+    if (!r.ok) throw new Error(`no target '${program.target}': ${(await r.json()).error ?? r.status}`);
+    const t = await r.json();
+    program = {
+      ...program,
+      root: t.dir,
+      units: t.units.filter(u => u.source === undefined).map(u => u.file.slice(t.dir.length + 1)),
+      unitDefines: Object.fromEntries(t.units.filter(u => u.defines)
+        .map(u => [u.file.slice(t.dir.length + 1).toLowerCase(), u.defines])),
+      extraUnits: Object.fromEntries(t.units.filter(u => u.source !== undefined)
+        .map(u => [u.file, u.source])),
+      includeDirs: t.include.map(d => d.slice(t.dir.length + 1)),
+      defines: t.defines,
+      memory: (t.compile.memory ?? 64) * 1024 * 1024,
+      pack: t.compile.pack ?? null,
+      caseInsensitive: t.caseInsensitive,
+      title: program.title ?? t.title,
+    };
+  }
+
   const views = controlViews(control);
   const { ctrl, pal, audio } = views;
   const reader = makeKeyReader(views);
@@ -95,7 +130,8 @@ async function start({ program, control, data, argv }) {
   for (const u of program.units) {
     const text = tree.get(u.toLowerCase());
     if (text === undefined) throw new Error(`missing translation unit ${u}`);
-    units.push({ file: u, source: text });
+    const over = (program.unitDefines || {})[u.toLowerCase()];
+    units.push({ file: u, source: text, ...(over ? { defines: over } : {}) });
   }
   for (const [name, source] of Object.entries(program.extraUnits || {})) {
     units.push({ file: name, source });
@@ -117,7 +153,8 @@ async function start({ program, control, data, argv }) {
     prog = compileProgram(units, {
       defines: program.defines || {},
       resolve,
-      memory: program.memory,
+      pack: program.pack ?? null,
+    memory: program.memory,
       shared: true,                    // the page reads pixels straight out of this image
       /*
        * Safepoints, when the descriptor asks for them. They cost a decrement and a compare on every
@@ -181,6 +218,66 @@ async function start({ program, control, data, argv }) {
     });
     // compile.js installed stdio with no files; re-install with the ones the page supplied.
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
+  } else if (program.platform === 'watcom') {
+    /*
+     * A WATCOM/DOS4GW host: Heretic, Hexen and OpenDUNE. One branch for three games, because what
+     * they have in common is not a library but a MACHINE -- three devices and a clock.
+     *
+     * Nothing here implements a graphics API. Mode 13h is a linear framebuffer at 0xA0000, which
+     * PRISM already has because the low megabyte is reserved, so the page is told an ADDRESS and the
+     * program keeps writing where it always wrote. The palette arrives through the VGA DAC at
+     * 0x3C8/0x3C9 because that is where the program sends it.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    const machine = installPortMachine(prog.M);
+    installCrtStatus(machine);                       // the retrace bit these games spin on
+    installVgaDac(machine, {
+      // Published when a DAC entry completes, rather than polled: the program writes 256 triples in
+      // a burst and the page should see the whole palette, not a torn one.
+      onChange: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
+    });
+    prog.M.kbd = installKbd8042(machine);
+    /*
+     * A real clock for the PIT. installRealClock runs LATER in this file, so reading M.realClock
+     * here read undefined -- the whole build died on `Cannot read properties of undefined (reading
+     * 'micros')` after compiling 763 functions perfectly well. performance.now() is the same source
+     * installRealClock draws from, so the timer does not wait for it.
+     */
+    installPIT(machine, prog.M, { micros: () => performance.now() * 1000 });
+    const host = installWatcom(prog.M, {
+      publish: { ctrl, pal },
+      keys: (k) => reader.read(k),
+      onPresent: () => { reader.endFrame(); pace(); },
+    });
+
+    /*
+     * The safepoint, and the reason these games need one at all.
+     *
+     * Their time comes from an interrupt, and they wait for it inside a loop of their OWN C --
+     * Heretic's TryRunTics spins on `ticcount`, which only the ISR writes, calling no service and
+     * reading no port. A safepoint is the only place this runtime can reach into such a loop. Drive
+     * nothing and the game waits for ever, which looks exactly like a hang; that cost an hour and a
+     * bisection before I read tools/raven.mjs, which had reached the same conclusion first.
+     *
+     * The rate is counted in safepoint hits rather than in seconds because that is what is available
+     * deterministically here, and it is what makes a run reproducible.
+     */
+    const TICK_EVERY = program.tickEvery || 40;
+    const BUDGET = program.safepointBudget || 20000;
+    let sinceTick = 0;
+    prog.M.spBudget = BUDGET;
+    prog.M.sp_ = () => {
+      prog.M.spBudget = BUDGET;
+      if (++sinceTick < TICK_EVERY) return;
+      sinceTick = 0;
+      host.deliverTimer();
+      // A keypress arrives while the game is inside that same loop, so it is delivered from the same
+      // place -- as a scan code through the 8042, which is where the program looks for one.
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        if (e.scan) host.deliverKeyboard(e.scan, e.down);
+      }
+      if (Atomics.load(ctrl, SLOT.STOP)) throw new Error('__stopped');
+    };
   } else {
     /*
      * A DOS host: MAME's own src/msdos/msdos.c is compiled, and what is installed is the libraries it

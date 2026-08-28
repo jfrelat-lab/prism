@@ -1,0 +1,35 @@
+{
+  "title": "Heretic",
+  "target": "heretic",
+  "platform": "watcom",
+  "fps": 35,
+  "subtitle": "Raven, 1994 · 43,394 lines of C built with its own MAKEFILE — Watcom, DOS4GW",
+  "needsData": {
+    "hint": "Heretic's own HERETIC1.WAD (the shareware WAD is enough)"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Space",
+      "use"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "Enter",
+      "select"
+    ]
+  ],
+  "safepoints": true,
+  "safepointsNote": "These games get their TIME from an interrupt and wait for it inside a loop of their own C -- Heretic's TryRunTics spins on `ticcount`, which only the ISR writes. A safepoint is the only place this runtime can reach into such a loop, so without them the game waits for ever and looks exactly like a hang.",
+  "tickEvery": 40
+}
