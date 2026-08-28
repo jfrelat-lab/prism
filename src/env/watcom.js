@@ -60,6 +60,9 @@ export function installWatcom(M, {
     services: [],            // TSM timer services registered but not yet driven
     ticks: 0,                // timer interrupts delivered
     keys: 0,                 // keyboard interrupts delivered
+    // The mouse driver's state, as INT 33h sets it. `handler` is recorded rather than installed --
+    // a recorded handler is one this host can CALL. See deliverMouse.
+    mouse: { handler: 0, mask: 0, x: 0, y: 0, minX: 0, maxX: 319, minY: 0, maxY: 199, buttons: 0 },
   };
   M.watcom = state;
 
@@ -98,9 +101,61 @@ export function installWatcom(M, {
           setCarry(out, false);
           return 0;
         }
-        case 0x33:                                     // mouse driver: absent
+        /*
+         * INT 16h, the BIOS keyboard, as OpenDUNE's Video_Tick polls it.
+         *
+         * AH=11h asks "is an enhanced keystroke waiting" and answers in ZF, which a Watcom program
+         * cannot see: `union REGS` carries cflag and no other flag. The routine that asks -- a
+         * #pragma aux with an assembly body, video_dos.c:142 -- immediately does the AH=10h read
+         * itself when the answer is yes, and returns the key or zero. So the split between peek and
+         * read is not observable to any caller, and this answers the whole question in EAX: zero
+         * when nothing is waiting, the scan code and ASCII otherwise. Stated rather than implied,
+         * because it IS a deviation from the BIOS interface, just not from the program's.
+         */
+        case 0x16: {
+          const ah = (r.eax >> 8) & 0xff;
+          if (ah === 0x11 || ah === 0x01 || ah === 0x10 || ah === 0x00) {
+            const code = M.kbd?.take ? M.kbd.take() : 0;
+            // AH = scan code, AL = ASCII. Nothing here translates a layout, so AL stays 0 and a
+            // program that wants a character gets none -- which is what a program reading the
+            // SCAN code, as this one does, never notices.
+            setReg(out, R_EAX, code ? ((code & 0x7f) << 8) : 0);
+            setCarry(out, false);
+            return 0;
+          }
           setReg(out, R_EAX, 0);
+          setCarry(out, false);
           return 0;
+        }
+
+        /*
+         * INT 33h, the mouse. Dune II is mouse-driven -- Video_Init refuses to start without one --
+         * so supplying a mouse is supplying a device, the same as the DAC and the 8042.
+         */
+        case 0x33: {
+          const ax = r.eax & 0xffff;
+          if (ax === 0x0000) {                         // reset and detect
+            setReg(out, R_EAX, 0xffff);                // installed
+            setReg(out, R_EBX, 2);                     // two buttons
+          } else if (ax === 0x000c) {
+            /*
+             * Install an event handler: CX is the event mask, ES:EDX the routine. Recorded, not
+             * installed -- the same as every interrupt vector here, and for the same reason: a
+             * recorded handler is one this host can CALL when it has an event. See deliverMouse.
+             */
+            state.mouse.mask = r.ecx & 0xffff;
+            state.mouse.handler = r.edx >>> 0;
+          } else if (ax === 0x0004) {                  // set position
+            state.mouse.x = r.ecx & 0xffff;
+            state.mouse.y = r.edx & 0xffff;
+          } else if (ax === 0x0007) {                  // horizontal range
+            state.mouse.minX = r.ecx & 0xffff; state.mouse.maxX = r.edx & 0xffff;
+          } else if (ax === 0x0008) {                  // vertical range
+            state.mouse.minY = r.ecx & 0xffff; state.mouse.maxY = r.edx & 0xffff;
+          }
+          setCarry(out, false);
+          return 0;
+        }
         case 0x31:                                     // DPMI
           return dpmi(r, out);
         default:

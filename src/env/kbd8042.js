@@ -57,6 +57,12 @@ export function installKbd8042(machine, { onAck = null } = {}) {
     push(code) { queue.push(code & 0xff); },
     /** A key going down then up, which is what a menu keypress is. */
     tap(code) { queue.push(code & 0x7f, (code & 0x7f) | 0x80); },
+    /*
+     * Take one code, or 0 when there is none. Port 0x60 deliberately repeats the LAST code on an
+     * empty queue, because that is what the hardware latch does; a BIOS INT 16h caller needs the
+     * other answer -- "nothing is waiting" -- so it gets its own door rather than a flag on that one.
+     */
+    take() { return queue.length ? queue.shift() : 0; },
     get pending() { return queue.length; },
   };
 }

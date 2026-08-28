@@ -7,3 +7,21 @@ corpus/
 node_modules/
 *.log
 .DS_Store
+
+# GAME DATA, which never enters this repository under any name.
+#
+# Every target reads its data from a directory the USER names -- ~/quake, ~/quake2, ~/dune2 -- and no
+# tool here fetches any. These patterns are the second line of that rule rather than the first: they
+# exist so that a stray copy inside the tree cannot be committed by accident.
+data/
+baseq2/
+id1/
+DATA/
+*.pak
+*.PAK
+*.wad
+*.WAD
+*.dm2
+*.lmp
+*.rom
+*.zip
