@@ -39,7 +39,38 @@ import * as T from '../sema/types.js';
 let seq = 0;
 const fresh = (hint) => `_L${seq++}_${hint}`;
 
-/** Does a label appear anywhere below the top level? That is the only reason to do any of this. */
+/**
+ * Does a label appear anywhere below the top level -- or a `case` somewhere a JavaScript switch
+ * cannot put one?
+ *
+ * C lets a `case` label ANY statement inside the switch body, including one nested in an `if`, which
+ * is what makes Duff's device legal. libbenly's file.c:120 writes exactly that:
+ *
+ *     case -3:  if (buf != NULL)
+ *     case -2:  if (tmp != NULL) free(tmp);
+ *
+ * JavaScript requires case clauses to be direct children of the switch block, so emitting that
+ * literally produces source the engine will not parse. This pass already lowers a switch to a
+ * dispatch over labels and gotos, where the nesting stops mattering -- so a nested case is simply
+ * another reason to run it.
+ */
+/** A `case`/`default` that is not a direct child of a switch body. A nested switch owns its own. */
+function nestedCase(body) {
+  const direct = body?.n === 'block' ? (body.items ?? []) : [body];
+  const find = (node) => {
+    if (!node || typeof node !== 'object') return false;
+    if (node.n === 'case' || node.n === 'default') return true;
+    if (node.n === 'switch') return false;
+    for (const k of ['body', 'then', 'els', 'items']) {
+      const v = node[k];
+      if (Array.isArray(v)) { if (v.some(find)) return true; }
+      else if (v && typeof v === 'object' && find(v)) return true;
+    }
+    return false;
+  };
+  return direct.some(st => ((st?.n === 'case' || st?.n === 'default') ? find(st.body) : find(st)));
+}
+
 export function needsFlattening(body) {
   let nested = false;
   const scan = (s, top) => {
@@ -55,7 +86,12 @@ export function needsFlattening(body) {
       case 'if': scan(s.then, false); scan(s.els, false); return;
       case 'while': case 'do': scan(s.body, false); return;
       case 'for': scan(s.body, false); return;
-      case 'switch': scan(s.body, false); return;
+      case 'switch':
+        // Inside a switch, a case that is not a DIRECT child of the body is one JavaScript cannot
+        // express. The body's own statement list is direct; anything below it is not.
+        if (nestedCase(s.body)) { nested = true; return; }
+        scan(s.body, false);
+        return;
       case 'case': case 'default': scan(s.body, false); return;
       default: return;
     }

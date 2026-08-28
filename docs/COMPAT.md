@@ -149,3 +149,31 @@ one: the project's claim is that the original source runs on the original data, 
 that rewrites the data would end that claim whatever the byte was. But the distinction worth drawing
 is WHO edits: a user patching their own copy of their own game is not the compiler patching a
 program to make it run. PRISM cannot tell the difference, and should not have to.
+
+## Descent: 62 of its 66 assembly files have no C twin
+
+The question that decided Quake, Duke3D and ROTT decides this one too, and the answer is the
+clearest yet. Of 66 `.ASM` files in the 1995 Parallax source, **four** have a `.C` of the same name
+beside them. The other 62 include the whole of TEXMAP -- 28 files, which is to say the texture
+mapper IS assembly -- the eleven files of the 3D pipeline, the 2D blitter, the BIOS layer and the
+fixed-point maths.
+
+So Descent is not a candidate until P5.2, and further from it than ROTT: there is no `id386=0`
+here, and no `#ifndef __WATCOMC__`. Measured, not assumed.
+
+## clangsay: the smallest target, and it found a compiler bug on its first build
+
+1,479 lines of C with no graphics, no devices and no data -- argument parsing, a file read, text
+wrapping, stdout. It earns its place as a smoke test, and it paid for itself immediately:
+
+```
+clangsay: emitted JavaScript did not compile: Unexpected token 'case'
+```
+
+libbenly's `file.c:120` writes a case label inside an `if`, which is legal C -- it is what makes
+Duff's device work -- and illegal JavaScript, where case clauses must be direct children of the
+switch. PRISM emitted it faithfully and the engine refused the result.
+
+The fix was not to refuse it: `flatten.js` already lowers a switch to a dispatch over labels and
+gotos, where the nesting stops mattering. A nested case is simply another reason to run that pass.
+Refusing it instead cost one c-testsuite program, which is how the wrong fix announced itself.

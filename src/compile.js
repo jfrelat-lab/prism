@@ -861,7 +861,15 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   try {
     factory = new Function(src)();
   } catch (e) {
-    throw new CompileError(`emitted JavaScript did not compile: ${e.message}`);
+    /*
+     * Attach the source, as the single-unit path already does. A whole-program build that emits
+     * JavaScript the engine will not parse is a defect in the EMITTER, and "Unexpected token 'case'"
+     * with nothing to look at is a guessing game -- it cost several wrong minimal repros before I
+     * added this line.
+     */
+    const err = new CompileError(`emitted JavaScript did not compile: ${e.message}`);
+    err.src = src;
+    throw err;
   }
   const F = Object.create(null);
   const rebind = factory(M, F, mod.dv);

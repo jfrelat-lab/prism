@@ -91,7 +91,6 @@ function describeExpr(e) {
 
 export class EmitError extends Error {}
 
-
 const unsup = (what) => { throw new EmitError(`tier-0 does not support ${what} yet`); };
 
 // ---------------------------------------------------------------- load / store

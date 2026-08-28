@@ -1,0 +1,34 @@
+{
+  "name": "clangsay",
+  "title": "clangsay (cowsay in C)",
+  "dir": "corpus/clangsay/src",
+  "fetch": "git clone --depth 1 https://github.com/sasairc/clangsay.git corpus/clangsay",
+  "_doc": "The smallest real program in the corpus -- 1,479 lines, five units, no graphics and no devices. It earns its place as a SMOKE TEST: argument parsing, a file read, text wrapping and stdout, which is the whole hosted-C surface with nothing exotic on top.",
+  "units": {
+    "list": [
+      "clangsay.c",
+      "cow.c",
+      "info.c",
+      "list.c",
+      "msg.c",
+      "libbenly/src/string.c",
+      "libbenly/src/memory.c",
+      "libbenly/src/file.c",
+      "libbenly/src/env.c"
+    ]
+  },
+  "compile": {
+    "memory": 16,
+    "collect": true
+  },
+  "_defines": "COWPATH is where it looks for .cow files; the data directory is what the user names.",
+  "defines": {
+    "COWPATH": "\"cows\"",
+    "PROGNAME": "\"clangsay\"",
+    "VERSION": "\"prism\""
+  },
+  "env": [
+    "stdio"
+  ],
+  "_units": "clangsay plus the units of libbenly it actually calls -- strrep, smalloc, free2d, load_file_to_array. The library is a submodule the project declares, fetched rather than stubbed."
+}
