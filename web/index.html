@@ -27,8 +27,15 @@
   body { margin: 0; background: var(--bg); color: var(--fg); font-size: 13px;
          display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
 
-  header { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  /*
+   * The header does NOT wrap. It used to, and in a narrow window it grew to four or five lines and
+   * ate the height the game was supposed to get -- the picture came out as a forty-pixel strip. One
+   * row that scrolls sideways keeps its height fixed whatever the window does, so `main` always gets
+   * the rest.
+   */
+  header { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; overflow-x: auto;
            padding: 9px 14px; background: var(--panel); border-bottom: 1px solid var(--edge); }
+  header > * { flex: none; }
   header .name { font-weight: 700; letter-spacing: .16em; color: var(--accent); }
   header .name small { display: block; font-weight: 400; letter-spacing: 0;
                        color: var(--dim); font-size: 10px; }
@@ -48,6 +55,12 @@
   label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
   #subtitle { color: var(--dim); }
 
+  /*
+   * A FLOOR under the picture. The header is a flex row that wraps, so in a narrow window it grows
+   * to four or five lines and eats the height -- `grid-template-rows: auto minmax(0,1fr)` then hands
+   * the game whatever is left, which was a 40-pixel strip. The game gets 320px whatever the header
+   * does, and the page scrolls if the window truly cannot hold both.
+   */
   main { display: grid; grid-template-columns: 1fr minmax(290px, 32%); min-height: 0; }
 
   /*
@@ -58,7 +71,7 @@
    * being broken rather than as a layout that ran out of room. Stack instead: the picture takes the
    * width it needs and the log goes underneath.
    */
-  @media (max-width: 760px) {
+  @media (max-width: 900px) {
     main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
     aside { border-left: none; border-top: 1px solid var(--edge); }
   }
