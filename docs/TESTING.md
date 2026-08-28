@@ -1903,3 +1903,40 @@ Behind the data, two things, both read out of the source rather than guessed:
 * `Video_Init` refuses to start without a mouse: `int386(0x33)` with AX=0 must answer 0xFFFF or it
   `Error`s and returns false, and it then installs a real-mode callback with AX=0x0C. Dune II is
   mouse-driven, so supplying a mouse is supplying a device — the same as the DAC and the 8042.
+
+### What a build now tells you before you run it
+
+```
+node tools/build.mjs quake.json:dos
+```
+
+Three lines that did not exist, and each was earned by a bug that cost real time:
+
+```
+  7 symbols declared and called but NEVER DEFINED (they fail when called):
+    getch                            called from vregset.c
+    GUS_Init                         called from snd_dos.c
+    VGA_UpdatePlanarScreen           called from vid_vga.c
+  assembly: 21 files export 126 symbols; 1 of them are still undefined here:
+    VGA_UpdatePlanarScreen       d_copy.s
+```
+
+* **Undefined symbols.** A linker names them. PRISM used to swallow them, so a call to a declared-
+  and-never-defined name compiled and then threw as `F.name is not a function` — which is how
+  OpenDUNE's `get_bios_keyboard_status` was found, after the build had reported "nothing unemitted".
+* **The assembly cross-reference.** 298 exported symbols across the corpus, exactly one still
+  missing. That is the id386=0 thesis — the source ships its own C fallback — measured instead of
+  assumed, and it says an assembler would buy nothing for six of seven targets.
+
+### Compiling a `#pragma aux`, checked against a hand transcription
+
+The three routines with assembly bodies were all transcribed by hand before the compiler existed, so
+they are its oracle. The same program, with the pragmas and without:
+
+```
+FixedMul(65536,65536)=65536   FixedDiv2(65536,131072)=32768   hash=2223268735
+```
+
+169 multiplications and 156 divisions over negative operands and INT_MAX, identical either way. And
+OpenDUNE's intro renders the same 37,405 pixels in the same 62 colours as it did from the
+hand-written C, which is why `tools/opendune-dos-vars.c` no longer exists.
