@@ -107,3 +107,27 @@ with `-warp 1 1`, which is what tools/doomsnd.mjs does; the attract loop is the 
 
 I first stated this as a deduction from Doom's version history. It is now two measurements and a
 mechanism, which is a different kind of claim.
+
+### And the answer is not a patch
+
+Two things that look like fixes are not available, and it is worth saying why rather than only that.
+
+`enum { VERSION = 110 }` is an ENUM, not a macro, so no `-DVERSION=109` reaches it: the
+preprocessor would substitute the identifier and leave `enum { 109 = 109 };`, which is not C.
+Editing that line, or the byte in a WAD, is the one thing this project does not do — the whole claim
+is that the ORIGINAL source runs, and a program that only runs after a one-byte edit is a port.
+
+The program already solves it. `g_game.c:1555` writes `*demo_p++ = VERSION` when it RECORDS, so a
+demo this build makes carries 110 and this build replays it:
+
+```
+node tools/doom... -warp 1 1 -record prism -maxdemo 8
+  Demo prism.lmp recorded          8,178 bytes, first byte = 110
+
+              ... -playdemo prism
+  200 frames rendered, and no "Demo is from a different game version!"
+```
+
+Nothing was modified: the game authored the data, and `-maxdemo 8` fills the buffer so
+G_CheckDemoStatus writes the file and quits through the program's own path. What cannot be had is
+id's demos; what can be had is demos.
