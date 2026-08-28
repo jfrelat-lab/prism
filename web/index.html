@@ -50,6 +50,19 @@
 
   main { display: grid; grid-template-columns: 1fr minmax(290px, 32%); min-height: 0; }
 
+  /*
+   * A narrow window must not squeeze the game into a sliver.
+   *
+   * The side panel has a 290px floor, so below roughly 700px the canvas column collapses to almost
+   * nothing and the game becomes a thumbnail beside a full-height log -- which reads as the display
+   * being broken rather than as a layout that ran out of room. Stack instead: the picture takes the
+   * width it needs and the log goes underneath.
+   */
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
+    aside { border-left: none; border-top: 1px solid var(--edge); }
+  }
+
   #stage { display: grid; place-items: center; padding: 12px; min-height: 0; overflow: hidden;
            background: #000; }
   /* The guest decides the resolution; the canvas is scaled with no smoothing, because a 224x288
