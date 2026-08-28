@@ -80,9 +80,21 @@ the libc and the file layer rather than the video path.
 The byte tracks the release, which two shareware WADs of IDENTICAL size settle between them:
 
 ```
-DOOM1.WAD  4,196,020 bytes   DEMO1/2/3 first byte = 108      (1.8)
-DOOM1.WAD  4,196,020 bytes   DEMO1/2/3 first byte = 109      (1.9)
+DOOM1.WAD   4,196,020 bytes   shareware   DEMO1-3 first byte = 108      (1.8)
+DOOM1.WAD   4,196,020 bytes   shareware   DEMO1-3 first byte = 109      (1.9)
+DOOM.WAD   12,408,292 bytes   RETAIL      DEMO1-4 first byte = 109      (Ultimate Doom)
 ```
+
+The retail WAD was checked because a deduction is not a measurement, and it carries the same byte as
+its shareware sibling of the same release. Running on it closes the loop in the program's own words:
+
+```
+DOOM Registered Startup v1.10
+W_Init: Init WADfiles.
+Demo is from a different game version!
+```
+
+The program says 1.10; every WAD says 108 or 109.
 
 1.9 is the last DOS release, and the 1.10 source shipped no WAD of its own, so nothing carries a
 110 demo. This is not a shareware-versus-retail question and a different WAD does not fix it. Play
