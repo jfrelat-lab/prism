@@ -1,0 +1,53 @@
+{
+  "title": "MAME 0.2",
+  "subtitle": "Nicola Salmoria, 1997 · seven drivers instead of four — 9,215 lines of C89",
+  "target": "mame02",
+  "platform": "allegro",
+  "args": "pacman -nojoy",
+  "argsHint": "a driver name (pacman, mspacman, puckman, pengo, penta, crush, ladybug, mrdo, cclimber, ckong) plus msdos.c's own switches: -nosound -nojoy -vesa -noscanlines. Leave -nosound OFF to hear it: the SEAL mixer is wired to the page's audio ring.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only. The program paces itself from drv->frames_per_second through the real clock; this bounds a program that does not throttle itself at all.",
+  "needsData": {
+    "hint": "each driver's own ROMs, in a directory named after it (pacman/, mrdo/, ...)"
+  },
+  "controls": [
+    [
+      "3",
+      "insert coin"
+    ],
+    [
+      "1",
+      "start 1P"
+    ],
+    [
+      "2",
+      "start 2P"
+    ],
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "P",
+      "pause"
+    ],
+    [
+      "Tab",
+      "dip switches"
+    ],
+    [
+      "F3",
+      "reset"
+    ],
+    [
+      "Esc",
+      "quit"
+    ]
+  ],
+  "safepoints": true,
+  "safepointsNote": "MAME waits for a key to be RELEASED with `while (osd_key_pressed(k));`, and osd_key_pressed is now the game's own C reading Allegro's key[] out of memory -- no call, so nothing outside can see the loop or break it. The safepoint is where key[] gets refreshed, which is also what a real Allegro does from a keyboard interrupt."
+}
