@@ -146,6 +146,51 @@ function makeResolver(dir, { caseInsensitive = false, include = null } = {}, mis
   };
 }
 
+/*
+ * What the ASSEMBLY files export, in the two syntaxes this corpus uses.
+ *
+ *   GAS       .globl C(VGA_UpdatePlanarScreen)     — Quake's C() macro adds the leading underscore
+ *   MASM/TASM PUBLIC R_DrawColumn_                 — Watcom's convention puts it at the END
+ *
+ * So a name is normalised by stripping the C(...) wrapper and one underscore at either end. That is
+ * not a guess about naming: `PUBLIC _joystickx` and `PUBLIC I_ReadJoystick_` sit in the same file,
+ * which is what Watcom's data-versus-function convention looks like.
+ *
+ * The point of the list is not documentation. Crossed with the symbols that are declared, called and
+ * never defined, it answers the only question worth asking before writing an assembler: for THIS
+ * target, how many symbols would one actually buy?
+ */
+const ASM_EXT = /\.(s|S|asm|ASM|inc)$/;
+
+function scanAssembly(dir, depth = 3) {
+  const out = [];
+  const walk = (d, left) => {
+    let entries;
+    try { entries = readdirSync(d); } catch { return; }
+    for (const e of entries) {
+      const full = join(d, e);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) { if (left > 0) walk(full, left - 1); continue; }
+      if (!ASM_EXT.test(e) || e.endsWith('.inc')) continue;
+      const text = readFileSync(full, 'latin1');
+      const names = new Set();
+      for (const m of text.matchAll(/^\s*\.glob(?:a)?l\s+([A-Za-z_0-9$().]+)/gm)) names.add(m[1]);
+      for (const m of text.matchAll(/^\s*(?:PUBLIC|GLOBAL)\s+([A-Za-z_0-9$@?]+)/gim)) names.add(m[1]);
+      if (names.size) out.push({ file: full.slice(dir.length + 1), names: [...names].map(normaliseAsmName) });
+    }
+  };
+  walk(dir, depth);
+  return out;
+}
+
+/** `C(foo)` -> foo, `_foo` -> foo, `foo_` -> foo. */
+function normaliseAsmName(n) {
+  let v = n.replace(/^C\((.*)\)$/, '$1');
+  v = v.replace(/^_+/, '').replace(/_+$/, '');
+  return v;
+}
+
 /** Load a target file and fold in one of its named variants. */
 export function loadTarget(file, variant = null) {
   const target = JSON.parse(readFileSync(file, 'utf8'));
@@ -256,5 +301,18 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   }
   const env = buildEnv(program.M, target.env ?? ['stdio'],
     { ...envExtra, dl: { modules: sonames, ...(envExtra.dl ?? {}) } });
-  return { program, env, units, dir, asm, missingHeaders: [...missing] };
+  /*
+   * The cross-reference: every assembly export, and whether the program still lacks it. A name that
+   * appears here AND in program.undefined is one an assembler would buy; one that appears only here
+   * is already covered -- by a C fallback the source ships, or by a generated unit.
+   */
+  const asmExports = scanAssembly(dir);
+  const undef = new Set((program.undefined ?? []).map(u => u.name.split('$').pop()));
+  const asmWanted = [];
+  for (const f of asmExports) {
+    for (const n of f.names) if (undef.has(n)) asmWanted.push({ name: n, file: f.file });
+  }
+  return {
+    program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing],
+  };
 }

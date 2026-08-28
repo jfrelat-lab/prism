@@ -87,7 +87,7 @@ try {
   console.error(`${target.name}: ${e.message}`);
   process.exit(1);
 }
-const { program, env, units, asm, missingHeaders } = built;
+const { program, env, units, asm, missingHeaders, asmExports, asmWanted } = built;
 const secs = ((performance.now() - t0) / 1000).toFixed(1);
 
 const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
@@ -124,6 +124,18 @@ if (program.failures?.length) {
   for (const [m, n] of [...by].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
     console.log(`    ${String(n).padStart(4)}  ${m}`);
   }
+}
+/*
+ * What compiling the assembly would actually buy HERE. The interesting number is not how many
+ * symbols the .s files export -- most are covered by a C fallback the source itself ships, which is
+ * the whole point of id386=0 and `#ifndef __WATCOMC__` -- but how many are still missing.
+ */
+if (asmExports?.length) {
+  const total = asmExports.reduce((n, f) => n + f.names.length, 0);
+  console.log(`  assembly: ${asmExports.length} files export ${total} symbols; ` +
+    `${asmWanted.length} of them are still undefined here` +
+    (asmWanted.length ? ':' : ' — an assembler would buy nothing for this target.'));
+  for (const w of asmWanted.slice(0, 12)) console.log(`    ${w.name.padEnd(28)} ${w.file}`);
 }
 console.log(`  environment: ${Object.keys(env).filter(k => k !== 'machine').join(' ')}`);
 console.log(`  data: ${Object.keys(files).length} files from ${dataArg ?? '(none given)'}`);
