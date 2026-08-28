@@ -1,6 +1,6 @@
 {
   "title": "DOOM",
-  "subtitle": "id Software, 1993 \u00b7 linuxdoom-1.10, the only source ever published \u2014 X11, not DOS",
+  "subtitle": "id Software, 1993 · linuxdoom-1.10, the only source ever published — X11, not DOS",
   "root": "corpus/DOOM/linuxdoom-1.10",
   "units": [
     "am_map.c",
@@ -74,11 +74,11 @@
   },
   "memory": 134217728,
   "args": "",
-  "argsHint": "-warp 1 1, -skill 4, -devparm \u2026",
+  "argsHint": "empty starts the game as it shipped: title screen, attract demos, and a key opens the menu. `-warp <episode> <map> -skill <1-5>` drops straight into a level; `-playdemo <name>` replays one.",
   "fps": 35,
   "host": "x11",
   "needsData": {
-    "hint": "DOOM1.WAD \u2014 the freely redistributable shareware WAD"
+    "hint": "DOOM1.WAD — the freely redistributable shareware WAD"
   },
   "controls": [
     [
