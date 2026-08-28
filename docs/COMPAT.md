@@ -131,3 +131,21 @@ node tools/doom... -warp 1 1 -record prism -maxdemo 8
 Nothing was modified: the game authored the data, and `-maxdemo 8` fills the buffer so
 G_CheckDemoStatus writes the file and quits through the program's own path. What cannot be had is
 id's demos; what can be had is demos.
+
+### Does flipping the byte work? Yes — and that is the interesting part
+
+Patching the three DEMO lumps from 109 to 110 in a COPY of the shareware WAD makes id's demos play,
+and play CORRECTLY: DEMO1 runs E1M1 and the recorded inputs land where they were recorded --
+"YOU GOT THE SHOTGUN!", health 82%, armor 94%.
+
+That is a fact about the FORMAT, not a trick. 1.10's header parse (`g_game.c:1595`) reads thirteen
+bytes -- version, skill, episode, map, deathmatch, respawnparm, fastparm, nomonsters, consoleplayer,
+playeringame[4] -- which is byte-for-byte the 1.9 header, and its tic record is the same four bytes.
+1.10 was the Linux port; it did not change the demo format. So between 109 and 110 the version byte
+is a LOCKOUT, not a compatibility guard.
+
+Knowing that does not change what PRISM does. It reads whatever WAD it is handed and never edits
+one: the project's claim is that the original source runs on the original data, and a build step
+that rewrites the data would end that claim whatever the byte was. But the distinction worth drawing
+is WHO edits: a user patching their own copy of their own game is not the compiler patching a
+program to make it run. PRISM cannot tell the difference, and should not have to.
