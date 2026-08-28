@@ -76,6 +76,7 @@ export class Parser {
      * right field.
      */
     this.pack = pack;
+    this.aux = new Map();
     this.packStack = [];
   }
 
@@ -109,7 +110,7 @@ export class Parser {
       if (this.isP('#')) { this.#pragma(); continue; }
       decls.push(...this.#declarationOrFunction());
     }
-    return { n: 'unit', decls };
+    return { n: 'unit', decls, aux: [...this.aux.values()] };
   }
 
   /**
@@ -138,6 +139,19 @@ export class Parser {
      */
     const words = [];
     while (!this.done && !this.peek().bol) words.push(this.next());
+    /*
+     * `#pragma aux NAME = "insn", "insn" ... parm [eax] [ebx] value [eax] modify exact [eax edx]`
+     *
+     * Two different things share this syntax. With an `=` and string literals it is the WHOLE
+     * ROUTINE, written in assembly, and ignoring it leaves a declaration nothing defines. Without
+     * one -- `#pragma aux mouse_handler parm [EAX] [EBX]` -- it only decorates a C function's
+     * calling convention, and ignoring it is right.
+     */
+    if (words[0]?.v === 'pragma' && words[1]?.v === 'aux' && words[2]?.k === ID) {
+      const aux = this.#auxPragma(words);
+      if (aux) this.aux.set(aux.name, aux);
+      return;
+    }
     const text = words.map(t => t.v).join('');
     const m = /^pragma\s*pack\((.*)\)$/.exec(text.replace(/\s+/g, ''));
     if (!m) return;
@@ -148,6 +162,35 @@ export class Parser {
     const push = /^push,(.+)$/.exec(arg);
     if (push) { this.packStack.push(this.pack); this.pack = +push[1] || null; return; }
     if (/^\d+$/.test(arg)) this.pack = +arg || null;
+  }
+
+  /** Pull the routine out of an aux pragma's tokens, or null when it decorates rather than defines. */
+  #auxPragma(words) {
+    const name = words[2].v;
+    let i = 3;
+    if (words[i]?.v !== '=') return null;              // a convention, not a body
+    i++;
+    const insns = [];
+    while (i < words.length && words[i].k === STR) {
+      // A string token keeps its quotes; the instruction is what is between them.
+      insns.push(String(words[i].v).replace(/^L?"|"$/g, ''));
+      i++;
+      if (words[i]?.v === ',') i++;
+    }
+    if (!insns.length) return null;
+    const section = (kw) => {
+      const at = words.findIndex((t, k) => k >= i && t.v === kw);
+      if (at < 0) return null;
+      const regs = [];
+      for (let k = at + 1; k < words.length; k++) {
+        const v = String(words[k].v).toLowerCase();
+        if (v === 'exact' || v === '[' || v === ']') continue;
+        if (/^e?(ax|bx|cx|dx|si|di|bp)$/.test(v)) { regs.push(v.length === 2 ? 'e' + v : v); continue; }
+        if (['parm', 'value', 'modify', 'nomemory'].includes(v)) break;
+      }
+      return regs;
+    };
+    return { name, insns, parm: section('parm') ?? [], value: (section('value') ?? [])[0] ?? null };
   }
 
   /**

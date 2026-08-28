@@ -8,6 +8,7 @@ import * as T from './sema/types.js';
 import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
 import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
+import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
 import { watcomBuiltins } from './env/watcom.js';
@@ -711,11 +712,42 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   }
 
   // Pass 2: emit, with each unit's statics shadowing the shared names.
-  const pieces = [], emitted = [];
   // Shared across units: a builtin whose address is taken in ONE unit still needs binding once.
   const builtinRefs = new Set();
   // name -> the units that CALL it, for every name declared here and defined nowhere.
   const undefinedCalls = new Map();
+
+  /*
+   * `#pragma aux` routines: an assembly body for a name the C declares and never defines.
+   *
+   * Collected across every unit, because the pragma lives in a header (Heretic's DOOMDEF.H) and is
+   * therefore parsed once per unit that includes it. Resolved BEFORE pass 2 so that a call reaches
+   * the compiled routine directly, exactly as a call to any other defined function does.
+   */
+  const pieces = [], emitted = [];
+  const auxPieces = [];
+  const auxSeen = new Set();
+  for (const p of parsed) {
+    for (const aux of p.unit.aux ?? []) {
+      if (auxSeen.has(aux.name)) continue;
+      const home = perModule.get(p.module ?? MAIN);
+      const f = home.funcs.get(aux.name) ?? perModule.get(MAIN).funcs.get(aux.name);
+      // Only where the C defines nothing. A program that ships both a pragma and a C body has
+      // chosen the C body, and this must not overrule it.
+      if (!f || f.defined) continue;
+      try {
+        auxPieces.push(compileAux(aux, jsIdent(f.name)));
+        f.defined = true;
+        auxSeen.add(aux.name);
+        emitted.push(f.name);
+      } catch (e) {
+        if (!(e instanceof AuxError)) throw e;
+        // Refused by name, never guessed at: a wrong instruction here is a wrong number in a
+        // renderer. It stays undefined, and the undefined-symbol report says so.
+        failures.push({ unit: basename(p.file), fn: aux.name, message: String(e.message) });
+      }
+    }
+  }
 
   /*
    * What each module can SEE, built once.
@@ -812,6 +844,8 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
       emitted.push(link);
     }
   }
+
+  pieces.push(...auxPieces);
 
   finalizeHeap(M);
   const src = '"use strict";\nreturn function(M,F,D){\n' + pieces.join('\n') + '\n' +

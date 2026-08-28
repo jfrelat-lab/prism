@@ -63,6 +63,8 @@ export function installKbd8042(machine, { onAck = null } = {}) {
      * other answer -- "nothing is waiting" -- so it gets its own door rather than a flag on that one.
      */
     take() { return queue.length ? queue.shift() : 0; },
+    /** Look without taking. INT 16h AH=11h reports whether a key waits and leaves it waiting. */
+    peek() { return queue.length ? queue[0] : 0; },
     get pending() { return queue.length; },
   };
 }

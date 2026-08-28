@@ -78,6 +78,28 @@ export function installWatcom(M, {
   const setReg = (p, off, v) => { if (p) dv().setUint32(p + off, v >>> 0, true); };
   const setCarry = (p, on) => { if (p) dv().setUint32(p + R_CFLAG, on ? 1 : 0, true); };
 
+  /*
+   * The BIOS keyboard, INT 16h, with ONE implementation behind two doors.
+   *
+   * AH=11h/01h PEEK: they report whether a key is waiting in ZF and leave it waiting.
+   * AH=10h/00h READ: they take it.
+   *
+   * That split matters because OpenDUNE's get_bios_keyboard_status does both -- it is a #pragma aux
+   * whose body peeks, branches on ZF, and reads. Folding the two into one answer worked while that
+   * routine was transcribed by hand; once it is COMPILED from its own assembly, the halves have to
+   * be real. AH is the scan code and AL the ASCII, and nothing here maps a layout, so AL stays 0 --
+   * which a program reading the scan code, as this one does, never notices.
+   */
+  function biosKeyboard(ah) {
+    const peekOnly = (ah === 0x11 || ah === 0x01);
+    if (peekOnly) {
+      const code = M.kbd?.peek ? M.kbd.peek() : 0;
+      return { eax: code ? ((code & 0xff) << 8) : 0, zf: !code };
+    }
+    const code = M.kbd?.take ? M.kbd.take() : 0;
+    return { eax: code ? ((code & 0xff) << 8) : 0, zf: !code };
+  }
+
   const api = {
     /**
      * A software interrupt. Only the services these games actually ask for, answered honestly;
@@ -113,17 +135,12 @@ export function installWatcom(M, {
          * because it IS a deviation from the BIOS interface, just not from the program's.
          */
         case 0x16: {
-          const ah = (r.eax >> 8) & 0xff;
-          if (ah === 0x11 || ah === 0x01 || ah === 0x10 || ah === 0x00) {
-            const code = M.kbd?.take ? M.kbd.take() : 0;
-            // AH = scan code, AL = ASCII. Nothing here translates a layout, so AL stays 0 and a
-            // program that wants a character gets none -- which is what a program reading the
-            // SCAN code, as this one does, never notices.
-            setReg(out, R_EAX, code ? ((code & 0x7f) << 8) : 0);
-            setCarry(out, false);
-            return 0;
-          }
-          setReg(out, R_EAX, 0);
+          /*
+           * A C caller cannot see ZF: Watcom's union REGS carries cflag and no other flag. So this
+           * door answers in EAX alone, and the ZF half of the service is reachable only through
+           * __asmInt, where a compiled `jz` needs it.
+           */
+          setReg(out, R_EAX, biosKeyboard((r.eax >> 8) & 0xff).eax);
           setCarry(out, false);
           return 0;
         }
@@ -165,6 +182,21 @@ export function installWatcom(M, {
     },
 
     int386x: (num, inR, outR, _sregs) => api.int386(num, inR, outR),
+
+    /*
+     * A software interrupt from a COMPILED #pragma aux (src/asm/pragma-aux.js). Registers arrive and
+     * leave as a plain object rather than through a union REGS in memory, and the flags come with
+     * them -- which is the whole difference, and the reason this door exists at all.
+     */
+    __asmInt: (num, r) => {
+      if ((num | 0) === 0x16) {
+        const k = biosKeyboard((r.eax >> 8) & 0xff);
+        return { ...r, eax: k.eax, zf: k.zf };
+      }
+      // Anything else: unchanged, and no flag set. A BIOS that does not know a service leaves the
+      // registers alone, which is what a caller checking them will see.
+      return { ...r, zf: false };
+    },
 
     /** Segment registers. One flat selector, so every answer is the same one. */
     segread: (sregs) => {
