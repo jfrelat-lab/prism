@@ -252,7 +252,16 @@ $('run').onclick = () => {
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'log') log(m.line, m.kind);
-    else if (m.type === 'ready') guest = new Uint8Array(m.image);
+    else if (m.type === 'ready') {
+      /*
+       * The guest's memory, and paint() will not draw a single pixel without it -- the graphics
+       * branch tests `guest && pixels && w`. A run where this message never arrived showed
+       * `running · 320x200` in the status line and a text-mode canvas underneath, which reads as a
+       * geometry bug and is not one. Logged so the two cases are told apart on sight.
+       */
+      guest = new Uint8Array(m.image);
+      log(`guest memory: ${(guest.length / 1048576).toFixed(0)} MB shared with the page`);
+    }
     else if (m.type === 'failed') log(`build failed: ${m.message}`, 'error');
     else if (m.type === 'diag') window.PRISM_DIAG = m;
   };
@@ -414,7 +423,15 @@ function stats() {
   // and it became a lie the moment the program started pacing itself from its own
   // drv->frames_per_second. A number the host cannot know should not be printed as if it did.
   $('stats').textContent = (STATE_NAME[state] || state) +
-    (graphics ? ` · ${w}x${h} · ${Atomics.load(ctrl, SLOT.PENS)} pens` : ` · text ${TEXT_COLS}x${TEXT_ROWS}`) +
+    /*
+     * Show the geometry even when the page is in TEXT mode. It used to print `text 80x25` and
+     * nothing else, which hid the one case worth seeing: a program that HAS published a framebuffer
+     * while TEXTMODE is still 1 -- the canvas then keeps the text size and the game lands in a
+     * corner at 1:1. The numbers that decide it should be on screen.
+     */
+    (graphics ? ` · ${w}x${h} · ${Atomics.load(ctrl, SLOT.PENS)} pens`
+      : ` · text ${TEXT_COLS}x${TEXT_ROWS}` +
+        (w > 0 ? ` · guest ${w}x${h} @0x${Atomics.load(ctrl, SLOT.PIXELS).toString(16)} (textmode still on)` : '')) +
     (frame ? ` · frame ${frame} · ${fps.toFixed(1)} fps` : '') +
     (frame && $('speed').value !== '100' ? ` · ${$('speed').value === '0' ? 'unlimited' : $('speed').value + '%'}` : '');
   lastFrame = frame; lastStatAt = now;
