@@ -595,6 +595,13 @@ function makeLibc(M) {
     // --- math (double in, double out; the emitter has already coerced)
     sqrt: Math.sqrt, sin: Math.sin, cos: Math.cos, tan: Math.tan, atan: Math.atan,
     asin: Math.asin, acos: Math.acos,
+    /*
+     * round() goes AWAY FROM ZERO on a tie, which Math.round does not: Math.round(-0.5) is -0 and
+     * round(-0.5) is -1. OpenTyrian calls roundf 25 times, in its scaler.
+     */
+    round: (x) => Math.sign(x) * Math.round(Math.abs(x)),
+    trunc: Math.trunc,
+    lround: (x) => (Math.sign(x) * Math.round(Math.abs(x))) | 0,
     atan2: Math.atan2, exp: Math.exp, log: Math.log, log10: Math.log10, pow: Math.pow,
     floor: Math.floor, ceil: Math.ceil, fabs: Math.abs,
     /*
@@ -604,6 +611,8 @@ function makeLibc(M) {
      */
     sqrtf: (x) => Math.fround(Math.sqrt(x)), sinf: (x) => Math.fround(Math.sin(x)),
     cosf: (x) => Math.fround(Math.cos(x)), tanf: (x) => Math.fround(Math.tan(x)),
+    roundf: (x) => Math.fround(Math.sign(x) * Math.round(Math.abs(x))),
+    truncf: (x) => Math.fround(Math.trunc(x)),
     atanf: (x) => Math.fround(Math.atan(x)),
     atan2f: (y, x) => Math.fround(Math.atan2(y, x)),
     expf: (x) => Math.fround(Math.exp(x)), logf: (x) => Math.fround(Math.log(x)),

@@ -29,6 +29,7 @@ import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
+import { installSDL2 } from './sdl2.js';
 import { installConsole } from './console.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
@@ -65,6 +66,8 @@ export const ENV = {
   dsp: { install: (M, _c, o) => installDsp(M, o) },
   // dlopen over PRISM's symbol table: the modules are the target's, passed by buildTarget.
   dl: { install: (M, _c, o) => installDl(M, o) },
+  // SDL2 for the Open* family. See src/env/sdl2.js.
+  sdl2: { install: (M, _c, o) => installSDL2(M, o) },
 };
 
 /**

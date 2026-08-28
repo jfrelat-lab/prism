@@ -14,6 +14,7 @@ import { allegroBuiltins } from './env/allegro.js';
 import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
 import { dlBuiltins } from './env/dl.js';
+import { sdl2Builtins } from './env/sdl2.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
 import { installPorts } from './env/ports.js';
@@ -370,6 +371,9 @@ export const BUILTINS = new Map(Object.entries({
   sqrt: { ret: D, params: [D] }, sin: { ret: D, params: [D] }, cos: { ret: D, params: [D] },
   tan: { ret: D, params: [D] }, atan: { ret: D, params: [D] }, atan2: { ret: D, params: [D, D] },
   asin: { ret: D, params: [D] }, acos: { ret: D, params: [D] },
+  round: { ret: D, params: [D] }, trunc: { ret: D, params: [D] },
+  lround: { ret: T.LONG, params: [D] },
+
   exp: { ret: D, params: [D] }, log: { ret: D, params: [D] }, log10: { ret: D, params: [D] },
   pow: { ret: D, params: [D, D] }, floor: { ret: D, params: [D] }, ceil: { ret: D, params: [D] },
   fabs: { ret: D, params: [D] }, fmod: { ret: D, params: [D, D] },
@@ -381,6 +385,7 @@ export const BUILTINS = new Map(Object.entries({
   sqrtf: { ret: FLT, params: [FLT] }, sinf: { ret: FLT, params: [FLT] },
   cosf: { ret: FLT, params: [FLT] }, tanf: { ret: FLT, params: [FLT] },
   atanf: { ret: FLT, params: [FLT] }, atan2f: { ret: FLT, params: [FLT, FLT] },
+  roundf: { ret: FLT, params: [FLT] }, truncf: { ret: FLT, params: [FLT] },
   expf: { ret: FLT, params: [FLT] }, logf: { ret: FLT, params: [FLT] },
   log10f: { ret: FLT, params: [FLT] }, powf: { ret: FLT, params: [FLT, FLT] },
   floorf: { ret: FLT, params: [FLT] }, ceilf: { ret: FLT, params: [FLT] },
@@ -441,6 +446,7 @@ for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
 // DJGPP's DPMI floor, which Quake's dos_v2.c builds all of dosisms.h on; see src/env/go32.js.
 for (const [k, v] of Object.entries(go32Builtins(T))) BUILTINS.set(k, v);
 for (const [k, v] of Object.entries(dlBuiltins(T))) BUILTINS.set(k, v);
+for (const [k, v] of Object.entries(sdl2Builtins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 
