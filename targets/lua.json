@@ -1,0 +1,57 @@
+{
+  "name": "lua",
+  "title": "Lua 5.4 (ANSI C, with its own test suite)",
+  "dir": "corpus/lua",
+  "fetch": "git clone --depth 1 -b v5.4.7 https://github.com/lua/lua.git corpus/lua",
+  "_doc": "Not a game and not here to be one. Lua is strict ANSI C with no platform layer at all, and it ships THIRTY-FOUR files of its own tests -- which makes it an ORACLE in the same role as c-testsuite and Csmith rather than another target: the tests are built on assert(), so running them under PRISM and reaching the end is the check.",
+  "_units": "Every .c except luac.c and onelua.c. luac.c is the bytecode compiler and has a main() of its own; onelua.c is Lua's single-file amalgamation, which #includes every other unit -- listing it alongside them defined all 155 public functions twice, which is precisely what the duplicate-symbol report is for and what it said on the first build.",
+  "units": {
+    "list": [
+      "lapi.c",
+      "lauxlib.c",
+      "lbaselib.c",
+      "lcode.c",
+      "lcorolib.c",
+      "lctype.c",
+      "ldblib.c",
+      "ldebug.c",
+      "ldo.c",
+      "ldump.c",
+      "lfunc.c",
+      "lgc.c",
+      "linit.c",
+      "liolib.c",
+      "llex.c",
+      "lmathlib.c",
+      "lmem.c",
+      "loadlib.c",
+      "lobject.c",
+      "lopcodes.c",
+      "loslib.c",
+      "lparser.c",
+      "lstate.c",
+      "lstring.c",
+      "lstrlib.c",
+      "ltable.c",
+      "ltablib.c",
+      "ltests.c",
+      "ltm.c",
+      "lua.c",
+      "lundump.c",
+      "lutf8lib.c",
+      "lvm.c",
+      "lzio.c"
+    ]
+  },
+  "compile": {
+    "memory": 64,
+    "collect": true
+  },
+  "_defines": "LUA_USE_C89 keeps it to what PRISM's tier-0 already promises. The default build reaches for POSIX (dlopen for require, popen, locale) through LUA_USE_LINUX; C89 is Lua's own switch for a host without those, which is exactly this one.",
+  "defines": {
+    "LUA_USE_C89": "1"
+  },
+  "env": [
+    "stdio"
+  ]
+}

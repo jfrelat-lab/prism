@@ -105,6 +105,10 @@ void *realloc(void *p, size_t n);
 void free(void *p);
 void exit(int code);
 void abort(void);
+double strtod(const char *s, char **end);
+float strtof(const char *s, char **end);
+int system(const char *cmd);
+char *tmpnam(char *buf);
 long random(void);
 void srandom(unsigned seed);
 int atoi(const char *s);
@@ -135,6 +139,9 @@ char *strchr(const char *s, int c);
 char *strpbrk(const char *s, const char *accept);
 char *strrchr(const char *s, int c);
 char *strncat(char *d, const char *s, size_t n);
+/* strcoll compares in the LOCALE's collating order; there is one locale here and it is C, where
+   that order is strcmp's. Saying so is the whole implementation. */
+int strcoll(const char *a, const char *b);
 char *strdup(const char *s);
 char *strtok(char *s, const char *delim);
 void *memcpy(void *d, const void *s, size_t n);
@@ -320,6 +327,10 @@ const FLOATH = `
 #define DBL_MANT_DIG 53
 #define FLT_DIG 6
 #define DBL_DIG 15
+#define DBL_MAX_10_EXP 308
+#define DBL_MIN_10_EXP (-307)
+#define DBL_MAX_EXP 1024
+#define DBL_MIN_EXP (-1021)
 #define FLT_MIN_EXP (-125)
 #define DBL_MIN_EXP (-1021)
 #define FLT_MAX_EXP 128
@@ -365,6 +376,9 @@ struct tm {
 struct timespec { long tv_sec; long tv_nsec; };
 struct tm *localtime(const long *t);
 struct tm *gmtime(const long *t);
+long mktime(struct tm *tm);
+double difftime(long a, long b);
+size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
 int gettimeofday(struct timeval *tv, void *tz);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 int utimes(const char *path, const struct timeval *times);
@@ -562,6 +576,33 @@ struct mntent { char *mnt_fsname, *mnt_dir, *mnt_type, *mnt_opts; int mnt_freq, 
 FILE *setmntent(const char *file, const char *mode);
 struct mntent *getmntent(FILE *stream);
 int endmntent(FILE *stream);
+#endif
+`;
+
+/*
+ * locale.h. There is ONE locale here and it is the C locale, so localeconv answers with the C
+ * locale's own values -- a full stop for the decimal point and nothing else set. That is not a
+ * placeholder: it is what a program in setlocale(LC_ALL, "C") is entitled to read, and Lua reads
+ * exactly one field of it (lconv->decimal_point, to know how to print a number).
+ */
+const LOCALE_H = `
+#ifndef _PRISM_LOCALE_H
+#define _PRISM_LOCALE_H
+#define LC_ALL      6
+#define LC_COLLATE  3
+#define LC_CTYPE    0
+#define LC_MONETARY 4
+#define LC_NUMERIC  1
+#define LC_TIME     2
+struct lconv {
+    char *decimal_point, *thousands_sep, *grouping;
+    char *int_curr_symbol, *currency_symbol, *mon_decimal_point, *mon_thousands_sep;
+    char *mon_grouping, *positive_sign, *negative_sign;
+    char int_frac_digits, frac_digits, p_cs_precedes, p_sep_by_space;
+    char n_cs_precedes, n_sep_by_space, p_sign_posn, n_sign_posn;
+};
+char *setlocale(int category, const char *locale);
+struct lconv *localeconv(void);
 #endif
 `;
 
@@ -1246,6 +1287,12 @@ int getitimer(int which, struct itimerval *val);
 #define ITIMER_PROF 2
 `,
   'signal.h': `
+/*
+ * sig_atomic_t is C89 (7.7): the type a handler and the interrupted program may share. Lua reaches
+ * for it through llimits.h, which defines l_signalT as sig_atomic_t. Its absence surfaced as a parse
+ * error on the volatile l_signalT field in lstate.h -- the typedef having quietly vanished.
+ */
+typedef int sig_atomic_t;
 typedef void (*__sighandler_t)(int);
 __sighandler_t signal(int sig, __sighandler_t h);
 int raise(int sig);
@@ -1321,6 +1368,7 @@ int sigaddset(sigset_t *set, int sig);
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,
   'dirent.h': DIRENT,
+  'locale.h': LOCALE_H,
   'dlfcn.h': DLFCN,
   'mntent.h': MNTENT,
   'sys/dirent.h': DIRENT,

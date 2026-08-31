@@ -152,6 +152,13 @@ if (!flag('run')) process.exit(0);
  */
 const args = (opt('args') ?? '').split(/\s+/).filter(Boolean);
 console.log(`\nrunning: ${target.name} ${args.join(' ')}`);
+/*
+ * What the program SAYS. Its stdout goes into an in-memory buffer -- the page reads it there -- so a
+ * console run showed nothing at all, which for a program whose whole output is text reads as a
+ * program that did nothing.
+ */
+const write = program.M.write.bind(program.M);
+program.M.write = (str) => { process.stdout.write(str); write(str); };
 try {
   program.run([target.name, ...args]);
 } catch (e) {

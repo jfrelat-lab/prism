@@ -137,26 +137,26 @@ function makeLibc(M) {
     vfprintf: (_stream, fmt, ap) => { const s = format(M, fmt, vaReader(M, ap)); M.write(s); return s.length; },
     vsprintf: (dst, fmt, ap) => {
       const s = format(M, fmt, vaReader(M, ap));
-      const bytes = new TextEncoder().encode(s);
+      const bytes = bytesOf(s);
       u8().set(bytes, dst); u8()[dst + bytes.length] = 0;
       return bytes.length;
     },
     vsnprintf: (dst, n, fmt, ap) => {
       const s = format(M, fmt, vaReader(M, ap));
-      const bytes = new TextEncoder().encode(s);
+      const bytes = bytesOf(s);
       const take = Math.max(0, Math.min(bytes.length, (n | 0) - 1));
       if (n | 0) { u8().set(bytes.subarray(0, take), dst); u8()[dst + take] = 0; }
       return bytes.length;
     },
     sprintf: (dst, fmt, args) => {
       const s = format(M, fmt, args ?? []);
-      const bytes = new TextEncoder().encode(s);
+      const bytes = bytesOf(s);
       u8().set(bytes, dst); u8()[dst + bytes.length] = 0;
       return bytes.length;
     },
     snprintf: (dst, n, fmt, args) => {
       const s = format(M, fmt, args ?? []);
-      const bytes = new TextEncoder().encode(s).subarray(0, Math.max(0, n - 1));
+      const bytes = bytesOf(s).subarray(0, Math.max(0, n - 1));
       u8().set(bytes, dst); u8()[dst + bytes.length] = 0;
       return s.length;
     },
@@ -334,6 +334,7 @@ function makeLibc(M) {
       }
     },
 
+    strcoll: (a, b) => lib.strcmp(a, b),
     strncat: (d, s, n) => {
       const e = d + strlenAt(d);
       let i = 0;
@@ -342,6 +343,100 @@ function makeLibc(M) {
       return d;
     },
     /** The first character of `s` that appears in `accept`, or NULL -- not the first `accept`. */
+    /*
+     * strtod, with a working endptr -- which is the whole point of it. Lua's number parser calls it
+     * and then checks how far it got, so a version that consumed the string silently would turn
+     * "10 apples" into the number ten instead of a syntax error.
+     *
+     * JavaScript's own parseFloat accepts exactly C's decimal syntax minus the hexadecimal form,
+     * which C99 added and Lua does use ("0x10" is 16). So the hex case is matched first.
+     */
+    strtod: (p, endp) => {
+      let i = 0;
+      // Leading whitespace, which strtod skips: space, \t, \n, \v, \f, \r.
+      while ([32, 9, 10, 11, 12, 13].includes(u8()[p + i])) i++;
+      const text = M.cstr(p + i);
+      let m = /^[+-]?0[xX][0-9a-fA-F]*(\.[0-9a-fA-F]*)?([pP][+-]?\d+)?/.exec(text);
+      let value, used;
+      if (m && /[0-9a-fA-F]/.test(m[0].replace(/^[+-]?0[xX]/, ''))) {
+        value = Number(m[0].includes('p') || m[0].includes('P') ? m[0] : m[0]);
+        if (Number.isNaN(value)) value = parseInt(m[0], 16);
+        used = m[0].length;
+      } else {
+        m = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(text);
+        if (!m) { if (endp) M.mod.dv.setUint32(endp, p, true); return 0; }
+        value = parseFloat(m[0]);
+        used = m[0].length;
+      }
+      if (endp) M.mod.dv.setUint32(endp, p + i + used, true);
+      return value;
+    },
+    strtof: (p, endp) => Math.fround(lib.strtod(p, endp)),
+
+    /** The C locale's own lconv, in guest memory, filled once. */
+    localeconv: () => {
+      if (!M.__lconv) {
+        const SIZE = 10 * 4 + 8;
+        M.__lconv = M.rt.malloc(SIZE);
+        M.u8.fill(0, M.__lconv, M.__lconv + SIZE);
+        const dot = M.mod.intern([0x2e, 0]);          // "."
+        const empty = M.mod.intern([0]);
+        M.mod.dv.setUint32(M.__lconv, dot, true);     // decimal_point
+        for (let f = 1; f < 10; f++) M.mod.dv.setUint32(M.__lconv + f * 4, empty, true);
+      }
+      return M.__lconv;
+    },
+    setlocale: () => M.mod.intern([0x43, 0]),        // "C", the only one there is
+
+    /*
+     * mktime and difftime over the same epoch the rest of the clock uses. strftime handles the
+     * conversions Lua's os.date asks for and REFUSES the rest by name rather than dropping them,
+     * because a silently missing field in a formatted date is the kind of wrong that travels.
+     */
+    mktime: (tmPtr) => {
+      const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);
+      return Math.floor(Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0)) / 1000) | 0;
+    },
+    difftime: (a, b) => (a | 0) - (b | 0),
+    strftime: (dst, max, fmt, tmPtr) => {
+      const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);
+      const date = new Date(Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0)));
+      const p2 = (n) => String(n).padStart(2, '0');
+      const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const MONS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+                    'September', 'October', 'November', 'December'];
+      const out = M.cstr(fmt).replace(/%(.)/g, (_, c) => {
+        switch (c) {
+          case 'Y': return String(date.getUTCFullYear());
+          case 'y': return p2(date.getUTCFullYear() % 100);
+          case 'm': return p2(date.getUTCMonth() + 1);
+          case 'd': return p2(date.getUTCDate());
+          case 'H': return p2(date.getUTCHours());
+          case 'M': return p2(date.getUTCMinutes());
+          case 'S': return p2(date.getUTCSeconds());
+          case 'j': return String(g(7) + 1).padStart(3, '0');
+          case 'a': return DAYS[date.getUTCDay()].slice(0, 3);
+          case 'A': return DAYS[date.getUTCDay()];
+          case 'b': return MONS[date.getUTCMonth()].slice(0, 3);
+          case 'B': return MONS[date.getUTCMonth()];
+          case 'p': return date.getUTCHours() < 12 ? 'AM' : 'PM';
+          case 'c': return date.toUTCString();
+          case 'x': return `${p2(date.getUTCMonth() + 1)}/${p2(date.getUTCDate())}/` +
+            p2(date.getUTCFullYear() % 100);
+          case 'X': return `${p2(date.getUTCHours())}:${p2(date.getUTCMinutes())}:` +
+            p2(date.getUTCSeconds());
+          case 'Z': return 'UTC';
+          case '%': return '%';
+          default: return '%' + c;      // left as written, which is what a C library may also do
+        }
+      });
+      const bytes = [...new TextEncoder().encode(out)];
+      if (bytes.length + 1 > (max >>> 0)) return 0;   // strftime's own failure answer
+      M.u8.set(bytes, dst);
+      M.u8[dst + bytes.length] = 0;
+      return bytes.length;
+    },
+
     strpbrk: (s, accept) => {
       for (let i = 0; u8()[s + i]; i++) {
         for (let j = 0; u8()[accept + j]; j++) if (u8()[s + i] === u8()[accept + j]) return s + i;
@@ -667,6 +762,20 @@ function vaReader(M, ap) {
     i64: () => { const v = dv.getBigInt64(p, true); p += 8; return v; },
   };
 }
+
+/**
+ * A formatted result, as BYTES.
+ *
+ * `format` builds a string in which every character is one byte -- that is what %c produces and what
+ * cstr returns -- so the encoding back is charCode & 0xFF, not UTF-8. Using TextEncoder here turned
+ * every byte above 0x7F into two, which is how `sprintf("%c", 0xE4)` came out five bytes long
+ * instead of four.
+ */
+const bytesOf = (s) => {
+  const out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
+  return out;
+};
 
 export function format(M, fmtPtr, args) {
   const fmt = M.cstr(fmtPtr);

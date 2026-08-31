@@ -107,10 +107,21 @@ export class Module {
   cstr(addr) {
     let end = addr;
     while (end < this.size && this.u8[end] !== 0) end++;
-    // slice, not subarray: TextDecoder refuses a view onto a SharedArrayBuffer, and the image IS
-    // shared in the browser. slice copies into an unshared buffer, which costs nothing here — C
-    // strings passed across this boundary are file names and format strings, not payloads.
-    return new TextDecoder().decode(this.u8.slice(addr, end));
+    /*
+     * ONE BYTE, ONE CHARACTER. A C string is a sequence of bytes and nothing more -- it has no
+     * encoding of its own -- so decoding it as UTF-8 here was a guess, and the guess was wrong in
+     * both directions: `sprintf("%c", 0xE4)` came back out as the two bytes C3 A4, and Lua's own
+     * strings.lua caught it at line 204.
+     *
+     * Mapping each byte to the character of the same code makes the round trip exact for every
+     * byte, including the ones no UTF-8 decoder would accept. What the CONSOLE does with those
+     * bytes is a separate question, answered where the console is -- see M.write.
+     */
+    let out = '';
+    for (let i = addr; i < end; i += 4096) {
+      out += String.fromCharCode(...this.u8.subarray(i, Math.min(i + 4096, end)));
+    }
+    return out;
   }
 }
 

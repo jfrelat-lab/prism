@@ -529,6 +529,17 @@ export function installStdio(M, {
      * table opens as empty and the search finds nothing -- the same outcome as a machine with no CD
      * in the drive, which the program already handles.
      */
+    /*
+     * Four that this host genuinely cannot provide, answering the way a C library answers when it
+     * cannot either -- NULL, or a failure code. Lua checks every one of them, so a lie would be
+     * found: io.tmpfile() returning a bad handle would crash inside the test suite rather than
+     * report "cannot open".
+     */
+    freopen: () => 0,
+    tmpfile: () => 0,
+    tmpnam: () => 0,
+    system: () => -1,          // no shell; -1 is "the command could not be executed"
+
     setmntent: () => 0,
     getmntent: () => 0,
     endmntent: () => 0,

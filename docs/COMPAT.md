@@ -196,3 +196,51 @@ for Raven and Parallax, where `LINEAR.ASM` sits beside `R_DRAW.C`; it is the WRO
 descended from Quake, which names its assembly `d_polysa.asm` against `d_polyse.c` and never shares a
 stem. For those, the measurement is to compile with `id386=0` and read the undefined-symbol report --
 which is exactly what that report was built for.
+
+## Lua 5.4, and the printf bug its own tests found
+
+34 units, 25,957 lines, 1,092 functions, nothing unemitted. It runs:
+
+```
+fib:    1,1,2,3,5,8,13,21,34,55
+string: prism/42/3.142
+sort:   1 3 5 9
+pcall:  false   t.lua:7: caught
+gsub:   hell0 w0rld    2
+```
+
+It is here as an ORACLE, not as another target. Lua ships thirty-three files of its own tests, built
+on `assert()`, so running one and reaching `OK` is the check -- and three do:
+
+```
+sort.lua      50,000 elements, 852,463 comparisons        OK
+math.lua      random ranges over 31,800 calls             OK
+bitwise.lua                                               OK
+```
+
+`strings.lua` did not, and what it found is a real defect rather than a corner:
+
+    string.format("\0%c\0%c%x\0", 0xE4, 'b', 140)
+
+**Every printf-family writer encoded its result as UTF-8.** A C string is a sequence of bytes with no
+encoding of its own, so `%c` with 0xE4 came out as the two bytes `C3 A4` and the result was five
+bytes where C says four. `cstr` had the same guess in the other direction, which is why nothing had
+noticed: the two were consistently wrong and round-tripped. Both now map one byte to one character,
+which is exact for every byte including those no UTF-8 decoder would accept.
+
+That moved strings.lua from line 204 to line 272, where a second one waits and is written down
+rather than fixed tonight:
+
+    string.format('%.99f', -1e308)
+
+C's `%f` prints all 309 integer digits. JavaScript's `toFixed` switches to exponential notation
+above 1e21, so the result comes back as `-1e+308`. Fixing it means expanding the double exactly,
+which BigInt can do.
+
+Two smaller things Lua needed, both plain C89 that PRISM simply lacked: `sig_atomic_t` -- llimits.h
+defines `l_signalT` as that, and its absence surfaced as a parse error on a struct field three
+headers away -- and `strtod` with a working `endptr`, without which Lua's number parser would read
+"10 apples" as ten.
+
+And the duplicate-symbol report earned its keep again on the first build: listing `onelua.c`, Lua's
+single-file amalgamation, alongside the units it `#include`s defined all 155 public functions twice.
