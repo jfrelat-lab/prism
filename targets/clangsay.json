@@ -1,9 +1,9 @@
 {
   "name": "clangsay",
-  "title": "clangsay (cowsay in C)",
+  "title": "clangsay (a C reimplementation of cowsay)",
   "dir": "corpus/clangsay/src",
   "fetch": "git clone --depth 1 https://github.com/sasairc/clangsay.git corpus/clangsay",
-  "_doc": "The smallest real program in the corpus -- 1,479 lines, five units, no graphics and no devices. It earns its place as a SMOKE TEST: argument parsing, a file read, text wrapping and stdout, which is the whole hosted-C surface with nothing exotic on top.",
+  "_doc": "NOT an original source, and further from one than any other target here: cowsay itself is a PERL script (Tony Monroe, 1999) and a Unix program, so there is no 1990s C behind this at all -- sasairc wrote clangsay in 2016. It says nothing about the project's claim that original source runs; what it is worth is a SMOKE TEST of the plain hosted-C surface, 1,479 lines with no graphics, no devices and no data. It earned that on its first build by exposing a Duff's device in libbenly that PRISM emitted as JavaScript the engine would not parse.",
   "units": {
     "list": [
       "clangsay.c",

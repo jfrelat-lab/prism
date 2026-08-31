@@ -163,7 +163,7 @@ here, and no `#ifndef __WATCOMC__`. Measured, not assumed.
 
 ## clangsay: the smallest target, and it found a compiler bug on its first build
 
-1,479 lines of C with no graphics, no devices and no data -- argument parsing, a file read, text
+Said plainly first, because the name invites a wrong assumption: cowsay is a PERL script and a Unix program, so this is a 2016 reimplementation and there is no original C behind it. It proves nothing about running unmodified 1990s source. What it is, is 1,479 lines of C with no graphics, no devices and no data -- argument parsing, a file read, text
 wrapping, stdout. It earns its place as a smoke test, and it paid for itself immediately:
 
 ```
