@@ -177,3 +177,22 @@ switch. PRISM emitted it faithfully and the engine refused the result.
 The fix was not to refuse it: `flatten.js` already lowers a switch to a dispatch over labels and
 gotos, where the nesting stops mattering. A nested case is simply another reason to run that pass.
 Refusing it instead cost one c-testsuite program, which is how the wrong fix announced itself.
+
+## The candidate list, with the measurement that ranks it
+
+Every C-language source in videogamepreservation, filtered to things of a size worth the trip:
+
+| candidate | size | why it ranks there |
+|---|---|---|
+| **Hexen II** (1997) | 2.1 MB C, 183 units | Quake lineage, and `id386` is in its sources — PRISM already runs two members of that family, so the platform work is largely done. **First choice.** |
+| **Witchaven, Witchaven II, TekWar** | 13–20 MB C each | Build engine, so Ken Silverman's own `A.C` applies exactly as it does to Duke3D. Large and real. |
+| **Micropolis** (SimCity, 2008) | 7.7 MB C | A different KIND of program — a simulation with an X11/Tcl front end. Tests parts of the compiler no shooter touches. |
+| **Abuse** (1997), **Star Control 2** | 1.7 MB, 1.0 MB C | Smaller, and both are ports of their own era. |
+| **NetHack** | 133 units in src/, and it ships `sys/msdos` | The substantial POSIX answer, and DOS as well. No graphics at all: it would stress the libc and the file layer instead of devices, which nothing in the corpus does. |
+| **Lua** | 35 units, **34 files of its own tests** | The highest value per line in the list, and not as a game: its test suite is a SEMANTIC ORACLE, the same role c-testsuite and Csmith play. |
+
+A note on how NOT to measure this family. Comparing `.ASM` stems against `.C` stems is the right test
+for Raven and Parallax, where `LINEAR.ASM` sits beside `R_DRAW.C`; it is the WRONG test for anything
+descended from Quake, which names its assembly `d_polysa.asm` against `d_polyse.c` and never shares a
+stem. For those, the measurement is to compile with `id386=0` and read the undefined-symbol report --
+which is exactly what that report was built for.
