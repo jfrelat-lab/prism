@@ -888,25 +888,52 @@ function intArg(v, wide64, signed) {
 }
 
 /**
- * `%.*f`. Not `toFixed`: C rounds a tie to EVEN (IEEE round-to-nearest-even), JS rounds a tie away
- * from zero. `printf("%.0f", 2.5)` is therefore "2" in C and "3" from toFixed — measured against
- * glibc, not assumed.
+ * `%.*f`, expanded EXACTLY.
+ *
+ * Two things this has to get right, and the arithmetic of doubles gives neither for free.
+ *
+ * The tie. C rounds a tie to EVEN (IEEE round-to-nearest-even) and `toFixed` rounds away from zero,
+ * so `printf("%.0f", 2.5)` is "2" in C and "3" from toFixed -- measured against glibc, not assumed.
+ *
+ * The magnitude. `printf("%.99f", -1e308)` prints all 309 integer digits, and no amount of care with
+ * doubles will produce them: `1e308 * 1e99` is Infinity, and `String` of anything past 1e21 comes
+ * back in exponential notation. Lua's own strings.lua:272 asserts on the length of exactly that.
+ *
+ * So the expansion runs in BigInt. A double IS an exact binary rational -- m * 2^e for integers m
+ * and e -- so `value * 10^p` is an exact ratio, and rounding it is a comparison of two integers
+ * rather than a floating-point guess. There is no double rounding left to worry about, which the
+ * scaled-multiply version had by construction.
  */
 function fixed(v, p) {
   if (Number.isNaN(v)) return 'nan';
   if (!Number.isFinite(v)) return v > 0 ? 'inf' : '-inf';
   const neg = v < 0 || Object.is(v, -0);
   const a = Math.abs(v);
-  const scale = 10 ** p;
-  const x = a * scale;
-  let n;
-  if (Math.abs(x - Math.trunc(x)) === 0.5) {
-    const t = Math.trunc(x);
-    n = t % 2 === 0 ? t : t + 1;          // the tie goes to the even neighbour
+
+  // m * 2^e, read straight out of the bits: 1 sign, 11 exponent, 52 mantissa.
+  const buf = new DataView(new ArrayBuffer(8));
+  buf.setFloat64(0, a);
+  const bits = buf.getBigUint64(0);
+  const rawExp = Number((bits >> 52n) & 0x7ffn);
+  const frac52 = bits & 0xfffffffffffffn;
+  // A subnormal has no implicit leading 1, and its exponent is fixed at the smallest one.
+  const m = rawExp === 0 ? frac52 : (frac52 | 0x10000000000000n);
+  const e = rawExp === 0 ? -1074 : rawExp - 1075;
+
+  const pow10 = 10n ** BigInt(p);
+  let q;
+  if (e >= 0) {
+    q = m * (1n << BigInt(e)) * pow10;          // exact; nothing to round
   } else {
-    n = Math.round(x);
+    const den = 1n << BigInt(-e);
+    const num = m * pow10;
+    q = num / den;
+    const r2 = (num % den) * 2n;
+    // Half to even, which is what C does and what a comparison of integers can decide exactly.
+    if (r2 > den || (r2 === den && (q & 1n) === 1n)) q += 1n;
   }
-  const digits = String(n).padStart(p + 1, '0');
+
+  const digits = q.toString().padStart(p + 1, '0');
   const int = p ? digits.slice(0, -p) : digits;
   const frac = p ? digits.slice(-p) : '';
   return (neg ? '-' : '') + int + (p ? '.' + frac : '');
