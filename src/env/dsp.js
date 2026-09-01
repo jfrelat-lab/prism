@@ -31,7 +31,23 @@ import { SLOT } from './webhost.js';
 // <linux/soundcard.h>, the values PRISM's own header declares. The two are one thing in two places.
 const SNDCTL_DSP_RESET = 0x5000, SNDCTL_DSP_SPEED = 0x5002, SNDCTL_DSP_STEREO = 0x5003,
       SNDCTL_DSP_GETFMTS = 0x500b, SNDCTL_DSP_SETFMT = 0x5005, SNDCTL_DSP_SETFRAGMENT = 0x500a,
-      SNDCTL_DSP_GETOSPACE = 0x500c, SNDCTL_DSP_SYNC = 0x5001;
+      SNDCTL_DSP_GETOSPACE = 0x500c, SNDCTL_DSP_SYNC = 0x5001,
+      SNDCTL_DSP_GETCAPS = 0x500f, SNDCTL_DSP_SETTRIGGER = 0x5010, SNDCTL_DSP_GETOPTR = 0x5012;
+const DSP_CAP_TRIGGER = 0x1000, DSP_CAP_MMAP = 0x2000, PCM_ENABLE_OUTPUT = 0x0002;
+
+/*
+ * The DMA buffer, for the OTHER way a program uses this device.
+ *
+ * Doom WRITES its mixed samples here; Quake MMAPS the card's buffer and mixes straight into it,
+ * asking SNDCTL_DSP_GETOPTR where the card has got to and filling in ahead of that. Both are OSS,
+ * both are ordinary, and the difference is not a detail: without mmap, snd_linux.c refuses at
+ * SNDDMA_Init with "sound driver too old".
+ *
+ * Eight fragments of 4 KB. The size is not arbitrary -- Quake computes `shm->samples` from it and
+ * masks ring positions with `samples - 1`, so a total that is not a power of two silently corrupts
+ * every wrap.
+ */
+const DMA_FRAGS = 8, DMA_FRAGSIZE = 4096, DMA_BYTES = DMA_FRAGS * DMA_FRAGSIZE;
 const AFMT_S16_LE = 0x10, AFMT_U8 = 0x08;
 
 const DSP_FD = 0x7300_0001;      // a descriptor no file store will ever hand out
@@ -40,10 +56,19 @@ const DSP_FD = 0x7300_0001;      // a descriptor no file store will ever hand ou
  * Install the device. Wraps whatever `open`/`ioctl`/`write`/`close` are already in place, so a
  * program that writes files AND plays sound keeps both — install this after src/env/stdio.js.
  */
-export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
+export function installDsp(M, { publish = null, blockWhenFull = false, micros = null } = {}) {
   const prev = {
-    open: M.rt.open, close: M.rt.close, write: M.rt.write, ioctl: M.rt.ioctl,
+    open: M.rt.open, close: M.rt.close, write: M.rt.write, ioctl: M.rt.ioctl, mmap: M.rt.mmap,
   };
+  /*
+   * What paces the DMA pointer. A real card advances it at the sample rate whatever the program is
+   * doing, so the wall clock is the truthful default and the only right answer in a browser.
+   *
+   * A headless capture wants the other thing -- a counter -- for the same reason the timer does:
+   * a run that goes faster than real time would sample almost nothing, and one that goes slower
+   * would race ahead of what the game had mixed. Pass `micros` to supply that.
+   */
+  const clock = micros ?? (() => Math.round(performance.now() * 1000));
 
   const audio = {
     open: false,
@@ -54,6 +79,7 @@ export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
     ring: publish ? publish.audio : new Int16Array(4096),
     wav: null,               // a harness may collect here; nothing else uses it
     dropped: 0,              // frames refused because the page had not drained the ring
+    dma: null,               // { addr, playing, playedBytes, at } once the program mmaps it
   };
   M.dsp = audio;
 
@@ -64,6 +90,24 @@ export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
       return DSP_FD;
     }
     return prev.open ? prev.open(namePtr, flags) : -1;
+  };
+
+  /*
+   * mmap on this descriptor hands back the DMA buffer. It is ordinary guest memory -- the program
+   * writes samples into it and this device reads them out -- which is exactly the relationship a
+   * real card has with its buffer, minus the bus.
+   */
+  M.rt.mmap = (addr, len, prot, flags, fd, off) => {
+    if ((fd | 0) !== (DSP_FD | 0)) {
+      return prev.mmap ? prev.mmap(addr, len, prot, flags, fd, off) : -1;
+    }
+    if (!audio.dma) {
+      const p = M.rt.malloc(DMA_BYTES) | 0;
+      if (!p) return -1;
+      M.mod.u8.fill(0, p, p + DMA_BYTES);
+      audio.dma = { addr: p, playing: false, playedBytes: 0, at: clock() };
+    }
+    return audio.dma.addr;
   };
 
   M.rt.close = (fd) => {
@@ -95,16 +139,56 @@ export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
       case SNDCTL_DSP_SYNC:    return 0;
       case SNDCTL_DSP_SETFRAGMENT: return 0;
       /*
+       * What this device can do. Saying TRIGGER|MMAP is a promise the two cases below keep; a
+       * device that claimed it and then failed the mmap would be worse than one that claimed
+       * nothing, because snd_linux.c checks the capability and not the result.
+       */
+      case SNDCTL_DSP_GETCAPS: return grant(DSP_CAP_TRIGGER | DSP_CAP_MMAP);
+      /*
+       * The trigger is the card's start button. Quake clears it, mmaps, then sets PCM_ENABLE_OUTPUT,
+       * and only from that moment does the pointer move -- so the buffer it filled beforehand is not
+       * half-played by the time it starts.
+       */
+      case SNDCTL_DSP_SETTRIGGER: {
+        const want = (get() & PCM_ENABLE_OUTPUT) !== 0;
+        if (audio.dma && want !== audio.dma.playing) {
+          audio.dma.playing = want;
+          audio.dma.at = clock();
+        }
+        return 0;
+      }
+      /*
+       * Where the card has got to. This is also where the samples actually leave, because a program
+       * using the mmap path never calls write() -- and it asks every frame, which is precisely when
+       * new samples are guaranteed to be in the buffer. A real card would be moving them by DMA in
+       * between; the program cannot tell the difference, since all it can observe is this answer.
+       */
+      case SNDCTL_DSP_GETOPTR: {
+        if (!arg || !audio.dma) return -1;
+        pumpDma();
+        dv.setInt32(arg, audio.dma.playedBytes | 0, true);                   // bytes, total
+        dv.setInt32(arg + 4, (audio.dma.playedBytes / DMA_FRAGSIZE) | 0, true);  // blocks
+        dv.setInt32(arg + 8, audio.dma.playedBytes % DMA_BYTES, true);       // ptr, within the buffer
+        return 0;
+      }
+      /*
        * How much room is left. Doom 1.10 does not ask, but a program that does is asking the one
        * question the ring can answer exactly, so answer it rather than failing.
        */
+      /*
+       * The output buffer: its GEOMETRY, and how much of it is free.
+       *
+       * `fragstotal` and `fragsize` describe the DEVICE, not the moment -- Quake multiplies them to
+       * size its own mixing ring before it has written a byte. Reporting free space in those two
+       * fields, as this did, gave a program asking about the card an answer about the queue.
+       */
       case SNDCTL_DSP_GETOSPACE: {
         if (!arg) return -1;
-        const free = room();
-        dv.setInt32(arg, free > 0 ? 1 : 0, true);              // fragments
-        dv.setInt32(arg + 4, Math.max(free, 0), true);         // fragstotal
-        dv.setInt32(arg + 8, Math.max(free, 0) * 2 * audio.channels, true);  // fragsize
-        dv.setInt32(arg + 12, Math.max(free, 0) * 2 * audio.channels, true); // bytes
+        const freeBytes = Math.max(room(), 0) * 2 * audio.channels;
+        dv.setInt32(arg, Math.min(DMA_FRAGS, (freeBytes / DMA_FRAGSIZE) | 0), true);  // fragments free
+        dv.setInt32(arg + 4, DMA_FRAGS, true);                                        // fragstotal
+        dv.setInt32(arg + 8, DMA_FRAGSIZE, true);                                     // fragsize
+        dv.setInt32(arg + 12, freeBytes, true);                                       // bytes free
         return 0;
       }
       default: return 0;      // an unknown ioctl SUCCEEDS: i_sound.c's myioctl prints on failure
@@ -149,6 +233,12 @@ export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
     if (frames > free) { audio.dropped += frames - free; frames = Math.max(free, 0); }
     if (frames <= 0) return bytes;
 
+    submit(src, frames);
+    return bytes;
+  };
+
+  /** Move `frames` frames of 16-bit samples from guest memory at `src` into the ring. */
+  function submit(src, frames) {
     const dv = M.mod.dv;
     const mask = audio.ring.length - 1;
     let o = (audio.written * audio.channels) & mask;
@@ -160,8 +250,34 @@ export function installDsp(M, { publish = null, blockWhenFull = false } = {}) {
     }
     audio.written += frames;
     if (publish) Atomics.store(publish.ctrl, SLOT.AUDIO_WRITE, audio.written);
-    return bytes;
-  };
+  }
+
+  /**
+   * Play whatever the clock says has been played since last time, out of the mmapped buffer.
+   *
+   * Capped at one buffer's worth per call. A program that stops asking for a while has not caused
+   * the card to queue up minutes of audio -- the card overwrote it -- and pretending otherwise would
+   * emit a long stretch of stale samples the moment it came back.
+   */
+  function pumpDma() {
+    const d = audio.dma;
+    if (!d || !d.playing) return;
+    const now = clock();
+    const bytesPerFrame = 2 * audio.channels;
+    const due = Math.floor(((now - d.at) / 1e6) * audio.rate) * bytesPerFrame;
+    if (due <= 0) return;
+    d.at = now;
+    const take = Math.min(due, DMA_BYTES);
+    let at = d.playedBytes % DMA_BYTES;
+    let left = take;
+    while (left > 0) {
+      const run = Math.min(left, DMA_BYTES - at);
+      submit(d.addr + at, run / bytesPerFrame);
+      at = (at + run) % DMA_BYTES;
+      left -= run;
+    }
+    d.playedBytes += due;
+  }
 
   function room() {
     if (!publish) return audio.ring.length;      // no reader: a sliding window nobody is behind

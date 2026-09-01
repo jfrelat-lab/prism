@@ -542,3 +542,53 @@ under an `if` instead of a loop, the other place C allows one and JavaScript doe
 
 It was not one program's problem. The same limitation was costing clangsay a function and two
 c-testsuite programs, neither of which had been attributed to it.
+
+## Quake has sound: the other way a program uses /dev/dsp
+
+```
+node tools/build.mjs targets/quake.json:x11 --run --data=<dir> --frames=200 --wav=/tmp/q.wav
+
+Sound Initialization
+Sound sampling rate: 11025
+audio: 8805 frames at 11025 Hz x2 - peak 32768 - rms 10421
+```
+
+Doom **writes** its mixed samples to the device. Quake **mmaps** the card's DMA buffer and mixes
+straight into it, asking `SNDCTL_DSP_GETOPTR` where the card has got to and filling in ahead of that.
+Both are ordinary OSS, and the difference is not a detail: `snd_linux.c` checks
+`caps & DSP_CAP_MMAP` and refuses at `SNDDMA_Init` without it, which is why the whole function used
+to be skipped.
+
+So `src/env/dsp.js` grew the second path: `GETCAPS` answers `TRIGGER|MMAP`, `mmap` on the descriptor
+hands back a real 32 KB buffer in guest memory, `SETTRIGGER` is the start button, and `GETOPTR`
+reports the play position -- and is also where the samples leave, because a program on this path
+never calls `write()` and asks for the position every frame, which is exactly when new samples are
+guaranteed to be there. A real card moves them by DMA in between; the program cannot tell, since the
+answer to this ioctl is all it can observe.
+
+Two things that were not free choices:
+
+  * **8 fragments of 4 KB.** Quake computes `shm->samples` from `fragstotal * fragsize` and masks
+    ring positions with `samples - 1`, so a total that is not a power of two corrupts every wrap.
+  * **`GETOSPACE` describes the DEVICE.** `fragstotal` and `fragsize` are its geometry, not the
+    state of the moment -- Quake multiplies them before writing a byte. The old implementation put
+    free ring space in those two fields, which answered a question about the queue to a program
+    asking about the card.
+
+**How the capture was checked, since a histogram can be talked into anything.** The distribution is
+peaked near zero (66.6% of samples in the quietest octile) with ~1100 Hz of dominant content, which
+is the shape of audio rather than of noise; but 1.8% of samples sat at exactly -32768, which is
+Quake's own clamp value and could equally have meant a misread buffer. The test that settles it is
+the `volume` cvar:
+
+```
++volume 1.0    peak 32768   rms 12698
++volume 0.3    peak 32768   rms  4889
++volume 0.05   peak  4416   rms   755
+```
+
+The rms tracks the cvar (1.00 : 0.385 : 0.059 against 1.0 : 0.3 : 0.05) and the clipping disappears
+when the game stops asking for it. What comes out is Quake's mixer, at the gain Quake chose.
+
+`tools/build.mjs` gained `--wav=<path>`, generic for the same reason `--png` is: the device already
+keeps every sample it accepted, whichever path they arrived by, so the option only has to ask.

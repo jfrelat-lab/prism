@@ -173,6 +173,14 @@ program.M.write = (str) => { process.stdout.write(str); write(str); };
  * It earns its place by answering a question a log cannot: these main loops never return, so a run
  * with no cap hangs, and a run that is interrupted proves only that it was still going.
  */
+/*
+ * --wav=<path>: collect what the program played. Generic for the same reason --png is: the dsp
+ * device already keeps every sample it accepted, whether the program wrote them or mixed them into
+ * an mmapped buffer, so this only has to ask for them.
+ */
+const wavPath = opt('wav');
+if (wavPath && program.M.dsp) program.M.dsp.wav = [];
+
 const frameCap = +(opt('frames') ?? 0);
 const pngPath = opt('png');
 let frames = 0;
@@ -189,6 +197,25 @@ try {
   program.run([target.name, ...args]);
 } catch (e) {
   if (e.message !== '__frames_done') console.log(`exited: ${e.message}`);
+}
+
+if (wavPath && program.M.dsp?.wav) {
+  const w = program.M.dsp.wav, ch = program.M.dsp.channels || 2, rate = program.M.dsp.rate || 11025;
+  let peak = 0, energy = 0;
+  for (const v of w) { const a = Math.abs(v); if (a > peak) peak = a; energy += v * v; }
+  console.log(`\naudio: ${(w.length / ch) | 0} frames at ${rate} Hz x${ch} · peak ${peak} · ` +
+    `rms ${(w.length ? Math.sqrt(energy / w.length) : 0).toFixed(0)}`);
+  if (w.length) {
+    const n = w.length, buf = Buffer.alloc(44 + n * 2);
+    buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVE', 8);
+    buf.write('fmt ', 12); buf.writeUInt32LE(16, 16); buf.writeUInt16LE(1, 20);
+    buf.writeUInt16LE(ch, 22); buf.writeUInt32LE(rate, 24);
+    buf.writeUInt32LE(rate * 2 * ch, 28); buf.writeUInt16LE(2 * ch, 32); buf.writeUInt16LE(16, 34);
+    buf.write('data', 36); buf.writeUInt32LE(n * 2, 40);
+    for (let i = 0; i < n; i++) buf.writeInt16LE(w[i], 44 + i * 2);
+    writeFileSync(wavPath, buf);
+    console.log(`  wrote ${wavPath}`);
+  }
 }
 
 if (program.M.x11?.imageData) {
