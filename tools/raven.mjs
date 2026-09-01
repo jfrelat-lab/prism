@@ -230,6 +230,31 @@ if (process.argv.includes('--run')) {
     console.log('note: no --safepoints, so no timer interrupt is delivered and the game will wait ' +
       'for ever. Add --safepoints to run it.');
   }
+  /*
+   * The frame, and everything that says whether there was one. It is a function because there are
+   * two ways out of here and both need it: the program returning, and the safepoint deadline -- and
+   * the deadline is the ONLY way these games ever stop, since a Raven main loop does not return.
+   * It used to `process.exit(0)` straight past this, so `--png` wrote nothing in the one mode that
+   * makes Heretic and Hexen run at all, and "it renders" had to be taken on the word of a profile.
+   */
+  const report = () => {
+    const s = host.state;
+    console.log(`interrupts delivered: ${s.ticks} timer, ${s.keys} keyboard`);
+    console.log(`video mode ${s.mode === null ? '(none set)' : '0x' + s.mode.toString(16)} · ` +
+      `${s.width}x${s.height} · vectors installed: ` +
+      `${[...s.vectors.keys()].map(k => '0x' + k.toString(16)).join(' ') || 'none'}`);
+    const px = program.M.u8.subarray(s.pixels, s.pixels + s.width * s.height);
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    console.log(`framebuffer at 0x${s.pixels.toString(16)}: ${nz} non-zero pixels of ${px.length}, ` +
+      `${new Set(px).size} distinct colours`);
+    const png = opt('png');
+    if (png) {
+      writeIndexedPng(png, { pixels: px, width: s.width, height: s.height, palette: dac.palette });
+      console.log(`wrote ${png} (${s.width}x${s.height})`);
+    }
+  };
+
   if (process.argv.includes('--safepoints')) {
     const table = program.mod.safepoints;
     const hits = new Map();
@@ -249,6 +274,8 @@ if (process.argv.includes('--run')) {
       for (const [k, c] of [...hits].sort((a, b) => b[1] - a[1]).slice(0, 8)) {
         console.log(`  ${String(c * EVERY).padStart(14)} iterations  ${table[k]}`);
       }
+      console.log('');
+      report();
       process.exit(0);
     };
   }
@@ -265,19 +292,5 @@ if (process.argv.includes('--run')) {
     console.log(`\n✗ ran and threw: ${e.message}`);
     console.log((e.stack || '').split('\n').slice(1, 14).join('\n'));
   }
-  const s = host.state;
-  console.log(`interrupts delivered: ${s.ticks} timer, ${s.keys} keyboard`);
-  console.log(`video mode ${s.mode === null ? '(none set)' : '0x' + s.mode.toString(16)} · ` +
-    `${s.width}x${s.height} · vectors installed: ${[...s.vectors.keys()].map(k => '0x' + k.toString(16)).join(' ') || 'none'}`);
-  const px = program.M.u8.subarray(s.pixels, s.pixels + s.width * s.height);
-  let nz = 0;
-  for (const b of px) if (b) nz++;
-  const pens = new Set(px).size;
-  console.log(`framebuffer at 0x${s.pixels.toString(16)}: ${nz} non-zero pixels of ${px.length}, ` +
-    `${pens} distinct colours`);
-  const png = opt('png');
-  if (png) {
-    writeIndexedPng(png, { pixels: px, width: s.width, height: s.height, palette: dac.palette });
-    console.log(`wrote ${png} (${s.width}x${s.height})`);
-  }
+  report();
 }

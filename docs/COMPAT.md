@@ -305,3 +305,39 @@ node tools/doom.mjs --run --data=<dir with the WAD> --frames=360 \
 
 reaches E1M1 with `demoplayback = 0` and 100% health -- a real game, started from the menu by
 keyboard alone.
+
+## Hexen runs, and it was never Mode X
+
+```
+node tools/raven.mjs --game=hexen --run --safepoints --tick=1 --budget=6000 \
+     --data=<dir with the retail HEXEN.WAD> --png=/tmp/hexen.png
+
+video mode 0x13 - 320x200 - vectors installed: 0x9
+framebuffer at 0xa0000: 63868 non-zero pixels of 64000, 131 distinct colours
+       907554000 iterations  R_DrawColumn
+       305220000 iterations  R_DrawSpan
+        28302000 iterations  R_RenderSegLoop
+```
+
+54 units from the game's own MAKEFILE, 70,000 lines, 1,217 functions, compiled in 1.1 s. A level with
+its status bar, the Fighter's gauntlets, and the attract loop running.
+
+**It was the data, and the diagnosis had the versions backwards.** `P_SETUP.C:803` looks up
+`R_TextureNumForName("SKY1")` unconditionally, before MAPINFO is read, and `I_Error`s if it is
+missing. The WAD in `mirage/games/HEXEN` is the four-level DEMO (10,644,136 bytes, 2856 lumps, 148
+textures) and has no SKY1 -- the string occurs nowhere in the file except as MAPINFO's own `sky1`
+keyword. The retail v1.1 WAD (20,083,672 bytes, 4270 lumps, 359 textures) has it at index 228, and
+the game starts.
+
+**The mode is 0x13, linear.** Hexen sets mode 13h and writes the framebuffer directly, so the
+planar/Mode-X hypothesis was never applicable -- and it had been carried for a while as if it were
+the blocker. MIRAGE does implement Mode X and does test it (`src/vga.js`: sequencer index 4, chain-4
+cleared in mode 13h, A000 routed through the plane pipeline). What makes it non-transplantable is
+stated in `src/env/ports.js` and is unrelated to Hexen: MIRAGE's pipeline needs a CPU that traps
+MEMORY writes, and a store into 0xA0000 emitted from C is a plain store into the guest image. Ports
+cost nothing to intercept; A000 would need a write barrier in the emitter.
+
+**One harness defect found on the way.** `--safepoints` is the only mode in which a Raven game runs at
+all -- its main loop never returns -- and that path called `process.exit(0)` before the frame report.
+So `--png` wrote nothing exactly when it was needed, and "it renders" rested on a profile listing
+`R_DrawColumn`. The report is now a function, called from both exits.
