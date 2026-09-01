@@ -244,3 +244,64 @@ headers away -- and `strtod` with a working `endptr`, without which Lua's number
 
 And the duplicate-symbol report earned its keep again on the first build: listing `onelua.c`, Lua's
 single-file amalgamation, alongside the units it `#include`s defined all 155 public functions twice.
+
+## The menus, by keyboard
+
+Two programs would not respond to Enter or Escape. One was a defect in PRISM; the other was never
+one, and telling them apart took an instrument rather than an argument.
+
+**Doom: `xkey.keycode` was at the wrong offset.** `installX11` wrote the scan code at byte 36 of the
+XEvent. Doom reads the field through its own `offsetof`, and it is at 52 -- 36 is `xexpose.count`,
+one union arm over. So every key arrived as keycode 0, `XKeycodeToKeysym(0)` returned 0, `xlatekey`
+translated nothing, and `M_Responder` was handed `data1 = 0` for Escape, Down and Enter alike.
+
+Escape *looked* like it worked, and that is the part worth keeping. During demo playback
+`G_Responder` opens the menu on ANY keydown -- so an undecoded key and a correctly decoded Escape
+produce the same picture, and I read the menu opening as evidence that the keysym had arrived. Twice.
+What settled it was wrapping `M_Responder` and printing its argument: `type=0 data1=0`, three times
+in a row, for three different keys.
+
+The offsets are now measured, not counted:
+
+```
+$ node tools/run-one.mjs /tmp/xoff.c
+sizeof(XEvent)      = 96
+xkey.keycode        = 52
+xkey.state          = 48
+xexpose.count       = 36
+```
+
+which is PRISM compiling `offsetof` against the same header the guest sees. A shim's offsets are part
+of the ABI, and the ABI has a gate for a reason; this one was outside it because it lived in JS.
+
+**The page had a second, independent defect.** `keydown` was dropped whenever the focus sat on one of
+the page's own controls -- the arguments field, the program menu, exactly where the focus lands after
+choosing a game -- while `keyup` was not guarded at all. The guest therefore received the RELEASE of
+a key it had never seen pressed. An asymmetric guard does not drop input, it corrupts it. Both
+handlers now ask one `typing()` question, a `<select>` is no longer counted as typing, starting a
+program takes the focus off the controls, and clicking into the command line releases what is held.
+
+**MAME was not broken.** It waits on `getchar()`, and its `OSD_KEY_*` are PC scan codes already, so
+nothing needed translating. What it was actually waiting for, two prompts down and off the visible
+part of the log, was a numbered choice:
+
+```
+Press <ENTER> to continue.
+Select the audio device:
+   0. PRISM shared-memory ring
+```
+
+`0` then Enter, and Pac-Man starts: text mode off, display 224x288. The prompt is also the answer to
+why its descriptor used `-nosound` -- with sound compiled in, the program stops here and asks.
+
+The check is now an option rather than a browser session, because the menu is the one part of the
+program a frame counter cannot see. Doom renders its attract demo whether or not a key ever arrives,
+so a working keyboard and a silently dropped one give the same frame count and the same fps:
+
+```
+node tools/doom.mjs --run --data=<dir with the WAD> --frames=360 \
+     --keys=esc,enter,enter,enter --keyat=120 --keyevery=25 --png=/tmp/dk --at=175,359
+```
+
+reaches E1M1 with `demoplayback = 0` and 100% health -- a real game, started from the menu by
+keyboard alone.
