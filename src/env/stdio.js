@@ -65,7 +65,10 @@ export function installStdio(M, {
     return null;
   }
 
-  const environment = { HOME: '/', USER: 'prism', TMPDIR: '/', ...env };
+  // PATH is here because Lua's files.lua opens with `assert(type(os.getenv"PATH") == "string")`:
+  // a POSIX program may reasonably assume it exists, and an absent one is a stranger answer than a
+  // short one.
+  const environment = { HOME: '/', USER: 'prism', TMPDIR: '/', PATH: '/bin:/usr/bin', ...env };
   const interned = new Map();
 
   const handles = new Map();

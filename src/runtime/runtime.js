@@ -74,12 +74,22 @@ export function makeMachine(mod = new Module()) {
   return M;
 }
 
-/** Start the heap above the last static byte, once every global has been placed. */
+/**
+ * Start the heap above the last static byte, once every global has been placed -- leaving a gap.
+ *
+ * The gap is what makes lazy interning safe. `getenv`, `strerror`, `setlocale` and `tmpnam` cannot
+ * know in advance which strings a program will ask for, so they intern on demand, which bumps the
+ * static pointer after this line has already decided where the heap begins. Without the gap those
+ * bytes landed inside memory malloc had handed out.
+ */
 export function finalizeHeap(M) {
-  M.heap = Math.ceil(M.mod.brk / 16) * 16;
+  const GAP = 64 * 1024;                    // room for every string a shim may intern while running
+  M.heap = Math.ceil((M.mod.brk + GAP) / 16) * 16;
+  M.mod.staticLimit = M.heap;               // Module.alloc refuses to cross this
   M.heapEnd = M.heap;
   M.heapTop = M.mod.stackLimit - 64 * 1024;
 }
+
 
 function makeLibc(M) {
   const u8 = () => M.mod.u8;
@@ -386,7 +396,24 @@ function makeLibc(M) {
       }
       return M.__lconv;
     },
-    setlocale: () => M.mod.intern([0x43, 0]),        // "C", the only one there is
+    /*
+     * setlocale, answering only for the locales that exist here.
+     *
+     * It used to return "C" whatever it was asked for, which is not a simplification but a false
+     * claim: a program that asks for pt_BR and is told yes then expects a comma for its decimal
+     * point. Lua's literals.lua does exactly that -- `if os.setlocale("pt_BR") then` guards a block
+     * asserting `tonumber("3,4") == 3.4` -- and the block ran. A real libc returns NULL for a locale
+     * that is not installed, which is both the truth and what makes the guard work.
+     *
+     * NULL for the query form is deliberate too: a caller asking "what locale am I in" gets "C".
+     */
+    setlocale: (_cat, namePtr) => {
+      const name = namePtr === 0 ? null : M.cstr(namePtr);
+      if (name === null || name === '' || name === 'C' || name === 'POSIX') {
+        return M.mod.intern([0x43, 0]);                // "C"
+      }
+      return 0;
+    },
 
     /*
      * mktime and difftime over the same epoch the rest of the clock uses. strftime handles the
@@ -799,6 +826,13 @@ export function format(M, fmtPtr, args) {
       i++; prec = '';
       if (fmt[i] === '*') { prec = String(nextArg() | 0); i++; }
       else while (/[0-9]/.test(fmt[i])) prec += fmt[i++];
+      /*
+       * C99 7.19.6.1p4: a '.' with no digits after it means a precision of ZERO. Every call site
+       * below used to read the empty string as "no precision given" and substitute its own default,
+       * so `printf("%.u", 0)` printed "0" where C prints nothing, and `printf("%.f", 1.5)` printed
+       * six decimals instead of none. Settled here so no call site has to remember.
+       */
+      if (prec === '') prec = '0';
     }
     // The length modifier MATTERS on i386 for one case: `ll` is 64 bits, and the emitter hands a
     // BigInt for those. Everything else is 32 bits, `l` included.
@@ -818,7 +852,7 @@ export function format(M, fmtPtr, args) {
       case 's': {
         const p = nextArg() | 0;
         body = p === 0 ? '(null)' : M.cstr(p);
-        if (prec !== null && prec !== '') body = body.slice(0, +prec);
+        if (prec !== null) body = body.slice(0, +prec);
         break;
       }
       case 'p': {
@@ -826,19 +860,24 @@ export function format(M, fmtPtr, args) {
         body = v === 0 ? '(nil)' : '0x' + v.toString(16);
         break;
       }
-      case 'f': case 'F': body = fixed(src.f64(), prec === null || prec === '' ? 6 : +prec); break;
+      case 'f': case 'F': body = fixed(src.f64(), prec === null ? 6 : +prec); break;
       case 'e': case 'E': {
-        const p = prec === null || prec === '' ? 6 : +prec;
-        body = src.f64().toExponential(p);
+        const p = prec === null ? 6 : +prec;
+        const v = src.f64();
+        const nf = nonFinite(v);
+        if (nf !== null) { body = nf; if (conv === 'E') body = body.toUpperCase(); break; }
+        body = signOfZero(v) + v.toExponential(p);
         // C writes at least two exponent digits; JS writes one.
         body = body.replace(/e([-+])(\d)$/, 'e$10$2');
         if (conv === 'E') body = body.toUpperCase();
         break;
       }
       case 'g': case 'G': {
-        const p = prec === null || prec === '' ? 6 : Math.max(1, +prec);
+        const p = prec === null ? 6 : Math.max(1, +prec);
         const v = src.f64();
-        body = String(Number(v.toPrecision(p)));
+        const nf = nonFinite(v);
+        if (nf !== null) { body = nf; if (conv === 'G') body = body.toUpperCase(); break; }
+        body = gStyle(v, p, flags.includes('#'));
         if (conv === 'G') body = body.toUpperCase();
         break;
       }
@@ -847,19 +886,46 @@ export function format(M, fmtPtr, args) {
         continue;
     }
 
-    // Zero-padding and precision on integers, then width.
-    const numeric = 'diuxXo'.includes(conv);
-    if (numeric) {
+    /*
+     * Flags, precision and width -- for every numeric conversion, which is the part that was wrong.
+     *
+     * This block used to run only for `diuxXo`, so a float received width padding and NOTHING else:
+     * no `+`, no leading space, no zero fill, no `#`. `printf("%+#014.0f", 100)` produced "          100"
+     * where C produces "+000000000100.", and Lua's strings.lua:351 asserts exactly that.
+     *
+     * Integers and floats differ in two specific ways, and both are in C99 7.19.6.1p6-8 rather than
+     * in anybody's intuition:
+     *
+     *   - the `0` flag is IGNORED for d,i,o,u,x,X when a precision is given, and honoured for the
+     *     float conversions regardless;
+     *   - `#` means a base prefix for o,x,X and a forced decimal point for e,E,f,F,g,G.
+     */
+    const isInt = 'diuxXo'.includes(conv);
+    const isFloat = 'eEfFgG'.includes(conv);
+    if (isInt || isFloat) {
       let neg = body.startsWith('-');
       if (neg) body = body.slice(1);
-      if (prec !== null && prec !== '' && body.length < +prec) body = '0'.repeat(+prec - body.length) + body;
-      if (flags.includes('#') && (conv === 'x' || conv === 'X') && body !== '0') body = (conv === 'x' ? '0x' : '0X') + body;
+      const special = /[a-z]/i.test(body);          // inf, nan: no padding, no point, no prefix
+      if (isInt) {
+        // Precision 0 with a value of 0 converts to NO characters at all (C99 7.19.6.1p8) -- which is
+        // why the precision has to be distinguishable from absent, and why `%.u` of 0 is "".
+        if (prec !== null && +prec === 0 && body === '0') body = '';
+        else if (prec !== null && body.length < +prec) body = '0'.repeat(+prec - body.length) + body;
+        if (flags.includes('#') && (conv === 'x' || conv === 'X') && body !== '0') body = (conv === 'x' ? '0x' : '0X') + body;
+        // `#` on octal prefixes a 0, and only if there is not one already: `%#o` of 8 is "010", of 0 is
+        // "0" and not "00". It was implemented for x and X alone, so `%#12o` of 10 gave "10" not "012".
+        if (flags.includes('#') && conv === 'o' && !body.startsWith('0')) body = '0' + body;
+      } else if (flags.includes('#') && !special && !body.includes('.')) {
+        // The point goes before the exponent, not at the end: `%#.0e` of 1 is "1.e+00".
+        const e = body.search(/[eE]/);
+        body = e < 0 ? body + '.' : body.slice(0, e) + '.' + body.slice(e);
+      }
       if (neg) body = '-' + body;
       else if (flags.includes('+')) body = '+' + body;
       else if (flags.includes(' ')) body = ' ' + body;
       if (width && body.length < +width) {
         if (flags.includes('-')) body = body.padEnd(+width);
-        else if (flags.includes('0') && prec === null) {
+        else if (flags.includes('0') && !special && (isFloat || prec === null)) {
           const sign = /^[-+ ]/.test(body) ? body[0] : '';
           const rest = sign ? body.slice(1) : body;
           body = sign + '0'.repeat(+width - body.length) + rest;
@@ -904,9 +970,67 @@ function intArg(v, wide64, signed) {
  * rather than a floating-point guess. There is no double rounding left to worry about, which the
  * scaled-multiply version had by construction.
  */
+/**
+ * The minus sign of a negative zero, which JavaScript drops on the way to text.
+ *
+ * `String(-0)` is "0" and `(-0).toExponential(2)` is "0.00e+0"; C prints "-0" and "-0.00e+00". The
+ * value itself survives -- `1/-0` is -Infinity here as everywhere -- so this is purely a formatting
+ * loss, and the only place it can be repaired is at the point of formatting. `fixed()` already had
+ * to handle it separately, which is what made it worth naming.
+ *
+ * Lua found it through `%a`. Its hex-float writer special-cases zero as `l_sprintf(buff, sz,
+ * LUA_NUMBER_FMT "x0p+0", x)` -- so the sign of `string.format("%a", -0.0)` comes out of OUR `%g`,
+ * three layers away from anything that mentions hexadecimal. The same bug made `tostring(-0.0)`
+ * print "0.0" instead of "-0.0", since that is `%.14g` too.
+ */
+const signOfZero = (v) => (Object.is(v, -0) ? '-' : '');
+
+/**
+ * What C prints for a value that is not a number: "nan", "inf", "-inf" -- and the uppercase
+ * conversions get "NAN"/"INF" for free, because they upper-case the whole body afterwards.
+ *
+ * `fixed()` had this right and `%e`/`%g` did not, so `printf("%g", 1.0/0.0)` produced the JavaScript
+ * spelling "Infinity". Lua's strings.lua:329 asserts `string.format("%a", 1/0)` starts with "inf",
+ * and its hex-float writer delegates the non-finite case to `%g` -- the same three-layer path that
+ * exposed the negative zero above. Returning null means "an ordinary number, carry on".
+ */
+const nonFinite = (v) => (Number.isNaN(v) ? 'nan' : Number.isFinite(v) ? null : (v > 0 ? 'inf' : '-inf'));
+
+/**
+ * `%g` / `%G`, by the rule C states rather than by whatever `toPrecision` happens to do.
+ *
+ * C99 7.19.6.1p8: with precision P (a P of 0 counts as 1) and X the decimal exponent the value would
+ * have in style e -- style f is used with precision P-1-X when P > X >= -4, and style e with
+ * precision P-1 otherwise. Trailing zeros are then removed from the fractional part unless `#`.
+ *
+ * The old one-liner, `String(Number(v.toPrecision(P)))`, agrees with that surprisingly often, which
+ * is why it survived: it is right for 0.1, for 100, for 1e30. It is wrong exactly where the two
+ * disagree about the crossover, and `printf("%.1g", 1024)` is such a place -- X is 3 and P is 1, so
+ * C picks style e and prints "1e+03" while `String(1000)` prints "1000". Lua's strings.lua:361
+ * asserts that one. It also wrote one-digit exponents, where C writes at least two.
+ */
+function gStyle(v, P, alt) {
+  const p = P < 1 ? 1 : P;
+  const X = Number(v.toExponential(p - 1).split('e')[1]);
+  // Only one of these two branches loses the sign of a negative zero: `fixed` carries it, and
+  // `toExponential` does not. Adding it at the call site instead gave `%g` of -0.0 as "--0".
+  let body = (p > X && X >= -4)
+    ? fixed(v, Math.max(0, p - 1 - X))
+    : signOfZero(v) + v.toExponential(p - 1);
+  if (!alt) {
+    // Only the mantissa's fractional zeros go, and the point with them if nothing is left after it.
+    const e = body.search(/[eE]/);
+    let mant = e < 0 ? body : body.slice(0, e);
+    const exp = e < 0 ? '' : body.slice(e);
+    if (mant.includes('.')) mant = mant.replace(/0+$/, '').replace(/\.$/, '');
+    body = mant + exp;
+  }
+  return body.replace(/e([-+])(\d)$/, 'e$10$2');
+}
+
 function fixed(v, p) {
-  if (Number.isNaN(v)) return 'nan';
-  if (!Number.isFinite(v)) return v > 0 ? 'inf' : '-inf';
+  const nf = nonFinite(v);
+  if (nf !== null) return nf;
   const neg = v < 0 || Object.is(v, -0);
   const a = Math.abs(v);
 

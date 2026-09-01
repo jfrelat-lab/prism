@@ -50,10 +50,29 @@ export class Module {
   }
 
   /** Reserve `size` bytes of static storage, honouring `align`. */
+  /**
+   * Static storage, from a bump pointer -- and it must never cross the heap's floor.
+   *
+   * `finalizeHeap` takes the heap base from `brk` ONCE, when every global has been placed, so
+   * anything that called `alloc` afterwards handed out addresses the guest heap had already claimed,
+   * and the two sides then wrote over each other. It surfaced as two unrelated-looking failures in
+   * one Lua run: an error message reading "No such file or director" with a garbage byte where its
+   * last character had been, and an out-of-bounds read in the collector at shutdown. The writer was
+   * `strerror`, which interns its message the first time it is asked -- long after the base was
+   * frozen. Nothing reported a collision because nothing was checking for one.
+   *
+   * Lazy interning is legitimate: an environment shim cannot know in advance which strings a program
+   * will ask for (`getenv`, `strerror`, `setlocale`, `tmpnam` all intern on demand). So the room is
+   * RESERVED -- finalizeHeap leaves a gap below the heap base and sets `staticLimit` to it -- and
+   * exhausting the gap is now an error that names itself instead of silent corruption.
+   */
   alloc(size, align = 4) {
     const a = Math.ceil(this.brk / align) * align;
     this.brk = a + Math.max(size, 0);
-    if (this.brk >= this.stackLimit) throw new Error('static storage exhausted');
+    if (this.brk >= (this.staticLimit ?? this.stackLimit)) {
+      throw new Error('static storage exhausted' +
+        (this.staticLimit ? ' (the reserved gap below the heap is full)' : ''));
+    }
     return a;
   }
 
