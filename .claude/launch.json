@@ -7,7 +7,7 @@
       "runtimeArgs": [
         "tools/serve.mjs",
         "--port=8080",
-        "--data=/Users/julienfrelat/quake,/Users/julienfrelat/quake2,/Users/julienfrelat/doom-play,/Users/julienfrelat/dune2,/Users/julienfrelat/tyrian,/Users/julienfrelat/roms"
+        "--data=/Users/julienfrelat/quake,/Users/julienfrelat/quake2,/Users/julienfrelat/doom-play,/Users/julienfrelat/dune2,/Users/julienfrelat/tyrian,/Users/julienfrelat/roms,/Users/julienfrelat/hexen-retail"
       ],
       "port": 8080
     }
