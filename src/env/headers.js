@@ -786,6 +786,9 @@ const SYS_MMAN = `
 #define MAP_SHARED  1
 #define MAP_PRIVATE 2
 #define MAP_ANONYMOUS 0x20
+/* MAP_FILE is 0 on Linux -- a mapping is file-backed unless MAP_ANONYMOUS says otherwise. Quake's
+   snd_linux.c writes MAP_FILE|MAP_SHARED when it mmaps /dev/dsp, which is how it went missing. */
+#define MAP_FILE 0
 #define MAP_FAILED ((void *) -1)
 void *mmap(void *addr, size_t len, int prot, int flags, int fd, off_t off);
 int munmap(void *addr, size_t len);

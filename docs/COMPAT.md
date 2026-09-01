@@ -446,3 +446,59 @@ are decided in one place. The runtime keeps a pair for programs with no file lay
 Still to do for the browser: a second worker compiling `corpus/DOOM/sndserv` from fetched sources, the
 web counterpart of `tools/sndserv-worker.mjs` (which reads them from disk). The audio ring, the pipe
 and the page side already exist -- MAME plays through them today.
+
+## Quake on X11, through the Xlib shim Doom already needed
+
+```
+node tools/build.mjs targets/quake.json:x11 --run --data=<dir with id1/> --frames=150 --png=/tmp/q.png
+
+QUAKE (Linux/X11, id386=0) -- 71 translation units, 47,798 lines, 1083 functions in 1.0 s
+  2 functions could not be emitted (they throw IF CALLED)
+  assembly: 21 files export 126 symbols; 0 of them are still undefined here
+frames 150 - display 320x200
+  63810 non-zero pixels of 64000, 174 colours
+```
+
+The demo plays: an explosion with its particles, the shotgun, 90 health on the status bar, and the
+game announcing "You got the Grenade Launcher".
+
+**The number that decided to do this was measured before any code was written.** Quake's Linux client
+calls 41 Xlib functions; PRISM's shim, written for Doom, already had all 41. The one apparent gap,
+`XLateKey`, is Quake's OWN function (`vid_x.c:718`) -- the counterpart of Doom's `xlatekey` -- and my
+first pattern had simply matched it on the `X` prefix. So the cost of a second, larger X11 client was
+zero new Xlib.
+
+**The unit list was computed, not chosen.** `Makefile.linuxi386` has an `X11_OBJS` variable; its 89
+objects are 71 C files and 18 assembly ones, and the difference between its C files and the engine
+list this target already had is exactly the platform set: `net_udp.c net_bsd.c cd_linux.c sys_linux.c
+vid_x.c snd_dma.c snd_mem.c snd_mix.c snd_linux.c`. The 18 assembly objects are the `id386=1` build,
+which is what the C files already listed replace. Nothing in the engine list was missing, which also
+means the existing list agrees with Quake's own Linux build.
+
+Two substitutions, both of files Quake ships for the purpose:
+
+  * `cd_null.c` instead of `cd_linux.c`. That file wants a real `linux/cdrom.h` -- five structs and
+    thirteen ioctl numbers -- to build a CD player for a machine with no CD drive. It surfaced as
+    three "local of incomplete type" failures and five undeclared ioctls, which is the empty stub
+    header telling the truth.
+  * `net_none.c` instead of `net_udp.c` + `net_bsd.c`, the same substitution the DOS variant already
+    makes. The socket surface is eight functions -- `socket bind recvfrom sendto setsockopt
+    getsockname gethostbyname ioctl` -- and is recorded here rather than worked around.
+
+One header constant was genuinely missing: `MAP_FILE`, which is 0 on Linux. `snd_linux.c` mmaps
+`/dev/dsp` with `MAP_FILE|MAP_SHARED`, and without the macro the whole of `SNDDMA_Init` failed to
+emit, so the run stopped there. With it declared, the function emits, the mmap fails, Quake prints
+"Could not mmap /dev/dsp" and runs silent -- which is exactly what it does on a machine whose sound
+driver cannot mmap. Sound here needs an mmap-able DSP device and a play pointer; that is a piece of
+work, not a constant, and it is the next thing on this target.
+
+The two functions that still do not emit are `st2_fixup` and `st3_fixup` in `vid_x.c`, Quake's 2x and
+3x pixel-doubling helpers. `tier-0 does not support goto into a nested block yet`. They are never
+called at 320x200, so the running configuration does not touch them -- but the limitation is real and
+named.
+
+`tools/build.mjs` gained `--frames=N --png=<path>`, and it is generic: an X11 client presents by
+calling `XPutImage`, so that call is the frame boundary and the option needs to know nothing else
+about the program. It works for Doom, Quake/X11 and Quake II alike. It earns its place by answering
+what a log cannot -- these main loops never return, so an uncapped run hangs, and an interrupted one
+proves only that it was still going.

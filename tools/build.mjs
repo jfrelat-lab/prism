@@ -3,6 +3,7 @@
 //   node tools/build.mjs targets/quake.json                       # compile only, report
 //   node tools/build.mjs targets/quake.json:null                  # a named variant
 //   node tools/build.mjs targets/heretic.json --run --data=<dir>
+//   node tools/build.mjs targets/quake.json:x11 --run --data=<dir> --frames=200 --png=/tmp/q.png
 //   node tools/build.mjs --list
 //
 // This replaces the BUILD half of quake.mjs, raven.mjs, mame.mjs and doomsnd.mjs: four hand-written
@@ -15,6 +16,7 @@
 // do also RUNS here. The rest keep their tool, which now calls buildTarget() instead of restating
 // the build.
 
+import { writeIndexedPng } from './png.mjs';
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -159,8 +161,44 @@ console.log(`\nrunning: ${target.name} ${args.join(' ')}`);
  */
 const write = program.M.write.bind(program.M);
 program.M.write = (str) => { process.stdout.write(str); write(str); };
+
+/*
+ * --frames=N --png=<path>: stop after N frames and write the last one.
+ *
+ * An X11 client presents by calling XPutImage, so that call IS the frame boundary and this needs to
+ * know nothing else about the program -- it works for Doom, for Quake's X11 client and for Quake II
+ * alike. It lives here rather than in each game's own tool because there is nothing game-specific
+ * left in it once the boundary is named.
+ *
+ * It earns its place by answering a question a log cannot: these main loops never return, so a run
+ * with no cap hangs, and a run that is interrupted proves only that it was still going.
+ */
+const frameCap = +(opt('frames') ?? 0);
+const pngPath = opt('png');
+let frames = 0;
+if ((frameCap || pngPath) && program.M.rt.XPutImage) {
+  const inner = program.M.rt.XPutImage;
+  program.M.rt.XPutImage = (...a) => {
+    const r = inner(...a);
+    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+    return r;
+  };
+}
+
 try {
   program.run([target.name, ...args]);
 } catch (e) {
-  console.log(`exited: ${e.message}`);
+  if (e.message !== '__frames_done') console.log(`exited: ${e.message}`);
+}
+
+if (program.M.x11?.imageData) {
+  const x = program.M.x11;
+  console.log(`\nframes ${frames} · display ${x.width}x${x.height}`);
+  if (pngPath) {
+    const px = program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height);
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    writeIndexedPng(pngPath, { pixels: px, width: x.width, height: x.height, palette: x.palette });
+    console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
+  }
 }

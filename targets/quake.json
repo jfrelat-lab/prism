@@ -37,6 +37,19 @@
       "env": ["stdio"]
     },
 
+    "x11": {
+      "title": "QUAKE (Linux/X11, id386=0)",
+      "_doc": "The Linux/X11 client -- `quake.x11` in the game's own Makefile.linuxi386. The platform units are the difference between that makefile's X11_OBJS and the shared engine list above, computed rather than chosen: net_udp.c net_bsd.c cd_linux.c sys_linux.c vid_x.c snd_dma.c snd_mem.c snd_mix.c snd_linux.c. Its 18 assembly objects are the id386=1 build and are exactly what the C files already listed replace.",
+      "addUnits": [
+        "sys_linux.c", "vid_x.c",
+        "snd_linux.c", "snd_dma.c", "snd_mem.c", "snd_mix.c",
+        "cd_null.c", "net_none.c"
+      ],
+      "_cd": "cd_null.c rather than the shipped cd_linux.c. That file wants a real linux/cdrom.h -- five structs and thirteen ioctl numbers -- and would buy a CD player for a machine with no CD drive. cd_null.c is Quake's own file for this situation and Makefile.linuxi386 links it for its own targets, so this is a build selection, not a modification.",
+      "_net": "net_udp.c and net_bsd.c are the shipped pair and want BSD sockets, which PRISM does not have. net_none.c is the same substitution the DOS variant already makes, and it is a build option of Quake's own -- Makefile.linuxi386 links net_none.o for the dedicated server. The socket surface is 8 functions and is recorded rather than worked around.",
+      "env": ["stdio", "x11", "dsp"]
+    },
+
     "dos": {
       "_doc": "The units the game actually shipped with. NOT a one-for-one swap: snd_null.c also DEFINES the sound cvars and shm, which the engine and the menu reference, so dropping it means picking up Quake's real sound core as well as its DOS driver. The null build was missing a third of the program, not just its output stage.",
       "addUnits": [
