@@ -196,8 +196,38 @@ addEventListener('fullscreenchange', () => {
   $('fullscreen').textContent = document.fullscreenElement ? 'Windowed' : 'Fullscreen';
 });
 
+/*
+ * Whether a keystroke belongs to the PAGE rather than to the program. The one case is a text field
+ * with focus, where the user is editing the command line.
+ *
+ * It has to be asked the same way for a press and for a release, and it wasn't: keydown checked and
+ * keyup did not. So a program whose menu never opened had nonetheless been handed the RELEASE of the
+ * key meant to open it -- an unpaired break code, which Doom's xlatekey translated faithfully and
+ * M_Responder ignored, exactly as it should. An asymmetric guard does not drop input; it corrupts it.
+ *
+ * A <select> is deliberately NOT in the list, though it was. It is where the focus sits after
+ * choosing a program from the menu, so counting it as typing left the keyboard dead for precisely
+ * the users who had just picked a game.
+ */
+const typing = () => /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
+
+/**
+ * Let go of every held key. A program only learns of a release from a break code, so dropping the
+ * held-key ARRAY without sending them leaves it walking left for ever -- which is what the window's
+ * blur handler used to do.
+ */
+function releaseAll() {
+  if (!views) return;
+  for (let sc = 0; sc < views.keys.length; sc++) {
+    if (!views.keys[sc]) continue;
+    views.keys[sc] = 0;
+    keyboard?.push(sc | 0x80, 0);
+  }
+  wake(views.ctrl);
+}
+
 addEventListener('keydown', (e) => {
-  if (!views || /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName || '')) return;
+  if (!views || typing()) return;
   const sc = scancodeForEvent(e);
   if (!sc) return;
   views.keys[sc] = 1;
@@ -217,7 +247,7 @@ addEventListener('keydown', (e) => {
   e.preventDefault();
 });
 addEventListener('keyup', (e) => {
-  if (!views) return;
+  if (!views || typing()) return;
   const sc = scancodeForEvent(e);
   if (!sc) return;
   views.keys[sc] = 0;
@@ -229,7 +259,10 @@ addEventListener('keyup', (e) => {
   e.preventDefault();
 });
 // A lost focus must release everything, or the program keeps walking left for ever.
-addEventListener('blur', () => { if (views) views.keys.fill(0); });
+addEventListener('blur', releaseAll);
+// And so must clicking into the command line: from here on its keys are the page's, so the ones
+// still down would never get their break code.
+addEventListener('focusin', () => { if (typing()) releaseAll(); });
 
 // ---------------------------------------------------------------- run / stop
 /** Split a command line the way a shell would, so a quoted argument survives as one. */
@@ -284,6 +317,12 @@ $('run').onclick = () => {
   };
   worker.onerror = (e) => log(`worker error: ${e.message}`, 'error');
   worker.postMessage({ type: 'start', program, control, data: dataFiles, argv });
+  /*
+   * The keys are the program's from now on. Without this the whole keyboard depended on which
+   * control the user had touched last: type an argument and the focus stays in the field, and every
+   * press goes to the field instead of the game.
+   */
+  document.activeElement?.blur?.();
   startAudio(control);
 
   // A debug seam: everything the shell knows, reachable from the console. A display bug and a guest

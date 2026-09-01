@@ -26,6 +26,21 @@ const GC_TOKEN = 0x7200_0004;
  * `publish` is the same control block everything else uses. An XImage's pixel buffer lives in guest
  * memory, so the page reads it directly — no copy, and the same mechanism as Quake's vid_buffer.
  */
+/*
+ * Where a keycode goes inside an XEvent. These are not free choices: the guest reads the field with
+ * its own `offsetof`, from the XKeyEvent this header declares, so a shim that writes anywhere else
+ * hands it whatever happens to be there.
+ *
+ * They are MEASURED, by compiling `offsetof(XEvent, xkey.keycode)` with PRISM and reading the answer,
+ * because counting the fields by hand is what produced 36 -- which is xexpose.count, one union arm
+ * over. Every key reached Doom with keycode 0, `XKeycodeToKeysym(0)` returned 0, and the menu ignored
+ * it. The one key that looked like it worked was Escape, and it did not: during demo playback
+ * G_Responder opens the menu on ANY keydown, so an undecoded key and a decoded Escape are the same
+ * picture. A shim's offsets are part of the ABI, and the ABI has a gate for a reason.
+ */
+const XKEY_KEYCODE = 52;
+const XEXPOSE_COUNT = 36;
+
 export function installX11(M, { publish = null, keyboard = null, onFrame = null } = {}) {
   const dv = () => M.mod.dv;
 
@@ -212,11 +227,11 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
         ?? { type: 12, count: 0 };
       if (e.type === 12) {
         dv().setInt32(ev, 12, true);                    // Expose
-        dv().setInt32(ev + 40, 0, true);                // xexpose.count -- see X11/Xlib.h
+        dv().setInt32(ev + XEXPOSE_COUNT, 0, true);
         return 0;
       }
       dv().setInt32(ev, e.down ? 2 : 3, true);          // KeyPress / KeyRelease
-      dv().setInt32(ev + 36, e.scan, true);             // xkey.keycode
+      dv().setInt32(ev + XKEY_KEYCODE, e.scan, true);
       return 0;
     },
     XKeycodeToKeysym: (_dpy, code) => keysymFor(code | 0),

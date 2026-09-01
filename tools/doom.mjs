@@ -91,6 +91,8 @@ console.log(`\n✓ compiled in ${(compileMs / 1000).toFixed(1)} s: ${Object.keys
 // Shared with reportFrame below, which runs after the guest has stopped one way or another.
 let x11 = null;
 let frames = 0;
+const keyQueue = [];
+let keyScript = [], keyEvery = 20, keyFirst = 30, keyAt = 0;
 
 // --sym=<substring>: print matching symbols and their first words. Reading the linked image is how a
 // "null function pointer" question gets settled — an empty table and a bad index look identical from
@@ -130,7 +132,31 @@ if (process.argv.includes('--run')) {
   // you nothing about where a hang is.
   const write = program.M.write.bind(program.M);
   program.M.write = (str) => { process.stdout.write(str); write(str); };
-  x11 = installX11(program.M);
+  /*
+   * --keys=esc,down,down,enter taps keys at the frame boundary, through the SAME two functions the
+   * browser uses: installX11's `keyboard` source, which XPending counts and XNextEvent turns into a
+   * KeyPress with `xkey.keycode` set to the scan code. Nothing here reaches into Doom.
+   *
+   * Its point is that the menu is the one part of the program a frame counter cannot check. Doom
+   * renders its attract demo whether or not a key ever arrives, so "the keyboard works" and "the
+   * keyboard is silently dropped" produce the same frame count and the same fps -- and did, for as
+   * long as this option did not exist.
+   *
+   * A press AND a release, always: Doom's xlatekey translates both, and a release with no press is
+   * not a missing event, it is a wrong one. The page had exactly that bug.
+   */
+  const KEYNAMES = {
+    esc: 0x01, enter: 0x1c, space: 0x39, up: 0x48, down: 0x50, left: 0x4b, right: 0x4d,
+    ctrl: 0x1d, y: 0x15, n: 0x31, tab: 0x0f, f1: 0x3b,
+  };
+  keyScript = (process.argv.find(a => a.startsWith('--keys='))?.slice(7) ?? '')
+    .split(',').map(k => k.trim()).filter(Boolean)
+    .map(k => KEYNAMES[k.toLowerCase()] ?? parseInt(k, 16));
+  keyEvery = +(process.argv.find(a => a.startsWith('--keyevery='))?.slice(11) ?? 20);
+  keyFirst = +(process.argv.find(a => a.startsWith('--keyat='))?.slice(8) ?? 30);
+  x11 = installX11(program.M, {
+    keyboard: { pending: () => keyQueue.length, next: () => keyQueue.shift() ?? null },
+  });
   /*
    * /dev/dsp. Doom mixes its own sound and hands over 16-bit stereo, so the device only has to
    * accept it -- see src/env/dsp.js. --wav=<path> collects every frame, because sound is the one
@@ -243,6 +269,11 @@ if (process.argv.includes('--run')) {
   program.M.rt.XPutImage = (...args) => {
     const r = putImage(...args);
     frames++;
+    if (keyAt < keyScript.length && frames >= keyFirst && (frames - keyFirst) % keyEvery === 0) {
+      const code = keyScript[keyAt++] & 0x7f;
+      keyQueue.push({ scan: code, down: true }, { scan: code, down: false });
+      console.log(`[key] 0x${code.toString(16).padStart(2, '0')} at frame ${frames}`);
+    }
     if (pngPrefix && at.has(frames)) {
       const x = program.M.x11;
       writeIndexedPng(`${pngPrefix}-${String(frames).padStart(4, '0')}.png`, {
