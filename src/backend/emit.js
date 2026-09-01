@@ -60,6 +60,21 @@ const JS_RESERVED = new Set([
 export const jsIdent = (n) => (JS_RESERVED.has(n) ? n + '$' : n);
 
 /*
+ * A PARAMETER's JavaScript name, prefixed.
+ *
+ * Locals already are (`_v_status`); parameters were not, and a parameter named M, F or D shadowed
+ * the three the emitted module runs on -- the memory, the function table and the DataView. Lua's
+ * ldump.c writes `static void dumpBlock (DumpState *D, ...)`, so every memory access inside it
+ * became a method call on a guest pointer: "D.getInt32 is not a function", from a function whose C
+ * mentions nothing of the sort.
+ *
+ * Prefixing is the whole fix, and it is the same one locals already had. Renaming the module's own
+ * three to something C cannot spell would work too, but it would touch every emitted access instead
+ * of one declaration.
+ */
+export const paramIdent = (n) => `_p_${jsIdent(n)}`;
+
+/*
  * An index into a pointer, narrowed to the pointer's width.
  *
  * `p + n` is legal C when n is a `long long`, and the index has to come down to 32 bits before it can
@@ -240,7 +255,7 @@ export class FunctionEmitter {
     // A struct RETURN uses the sret convention: the caller supplies the buffer, because the callee's
     // own frame is released before the value could be read out of it.
     this.sret = T.isRecord(d.type.ret);
-    const params = d.type.params.map((p, i) => (p.name ? jsIdent(p.name) : `_unused${i}`));
+    const params = d.type.params.map((p, i) => (p.name ? paramIdent(p.name) : `_unused${i}`));
     if (this.sret) params.unshift('_sret');
     // A variadic function takes the caller-packed argument buffer as a hidden last parameter, which
     // is what `va_start` resolves to.
@@ -259,16 +274,16 @@ export class FunctionEmitter {
       if (T.isRecord(p.type)) {
         // The caller already made a fresh copy, so the callee may modify it in place — no second
         // copy is needed, and `&param` is simply that address.
-        this.locals.set(p.name, { kind: 'aggparam', js: jsIdent(p.name), type: p.type });
+        this.locals.set(p.name, { kind: 'aggparam', js: paramIdent(p.name), type: p.type });
         continue;
       }
       if (p.type.k === 'array') unsup('an array parameter by value');
       if (escaped.has(p.name)) {
         const off = this.slot(p.type.size, p.type.align);
         this.locals.set(p.name, { kind: 'slot', off, type: p.type });
-        pre.push({ off, type: p.type, from: jsIdent(p.name) });
+        pre.push({ off, type: p.type, from: paramIdent(p.name) });
       } else {
-        this.locals.set(p.name, { kind: 'var', js: jsIdent(p.name), type: p.type });
+        this.locals.set(p.name, { kind: 'var', js: paramIdent(p.name), type: p.type });
       }
     }
 
