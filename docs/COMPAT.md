@@ -341,3 +341,65 @@ cost nothing to intercept; A000 would need a write barrier in the emitter.
 all -- its main loop never returns -- and that path called `process.exit(0)` before the frame report.
 So `--png` wrote nothing exactly when it was needed, and "it renders" rested on a profile listing
 `R_DrawColumn`. The report is now a function, called from both exits.
+
+## What Lua's printf assertions found
+
+```
+Lua 28 test files: 14 pass, 8 skipped by the test itself, 6 fail      (was 8 failing)
+```
+
+`strings.lua` is the whole story. It stopped at line 326, then 329, 345, 351, 361, and now reaches
+its own skip line -- six separate defects, each one stated plainly in C99 and none of which anything
+else in the corpus had noticed, because nothing else in the corpus checks its own output.
+
+| where | what C says | what PRISM did |
+|---|---|---|
+| `-0.0` | `%g` prints `-0` | `String(-0)` is `"0"` |
+| `%e`, `%g` of infinity | `inf` | `Infinity` |
+| `%.u`, `%.f` | a `.` with no digits is precision **0** | treated as "no precision", default substituted |
+| `%#o` | prefixes a `0` | `#` handled for `x`/`X` only |
+| `%+#014.0f` | `+000000000100.` | `          100` -- flags ran for integers only |
+| `%.1g` of 1024 | `1e+03` | `1000` -- style chosen by accident |
+
+The negative zero is the one worth keeping. It was found through **`%a`**: Lua's hex-float writer
+spells zero as `l_sprintf(buff, sz, LUA_NUMBER_FMT "x0p+0", x)`, so the sign of
+`string.format("%a", -0.0)` comes out of our `%g`, three layers from anything hexadecimal. The same
+defect made `tostring(-0.0)` print `0.0`. The value was never wrong -- `1/-0` is `-Infinity` here as
+everywhere -- so this was purely a loss at the point of formatting, which is the only place it could
+be repaired.
+
+`%g` deserves its own note, because the old one-liner was not obviously wrong:
+`String(Number(v.toPrecision(P)))` agrees with C for 0.1, for 100, for 1e30. It disagrees exactly at
+the crossover the standard defines, and `%.1g` of 1024 is such a point.
+
+### And one that was not printf
+
+`finalizeHeap` takes the heap base from `mod.brk` **once**, when every global has been placed, and
+`Module.alloc` kept bumping past it. So a shim that interns a string lazily handed out addresses
+`malloc` had already given the guest, and the two sides wrote over each other. It surfaced as two
+failures that looked unrelated:
+
+```
+after:  false   cannot open file 'non-existent-file' (No such file or director?)
+                                                                            ^ clobbered
+[threw] Offset is outside the bounds of the DataView
+    at ...lgc$whitelist   <- Lua's collector, at shutdown
+```
+
+The writer was `strerror`, which interns its message the first time it is asked. Lazy interning is
+legitimate -- `getenv`, `strerror`, `setlocale` and `tmpnam` cannot know in advance which strings a
+program will want -- so the room is now RESERVED: a 64 KB gap below the heap base, and exhausting it
+raises an error that names itself instead of corrupting memory silently.
+
+### The six that remain, and what each is
+
+| file | |
+|---|---|
+| `calls.lua`, `coroutine.lua`, `errors.lua` | JavaScript call-stack depth. Lua recurses to find its own limit; here the limit is V8's. |
+| `constructs.lua` | out of memory in `malloc` -- a real allocator question, not a language one. |
+| `files.lua` | line 47, having moved from line 8. The next actual report. |
+| `main.lua` | now skipped BY NAME: it takes `arg[-1]` as a program name and shells out to it, so it measures the host shell. |
+
+`literals.lua` and `strings.lua` now take their own skip paths -- `pt_BR` is genuinely unavailable and
+`%.3a` (a precision on `%a`) is genuinely unimplemented. A test declaring a feature absent is a
+different result from a test failing, and the gate reports them separately.

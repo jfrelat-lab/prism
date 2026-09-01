@@ -39,6 +39,7 @@ const SKIP = {
   'heavy.lua': 'deliberately exhausts memory; the point is the limit, not the semantics',
   'verybig.lua': 'needs several gigabytes to say anything',
   'big.lua': 'the same, one size down',
+  'main.lua': 'drives the INTERPRETER as an external process -- it takes arg[-1] as a program name\n               and shells out to it, so what it measures is the host shell, not the language',
 };
 
 if (!statSync(TESTES, { throwIfNoEntry: false })) {
