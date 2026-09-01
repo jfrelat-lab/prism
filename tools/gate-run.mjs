@@ -565,6 +565,65 @@ int main(void) {
 
 // ---------------------------------------------------------------- run
 
+C('duffs-device', `#include <stdio.h>
+
+/*
+ * The real thing, from Quake's vid_x.c: a case label INSIDE the loop the switch opens. Every
+ * remainder class is exercised, because the whole point of the construction is that the entry point
+ * depends on count % 8 -- a lowering that placed the labels wrongly would still be right for the
+ * multiples of eight and wrong for everything else.
+ */
+static void copy(unsigned char *dst, const unsigned char *src, int count)
+{
+    int n;
+    if (count <= 0) return;
+    n = (count + 7) / 8;
+    switch (count % 8) {
+    case 0: do { *dst++ = *src++;
+    case 7:      *dst++ = *src++;
+    case 6:      *dst++ = *src++;
+    case 5:      *dst++ = *src++;
+    case 4:      *dst++ = *src++;
+    case 3:      *dst++ = *src++;
+    case 2:      *dst++ = *src++;
+    case 1:      *dst++ = *src++;
+            } while (--n > 0);
+    }
+}
+
+/* The same shape with the labels under an if-statement rather than a loop, which is the other
+   place C allows one and JavaScript does not. */
+static int classify(int x)
+{
+    int r = 0;
+    switch (x) {
+    case 1: if (x > 0)
+    case 2:     r += 10;
+            r += 1;
+            break;
+    case 3: r = 99; break;
+    default: r = -1;
+    }
+    return r;
+}
+
+int main(void)
+{
+    unsigned char src[32], dst[32];
+    int i, k;
+    for (i = 0; i < 32; i++) src[i] = (unsigned char)(i * 7 + 1);
+    for (k = 0; k <= 20; k++) {
+        int sum = 0;
+        for (i = 0; i < 32; i++) dst[i] = 0;
+        copy(dst, src, k);
+        for (i = 0; i < 32; i++) sum += dst[i] * (i + 1);
+        printf("copy %2d -> %d\\n", k, sum);
+    }
+    for (k = 0; k < 5; k++) printf("classify %d = %d\\n", k, classify(k));
+    return 0;
+}
+`);
+
 C('flatten-gotos', `#include <stdio.h>
 
 /* Quake's edge-insert shape: labels inside a do-while, gotos jumping around them. */

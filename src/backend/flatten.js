@@ -110,6 +110,26 @@ export function needsFlattening(body) {
 export function flattenGotos(body, { unsup, newTemp }) {
   const out = [];
   const declared = new Map();          // name -> the declaration it came from, to catch collisions
+  /*
+   * Where each `case` label goes, and which ones have been placed.
+   *
+   * They are needed because a case label does not have to sit at the top of the switch body. In
+   * Duff's device it sits INSIDE the loop the switch opens:
+   *
+   *     switch (count % 8) {
+   *     case 0: do {    *dest-- = table[*src--];
+   *     case 7:         *dest-- = table[*src--];
+   *             } while (--n > 0);
+   *     }
+   *
+   * `collectCases` already looked inside loops -- it had to, or the dispatch would have no arm for
+   * `case 7` -- but `walkSwitchBody` only descended through blocks, so it handed the loop to the
+   * ordinary walker, whose case/default branch assumed the label had been placed already. It had
+   * not. The dispatch jumped to `_L625_case` and nothing ever defined it, which the emitter reported
+   * as a goto into a nested block. Quake's vid_x.c is where it showed up.
+   */
+  const caseName = new Map();          // case/default node -> its dispatch label
+  const placedCase = new Set();        // ...and the ones already emitted
 
   const emit = (s) => out.push(s);
   const label = (name) => emit({ n: 'label', name, body: { n: 'empty' } });
@@ -240,10 +260,18 @@ export function flattenGotos(body, { unsup, newTemp }) {
         return;
       }
 
-      case 'case': case 'default':
-        // Reached only through walkSwitchBody, which has already placed the label.
+      case 'case': case 'default': {
+        /*
+         * Usually walkSwitchBody has already placed this label. It has not when the case sits inside
+         * a loop or an `if` within the switch body -- Duff's device -- because the loop is lowered by
+         * this walker, not by that one. Place it here, at the point the statement actually occupies,
+         * which is what makes a jump into the middle of the loop body land where C says it does.
+         */
+        const name = caseName.get(s);
+        if (name && !placedCase.has(s)) { label(name); placedCase.add(s); }
         walk(s.body, brk, cont);
         return;
+      }
 
       case 'break':
         if (!brk) unsup('a break outside any loop or switch, while flattening');
@@ -266,12 +294,16 @@ export function flattenGotos(body, { unsup, newTemp }) {
     if (!s) return;
     if (s.n === 'block') { for (const it of s.items) collectCases(it, arms); return; }
     if (s.n === 'case') {
-      arms.push({ kind: 'case', lo: Number(s.lo), hi: s.hi === null || s.hi === undefined ? null : Number(s.hi), name: fresh('case'), node: s });
+      const name = fresh('case');
+      arms.push({ kind: 'case', lo: Number(s.lo), hi: s.hi === null || s.hi === undefined ? null : Number(s.hi), name, node: s });
+      caseName.set(s, name);
       collectCases(s.body, arms);
       return;
     }
     if (s.n === 'default') {
-      arms.push({ kind: 'default', name: fresh('default'), node: s });
+      const name = fresh('default');
+      arms.push({ kind: 'default', name, node: s });
+      caseName.set(s, name);
       collectCases(s.body, arms);
       return;
     }
@@ -288,6 +320,7 @@ export function flattenGotos(body, { unsup, newTemp }) {
     if (s.n === 'case' || s.n === 'default') {
       const arm = arms.find(a => a.node === s);
       label(arm.name);
+      placedCase.add(s);
       walkSwitchBody(s.body, arms, brk, cont);
       return;
     }

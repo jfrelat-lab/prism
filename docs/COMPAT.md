@@ -502,3 +502,43 @@ calling `XPutImage`, so that call is the frame boundary and the option needs to 
 about the program. It works for Doom, Quake/X11 and Quake II alike. It earns its place by answering
 what a log cannot -- these main loops never return, so an uncapped run hangs, and an interrupted one
 proves only that it was still going.
+
+## Duff's device, lowered properly
+
+```
+c-testsuite single-exec: 204/219 pass          (was 202)
+gate-run: 31/31 programs behave identically to a native i386 build
+QUAKE (Linux/X11): 1083 functions, nothing unemitted      (was 2)
+clangsay: 7 functions unemitted                           (was 8)
+```
+
+A `case` label does not have to sit at the top of a switch body. C lets it label any statement
+inside, which is what makes Duff's device legal, and Quake's `vid_x.c` writes the textbook form:
+
+```c
+switch (count % 8) {
+case 0: do {    *dest-- = st2d_8to16table[*src--];
+case 7:         *dest-- = st2d_8to16table[*src--];
+        ...
+        } while (--n > 0);
+}
+```
+
+`flatten.js` lowers a switch to a dispatch over labels and gotos, and it had **half** of this right.
+`collectCases` looked inside loops -- it had to, or there would be no arm to jump to for `case 7` --
+but `walkSwitchBody` descended only through blocks, so it handed the `do` to the ordinary walker,
+whose case/default branch carried the comment "Reached only through walkSwitchBody, which has already
+placed the label". It had not. Every jump was emitted and no label ever was, which the emitter
+reported, accurately and unhelpfully, as `goto into a nested block ('_L625_case')`.
+
+The fix is that the ordinary walker places the label itself when nobody else has, at the point the
+statement actually occupies -- which is what makes a jump into the middle of a loop body land where C
+says it does.
+
+The gate case exercises **every remainder class**, 0 through 20, because a lowering that placed the
+labels wrongly would still be right for the multiples of eight; and a second shape puts the labels
+under an `if` instead of a loop, the other place C allows one and JavaScript does not. Both match
+`gcc -m32` exactly.
+
+It was not one program's problem. The same limitation was costing clangsay a function and two
+c-testsuite programs, neither of which had been attributed to it.
