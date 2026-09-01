@@ -403,3 +403,46 @@ raises an error that names itself instead of corrupting memory silently.
 `literals.lua` and `strings.lua` now take their own skip paths -- `pt_BR` is genuinely unavailable and
 `%.3a` (a precision on `%a`) is genuinely unimplemented. A test declaring a feature absent is a
 different result from a test failing, and the gate reports them separately.
+
+## Doom has sound, and fprintf was the reason it did not
+
+```
+node tools/doomsnd.mjs --data=<dir with the WAD> --frames=400 --wav=/tmp/doom.wav
+
+popen: 1 open - "sndserver -quiet" 3040B          (was 0B)
+pipe:  3040 bytes written by Doom, 0 still unread
+audio: 2,440,704 frames at 11025 Hz x2 - peak 3435 - rms 243     (was peak 0)
+```
+
+The plumbing had been right for a while: Doom in one thread, `corpus/DOOM/sndserv` in another, a byte
+pipe between them, the mixed result in the audio ring the page already reads. What was wrong was one
+line in the runtime.
+
+    fprintf: (_stream, fmt, args) => { ...; M.write(s); return s.length; }
+
+**It discarded its stream.** The parameter was named `_stream`, which is the tell. So
+`fprintf(sndserver, "p%2.2x%2.2x%2.2x%2.2x\n", ...)` printed Doom's sound commands on the console,
+the server received nothing, and it mixed 204,800 samples of silence -- correctly, since nothing had
+been asked of it. `fprintf(fp, ...)` to an ordinary file went nowhere either.
+
+The log LOOKED right. Doom's commands were visible in it (`p297f01b9`, `p20800880`, ...), which reads
+as "the commands are being sent" and is in fact the opposite: they were visible *because* they were
+going to stdout. What settled it was the tool's own `--inject`, which writes one command straight into
+the pipe:
+
+```
+node tools/doomsnd.mjs --data=<dir> --frames=60 --inject=1a,20,7f,80
+audio: 40960 frames at 11025 Hz x2 - peak 24576 - rms 5101
+popen: 1 open - "sndserver -quiet" 0B        <- Doom had written NOTHING
+```
+
+Peak 24576 from the injected command, 0 bytes from Doom: the two halves separated in one run. That
+option existed for exactly this and it had a comment saying so.
+
+`fprintf` and `vfprintf` now live in `src/env/stdio.js`, which is the layer that knows what a FILE* is,
+and route through the same `writeByte` as `fputc`/`fwrite` -- so the pipe sink, stdout and a real file
+are decided in one place. The runtime keeps a pair for programs with no file layer at all, and says so.
+
+Still to do for the browser: a second worker compiling `corpus/DOOM/sndserv` from fetched sources, the
+web counterpart of `tools/sndserv-worker.mjs` (which reads them from disk). The audio ring, the pipe
+and the page side already exist -- MAME plays through them today.

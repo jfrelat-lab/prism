@@ -15,6 +15,8 @@
 // other. No `mmap`, no `stat`, no directories: the rule stands, implement what the program actually
 // references, ranked by frequency, never by anticipation.
 
+import { format, vaReader, bytesOf } from '../runtime/runtime.js';
+
 const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
 
 // Sentinel handles for the three standard streams, and the base for real files. High enough that a
@@ -155,6 +157,19 @@ export function installStdio(M, {
       return dst;
     },
 
+    /*
+     * fprintf and vfprintf BELONG here, not in the runtime: they take a FILE*, and this is the layer
+     * that knows what one is. The runtime's pair discarded the stream and wrote to the console, so
+     * `fprintf(fp, ...)` never reached a file and `fprintf(pipe, ...)` never reached a pipe -- which
+     * is how Doom's sound commands ended up printed on stdout while the sound server, correctly
+     * mixing whatever it was sent, produced silence.
+     *
+     * Byte at a time, through writeByte, so the sink lookup and the STDOUT/STDERR cases stay in one
+     * place rather than being re-decided here.
+     */
+    fprintf: (fp, fmtPtr, args) => putBytes(fp, format(M, fmtPtr, args ?? [])),
+    vfprintf: (fp, fmtPtr, ap) => putBytes(fp, format(M, fmtPtr, vaReader(M, ap))),
+
     fputc: (c, fp) => { writeByte(fp, c & 0xff); return c & 0xff; },
     putc: (c, fp) => { writeByte(fp, c & 0xff); return c & 0xff; },
     fputs: (sPtr, fp) => {
@@ -212,6 +227,13 @@ export function installStdio(M, {
     if (!h) return -1;
     if (h.pos >= h.bytes.length) { h.eof = true; return -1; }
     return h.bytes[h.pos++];
+  }
+
+  /** A formatted string to a stream, as bytes -- a C string is bytes, so the count is of those. */
+  function putBytes(fp, str) {
+    const bytes = bytesOf(str);
+    for (const b of bytes) writeByte(fp, b);
+    return bytes.length;
   }
 
   function writeByte(fp, b) {

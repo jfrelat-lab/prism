@@ -136,6 +136,17 @@ function makeLibc(M) {
     putchar: (c) => { M.write(String.fromCharCode(c & 0xff)); return c & 0xff; },
     fputs: (p, _stream) => { M.write(M.cstr(p)); return 1; },
     fputc: (c, _stream) => { M.write(String.fromCharCode(c & 0xff)); return c & 0xff; },
+    /*
+     * fprintf and vfprintf, for a program with no file layer at all.
+     *
+     * There is no FILE* to honour here -- nothing has defined one -- so everything goes to the
+     * console, which is the only sink that exists. installStdio REPLACES both with versions that
+     * route through its own writeByte, and it has to: this pair used to be the only implementation,
+     * it discarded its stream argument (the parameter was named `_stream`), and Doom's
+     * `fprintf(sndserver, "p%2.2x%2.2x%2.2x%2.2x\n", ...)` therefore printed its sound commands on
+     * the console instead of sending them down the pipe. The sound server received nothing and mixed
+     * silence, and the log LOOKED right because the commands were visible in it.
+     */
     fprintf: (_stream, fmt, args) => { const s = format(M, fmt, args ?? []); M.write(s); return s.length; },
 
     /*
@@ -780,7 +791,7 @@ function arrayReader(args) {
   return { i32: () => args[i++], f64: () => args[i++], i64: () => args[i++] };
 }
 
-function vaReader(M, ap) {
+export function vaReader(M, ap) {
   let p = ap | 0;
   const dv = M.mod.dv;
   return {
@@ -798,7 +809,7 @@ function vaReader(M, ap) {
  * every byte above 0x7F into two, which is how `sprintf("%c", 0xE4)` came out five bytes long
  * instead of four.
  */
-const bytesOf = (s) => {
+export const bytesOf = (s) => {
   const out = new Uint8Array(s.length);
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
   return out;
