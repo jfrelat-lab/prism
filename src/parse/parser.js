@@ -1357,6 +1357,39 @@ export function constEval(e) {
   return r;
 }
 
+/**
+ * The address of an lvalue, as an integer, when arithmetic on a constant pointer gets us there.
+ *
+ * `p->m` adds the member's offset to the POINTER's value; `b.m` adds it to the address of `b`, which
+ * has to be constant in turn; `a[i]` adds `i` elements, taking its base the same way round. Anything
+ * else falls through to `ce`, which either evaluates it -- a cast of 0 to a pointer is exactly that
+ * -- or refuses it by name.
+ */
+function addrConst(e) {
+  switch (e.n) {
+    case 'member': {
+      if (e.offset === null || e.offset === undefined) {
+        throw new ConstError(`no constant offset for member '${e.field}'`);
+      }
+      const base = e.arrow ? ce(e.base) : addrConst(e.base);
+      return base + BigInt(e.offset);
+    }
+    case 'index': {
+      const elem = e.type;
+      if (!elem || elem.size == null) throw new ConstError('subscript of an incomplete type');
+      // An array decays to its own address; a pointer is already one.
+      const bt = e.base.type;
+      const base = bt && bt.k === 'array' ? addrConst(e.base) : ce(e.base);
+      return base + ce(e.index) * BigInt(elem.size);
+    }
+    case 'unary':
+      if (e.op === '*') return ce(e.expr);
+      break;
+    default: break;
+  }
+  return ce(e);
+}
+
 function ce(e) {
   switch (e.n) {
     case 'num': return e.value;
@@ -1372,6 +1405,19 @@ function ce(e) {
         case '+': return ce(e.expr);
         case '~': return ~ce(e.expr);
         case '!': return ce(e.expr) === 0n ? 1n : 0n;
+        /*
+         * `&lvalue`, when the lvalue's address is arithmetic on a constant pointer. That is how C
+         * spelled offsetof before it had one, and a great deal of pre-standard code still does:
+         *
+         *     #define FIELD_OFFSET(t, f)  ((LONG)&(((t *)0)->f))        // the Windows SDK
+         *     #define offset(c, m)        (((size_t)&((c *)8)->m) - 8)  // OpenDUNE, saveload.h:29
+         *
+         * The emitter has folded this shape for a while (`#lvalAddrConst`), but a STATIC INITIALISER
+         * is evaluated here, before the emitter sees it -- so WinQuake's DirectInput data-format
+         * table, thirteen rows of FIELD_OFFSET, was refused with "unary '&' is not constant" and the
+         * emitter's version never got the chance.
+         */
+        case '&': return addrConst(e.expr);
       }
       throw new ConstError(`unary '${e.op}' is not constant`);
     case 'cond': {

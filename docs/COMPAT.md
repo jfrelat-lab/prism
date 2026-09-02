@@ -676,3 +676,32 @@ of pre-standard C spells an offset.
 Nothing regressed on the way: gate-run 31/31, c-testsuite 204/219, and Doom, Quake DOS, Quake X11,
 Heretic, Lua and MAME 0.2 all build as before -- the Win32 headers are spread FIRST into `HEADERS`,
 so an existing entry of the same name still wins.
+
+### constEval folds `&((T *)0)->m`
+
+```
+gate-run: 32/32 programs behave identically to a native i386 build
+```
+
+That expression is how C spelled `offsetof` before it had one, and two forms of it are in this
+corpus already:
+
+```c
+#define FIELD_OFFSET(t, f)  ((long)&(((t *)0)->f))          /* the Windows SDK */
+#define offset(c, m)        (((size_t)&((c *)8)->m) - 8)    /* OpenDUNE, saveload.h:29 */
+```
+
+The EMITTER had folded the shape for a while -- `#lvalAddrConst`, written for OpenDUNE. The PARSER's
+`constEval` had not, and a **static initialiser is evaluated there**, before the emitter sees it. So
+WinQuake's DirectInput data-format table, thirteen rows of `FIELD_OFFSET`, was refused with
+`unary '&' is not constant` and the emitter's version never got the chance. Two evaluators, one of
+them right, and the wrong one ran first.
+
+`addrConst` in the parser now walks the same shapes the emitter does: `p->m` adds the member offset
+to the POINTER's value, `b.m` adds it to the address of `b`, `a[i]` adds `i` elements taking its base
+the same way round, and anything else falls through to `ce` -- which evaluates a cast of 0 to a
+pointer, or refuses by name.
+
+The gate case checks both macro forms, a nested path (`in.deep`), a subscript (`c[3]`), an array
+size and a `case` label -- the two places a constant expression is REQUIRED rather than merely
+allowed -- all against `gcc -m32`.

@@ -565,6 +565,63 @@ int main(void) {
 
 // ---------------------------------------------------------------- run
 
+C('offsetof-by-hand', `#include <stdio.h>
+
+/*
+ * How C spelled offsetof before it had one, in the two forms real code uses: the Windows SDK's
+ * FIELD_OFFSET, which dereferences a null pointer, and OpenDUNE's, which uses 8 and subtracts it
+ * back out to keep a null-dereference warning quiet. Both have to work in a STATIC INITIALISER,
+ * which is where they are actually written.
+ */
+#define FIELD_OFFSET(t, f) ((long)&(((t *)0)->f))
+#define OFFSET_8(t, f)     (((unsigned long)&((t *)8)->f) - 8)
+
+struct inner { char pad; int deep; };
+struct outer {
+    char  a;
+    int   b;
+    short c[6];
+    struct inner in;
+    double d;
+};
+
+/* The table shape that made this matter: a static array whose entries are offsets. */
+static const long table[] = {
+    FIELD_OFFSET(struct outer, a),
+    FIELD_OFFSET(struct outer, b),
+    FIELD_OFFSET(struct outer, c),
+    FIELD_OFFSET(struct outer, c[3]),
+    FIELD_OFFSET(struct outer, in),
+    FIELD_OFFSET(struct outer, in.deep),
+    FIELD_OFFSET(struct outer, d),
+};
+static const unsigned long table8[] = {
+    OFFSET_8(struct outer, a),
+    OFFSET_8(struct outer, b),
+    OFFSET_8(struct outer, c[3]),
+    OFFSET_8(struct outer, in.deep),
+    OFFSET_8(struct outer, d),
+};
+
+/* And in the places a constant expression is REQUIRED, not merely allowed. */
+static char sized[FIELD_OFFSET(struct outer, d) + 1];
+
+int main(void)
+{
+    int i;
+    for (i = 0; i < (int)(sizeof table / sizeof table[0]); i++)
+        printf("table[%d] = %ld\\n", i, table[i]);
+    for (i = 0; i < (int)(sizeof table8 / sizeof table8[0]); i++)
+        printf("table8[%d] = %lu\\n", i, table8[i]);
+    printf("sizeof sized = %d\\n", (int)sizeof sized);
+    switch ((int)sizeof sized) {
+    case FIELD_OFFSET(struct outer, d) + 1: printf("case label folded\\n"); break;
+    default: printf("case label WRONG\\n"); break;
+    }
+    return 0;
+}
+`);
+
 C('duffs-device', `#include <stdio.h>
 
 /*
