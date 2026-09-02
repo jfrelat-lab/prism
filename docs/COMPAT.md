@@ -749,3 +749,41 @@ frames get to, and that depends on how fast the machine is going. Three runs bac
 capture from an hour earlier need not. I spent three A/B tests -- against the extern-data change,
 against the Duff's device fix, and against sound -- before recognising that none of them was the
 cause and the earlier number was simply a different moment in the demo.
+
+## MGL, and why one environment shim is written in C
+
+```
+QUAKE (Win32, id386=0) -- 75 translation units, 53,111 lines, 1196 functions in 1.2 s
+  0 functions could not be emitted
+  85 symbols declared and called but NEVER DEFINED   (was 106)
+  assembly: 126 exported symbols, 0 still undefined
+```
+
+All 34 MGL calls are gone from the undefined list, and nothing in the program fails to emit any more.
+What is left is Win32 itself: 75 of GDI, the message loop and the console, and 10 of multimedia.
+
+`src/env/mgl.c` is an environment shim like `allegro.js`, `sdl2.js` and `x11.js`, and named after the
+LIBRARY for the same reason they are -- it implements somebody else's published API, not one
+program's needs. WinQuake is simply the first program to ask.
+
+**It is written in C, and that is the point.** `publicDevCtx_t` is a public struct that ships with the
+source, and Quake reads two fields out of it:
+
+```c
+vid.buffer = vid.conbuffer = vid.direct = dibdc->surface;      /* vid_win.c:1351 */
+vid.rowbytes = vid.conrowbytes = dibdc->mi.bytesPerLine;
+```
+
+A JavaScript shim would have to know where `surface` and `mi.bytesPerLine` sit inside that struct, and
+a wrong offset there is SILENT -- `xkey.keycode` sat at byte 36 instead of 52 in `src/env/x11.js` for
+as long as it did precisely because nothing about a wrong offset announces itself. Compiling against
+the shipped header makes the layout the compiler's problem, which is where it belongs. That is a rule
+worth keeping: when a library's contract is a public struct, implement the shim in C.
+
+The arrangement that results is the one every other PRISM target already uses. Quake renders into a
+memory DC and blits it, so the harness reads `vid.buffer` and treats `MGL_bitBltCoord` as the frame
+boundary, exactly as `XPutImage` is for an X client. Nothing new had to be invented to publish it.
+
+Only the WINDOWED path is implemented, and it says so rather than pretending: `MGL_availableModes`
+returns an empty list -- the truthful answer for a machine with no fullscreen driver -- and
+`vid_win.c:411` reads `m[0] != 0xFF` and skips its entire mode enumeration. Run with `-window`.

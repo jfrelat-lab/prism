@@ -46,7 +46,7 @@
         "cd_win.c", "net_none.c"
       ],
       "_generated": "What the ASSEMBLER provides in a real build. sys_wina.s exports five routines and sys_win.c already defines four of them in C, so this is the DOS file minus what WinQuake writes itself -- using that one whole reported four duplicate definitions.",
-      "generated": ["tools/quake-win-vars.c"],
+      "generated": ["tools/quake-win-vars.c", "src/env/mgl.c"],
       "_include": "The DirectX and SciTech MGL headers SHIP WITH THE SOURCE, so nothing here has to invent them -- only MGLLT.LIB is binary, which makes the MGL calls undefined symbols rather than parse errors. Exactly MAME's relationship with Allegro.",
       "include": ["dxsdk/SDK/INC", "scitech/INCLUDE"],
       "_net": "net_none.c instead of net_win.c + net_wins.c + net_wipx.c, the substitution the DOS and X11 variants already make. Winsock is a surface of its own and is not the point of this target.",

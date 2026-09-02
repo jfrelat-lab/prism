@@ -439,6 +439,30 @@ typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #define SEVERITY_ERROR 1
 #define SEVERITY_SUCCESS 0
 #define QS_ALLINPUT 0x04FF
+#define MB_ICONQUESTION 0x20
+#define MB_RETRYCANCEL 0x5
+#define IDRETRY 4
+#define IDCANCEL 2
+#define FACILITY_WIN32 7
+#define SPI_SETMOUSE 4
+#define SPI_GETMOUSE 3
+#define PAGE_EXECUTE_READWRITE 0x40
+#define ERROR_READ_FAULT 30
+#define ERROR_SUCCESS 0
+#define ERROR_INVALID_ACCESS 12
+#define GMEM_MOVEABLE 0x0002
+#define GMEM_SHARE 0x2000
+#define PATCOPY 0x00F00021
+#define BLACKNESS 0x00000042
+BOOL WINAPI PatBlt(HDC, int, int, int, int, DWORD);
+BOOL WINAPI BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD);
+LONG WINAPI SetWindowLong(HWND, int, LONG);
+LONG WINAPI GetWindowLong(HWND, int);
+HWND WINAPI SetCapture(HWND);
+BOOL WINAPI ReleaseCapture(void);
+BOOL WINAPI VirtualProtect(LPVOID, DWORD, DWORD, LPDWORD);
+BOOL WINAPI AdjustWindowRectEx(LPRECT, DWORD, BOOL, DWORD);
+BOOL WINAPI SystemParametersInfo(UINT, UINT, LPVOID, UINT);
 BOOL WINAPI InvalidateRect(HWND, const RECT *, BOOL);
 DWORD WINAPI MsgWaitForMultipleObjects(DWORD, HANDLE *, BOOL, DWORD, DWORD);
 DWORD WINAPI WaitForMultipleObjects(DWORD, HANDLE *, BOOL, DWORD);
@@ -621,6 +645,9 @@ typedef struct { WORD wFormatTag, nChannels; DWORD nSamplesPerSec, nAvgBytesPerS
 #define WAVE_FORMAT_PCM 1
 typedef DWORD MMRESULT;
 #define MMSYSERR_NOERROR 0
+#define MMSYSERR_ALLOCATED 4
+#define MMSYSERR_ERROR 1
+#define MMSYSERR_BADDEVICEID 2
 #define JOYERR_NOERROR 0
 #define JOYERR_UNPLUGGED 167
 #define JOYCAPS_HASZ 0x0001
@@ -660,6 +687,7 @@ DWORD WINAPI mciSendCommand(DWORD, UINT, DWORD, DWORD);
 DWORD WINAPI mciGetErrorString(DWORD, LPSTR, UINT);
 typedef char *HPSTR;
 DECLARE_HANDLE(HWAVEOUT);
+typedef HWAVEOUT *LPHWAVEOUT;
 typedef struct wavehdr_tag {
     LPSTR lpData; DWORD dwBufferLength, dwBytesRecorded, dwUser, dwFlags, dwLoops;
     struct wavehdr_tag *lpNext; DWORD reserved;
@@ -669,7 +697,10 @@ typedef struct { WORD wMid, wPid; DWORD vDriverVersion; char szPname[32];
 typedef struct { UINT wType; union { DWORD ms, sample, cb, ticks; } u; } MMTIME, *LPMMTIME;
 typedef struct { WORD wMid, wPid; char szPname[32];
                  UINT wXmin, wXmax, wYmin, wYmax, wZmin, wZmax, wNumButtons,
-                      wPeriodMin, wPeriodMax; } JOYCAPS, *LPJOYCAPS;
+                      wPeriodMin, wPeriodMax,
+                      wRmin, wRmax, wUmin, wUmax, wVmin, wVmax,
+                      wCaps, wMaxAxes, wNumAxes, wMaxButtons;
+                 char szRegKey[32], szOEMVxD[260]; } JOYCAPS, *LPJOYCAPS;
 
 /* MCI, for cd_win.c. Every one of these is a parameter block passed to mciSendCommand. */
 typedef struct { DWORD dwCallback; } MCI_GENERIC_PARMS, *LPMCI_GENERIC_PARMS;
