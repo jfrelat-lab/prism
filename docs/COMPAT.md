@@ -592,3 +592,43 @@ when the game stops asking for it. What comes out is Quake's mixer, at the gain 
 
 `tools/build.mjs` gained `--wav=<path>`, generic for the same reason `--png` is: the device already
 keeps every sample it accepted, whichever path they arrived by, so the option only has to ask.
+
+## Doom is audible in the browser, and which thread owns a process
+
+```
+[sound] sound server: 4 units, 21 functions
+[sound] sound server running
+
+AUDIO_RATE  11025
+frames/second into the ring   10,922        (the rate, within rounding)
+peak 2544 - rms 447 - 3.4% exact zeros
+```
+
+Doom's own source delegates sound to a separate process -- `sndserver = popen("./sndserver ", "w")`
+in `i_sound.c` -- so this was never an audio feature. It is a second address space and a pipe, and
+both had existed for a while: `src/env/pipe.js` is a byte pipe in a SharedArrayBuffer, and the audio
+ring the server publishes into is the one the page had been reading for MAME all along.
+
+`web/sndworker.js` is the browser counterpart of `tools/sndserv-worker.mjs`, and the only real
+difference is where the source comes from: that one reads it off the disk, this one fetches it.
+
+**The mistake worth recording is about which thread starts it.** The obvious home for
+`new Worker('./sndworker.js')` is the worker that runs Doom, right beside the `installPopen` that
+uses the pipe. It is the wrong home, for exactly the reason the thing is a process at all:
+`prog.run()` never returns, so from that moment the parent's event loop is gone. The child compiled,
+the child ran, and not one of its messages was ever delivered -- `snd.onmessage` was registered on a
+listener that would never run again.
+
+Nothing about the symptom said so. It looked like a worker that had failed to load, and the first two
+hypotheses were wrong in an instructive way: the URL was right (`/web/sndworker.js`, 200), and the
+payload was not the cause either -- posting an empty file map changed nothing, which is what ruled
+out the 156 MB of data being cloned. What settled it was constructing the same worker from the PAGE,
+where it worked on the first try.
+
+So the page starts both programs and hands each end of the pipe to its side. That is also the
+truthful arrangement: the page is the system, and a program is a thread.
+
+Two smaller things found on the way. `M.write` is called per CHARACTER, so posting each one spelled
+one sentence in thirty-three messages; the server's stdout is buffered to a line now. And Stop has to
+terminate the second worker too -- it is parked in `Atomics.wait` inside its own `write`, because the
+ring is its clock and nobody is draining it any more, so nothing short of terminate brings it back.

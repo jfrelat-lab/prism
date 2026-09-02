@@ -1,6 +1,6 @@
 {
   "title": "DOOM",
-  "subtitle": "id Software, 1993 · linuxdoom-1.10, the only source ever published — X11, not DOS",
+  "subtitle": "id Software, 1993 \u00b7 linuxdoom-1.10, the only source ever published \u2014 X11, not DOS",
   "root": "corpus/DOOM/linuxdoom-1.10",
   "units": [
     "am_map.c",
@@ -78,7 +78,7 @@
   "fps": 35,
   "host": "x11",
   "needsData": {
-    "hint": "DOOM1.WAD — the freely redistributable shareware WAD"
+    "hint": "DOOM1.WAD \u2014 the freely redistributable shareware WAD"
   },
   "controls": [
     [
@@ -109,5 +109,7 @@
       "Tab",
       "map"
     ]
-  ]
+  ],
+  "_soundServer": "Doom delegates sound to a separate PROCESS -- doomdef.h defines SNDSERV and i_sound.c popens './sndserver' -- so making it audible was never an audio problem. Naming the source here is enough: web/worker.js starts a second worker on it and connects the two with a byte pipe.",
+  "soundServer": "corpus/DOOM/sndserv"
 }

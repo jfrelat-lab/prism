@@ -15,6 +15,7 @@ import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
 import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
+import { installPopen } from '../src/env/popen.js';
 import { installConsole } from '../src/env/console.js';
 import { installPorts as installPortMachine } from '../src/env/ports.js';
 import { installCrtStatus } from '../src/env/crtstatus.js';
@@ -39,7 +40,7 @@ self.onmessage = async (e) => {
   }
 };
 
-async function start({ program, control, data, argv }) {
+async function start({ program, control, data, argv, pipeSab = null }) {
   /*
    * A descriptor may carry the BUILD or merely name a target that does.
    *
@@ -202,6 +203,26 @@ async function start({ program, control, data, argv }) {
      * the same "publish what the program already writes" move as Quake's vid_buffer.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    /*
+     * A second PROGRAM, when the descriptor names one.
+     *
+     * Doom's own source delegates sound to a separate process -- `sndserver = popen("./sndserver ",
+     * "w")` in i_sound.c -- so this is not an audio feature, it is a second address space and a pipe.
+     * Both already exist: src/env/pipe.js is a byte pipe in a SharedArrayBuffer, and the audio ring
+     * the server publishes into is the one the page has been reading for MAME all along.
+     *
+     * Nothing is interleaved and neither program knows the other is not a process.
+     */
+    /*
+     * The sound server is a second PROGRAM, and the PAGE starts it -- see web/app.js.
+     *
+     * Not this worker, though this worker is where the pipe is used. The reason is the thing that
+     * makes it a process at all: `prog.run` below never returns, so from that moment this thread's
+     * event loop is gone, and a child created here would have been talking to a listener that would
+     * never run again. Its compile succeeded, its server ran, and not one of its messages was ever
+     * delivered. The page's loop stays free, so the page owns the child and this end owns the pipe.
+     */
+    if (pipeSab) installPopen(prog.M, { pipes: [{ match: /sndserver/, sab: pipeSab }] });
     installX11(prog.M, {
       publish: { ctrl, pal },
       keyboard: {

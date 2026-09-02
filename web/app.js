@@ -17,6 +17,7 @@
 import { makeControl, controlViews, makeKeyboard, wake, KEY_HOLD_FRAMES, AUDIO_RING, SLOT, STATE }
   from '../src/env/webhost.js';
 import { scancodeForEvent } from '../src/env/scancodes.js';
+import { makePipe } from '../src/env/pipe.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 
 const $ = (id) => document.getElementById(id);
@@ -24,6 +25,7 @@ const canvas = $('screen');
 const cx = canvas.getContext('2d', { alpha: false });
 
 let worker = null, views = null, guest = null;
+let soundWorker = null;
 let audioCtx = null, audioNode = null;
 let imageData = null, lut = null, palGen = -1;
 let statTimer = 0, lastStatAt = 0, lastFrame = 0;
@@ -316,7 +318,24 @@ $('run').onclick = () => {
     else if (m.type === 'diag') window.PRISM_DIAG = m;
   };
   worker.onerror = (e) => log(`worker error: ${e.message}`, 'error');
-  worker.postMessage({ type: 'start', program, control, data: dataFiles, argv });
+  /*
+   * A program whose descriptor names a second one gets it, with a byte pipe between them.
+   *
+   * Doom's own source delegates sound to a separate process -- `popen("./sndserver ", "w")` in
+   * i_sound.c -- so this was never an audio feature; it is a second address space and a pipe. Both
+   * ends are started HERE rather than by the first worker, because that worker's `run` never
+   * returns: a child created there would post its messages to an event loop that had stopped.
+   */
+  let pipeSab = null;
+  if (program.soundServer) {
+    pipeSab = makePipe();
+    soundWorker?.terminate();
+    soundWorker = new Worker(new URL('./sndworker.js', import.meta.url), { type: 'module' });
+    soundWorker.onmessage = (e) => { if (e.data?.type === 'log') log(`[sound] ${e.data.line}`, e.data.kind); };
+    soundWorker.onerror = (e) => log(`[sound] ${e.message || 'failed to start'}`, 'error');
+    soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
+  }
+  worker.postMessage({ type: 'start', program, control, data: dataFiles, argv, pipeSab });
   /*
    * The keys are the program's from now on. Without this the whole keyboard depended on which
    * control the user had touched last: type an argument and the focus stays in the field, and every
@@ -383,6 +402,12 @@ function stop(quiet) {
     wake(views.ctrl);
   }
   if (worker) { const w = worker; worker = null; setTimeout(() => w.terminate(), 150); }
+  /*
+   * And the second program, if there is one. It is parked in Atomics.wait inside its own write --
+   * the ring is its clock and nobody is draining it any more -- so nothing short of terminate will
+   * bring it back, and leaving it would keep a thread and 64 MB alive across every later run.
+   */
+  if (soundWorker) { const s = soundWorker; soundWorker = null; setTimeout(() => s.terminate(), 150); }
   clearInterval(statTimer); statTimer = 0;
   stopAudio();
   if (!quiet) log('stopped');
