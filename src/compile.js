@@ -814,12 +814,33 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
    * Each unit's own declarations of objects it does not define: same address, its own type. Done
    * after `visible`, because that is when every definition has an address to point at.
    */
+  const undefinedData = new Map();      // extern variables nobody defines
   for (const p of parsed) {
     const seen = visible.get(p.module ?? MAIN);
     for (const d of p.externDecls ?? []) {
       if (d.type?.k === 'func' || p.globals.has(d.name)) continue;
       const shared = seen.globals.get(d.name);
-      if (shared) p.globals.set(d.name, { addr: shared.addr, type: d.type });
+      if (shared) { p.globals.set(d.name, { addr: shared.addr, type: d.type }); continue; }
+      /*
+       * Declared and never defined -- and it STILL has an address.
+       *
+       * That is not a courtesy, it is what the name means: `extern const GUID GUID_XAxis;` is a
+       * promise that some other object file holds it, and a program may legally take its address in
+       * a static initialiser without ever reading it. WinQuake does exactly that -- its DirectInput
+       * data-format table is thirteen rows of `{ &GUID_XAxis, FIELD_OFFSET(...), ... }` -- and the
+       * definitions live in dxguid.lib, which is a binary and is not here.
+       *
+       * So it gets zeroed storage, which is what an unresolved data symbol reads as, and its name
+       * goes into the report beside the undefined FUNCTIONS, which have worked this way all along.
+       * Refusing instead would be stricter than a linker on a program that never dereferences it.
+       */
+      // The BARE name, deliberately: two units declaring the same missing symbol must get
+      // the same object, which is what a linker gives them. defineGlobal returns the
+      // existing entry when the name is already taken, so the sharing is free.
+      const sym = mod.defineGlobal(d.name, d.type);
+      p.globals.set(d.name, { addr: sym.addr, type: d.type });
+      if (!undefinedData.has(d.name)) undefinedData.set(d.name, new Set());
+      undefinedData.get(d.name).add(basename(p.file));
     }
   }
 
@@ -900,7 +921,12 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
    */
   const undefined_ = [...undefinedCalls].map(([name, units]) => ({ name, units: [...units].sort() }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  return { M, F, src, mod, failures, duplicates, undefined: undefined_, run: makeRunner(M, F, mod) };
+  /* Undefined DATA, reported the same way and separately: a missing variable and a missing
+     function fail differently -- one reads as zero, the other throws when called. */
+  const undefinedVars = [...undefinedData].map(([name, units]) => ({ name, units: [...units].sort() }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return { M, F, src, mod, failures, duplicates, undefined: undefined_, undefinedVars,
+           run: makeRunner(M, F, mod) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */

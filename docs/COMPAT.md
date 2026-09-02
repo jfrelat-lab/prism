@@ -705,3 +705,47 @@ pointer, or refuses by name.
 The gate case checks both macro forms, a nested path (`in.deep`), a subscript (`c[3]`), an array
 size and a `case` label -- the two places a constant expression is REQUIRED rather than merely
 allowed -- all against `gcc -m32`.
+
+## WinQuake compiles whole, and the shim surface is a list
+
+```
+QUAKE (Win32, id386=0) -- 74 translation units, 52,884 lines, 1159 functions in 1.2 s
+  106 symbols declared and called but NEVER DEFINED (they fail when called)
+   91 variables declared and never defined (they read as zero)
+   11 functions could not be emitted
+  assembly: 21 files export 126 symbols; 0 of them are still undefined here
+```
+
+The estimate that chose this target was 120 external symbols; the measurement is 106 functions, and
+they fall where the estimate said: **64 Win32/GDI/console, 34 SciTech MGL, 8 multimedia**. That is now
+a list to work through rather than a number to trust.
+
+Two general things had to be fixed to get here, and neither is about Windows.
+
+**`constEval` folds `&((T *)0)->m`** -- see above. WinQuake's DirectInput data-format table is
+thirteen rows of `FIELD_OFFSET`, and a static initialiser is evaluated in the parser, before the
+emitter (which had folded that shape for years) ever sees it.
+
+**An `extern` variable nobody defines still has an address.** `DEFINE_GUID` declares
+`extern const GUID GUID_XAxis;` and the definitions live in `dxguid.lib`, a binary that is not here --
+yet the program legally takes its address in a static initialiser without ever reading it. Such a
+symbol now gets zeroed storage, which is what an unresolved data symbol reads as, and its name goes
+into a report of its own. Refusing would have been stricter than a linker on a program that never
+dereferences it.
+
+That report is worth having beyond Windows. Every Quake variant carries some: with `id386=0` the
+engine stops referencing the globals its assembly renderer shares -- `bottomclip`, `r_lightptr` --
+while the headers still declare them, so they are declared, unused and undefined all at once. 28 in
+the X11 build, 30 in the DOS build, both of which run correctly. It was invisible before because
+nothing was counting.
+
+Also: `sys_wina.s` exports five routines and `sys_win.c` defines four of them in C, so the win variant
+generates `tools/quake-win-vars.c` -- the DOS file minus what WinQuake writes itself. Using the DOS
+file whole reported four duplicate definitions, which is the linker saying the same thing.
+
+**One property of the capture, recorded because it misled me.** `--frames=N` is not a deterministic
+oracle for Quake: `Sys_FloatTime` reads the real clock, so frame 150 lands wherever 150 rendered
+frames get to, and that depends on how fast the machine is going. Three runs back to back agree; a
+capture from an hour earlier need not. I spent three A/B tests -- against the extern-data change,
+against the Duff's device fix, and against sound -- before recognising that none of them was the
+cause and the earlier number was simply a different moment in the demo.

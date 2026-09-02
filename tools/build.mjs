@@ -119,6 +119,24 @@ if (program.undefined?.length) {
   }
   if (program.undefined.length > 20) console.log(`    … and ${program.undefined.length - 20} more`);
 }
+/*
+ * VARIABLES declared and never defined, which is a different thing from a missing function and is
+ * reported on its own line for that reason: a missing function throws when called, a missing
+ * variable reads as zero and a program that never touches it never notices.
+ *
+ * Most of these are honest. With `id386=0` Quake stops referencing the globals its assembly renderer
+ * shares -- `bottomclip`, `r_lightptr` -- but the headers still declare them, so they are declared,
+ * unused, and undefined all at once. WinQuake's DirectX GUIDs are the same shape for a different
+ * reason: DEFINE_GUID declares them and dxguid.lib holds the definitions.
+ */
+if (program.undefinedVars?.length) {
+  console.log(`  ${program.undefinedVars.length} variables declared and never defined ` +
+    `(they read as zero):`);
+  for (const u of program.undefinedVars.slice(0, 12)) console.log(`    ${u.name}`);
+  if (program.undefinedVars.length > 12) {
+    console.log(`    … and ${program.undefinedVars.length - 12} more`);
+  }
+}
 if (program.failures?.length) {
   const by = new Map();
   for (const f of program.failures) by.set(f.message, (by.get(f.message) ?? 0) + 1);

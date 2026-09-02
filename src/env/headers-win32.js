@@ -433,6 +433,17 @@ typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #define WM_DEVICECHANGE 0x0219
 #define WM_POWERBROADCAST 0x0218
 #define WM_USER 0x0400
+#define HORZRES 8
+#define VERTRES 10
+#define SW_MINIMIZE 6
+#define SEVERITY_ERROR 1
+#define SEVERITY_SUCCESS 0
+#define QS_ALLINPUT 0x04FF
+BOOL WINAPI InvalidateRect(HWND, const RECT *, BOOL);
+DWORD WINAPI MsgWaitForMultipleObjects(DWORD, HANDLE *, BOOL, DWORD, DWORD);
+DWORD WINAPI WaitForMultipleObjects(DWORD, HANDLE *, BOOL, DWORD);
+BOOL WINAPI WriteConsoleInput(HANDLE, const INPUT_RECORD *, DWORD, LPDWORD);
+BOOL WINAPI SetConsoleWindowInfo(HANDLE, BOOL, const SMALL_RECT *);
 
 #define LOWORD(l) ((WORD)((DWORD)(l) & 0xffff))
 #define HIWORD(l) ((WORD)(((DWORD)(l) >> 16) & 0xffff))
@@ -722,6 +733,8 @@ MMRESULT WINAPI waveOutPrepareHeader(HWAVEOUT, LPWAVEHDR, UINT);
 MMRESULT WINAPI waveOutUnprepareHeader(HWAVEOUT, LPWAVEHDR, UINT);
 MMRESULT WINAPI waveOutWrite(HWAVEOUT, LPWAVEHDR, UINT);
 MMRESULT WINAPI waveOutGetNumDevs(void);
+UINT WINAPI joyGetNumDevs(void);
+DWORD WINAPI timeGetTime(void);
 #define MCI_MAKE_TMSF(t, m, s, f) ((DWORD)(((BYTE)(t)) | ((WORD)(m) << 8) | (((DWORD)(BYTE)(s)) << 16) | (((DWORD)(BYTE)(f)) << 24)))
 #endif
 `,
