@@ -46,8 +46,9 @@ static MGLDC *mgl_current = NULL;
 
 /*
  * The palette, kept because the harness wants it and Quake never reads it back.
- * MGL's palette_t is BGRA and six bits per component, which is the VGA DAC's range -- vid_win.c
- * builds it from Quake's own 0..255 values by shifting right by two.
+ * palette_t is BGRA -- blue first -- and holds the FULL 0..255 per component: vid_win.c writes
+ * `pal[i].red = palette[i*3]` with no shift, whatever the hardware behind a real MGL would do
+ * with it. What the program writes is what is here.
  */
 palette_t prism_mgl_palette[256];
 m_int prism_mgl_frames = 0;

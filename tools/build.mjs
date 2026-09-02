@@ -223,11 +223,46 @@ const mgl = program.F.MGL_bitBltCoord && mglAddr('prism_mgl_surface')
       height: mglAddr('prism_mgl_height'), pitch: mglAddr('prism_mgl_pitch'),
       palette: mglAddr('prism_mgl_palette') }
   : null;
-if ((frameCap || pngPath) && mgl) {
+/*
+ * --keys=esc,down,enter taps keys at the frame boundary, through whichever door this platform has.
+ *
+ * For a Win32 program that is `prism_win32_key` in src/env/win32.c, which posts a real WM_KEYDOWN
+ * into the message queue -- so the keystroke travels the route the program expects, out through
+ * PeekMessage and back into its own window procedure, rather than being handed to its input code
+ * behind its back.
+ */
+const KEYNAMES = {
+  esc: 0x01, enter: 0x1c, space: 0x39, up: 0x48, down: 0x50, left: 0x4b, right: 0x4d,
+  ctrl: 0x1d, y: 0x15, n: 0x31, tab: 0x0f, tilde: 0x29, f1: 0x3b,
+};
+const keyScript = (opt('keys') ?? '').split(',').map(k => k.trim()).filter(Boolean)
+  .map(k => KEYNAMES[k.toLowerCase()] ?? parseInt(k, 16));
+const keyEvery = +(opt('keyevery') ?? 20);
+const keyFirst = +(opt('keyat') ?? 40);
+let keyAt = 0;
+const pressKey = program.F.prism_win32_key ?? null;
+if (keyScript.length && !pressKey) {
+  // A flag that quietly does nothing is worse than one that is missing: say so.
+  console.log(`  --keys: this target has no key door here (it needs prism_win32_key, from ` +
+    `src/env/win32.c). For an X11 program use tools/doom.mjs --keys, and for a DOS one ` +
+    `tools/raven.mjs or tools/quake.mjs.`);
+}
+const tapKeys = () => {
+  if (!pressKey || keyAt >= keyScript.length) return;
+  if (frames < keyFirst || (frames - keyFirst) % keyEvery !== 0) return;
+  const code = keyScript[keyAt++] & 0x7f;
+  pressKey(code, 1);
+  pressKey(code, 0);
+  console.log(`[key] 0x${code.toString(16).padStart(2, '0')} at frame ${frames}`);
+};
+
+if ((frameCap || pngPath || keyScript.length) && mgl) {
   const inner = program.F.MGL_bitBltCoord;
   const wrapped = function (...a) {
     const r = inner.apply(this, a);
-    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+    frames++;
+    tapKeys();
+    if (frameCap && frames >= frameCap) throw new Error('__frames_done');
     return r;
   };
   program.F.MGL_bitBltCoord = wrapped;
@@ -270,13 +305,17 @@ if (mgl) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) pixels[y * width + x] = program.M.u8[surface + y * pitch + x];
     }
-    // MGL's palette_t is BGRA at six bits a component -- the VGA DAC's range, which vid_win.c
-    // shifts Quake's 0..255 values down into. Scaled back up here for a PNG.
+    /*
+     * MGL's palette_t is BGRA -- blue first, per its own header -- and the components are the FULL
+     * 0..255, not the VGA DAC's six bits. That was worth reading rather than assuming: vid_win.c
+     * writes `pal[i].red = palette[i*3]` with no shift at all, and scaling those up by four
+     * saturated most of the picture and turned it yellow.
+     */
     const palette = new Uint8Array(768);
     for (let i = 0; i < 256; i++) {
-      palette[i * 3 + 0] = Math.min(255, program.M.u8[mgl.palette + i * 4 + 2] << 2);
-      palette[i * 3 + 1] = Math.min(255, program.M.u8[mgl.palette + i * 4 + 1] << 2);
-      palette[i * 3 + 2] = Math.min(255, program.M.u8[mgl.palette + i * 4 + 0] << 2);
+      palette[i * 3 + 0] = program.M.u8[mgl.palette + i * 4 + 2];   // red
+      palette[i * 3 + 1] = program.M.u8[mgl.palette + i * 4 + 1];   // green
+      palette[i * 3 + 2] = program.M.u8[mgl.palette + i * 4 + 0];   // blue
     }
     let nz = 0;
     for (const b of pixels) if (b) nz++;

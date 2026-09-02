@@ -199,7 +199,54 @@ BOOL WINAPI SetThreadPriority(HANDLE h, int p) { (void)h; (void)p; return TRUE; 
 
 /* ---------------------------------------------------------------- windows */
 
-ATOM WINAPI RegisterClass(const WNDCLASS *wc) { (void)wc; return (ATOM)next_handle++; }
+/*
+ * The window procedure, remembered. DispatchMessage has to call it, and this is the only place its
+ * address is ever handed over -- which also makes the pair a real test of PRISM's function-pointer
+ * table: the callback goes out through a struct field and comes back as a call.
+ */
+static WNDPROC wndproc = NULL;
+
+ATOM WINAPI RegisterClass(const WNDCLASS *wc)
+{
+    if (wc && wc->lpfnWndProc) wndproc = wc->lpfnWndProc;
+    return (ATOM)next_handle++;
+}
+
+/*
+ * ---- the message queue.
+ *
+ * Small, and a ring, because it is only ever a few keystrokes deep: the host pushes and the game
+ * drains every frame. A full queue drops the oldest, which is what a keyboard buffer does.
+ */
+#define MSGQ 64
+static MSG msgq[MSGQ];
+static int msgq_head = 0, msgq_tail = 0;
+static HWND msg_window = NULL;
+
+static void post(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    MSG *m = &msgq[msgq_head % MSGQ];
+    memset(m, 0, sizeof(*m));
+    m->hwnd = msg_window;
+    m->message = message;
+    m->wParam = wParam;
+    m->lParam = lParam;
+    msgq_head++;
+    if (msgq_head - msgq_tail > MSGQ) msgq_tail = msgq_head - MSGQ;
+}
+
+/*
+ * The host's way in: one key, pressed or released.
+ *
+ * `scan` is a set-1 PC scan code, the same currency src/env/scancodes.js and src/env/x11.js already
+ * deal in. It goes in bits 16-23 of lParam because that is where the program reads it --
+ * vid_win.c's MapKey is `(lParam >> 16) & 255`, indexing its own scantokey[] table. Putting a
+ * virtual-key code in wParam instead would have looked right and delivered nothing.
+ */
+void prism_win32_key(int scan, int down)
+{
+    post(down ? WM_KEYDOWN : WM_KEYUP, 0, ((LPARAM)(scan & 0xff)) << 16);
+}
 
 HWND WINAPI CreateWindowEx(DWORD exStyle, LPCSTR cls, LPCSTR name, DWORD style,
                            int x, int y, int w, int h, HWND parent, HMENU menu,
@@ -209,7 +256,8 @@ HWND WINAPI CreateWindowEx(DWORD exStyle, LPCSTR cls, LPCSTR name, DWORD style,
     (void)parent; (void)menu; (void)inst; (void)param;
     if (w > 0) screen_w = w;
     if (h > 0) screen_h = h;
-    return HANDLE_OF(HWND);
+    msg_window = HANDLE_OF(HWND);
+    return msg_window;
 }
 
 BOOL WINAPI DestroyWindow(HWND w) { (void)w; return TRUE; }
@@ -259,18 +307,43 @@ BOOL WINAPI PostMessage(HWND w, UINT m, WPARAM wp, LPARAM lp)
  */
 BOOL WINAPI PeekMessage(LPMSG msg, HWND w, UINT min, UINT max, UINT flags)
 {
-    (void)w; (void)min; (void)max; (void)flags;
-    if (msg) memset(msg, 0, sizeof(*msg));
-    return FALSE;
+    (void)w; (void)min; (void)max;
+    if (msgq_head == msgq_tail) {
+        if (msg) memset(msg, 0, sizeof(*msg));
+        return FALSE;
+    }
+    if (msg) *msg = msgq[msgq_tail % MSGQ];
+    if (flags & PM_REMOVE) msgq_tail++;
+    return TRUE;
 }
+
+/*
+ * GetMessage REMOVES, and its FALSE means WM_QUIT -- not "nothing waiting".
+ *
+ * That distinction is the whole trap here. Sys_SendKeyEvents peeks with PM_NOREMOVE and then calls
+ * `if (!GetMessage(...)) Sys_Quit();`, so a GetMessage that answered FALSE for an empty queue would
+ * have quit the game on the first keystroke. It was harmless only for as long as PeekMessage never
+ * said there was anything.
+ */
 BOOL WINAPI GetMessage(LPMSG msg, HWND w, UINT min, UINT max)
 {
     (void)w; (void)min; (void)max;
-    if (msg) memset(msg, 0, sizeof(*msg));
-    return FALSE;                     /* FALSE means WM_QUIT: a message loop on this exits at once */
+    if (msgq_head == msgq_tail) {
+        if (msg) memset(msg, 0, sizeof(*msg));
+        return TRUE;                  /* nothing waiting is not a reason to stop */
+    }
+    if (msg) *msg = msgq[msgq_tail % MSGQ];
+    msgq_tail++;
+    return msg && msg->message == WM_QUIT ? FALSE : TRUE;
 }
+
 BOOL WINAPI TranslateMessage(const MSG *m) { (void)m; return FALSE; }
-LRESULT WINAPI DispatchMessage(const MSG *m) { (void)m; return 0; }
+
+LRESULT WINAPI DispatchMessage(const MSG *m)
+{
+    if (!m || !wndproc) return 0;
+    return wndproc(m->hwnd, m->message, m->wParam, m->lParam);
+}
 
 /*
  * No decorations, so the window rectangle equals the client rectangle and this changes nothing.

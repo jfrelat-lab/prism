@@ -841,3 +841,49 @@ Open on this target: the palette. The picture is a little brighter and yellower 
 which is either the six-bit scaling here or a gamma ramp vid_win.c applies, and I have not measured
 which. Input is the other half -- `PeekMessage` returns an empty queue, so nothing reaches the game
 yet, and that one function is where keys will arrive.
+
+## WinQuake takes the keyboard, and the colours were a guess
+
+```
+node tools/build.mjs targets/quake.json:win --run --data=<dir with id1/> --args="-window" \
+     --frames=220 --keys=esc,down,down --keyat=100 --keyevery=30 --png=/tmp/wq.png
+```
+
+Escape opens Quake's main menu and two Downs move the cursor to OPTIONS -- and the keystroke travels
+the route the program expects rather than being handed to its input code behind its back: it is
+posted as a real `WM_KEYDOWN` into the message queue, comes out through `PeekMessage`/`GetMessage`,
+and is dispatched into Quake's own `MainWndProc`, which calls its own `MapKey` and `Key_Event`.
+
+Three things that had to be right, and two of them only look obvious afterwards:
+
+  * **The scan code goes in bits 16-23 of `lParam`.** `MapKey` is `(lParam >> 16) & 255`, indexing
+    vid_win.c's own `scantokey[]`. A virtual-key code in `wParam` would have looked entirely
+    reasonable and delivered nothing.
+  * **`GetMessage` returning FALSE means WM_QUIT, not "nothing waiting".** Sys_SendKeyEvents peeks
+    with PM_NOREMOVE and then calls `if (!GetMessage(...)) Sys_Quit();`, so the stub that answered
+    FALSE for an empty queue would have quit the game on the first keystroke. It was harmless only
+    while PeekMessage never said there was anything -- a bug that could not fire until the moment
+    the feature started working.
+  * **`RegisterClass` has to remember `lpfnWndProc`**, because `DispatchMessage` calls it. That also
+    makes the pair a real exercise of PRISM's function-pointer table: the callback leaves through a
+    struct field and comes back as a call.
+
+### The colour difference
+
+The first WinQuake capture was brighter and yellower than the X11 build's. I had written that MGL's
+`palette_t` holds six bits a component, the VGA DAC's range, and scaled it up by four.
+
+vid_win.c says otherwise, in one line:
+
+```c
+pal[i].red = palette[i*3];          /* no shift */
+```
+
+Quake writes the FULL 0..255 values. Multiplying them by four saturated most of the picture, which is
+exactly what it looked like. What a real MGL would then do with those bytes is its business; what is
+in the array is what the program put there, and that is the only thing a shim can read. Measured
+rather than inferred, one line of the caller, and the picture is Quake's own palette again.
+
+`--keys` in `build.mjs` works through `prism_win32_key`, and on a target without that door it now
+SAYS so and names the tool that does have one. A flag that quietly does nothing is worse than a flag
+that is missing.
