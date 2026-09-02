@@ -15,6 +15,7 @@ import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
 import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
+import { installDsp } from '../src/env/dsp.js';
 import { installPopen } from '../src/env/popen.js';
 import { installConsole } from '../src/env/console.js';
 import { installPorts as installPortMachine } from '../src/env/ports.js';
@@ -67,6 +68,11 @@ async function start({ program, control, data, argv, pipeSab = null }) {
       pack: t.compile.pack ?? null,
       caseInsensitive: t.caseInsensitive,
       title: program.title ?? t.title,
+      // The resolved variant's host wins: the descriptor names a GAME, the variant a PLATFORM.
+      host: t.host ?? program.host,
+      // ...and which devices it asked for, so the branch below installs what the build wants
+      // rather than what its host usually implies.
+      env: t.env ?? [],
     };
   }
 
@@ -196,7 +202,12 @@ async function start({ program, control, data, argv, pipeSab = null }) {
    * eighteen callbacks, so its layer implements functions; Quake draws into a 320x200 array it
    * already owns, so its layer only publishes addresses and implements nothing.
    */
-  if (program.host === 'x11' || program.platform === 'x11') {
+  /*
+   * Which shell branch presents this build. It comes from the resolved TARGET VARIANT when there is
+   * one -- Quake has four platform layers over one engine -- and from the descriptor otherwise.
+   */
+  const host = program.host ?? program.platform ?? 'allegro';
+  if (host === 'x11') {
     /*
      * A UNIX host: the program is an X client, and Xlib is shimmed at the library boundary. Doom
      * draws into the XImage buffer it asked Xlib for, so the page reads that address directly —
@@ -223,6 +234,14 @@ async function start({ program, control, data, argv, pipeSab = null }) {
      * delivered. The page's loop stays free, so the page owns the child and this end owns the pipe.
      */
     if (pipeSab) installPopen(prog.M, { pipes: [{ match: /sndserver/, sab: pipeSab }] });
+    /*
+     * Sound, when the BUILD asks for it. Quake's X11 client mmaps /dev/dsp and mixes into the DMA
+     * buffer (see src/env/dsp.js); Doom writes to it through a separate program. Reading the target's
+     * own env list is what keeps this from being a guess about what an X11 program usually wants.
+     */
+    if ((program.env ?? []).includes('dsp')) {
+      installDsp(prog.M, { publish: { ctrl, audio } });
+    }
     installX11(prog.M, {
       publish: { ctrl, pal },
       keyboard: {
@@ -231,7 +250,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
       },
       onFrame: () => { reader.endFrame(); pace(); },
     });
-  } else if (program.platform === 'quake') {
+  } else if (host === 'quake') {
     installQuake(prog.M, {
       publish: { ctrl },
       F: prog.F,
@@ -239,7 +258,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     });
     // compile.js installed stdio with no files; re-install with the ones the page supplied.
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
-  } else if (program.platform === 'watcom') {
+  } else if (host === 'watcom') {
     /*
      * A WATCOM/DOS4GW host: Heretic, Hexen and OpenDUNE. One branch for three games, because what
      * they have in common is not a library but a MACHINE -- three devices and a clock.
@@ -318,6 +337,19 @@ async function start({ program, control, data, argv, pipeSab = null }) {
         if (e.scan) host.deliverKeyboard(e.down ? e.scan : (e.scan | 0x80));
       }
     };
+  } else if (host !== 'allegro') {
+    /*
+     * An unknown platform, said out loud.
+     *
+     * This chain used to end in an `else` that installed Allegro, so a build whose platform had no
+     * branch here got MAME's environment and failed somewhere far away. Now that the page can PICK a
+     * platform, that matters: `quake:dos` and `quake:win` are real builds Node runs today and the
+     * shell has no branch for yet, and saying which is missing is more useful than a stack trace
+     * from a program that was handed the wrong world.
+     */
+    throw new Error(`the shell has no branch for platform '${host}' yet -- ` +
+      `it presents x11, quake, watcom and allegro. This build runs in Node: ` +
+      `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*
      * A DOS host: MAME's own src/msdos/msdos.c is compiled, and what is installed is the libraries it

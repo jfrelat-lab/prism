@@ -887,3 +887,45 @@ rather than inferred, one line of the caller, and the picture is Quake's own pal
 `--keys` in `build.mjs` works through `prism_win32_key`, and on a target without that door it now
 SAYS so and names the tool that does have one. A flag that quietly does nothing is worse than a flag
 that is missing.
+
+## Choosing the platform, not just the program
+
+Node could always do it -- `node tools/build.mjs targets/quake.json:x11` -- and the page could not,
+which made the shell the one place the choice was invisible. It now has a second picker beside the
+program, shown only when there IS a choice:
+
+```
+quake   [ null | win | x11 | dos ]
+doom    (hidden: one build)
+```
+
+Everything for it existed already: `/__targets` reported each target's variants, and `/__target`
+already parsed `name:variant`. What was missing was one field and one honest dispatch.
+
+**`host` belongs to the VARIANT, not the target.** One engine, four platform layers, and the page has
+to know which one it is looking at. Node never needed it, which is exactly why it was absent.
+
+**The shell's branch chain used to end in an `else` that installed Allegro.** That was harmless while
+every descriptor named its own platform; the moment the page could pick one, a build with no branch
+here would silently get MAME's environment and fail somewhere far away. It now names the platform it
+cannot present and points at the tool that can:
+
+```
+the shell has no branch for platform 'mgl' yet -- it presents x11, quake, watcom and allegro.
+This build runs in Node: node tools/build.mjs targets/<name>.json:<variant> --run
+```
+
+**The page's Quake descriptor now names its target instead of restating the build.** It carries what
+a descriptor is for -- the title, the arguments, what data it needs, what its keys do -- and the four
+platforms come from `targets/quake.json`. Picking `x11` gives the real X11 client in the page, with
+its keyboard and its sound, in place of the `vid_null.c` build that was the only one available
+before: 1,083 functions, 320x200, 3,441 frames, audio at 11,025 Hz.
+
+**Sound follows the BUILD, not the host.** The x11 branch installs `dsp` when the target's own `env`
+list asks for it, which is how Quake's mmap path gets wired without assuming that every X11 program
+wants a sound device.
+
+**And changing the picker stops what is running.** Otherwise the selector stops describing what is on
+screen: choose `x11` while the `null` build is still going and the two disagree, while the next Run
+competes with a worker that never went away. The last frame is cleared with it -- a stale picture
+from the previous platform is exactly the kind of evidence that gets read as a result.

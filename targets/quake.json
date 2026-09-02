@@ -4,6 +4,8 @@
   "dir": "corpus/Quake/WinQuake",
   "fetch": "git clone --depth 1 https://github.com/id-Software/Quake.git corpus/Quake",
 
+  "_host": "Which shell branch presents this build. It belongs to the VARIANT, not to the target: one engine, four platform layers, and the page has to know which one it is looking at. Node needs none of this -- `targets/quake.json:x11` has always been enough there -- which is why it was missing.",
+
   "_units": "The engine, shared by both platforms. id386=0 is a BUILD OPTION of Quake's own, not a modification: the source ships a C equivalent of every .s file and the makefile picks one.",
   "units": {
     "list": [
@@ -32,12 +34,14 @@
 
   "variants": {
     "null": {
+      "host": "quake",
       "_doc": "The porting stub set Quake ships for exactly this situation: no real input, sound or timing. Sys_FloatTime here returns t += 0.1 -- a counter, not a clock -- so anything this build measures about ITSELF is fiction, and only a wall clock outside it means anything.",
       "addUnits": ["sys_null.c", "vid_null.c", "snd_null.c", "cd_null.c", "net_none.c", "in_null.c"],
       "env": ["stdio"]
     },
 
     "win": {
+      "host": "mgl",
       "title": "QUAKE (Win32, id386=0)",
       "_doc": "The Windows client, from WinQuake.dsp's own source list minus the twelve gl_* units of the GLQuake configuration. The platform set is the difference between that and the shared engine list: cd_win.c conproc.c in_win.c net_win.c net_wins.c net_wipx.c snd_dma.c snd_mem.c snd_mix.c snd_win.c sys_win.c vid_win.c.",
       "addUnits": [
@@ -55,6 +59,7 @@
     },
 
     "x11": {
+      "host": "x11",
       "title": "QUAKE (Linux/X11, id386=0)",
       "_doc": "The Linux/X11 client -- `quake.x11` in the game's own Makefile.linuxi386. The platform units are the difference between that makefile's X11_OBJS and the shared engine list above, computed rather than chosen: net_udp.c net_bsd.c cd_linux.c sys_linux.c vid_x.c snd_dma.c snd_mem.c snd_mix.c snd_linux.c. Its 18 assembly objects are the id386=1 build and are exactly what the C files already listed replace.",
       "addUnits": [
@@ -68,6 +73,7 @@
     },
 
     "dos": {
+      "host": "dos",
       "_doc": "The units the game actually shipped with. NOT a one-for-one swap: snd_null.c also DEFINES the sound cvars and shm, which the engine and the menu reference, so dropping it means picking up Quake's real sound core as well as its DOS driver. The null build was missing a third of the program, not just its output stage.",
       "addUnits": [
         "sys_dos.c", "vid_dos.c", "vid_vga.c", "vid_ext.c", "vregset.c",

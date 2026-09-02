@@ -105,6 +105,8 @@ const server = createServer(async (req, res) => {
           caseInsensitive: !!resolved.caseInsensitive,
           compile: resolved.compile ?? {},
           env: resolved.env ?? ['stdio'],
+          // Which shell branch presents it; a variant may set its own.
+          host: resolved.host ?? null,
           modules: Object.fromEntries(Object.entries(resolved.modules ?? {})
             .filter(([k]) => !k.startsWith('_'))
             .map(([k, m]) => [k, { soname: m.soname ?? null }])),

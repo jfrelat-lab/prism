@@ -104,11 +104,22 @@ function paintText() {
 
 // ---------------------------------------------------------------- program discovery
 let programs = {};
+/*
+ * Which platforms each target offers, by name. A program is a GAME; a variant is the platform layer
+ * it is built against, and Quake has four of them from one engine -- DOS, X11, Win32 and the null
+ * build its own source ships. Node could always pick one (`targets/quake.json:x11`); the page could
+ * not, which made it the only place the choice was invisible.
+ */
+let targetVariants = {};
 async function discover() {
   const { files } = await (await fetch('/__ls?dir=web/programs')).json();
   for (const f of files.filter(f => f.endsWith('.json'))) {
     programs[f.replace(/\.json$/, '')] = await (await fetch(`/web/programs/${f}`)).json();
   }
+  try {
+    const { targets } = await (await fetch('/__targets')).json();
+    for (const t of targets) targetVariants[t.name] = t.variants ?? [];
+  } catch { /* an older server: the picker simply stays hidden */ }
   const sel = $('program');
   sel.innerHTML = '';
   for (const [id, p] of Object.entries(programs)) {
@@ -121,9 +132,37 @@ async function discover() {
 
 function current() { return programs[$('program').value]; }
 
+/** The target this program builds from, if it names one, without any variant suffix. */
+function baseTarget(p) { return (p?.target ?? '').split(':')[0]; }
+
+/** The variant chosen in the picker, or whatever the descriptor already asked for. */
+function chosenTarget() {
+  const p = current();
+  if (!p?.target) return null;
+  const host = $('host');
+  return !host.hidden && host.value ? `${baseTarget(p)}:${host.value}` : p.target;
+}
+
 function describe() {
   const p = current();
   if (!p) return;
+  /*
+   * The platform picker, shown only when there is a choice to make. One variant is not a choice, and
+   * a program with no target at all describes its own build and has no variants to offer.
+   */
+  const host = $('host');
+  const variants = targetVariants[baseTarget(p)] ?? [];
+  host.innerHTML = '';
+  host.hidden = variants.length < 2;
+  if (!host.hidden) {
+    for (const v of variants) {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = v;
+      host.append(o);
+    }
+    const asked = (p.target ?? '').split(':')[1];
+    if (asked && variants.includes(asked)) host.value = asked;
+  }
   $('subtitle').textContent = p.subtitle || '';
   $('args').value = p.args || '';
   $('args').placeholder = p.argsHint || 'arguments passed to main()';
@@ -132,7 +171,32 @@ function describe() {
     .map(([k, what]) => `<kbd>${k}</kbd> ${what}`).join(' · ');
   $('controls').style.display = (p.controls || []).length ? '' : 'none';
 }
-$('program').onchange = describe;
+/*
+ * Changing the program or the platform STOPS what is running.
+ *
+ * Otherwise the picker stops describing what is on screen: pick `x11` while the `null` build is
+ * still going and the selector says one thing, the canvas shows another, and the next Run competes
+ * with a worker that never went away. The last frame is cleared too -- a stale picture from the
+ * previous platform is exactly the kind of evidence that gets read as a result.
+ */
+function switchAway(what) {
+  if (!worker) return;
+  stop(true);
+  log(`${what} changed — stopped the running program`);
+}
+
+/** Forget the screen, so nothing from the last program is mistaken for the next one. */
+function clearScreen() {
+  imageData = null; lut = null; palGen = -1;
+  cx.fillStyle = '#000';
+  cx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+$('program').onchange = () => { switchAway('program'); clearScreen(); describe(); };
+$('host').onchange = () => {
+  switchAway('platform'); clearScreen();
+  log(`platform: ${$('host').value}`);
+};
 
 // ---------------------------------------------------------------- the shell's own log
 function log(line, kind = 'info') {
@@ -335,7 +399,8 @@ $('run').onclick = () => {
     soundWorker.onerror = (e) => log(`[sound] ${e.message || 'failed to start'}`, 'error');
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
-  worker.postMessage({ type: 'start', program, control, data: dataFiles, argv, pipeSab });
+  worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
+                       control, data: dataFiles, argv, pipeSab });
   /*
    * The keys are the program's from now on. Without this the whole keyboard depended on which
    * control the user had touched last: type an argument and the focus stays in the field, and every
