@@ -11,6 +11,7 @@
 import { DJGPP_HEADERS } from './headers-djgpp.js';
 import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
+import { WIN32_HEADERS } from './headers-win32.js';
 
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
@@ -1149,6 +1150,7 @@ const KEYSYMDEF = `
 `;
 
 export const HEADERS = {
+  ...WIN32_HEADERS,
   'X11/Xlib.h': XLIB,
   'X11/Xutil.h': XUTIL,
   'X11/keysym.h': KEYSYMDEF,

@@ -632,3 +632,47 @@ Two smaller things found on the way. `M.write` is called per CHARACTER, so posti
 one sentence in thirty-three messages; the server's stdout is buffered to a line now. And Stop has to
 terminate the second worker too -- it is parked in `Atomics.wait` inside its own `write`, because the
 ring is its clock and nobody is draining it any more, so nothing short of terminate brings it back.
+
+## WinQuake: the Windows SDK is the missing header, and how far that got
+
+The measurement that chose this target held up. WinQuake's nine platform files name **120 external
+symbols** -- about 92 Win32/GDI/console, 12 DirectSound, 14 SciTech MGL -- and the DirectX and MGL
+headers SHIP WITH THE SOURCE (`dxsdk/SDK/INC`, `scitech/INCLUDE`). What no source tree ships, and
+what all of them assume underneath, is the Windows SDK: the base types, the calling-convention
+macros, and the COM declaration macros `objbase.h` would provide.
+
+`src/env/headers-win32.js` is that, and its size was set by what the shipped headers and the twelve
+platform units actually name, one compiler error at a time. It now gets **all four vendor headers to
+parse** -- ddraw.h, dsound.h, dinput.h and mgraph.h -- plus `winquake.h`, `sys_win.c`, `conproc.c`,
+`snd_win.c` and `cd_win.c`.
+
+Three things it had to get right rather than approximate:
+
+  * **COM in C.** An interface is a struct holding a pointer to a vtable of function pointers, and a
+    method call is `p->lpVtbl->Method(p, ...)`. That is not a simplification for PRISM's benefit: it
+    is the shape `objbase.h` gives these macros when `__cplusplus` is undefined, and the form Quake
+    was written against.
+  * **`LARGE_INTEGER` is a union.** `QueryPerformanceFrequency` fills it and `Sys_Init` immediately
+    takes `.LowPart` and `.HighPart` apart by hand, so a plain 64-bit typedef would compile the
+    declaration and fail on the next line.
+  * **`windows.h` used to include `winsock.h` and `mmsystem.h`.** `winquake.h` declares eleven
+    Winsock entry points without including anything that names `SOCKET`, and `dsound.h` names
+    `LPWAVEFORMATEX` the same way. Those declarations stand whichever `net_*.c` the build links, so
+    even a `net_none.c` build needs the types.
+
+**Where it stops, precisely.** `in_win.c:132` builds DirectInput's data-format table with
+
+    { &GUID_XAxis, FIELD_OFFSET(MYDATA, lX), DIDFT_AXIS | DIDFT_ANYINSTANCE, 0 },
+
+and `FIELD_OFFSET` expands to `&((MYDATA *)0)->lX` -- the portable, pre-C89 spelling of `offsetof`.
+The EMITTER already folds that shape (`#lvalAddrConst`, written for OpenDUNE's `offset(c, m)` idiom,
+which uses a base of 8 rather than 0). The PARSER's own `constEval` does not: it knows
+`__builtin_offsetof`, which is what `<stddef.h>` uses here, and nothing about the hand-written form.
+So a static initialiser containing one is refused before the emitter ever sees it.
+
+That is the next step, and it is worth more than this one target: `&((T *)0)->m` is how a great deal
+of pre-standard C spells an offset.
+
+Nothing regressed on the way: gate-run 31/31, c-testsuite 204/219, and Doom, Quake DOS, Quake X11,
+Heretic, Lua and MAME 0.2 all build as before -- the Win32 headers are spread FIRST into `HEADERS`,
+so an existing entry of the same name still wins.
