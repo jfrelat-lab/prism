@@ -210,6 +210,29 @@ if ((frameCap || pngPath) && program.M.rt.XPutImage) {
     return r;
   };
 }
+/*
+ * The same thing for a program presenting through MGL, whose frame boundary is MGL_bitBltCoord.
+ *
+ * The four integers it reads are published by src/env/mgl.c, in C, on purpose: `surface` and
+ * `mi.bytesPerLine` live inside a struct whose layout this file must not guess at -- that is the
+ * whole reason that shim is not written in JavaScript. Plain integers cross the boundary safely.
+ */
+const mglAddr = (n) => program.mod.symbols.get(n)?.addr ?? 0;
+const mgl = program.F.MGL_bitBltCoord && mglAddr('prism_mgl_surface')
+  ? { surface: mglAddr('prism_mgl_surface'), width: mglAddr('prism_mgl_width'),
+      height: mglAddr('prism_mgl_height'), pitch: mglAddr('prism_mgl_pitch'),
+      palette: mglAddr('prism_mgl_palette') }
+  : null;
+if ((frameCap || pngPath) && mgl) {
+  const inner = program.F.MGL_bitBltCoord;
+  const wrapped = function (...a) {
+    const r = inner.apply(this, a);
+    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+    return r;
+  };
+  program.F.MGL_bitBltCoord = wrapped;
+  program.mod.bindFunc('MGL_bitBltCoord', wrapped);
+}
 
 try {
   program.run([target.name, ...args]);
@@ -236,7 +259,31 @@ if (wavPath && program.M.dsp?.wav) {
   }
 }
 
-if (program.M.x11?.imageData) {
+if (mgl) {
+  const dv = program.mod.dv;
+  const surface = dv.getInt32(mgl.surface, true);
+  const width = dv.getInt32(mgl.width, true), height = dv.getInt32(mgl.height, true);
+  const pitch = dv.getInt32(mgl.pitch, true);
+  console.log(`\nframes ${frames} · display ${width}x${height}`);
+  if (surface && width && pngPath) {
+    const pixels = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) pixels[y * width + x] = program.M.u8[surface + y * pitch + x];
+    }
+    // MGL's palette_t is BGRA at six bits a component -- the VGA DAC's range, which vid_win.c
+    // shifts Quake's 0..255 values down into. Scaled back up here for a PNG.
+    const palette = new Uint8Array(768);
+    for (let i = 0; i < 256; i++) {
+      palette[i * 3 + 0] = Math.min(255, program.M.u8[mgl.palette + i * 4 + 2] << 2);
+      palette[i * 3 + 1] = Math.min(255, program.M.u8[mgl.palette + i * 4 + 1] << 2);
+      palette[i * 3 + 2] = Math.min(255, program.M.u8[mgl.palette + i * 4 + 0] << 2);
+    }
+    let nz = 0;
+    for (const b of pixels) if (b) nz++;
+    writeIndexedPng(pngPath, { pixels, width, height, palette });
+    console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
+  }
+} else if (program.M.x11?.imageData) {
   const x = program.M.x11;
   console.log(`\nframes ${frames} · display ${x.width}x${x.height}`);
   if (pngPath) {

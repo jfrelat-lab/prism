@@ -37,6 +37,7 @@
 #include <windows.h>
 #include <mgraph.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 /* MGL reports the last error through MGL_result(); nothing here fails, so it stays grOK. */
@@ -50,6 +51,19 @@ static MGLDC *mgl_current = NULL;
  */
 palette_t prism_mgl_palette[256];
 m_int prism_mgl_frames = 0;
+
+/*
+ * The presented surface, as four plain integers.
+ *
+ * A harness wants the pixels, and it must not have to know where `surface` and `mi.bytesPerLine` sit
+ * inside publicDevCtx_t -- that knowledge is why this file is in C at all, and re-deriving it in
+ * JavaScript would put it back where it does not belong. So the blit publishes what it just showed,
+ * the same move every other PRISM target makes: the program says where its picture is.
+ */
+void  *prism_mgl_surface = 0;
+m_int  prism_mgl_width = 0;
+m_int  prism_mgl_height = 0;
+m_int  prism_mgl_pitch = 0;
 
 /*
  * A device context plus its surface, allocated together so one free releases both. The public part
@@ -115,7 +129,13 @@ m_int MGL_modeResolution(m_int mode, m_int *xRes, m_int *yRes, m_int *bitsPerPix
 }
 
 const char *MGL_modeDriverName(m_int mode) { (void)mode; return "PRISM"; }
-bool MGL_changeDisplayMode(m_int mode) { (void)mode; return false; }
+/*
+ * grWINDOWED is not a display mode, it is the request to LEAVE one -- vid_win.c calls
+ * `MGL_changeDisplayMode(grWINDOWED)` at the top of VID_SetWindowedMode and calls initFatalError if
+ * it fails. Refusing everything uniformly therefore killed the windowed path, which is the only one
+ * this build has. A real fullscreen mode is still refused, because there is none.
+ */
+bool MGL_changeDisplayMode(m_int mode) { return mode == grWINDOWED; }
 
 MGLDC *MGL_createDisplayDC(m_int numBuffers) { (void)numBuffers; return NULL; }
 
@@ -168,6 +188,10 @@ static void blit(MGLDC *dst, MGLDC *src, m_int left, m_int top, m_int right, m_i
     m_int y, w, h;
     if (!dst || !src || !src->surface) return;
     prism_mgl_frames++;
+    prism_mgl_surface = src->surface;
+    prism_mgl_width = src->mi.xRes + 1;
+    prism_mgl_height = src->mi.yRes + 1;
+    prism_mgl_pitch = src->mi.bytesPerLine;
     if (!dst->surface) return;                   /* the window: the harness reads vid.buffer */
     w = right - left;
     h = bottom - top;
@@ -218,9 +242,21 @@ void MGL_setVisualPage(MGLDC *dc, m_int page, m_int waitVRT) { (void)dc; (void)p
 
 m_int MGL_result(void) { return mgl_lastResult; }
 const char *MGL_errorMsg(m_int err) { (void)err; return "no error"; }
-void MGL_fatalError(const char *msg) { (void)msg; }
+/*
+ * A fatal error EXITS. MGL's does, and a version that printed nothing and returned let vid_win.c's
+ * initFatalError -- whose whole job is to stop -- fall through and carry on with a half-built
+ * device context. That is the failure mode this file's own opening paragraph warns about, arrived at
+ * by writing `{ }` without asking what the caller expects to happen next.
+ */
+void MGL_fatalError(const char *msg)
+{
+    fprintf(stderr, "MGL fatal error: %s\n", msg ? msg : "(none)");
+    exit(1);
+}
 
 void MGL_appActivate(MGLDC *winDC, bool active) { (void)winDC; (void)active; }
 void MGL_setAppInstance(MGL_HINSTANCE hInstApp) { (void)hInstApp; }
 void MGL_setSuspendAppCallback(MGL_suspend_cb_t saveState) { (void)saveState; }
 bool MGL_setWinDC(MGLDC *dc, MGL_HDC hdc) { (void)dc; (void)hdc; return true; }
+/* MGLWIN.H's, not MGRAPH.H's: the fullscreen window registration, which this build has none of. */
+void MGL_registerFullScreenWindow(MGL_HWND hwnd) { (void)hwnd; }

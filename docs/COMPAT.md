@@ -787,3 +787,57 @@ boundary, exactly as `XPutImage` is for an X client. Nothing new had to be inven
 Only the WINDOWED path is implemented, and it says so rather than pretending: `MGL_availableModes`
 returns an empty list -- the truthful answer for a machine with no fullscreen driver -- and
 `vid_win.c:411` reads `m[0] != 0xFF` and skips its entire mode enumeration. Run with `-window`.
+
+## WinQuake runs and renders: the third platform
+
+```
+node tools/build.mjs targets/quake.json:win --run --data=<dir with id1/> \
+     --args="-window" --frames=150 --png=/tmp/wq.png
+
+QUAKE (Win32, id386=0) -- 76 translation units, 53,634 lines, 1295 functions in 1.2 s
+  0 symbols declared and called but never defined
+  0 functions could not be emitted
+frames 150 - display 320x240
+  76694 non-zero pixels of 76800, 136 colours
+```
+
+The same game on a third platform, from the same tree: DOS, X11 and now Win32. The demo plays at
+320x240 -- the Windows build's own default windowed size, larger than the 320x200 the other two use.
+
+`src/env/win32.c` is 85 functions, in C for the reason `mgl.c` is: nearly every one takes or fills a
+struct whose layout `headers-win32.js` decides, so a JavaScript version would be two files of mine
+disagreeing silently. It also holds the `main` -> `WinMain` bridge, which is a property of the
+platform rather than of any program.
+
+**Where "answer honestly that there is nothing here" is right, and where it is not.**
+
+The rule served well for the hardware. `LoadLibrary` returns NULL and snd_win.c's DirectSound path --
+which reaches DirectSound only through `GetProcAddress` on dsound.dll -- gives up exactly as it does
+on a machine without it; `waveOutOpen` fails and the fallback gives up too; `mciSendCommand` fails and
+CDAudio reports no CD; `joyGetNumDevs` returns 0. Each of those is a fact about the machine, and the
+program has a path for it because plenty of 1996 machines were configured that way.
+
+It was wrong twice, in the same way, and both cost a run:
+
+  * **`CreateEvent` returning NULL.** An event object is not a device -- every Windows has them, they
+    are pure bookkeeping. WinMain does `tevent = CreateEvent(...); if (!tevent) Sys_Error(...)`, so
+    the program stopped before printing its first line.
+  * **`MGL_changeDisplayMode` refusing everything.** `grWINDOWED` is not a display mode, it is the
+    request to LEAVE one, and VID_SetWindowedMode calls it first thing. Refusing uniformly killed the
+    only path this build has.
+
+And one that was worse than either: **`MGL_fatalError` written as `{ }`**. A fatal error exits; a
+version that printed nothing and returned let `initFatalError` -- whose entire job is to stop -- fall
+through and continue with a half-built device context. That is precisely the failure this shim's own
+opening paragraph warns about, arrived at by writing an empty body without asking what the caller
+expects to happen next. It prints and exits now.
+
+`build.mjs`'s `--frames`/`--png` cover this target too: the frame boundary is `MGL_bitBltCoord`, and
+the surface it presents is published from `mgl.c` as four plain integers. That indirection is the
+point -- `surface` and `mi.bytesPerLine` live inside a struct the JavaScript side must not guess at,
+which is the whole reason that shim is written in C.
+
+Open on this target: the palette. The picture is a little brighter and yellower than the X11 build's,
+which is either the six-bit scaling here or a gamma ramp vid_win.c applies, and I have not measured
+which. Input is the other half -- `PeekMessage` returns an empty queue, so nothing reaches the game
+yet, and that one function is where keys will arrive.
