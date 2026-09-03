@@ -2052,3 +2052,49 @@ One method note. An early count said `D_DrawParticle` ran 0 times while `R_DrawP
 PRISM emits DIRECT calls, so wrapping `program.F[name]` does not intercept a call made from another
 compiled function unless the rebinder reaches it. Numbers taken that way have to be checked against a
 function that is definitely being intercepted before they mean anything.
+
+### Tracing the three platforms against each other
+
+```
+node tools/trace-platforms.mjs --data=<dir> --frames=60 --trace=SCR_UpdateScreen,VID_Update
+
+  x11 vs dos: 47/61 world frames agree, differing at 0-13
+  x11 vs win:  0/61 world frames agree, differing at 0-60
+      at frame 60: SCR_UpdateScreen  x11=73  win=78
+      at frame 60: VID_Update        x11=70  win=74
+  dos vs win:  0/61 world frames agree
+      at frame 60: VID_Update        dos=70  win=74
+```
+
+`gate-pixels.mjs` says WHETHER the pictures agree; this says WHERE they stop, which is the question
+you have once they do not. The signature per frame is a checksum of the framebuffer plus the call
+counts of whatever was named, matched by WORLD frame rather than by position.
+
+**"First divergence" was the wrong statistic** and the first version reported it. Every pair differed
+at world frame 0 -- including x11 and dos, which `gate-pixels` proves identical at frame 60 -- because
+the console screens before the demo are drawn at different rates and legitimately disagree. Two
+platforms can differ early and CONVERGE. The run of frames where they agree is what says something,
+and it says x11 and dos settle down at frame 14 and never disagree again.
+
+**The tool marks its own blind spot.** PRISM emits direct calls, so wrapping `program.F[name]` does
+not intercept a call made from another compiled function. `R_DrawSurface`, `D_CacheSurface` and
+`R_DrawParticles` all report 0 on every platform, which means "not intercepted", not "not called" --
+and an earlier hunt of mine drew a conclusion from exactly that reading. Anything reported as 0 on
+every platform is flagged in the output rather than left to be misread.
+
+**What it found.** win runs `VID_Update` 74 times and `SCR_UpdateScreen` 78 times for the same 60
+world frames, against 70 and 73 for the other two. Five extra screen updates, each of which repaints
+only part of the screen and leaves the rest as it was -- which is a mechanism by which one buffer
+accumulates content the others never had. That is the next thing to follow for the 1219 pixels.
+
+### Does a windowed resolution change apply?
+
+At start-up, yes, measured: `+vid_stretch_by_2 0 +vid_config_x 320 +vid_config_y 200 +vid_mode 2`
+gives `display 320x200`.
+
+At RUNTIME, not yet. `vid_win.c:2377` polls `if ((int)vid_mode.value != vid_realmode) VID_SetMode(...)`
+inside `VID_Update`, every frame, so the video menu should work -- but driving the same change from the
+command buffer (forty `+wait`s then `+vid_mode 2`) left the presented size at 320x240 for 260 frames
+and `vid_mode` reading 0 at the end. Either the deferred command never ran or the mode set failed and
+`vid_win.c:2382` reset the cvar to the mode actually obtained. Not chased further; recorded because a
+menu that silently does nothing is worse than one that is missing.
