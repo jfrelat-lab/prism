@@ -23,6 +23,7 @@ import { installCrtStatus } from '../src/env/crtstatus.js';
 import { installVgaDac } from '../src/env/vgadac.js';
 import { installKbd8042 } from '../src/env/kbd8042.js';
 import { installPIT } from '../src/env/pit.js';
+import { installGo32 } from '../src/env/go32.js';
 import { installWatcom } from '../src/env/watcom.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
@@ -57,9 +58,22 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     program = {
       ...program,
       root: t.dir,
-      units: t.units.filter(u => u.source === undefined).map(u => u.file.slice(t.dir.length + 1)),
+      /*
+       * A unit under the target's own directory is named RELATIVE to it, because that is the tree
+       * this worker fetches. One outside it -- a `generated` file such as src/env/win32.c, which is
+       * PRISM's and not the game's -- keeps its repo-relative path and is fetched on its own.
+       *
+       * Slicing the directory prefix off every unit is what broke this: an absolute-in-the-repo path
+       * that does not start with the target's directory came out as the EMPTY STRING, and the build
+       * failed with "missing translation unit " and nothing after it.
+       */
+      units: t.units.filter(u => u.source === undefined)
+        .map(u => (u.file.startsWith(`${t.dir}/`) ? u.file.slice(t.dir.length + 1) : u.file)),
+      outsideRoot: t.units.filter(u => u.source === undefined)
+        .map(u => u.file).filter(f => !f.startsWith(`${t.dir}/`)),
       unitDefines: Object.fromEntries(t.units.filter(u => u.defines)
-        .map(u => [u.file.slice(t.dir.length + 1).toLowerCase(), u.defines])),
+        .map(u => [(u.file.startsWith(`${t.dir}/`) ? u.file.slice(t.dir.length + 1) : u.file)
+          .toLowerCase(), u.defines])),
       extraUnits: Object.fromEntries(t.units.filter(u => u.source !== undefined)
         .map(u => [u.file, u.source])),
       includeDirs: t.include.map(d => d.slice(t.dir.length + 1)),
@@ -105,6 +119,11 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     const r = await fetch(`/${program.root}/${f}`);
     if (r.ok) tree.set(f.toLowerCase(), await r.text());
   }));
+  /* The units that live outside the target's tree, each fetched from the repository root. */
+  for (const f of program.outsideRoot ?? []) {
+    const r = await fetch(`/${f}`);
+    if (r.ok) tree.set(f.toLowerCase(), await r.text());
+  }
   log(`fetched ${tree.size} source files (${(performance.now() - t0).toFixed(0)} ms)`);
 
   /** The include search, over the fetched tree: the program's own -I list, then PRISM's headers. */
@@ -206,8 +225,8 @@ async function start({ program, control, data, argv, pipeSab = null }) {
    * Which shell branch presents this build. It comes from the resolved TARGET VARIANT when there is
    * one -- Quake has four platform layers over one engine -- and from the descriptor otherwise.
    */
-  const host = program.host ?? program.platform ?? 'allegro';
-  if (host === 'x11') {
+  const platform = program.host ?? program.platform ?? 'allegro';
+  if (platform === 'x11') {
     /*
      * A UNIX host: the program is an X client, and Xlib is shimmed at the library boundary. Doom
      * draws into the XImage buffer it asked Xlib for, so the page reads that address directly —
@@ -250,7 +269,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
       },
       onFrame: () => { reader.endFrame(); pace(); },
     });
-  } else if (host === 'quake') {
+  } else if (platform === 'quake') {
     installQuake(prog.M, {
       publish: { ctrl },
       F: prog.F,
@@ -258,7 +277,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     });
     // compile.js installed stdio with no files; re-install with the ones the page supplied.
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
-  } else if (host === 'watcom') {
+  } else if (platform === 'watcom') {
     /*
      * A WATCOM/DOS4GW host: Heretic, Hexen and OpenDUNE. One branch for three games, because what
      * they have in common is not a library but a MACHINE -- three devices and a clock.
@@ -337,7 +356,111 @@ async function start({ program, control, data, argv, pipeSab = null }) {
         if (e.scan) host.deliverKeyboard(e.down ? e.scan : (e.scan | 0x80));
       }
     };
-  } else if (host !== 'allegro') {
+  } else if (platform === 'mgl') {
+    /*
+     * A WIN32 host: WinQuake. src/env/win32.c and src/env/mgl.c are compiled INTO the program, so
+     * this branch installs no library at all -- it publishes an address and posts keystrokes.
+     *
+     * Where the picture is comes from the program, as everywhere else here, but through four plain
+     * integers rather than a symbol lookup: `surface` and `mi.bytesPerLine` live inside MGL's
+     * publicDevCtx_t, and this side must not know that struct's layout. mgl.c writes them out on
+     * every blit for exactly this reason.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
+    const at = {
+      surface: sym('prism_mgl_surface'), width: sym('prism_mgl_width'),
+      height: sym('prism_mgl_height'), pitch: sym('prism_mgl_pitch'),
+      palette: sym('prism_mgl_palette'),
+    };
+    const key = prog.F.prism_win32_key;
+    if (!at.surface || !key) throw new Error('this build has no MGL/Win32 layer compiled in');
+
+    /*
+     * MGL's palette_t is BGRA and holds the FULL 0..255 -- vid_win.c writes `pal[i].red =
+     * palette[i*3]` with no shift. Scaling it as if it were the DAC's six bits made the first
+     * capture four times too bright, which is the kind of mistake that looks like a gamma setting.
+     */
+    const publishPalette = () => {
+      for (let i = 0; i < 256; i++) {
+        pal[i * 3 + 0] = prog.M.u8[at.palette + i * 4 + 2];
+        pal[i * 3 + 1] = prog.M.u8[at.palette + i * 4 + 1];
+        pal[i * 3 + 2] = prog.M.u8[at.palette + i * 4 + 0];
+      }
+      Atomics.add(ctrl, SLOT.PALGEN, 1);
+    };
+
+    const dv = prog.mod.dv;
+    const blt = prog.F.MGL_bitBltCoord;
+    const wrapped = function (...a) {
+      const r = blt.apply(this, a);
+      const surface = dv.getInt32(at.surface, true);
+      if (surface) {
+        Atomics.store(ctrl, SLOT.WIDTH, dv.getInt32(at.width, true));
+        Atomics.store(ctrl, SLOT.HEIGHT, dv.getInt32(at.height, true));
+        Atomics.store(ctrl, SLOT.PIXELS, surface);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        publishPalette();
+      }
+      /*
+       * The keystrokes go in HERE, at the frame boundary, and through the program's own message
+       * queue -- prism_win32_key posts a real WM_KEYDOWN, which leaves through PeekMessage and comes
+       * back into Quake's MainWndProc. Handing them to its input code directly would have been
+       * shorter and would have tested nothing.
+       */
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+      reader.endFrame();
+      pace();
+      return r;
+    };
+    prog.F.MGL_bitBltCoord = wrapped;
+    prog.mod.bindFunc('MGL_bitBltCoord', wrapped);
+
+  } else if (platform === 'dos') {
+    /*
+     * A DJGPP/DOS host: Quake's own DOS build. The same three devices the Raven games need, plus
+     * DJGPP's DPMI floor -- and no CRTC emulation, because Quake's default video mode programs no
+     * VGA registers at all (`vgavidmodes[0]` carries an empty register set), which leaves the
+     * framebuffer as ordinary memory at 0xA0000.
+     *
+     * tools/quake.mjs reached this arrangement first; this is the same one, which is the point of
+     * the environment being a list in the target rather than code in each harness.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    const machine = installPortMachine(prog.M);
+    installCrtStatus(machine);                       // VGA_WaitVsync spins on bit 3 of 0x3DA
+    installVgaDac(machine, {
+      onChange: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
+    });
+    prog.M.kbd = installKbd8042(machine);            // in_dos.c's handler reads port 0x60
+    installPIT(machine, prog.M, { micros: () => performance.now() * 1000 });
+    const dosHost = installGo32(prog.M);
+
+    Atomics.store(ctrl, SLOT.WIDTH, 320);
+    Atomics.store(ctrl, SLOT.HEIGHT, 200);
+    Atomics.store(ctrl, SLOT.PIXELS, 0xa0000);
+    Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+
+    /*
+     * VID_Update is the frame boundary AND the only moment this host has to deliver an interrupt: a
+     * DOS program's asynchronous events arrive while it is inside a loop of its own C. A press and a
+     * release are one interrupt each, because that is what the hardware sends.
+     */
+    const inner = prog.F.VID_Update;
+    const w = function (...a) {
+      const r = inner.apply(this, a);
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        prog.M.kbd.push(e.down ? e.scan : (e.scan | 0x80));
+        dosHost.deliver(0x09);
+      }
+      reader.endFrame();
+      pace();
+      return r;
+    };
+    prog.F.VID_Update = w;
+    prog.mod.bindFunc('VID_Update', w);
+
+  } else if (platform !== 'allegro') {
     /*
      * An unknown platform, said out loud.
      *
@@ -347,7 +470,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
      * shell has no branch for yet, and saying which is missing is more useful than a stack trace
      * from a program that was handed the wrong world.
      */
-    throw new Error(`the shell has no branch for platform '${host}' yet -- ` +
+    throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
       `it presents x11, quake, watcom and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {

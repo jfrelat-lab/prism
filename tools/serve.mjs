@@ -107,6 +107,7 @@ const server = createServer(async (req, res) => {
           env: resolved.env ?? ['stdio'],
           // Which shell branch presents it; a variant may set its own.
           host: resolved.host ?? null,
+          args: resolved.args ?? null,
           modules: Object.fromEntries(Object.entries(resolved.modules ?? {})
             .filter(([k]) => !k.startsWith('_'))
             .map(([k, m]) => [k, { soname: m.soname ?? null }])),
@@ -125,7 +126,11 @@ const server = createServer(async (req, res) => {
       const out = [];
       for (const f of files) {
         const t = JSON.parse(await readFile(join(ROOT, 'targets', f), 'utf8'));
-        const variants = Object.keys(t.variants ?? {}).filter(k => !k.startsWith('_'));
+        /* Each variant as an object: the page needs its host and whether it is meant for a page. */
+        const variants = Object.entries(t.variants ?? {})
+          .filter(([k]) => !k.startsWith('_'))
+          .map(([k, v]) => ({ name: k, host: v.host ?? null, web: v.web !== false,
+                              args: v.args ?? null }));
         const present = await stat(join(ROOT, t.dir)).then(() => true, () => false);
         out.push({ name: f.replace(/\.json$/, ''), title: t.title ?? t.name, variants, present });
       }

@@ -929,3 +929,41 @@ wants a sound device.
 screen: choose `x11` while the `null` build is still going and the two disagree, while the next Run
 competes with a worker that never went away. The last frame is cleared with it -- a stale picture
 from the previous platform is exactly the kind of evidence that gets read as a result.
+
+## Three platforms of Quake in the page
+
+The picker now offers `win`, `x11` and `dos`, and all three run in the browser. `null` stays in Node
+and says why in the target: it is the porting-stub build whose `Sys_FloatTime` returns `t += 0.1`, a
+counter rather than a clock, so anything it measures about ITSELF is fiction. A fine compile test and
+a poor thing to hand somebody as a playable Quake.
+
+```
+win   320x240   76,694 non-zero pixels of 76,800     (matches the Node capture exactly)
+dos   320x200   63,089 non-zero pixels at 0xA0000, palette published
+x11   320x200   1,083 functions, 3,441 frames, audio at 11,025 Hz
+```
+
+The `mgl` branch installs no library at all -- `win32.c` and `mgl.c` are compiled INTO the program --
+so it publishes an address and posts keystrokes, and both come through the four integers `mgl.c`
+writes on every blit. The `dos` branch is the arrangement `tools/quake.mjs` reached first: three
+devices plus DJGPP's DPMI floor, no CRTC emulation, and the framebuffer as ordinary memory at
+0xA0000, because Quake's default video mode programs no VGA registers at all.
+
+Three things had to be fixed, and each was invisible until a platform other than x11 was asked for:
+
+  * **A unit outside the target's directory came out as the empty string.** The fold sliced the
+    target's directory off every unit path, which is right for the game's own files and wrong for a
+    `generated` one -- `src/env/win32.c` is PRISM's, not Quake's. The build failed with
+    `missing translation unit ` and nothing after it. Those are now kept whole and fetched from the
+    repository root.
+  * **A platform may need its own arguments.** Quake's DOS build asks DPMI how much memory there is,
+    computes `malloc'd: -95124` from the answer, and refuses with "Only -0.1 megs of memory
+    available"; `-mem 16` gives it the heap size outright. And `-nosound`, because `snd_dos.c` drives
+    a Gravis Ultrasound through ports nothing here answers, so without it the game reaches `GUS_Init`
+    and stops. Both are the program's own switches. The variant carries them and the page fills the
+    field in, visibly, so they can be changed.
+  * **The branch chain ended in an `else` that installed Allegro** -- fine while every descriptor
+    named its own platform, and a silent wrong answer the moment the page could pick one.
+
+And one latent trap of my own: the watcom branch declares `const host = installWatcom(...)`, which
+shadowed the new outer `host`. Renamed to `platform` before it could mean two things in one function.

@@ -118,7 +118,13 @@ async function discover() {
   }
   try {
     const { targets } = await (await fetch('/__targets')).json();
-    for (const t of targets) targetVariants[t.name] = t.variants ?? [];
+    // Only the variants meant for a page: a target may keep a Node-only build (see the `web`
+    // flag in targets/*.json), and offering one here would hand somebody a compile test.
+    for (const t of targets) {
+      targetVariants[t.name] = (t.variants ?? [])
+        .filter(v => (typeof v === 'string' ? true : v.web !== false))
+        .map(v => (typeof v === 'string' ? { name: v, args: null } : v));
+    }
   } catch { /* an older server: the picker simply stays hidden */ }
   const sel = $('program');
   sel.innerHTML = '';
@@ -157,11 +163,11 @@ function describe() {
   if (!host.hidden) {
     for (const v of variants) {
       const o = document.createElement('option');
-      o.value = v; o.textContent = v;
+      o.value = v.name; o.textContent = v.name;
       host.append(o);
     }
     const asked = (p.target ?? '').split(':')[1];
-    if (asked && variants.includes(asked)) host.value = asked;
+    if (asked && variants.some(v => v.name === asked)) host.value = asked;
   }
   $('subtitle').textContent = p.subtitle || '';
   $('args').value = p.args || '';
@@ -195,7 +201,14 @@ function clearScreen() {
 $('program').onchange = () => { switchAway('program'); clearScreen(); describe(); };
 $('host').onchange = () => {
   switchAway('platform'); clearScreen();
-  log(`platform: ${$('host').value}`);
+  /*
+   * A platform may need arguments of its own -- Quake's DOS build will not start without `-mem 16`,
+   * because it asks DPMI how much memory there is and does not like the answer. The variant says so
+   * in targets/*.json, and the field is filled in so the person can see and change it.
+   */
+  const v = (targetVariants[baseTarget(current())] ?? []).find(x => x.name === $('host').value);
+  if (v?.args) $('args').value = v.args;
+  log(`platform: ${$('host').value}${v?.args ? ` (args: ${v.args})` : ''}`);
 };
 
 // ---------------------------------------------------------------- the shell's own log

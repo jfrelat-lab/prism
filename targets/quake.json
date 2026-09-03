@@ -35,6 +35,8 @@
   "variants": {
     "null": {
       "host": "quake",
+      "_web": "NODE ONLY, and it earns that: this is the porting-stub build, whose Sys_FloatTime returns `t += 0.1` -- a counter, not a clock. Anything it measures about ITSELF is fiction, which makes it a fine compile test and a bad thing to hand somebody as a playable Quake. The page offers the three real platforms.",
+      "web": false,
       "_doc": "The porting stub set Quake ships for exactly this situation: no real input, sound or timing. Sys_FloatTime here returns t += 0.1 -- a counter, not a clock -- so anything this build measures about ITSELF is fiction, and only a wall clock outside it means anything.",
       "addUnits": ["sys_null.c", "vid_null.c", "snd_null.c", "cd_null.c", "net_none.c", "in_null.c"],
       "env": ["stdio"]
@@ -74,6 +76,8 @@
 
     "dos": {
       "host": "dos",
+      "_args": "-mem 16 is not a preference, it is what makes this build start. Quake DOS asks DPMI how much memory there is and computes `malloc'd: -95124` from the answer, then refuses with \"Only -0.1 megs of memory available\". The switch is the game's own, for the same situation on real hardware whose DPMI host lied; giving the heap size outright skips the question. -nosound is the second half: snd_dos.c drives a Gravis Ultrasound or a Sound Blaster through ports nothing here answers, and without the switch the game reaches GUS_Init and stops. Both are the program's own options, not modifications.",
+      "args": "-mem 16 -nosound",
       "_doc": "The units the game actually shipped with. NOT a one-for-one swap: snd_null.c also DEFINES the sound cvars and shm, which the engine and the menu reference, so dropping it means picking up Quake's real sound core as well as its DOS driver. The null build was missing a third of the program, not just its output stage.",
       "addUnits": [
         "sys_dos.c", "vid_dos.c", "vid_vga.c", "vid_ext.c", "vregset.c",
