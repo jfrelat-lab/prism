@@ -76,8 +76,8 @@
 
     "dos": {
       "host": "dos",
-      "_args": "-mem 16 is not a preference, it is what makes this build start. Quake DOS asks DPMI how much memory there is and computes `malloc'd: -95124` from the answer, then refuses with \"Only -0.1 megs of memory available\". The switch is the game's own, for the same situation on real hardware whose DPMI host lied; giving the heap size outright skips the question. -nosound is the second half: snd_dos.c drives a Gravis Ultrasound or a Sound Blaster through ports nothing here answers, and without the switch the game reaches GUS_Init and stops. Both are the program's own options, not modifications.",
-      "args": "-mem 16 -nosound",
+      "_args": "-nosound, and ONLY that. snd_dos.c drives a Gravis Ultrasound or a Sound Blaster through ports nothing here answers, so without the switch the game reaches GUS_Init and stops -- the program's own option for a machine with no sound card. `-mem 16` used to be here too and should not have been: the game sizes its heap by walking sbrk down in 64K steps until one succeeds, PRISM's sbrk refused every size, and the loop ran the value negative. That was a bug in the runtime, not a preference of this build (see src/runtime/runtime.js).",
+      "args": "-nosound",
       "_doc": "The units the game actually shipped with. NOT a one-for-one swap: snd_null.c also DEFINES the sound cvars and shm, which the engine and the menu reference, so dropping it means picking up Quake's real sound core as well as its DOS driver. The null build was missing a third of the program, not just its output stage.",
       "addUnits": [
         "sys_dos.c", "vid_dos.c", "vid_vga.c", "vid_ext.c", "vregset.c",

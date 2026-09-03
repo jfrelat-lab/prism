@@ -967,3 +967,43 @@ Three things had to be fixed, and each was invisible until a platform other than
 
 And one latent trap of my own: the watcom branch declares `const host = installWatcom(...)`, which
 shadowed the new outer `host`. Renamed to `platform` before it could mean two things in one function.
+
+### `-mem 16` was hiding a bug in sbrk
+
+The DOS variant carried `-mem 16` and I wrote that it was "the game's own switch, for the same
+situation on real hardware whose DPMI host lied". That was wrong, and the question "do we not have 16
+MB by default?" was the right one to ask: the target has **509 MB free**.
+
+`dos_getmaxlockedmem` asks DPMI how much memory there is, gets 32 MB, and then walks DOWN in 64 KB
+steps until an allocation succeeds:
+
+```c
+do { working_size -= 0x10000; working_memory = sbrk(working_size); }
+while (working_memory == (void *)-1);
+```
+
+Every call failed, so the loop ran the value negative -- `malloc'd: -95124`, then
+`Only -0.1 megs of memory available`. `-mem 16` made the game start by skipping the question
+entirely, which is exactly why it looked like a program option instead of a defect here.
+
+**There were two heap frontiers.** `malloc` bumped `heapEnd`; `sbrk` bumped `heap`; both began at the
+same address, so a working `sbrk` would have handed out bytes `malloc` had already given away. What
+concealed that was the limit check -- `sbrk` compared against `heapEnd`, malloc's frontier, instead of
+`heapTop`, the ceiling. It could therefore only extend into ground malloc had ALREADY taken, and
+refused everything else. The bug and the thing that made it harmless were the same line.
+
+One frontier now, and the DOS build sizes its own heap:
+
+```
+sbrk(33554432) = 1667984          (was -1, at every size)
+
+EXE: 00:00:00 JAN  1 1996
+31.9 MEGABYTE HEAP
+```
+
+The variant keeps `-nosound` and only that: `snd_dos.c` drives a Gravis Ultrasound or a Sound Blaster
+through ports nothing here answers, so without it the game reaches `GUS_Init` and stops. That one is
+genuinely the program's own option for a machine with no sound card.
+
+gate-run 32/32, c-testsuite 204/219, gate-abi 1745/1745, Lua 14+8 of 27, and Doom, Heretic, OpenDUNE,
+MAME 0.2 and both other Quake variants unchanged.

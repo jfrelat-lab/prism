@@ -240,12 +240,33 @@ function makeLibc(M) {
      * sbrk, over the same brk the guest malloc uses -- so a program that mixes them (Quake asks
      * sbrk(0) to find the heap top) sees one consistent heap rather than two.
      */
+    /*
+     * ONE frontier, shared with malloc.
+     *
+     * There were two: malloc bumped `heapEnd` and this bumped `heap`, both starting at the same
+     * address -- so a working sbrk would have handed out bytes malloc had already given away. What
+     * hid that was the limit check, which compared against `heapEnd` (malloc's frontier) instead of
+     * `heapTop` (the ceiling), so sbrk could only ever extend into ground malloc had ALREADY taken
+     * and refused everything else.
+     *
+     * Quake's DOS build is what exposed it. `dos_getmaxlockedmem` asks DPMI for the free memory, gets
+     * 32 MB, and then walks DOWN in 64K steps until sbrk succeeds:
+     *
+     *     do { working_size -= 0x10000; working_memory = sbrk(working_size); }
+     *     while (working_memory == (void *)-1);
+     *
+     * With sbrk failing at every size the loop ran the value negative, `malloc'd: -95124`, and the
+     * game refused to start with "Only -0.1 megs of memory available" -- on a target with 509 MB
+     * free. `-mem 16` made it start by skipping the question, which is why this looked like a
+     * program option rather than a bug here.
+     */
     sbrk: (delta) => {
-      const prev = M.heap;
+      const prev = M.heapEnd;
       const d = delta | 0;
       if (d === 0) return prev;
-      if (M.heap + d > M.heapEnd) return -1;
-      M.heap += d;
+      if (d > 0 && M.heapEnd + d > M.heapTop) return -1;
+      M.heapEnd += d;
+      if (M.heapEnd < M.heap) M.heapEnd = M.heap;     // never below the heap's base
       return prev;
     },
 
