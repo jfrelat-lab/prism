@@ -220,11 +220,28 @@ for (const [name, run] of Object.entries(runs)) {
  * X11 is the pivot: each other platform is compared against the run that matches its size.
  *
  * Only the pairs marked `assert` decide the exit status. x11-vs-win is MEASURED and printed but not
- * asserted, because it differs by about 2% of pixels and I have not found out why -- and a tolerance
- * invented to make it pass would be a check that cannot fail. What is known: the palettes are
- * byte-identical, both builds consume the PRNG identically (3 calls before the first world frame, 66
- * by frame 60), and both size their surface cache with the same D_SurfaceCacheForRes(320, 240). Two
- * hypotheses measured, two refuted. The number is printed every run so a change in it is visible.
+ * asserted: it differs by about 2% of pixels and the cause is not settled, so a tolerance invented to
+ * make it pass would be a check that cannot fail.
+ *
+ * What is established about those 1513 pixels, at frame 60 of demo1:
+ *
+ *   - They are at the SAME demo frame. win@60 differs from x11@60 by 1513 pixels and from x11@59 or
+ *     x11@61 by about 45,000, so it is not a phase offset.
+ *   - Every one of them is the same change: x11 holds index 0, win holds index 48. Not one is the
+ *     other way round.
+ *   - They sit on the torch flames and the lit highlights -- the brightest parts of the picture.
+ *   - The palettes are byte-identical, and both builds do the same rendering work (284 R_DrawSurface,
+ *     3046 D_CacheSurface, r_numparticles 2048) and size their cache with the same
+ *     D_SurfaceCacheForRes(320, 240).
+ *
+ * Refuted: a PRNG divergence (3 rand() calls before the first world frame and 66 by frame 60, on
+ * both) and a differing surface-cache size.
+ *
+ * The open lead is that the two platform layers buffer differently -- vid_x.c keeps TWO framebuffers
+ * and alternates (`x_framebuffer[2]`, `current_framebuffer`, lines 974 and 1015) while the Win32
+ * build renders into one memory DC. A pixel the renderer does not repaint therefore shows the frame
+ * before last on X11 and the frame before on Win32. Testing that directly was inconclusive because
+ * index 0 is far too common in a dark scene to discriminate on equality alone.
  */
 const pairs = [
   { a: 'x11@320x200', b: 'dos', assert: true },
