@@ -20,10 +20,15 @@
 //   `-nocdaudio` skips the "Press a key" the DOS build shows when MSCDEX is absent. Waiting there is
 //   correct behaviour and would simply never reach the demo.
 //
-// WinQuake has no 320x200 windowed mode -- its list is 320x240, 640x480, 800x600 -- so the three
-// cannot all be compared at one size without changing the game, which this project does not do. X11
-// is the pivot instead: it honours -width/-height (vid_x.c:501), so it is run twice, once at each
-// size, and each other platform is compared against the run that matches it.
+// All three at 320x200, which took reading the game rather than writing a shim. WinQuake's windowed
+// list looks fixed -- 320x240, 640x480, 800x600, written into vid_win.c:647 -- but modelist[2] is
+// MODE_SETTABLE_WINDOW, and VID_CheckModedescFixup rebuilds it from the cvars `vid_config_x` and
+// `vid_config_y` every time it is selected, with a floor of exactly 320x200 (vid_win.c:1031). So
+//
+//     +vid_stretch_by_2 0 +vid_config_x 320 +vid_config_y 200 +vid_mode 2
+//
+// is the game's own way of asking for that size, and no MGL fullscreen mode had to be invented for
+// it. X11 gets there with -width/-height (vid_x.c:501); the DOS build is 320x200 already.
 //
 // Two things the first run of this gate taught, both of which would have made it lie:
 //
@@ -196,11 +201,12 @@ function compare(a, b) {
 console.log(`Quake, one renderer over three platform layers — frame ${FRAMES}, ` +
   `args: ${COMMON.join(' ')}\n`);
 
+const SETTABLE = ['+vid_stretch_by_2', '0', '+vid_config_x', '320', '+vid_config_y', '200',
+                  '+vid_mode', '2'];
 const runs = {
-  'x11@320x200': () => capture('x11', ['-width', '320', '-height', '200']),
-  'dos':         () => capture('dos', []),
-  'x11@320x240': () => capture('x11', ['-width', '320', '-height', '240']),
-  'win':         () => capture('win', ['-window']),
+  x11: () => capture('x11', ['-width', '320', '-height', '200']),
+  dos: () => capture('dos', []),
+  win: () => capture('win', ['-window', ...SETTABLE]),
 };
 const got = {};
 for (const [name, run] of Object.entries(runs)) {
@@ -219,33 +225,33 @@ for (const [name, run] of Object.entries(runs)) {
 /*
  * X11 is the pivot: each other platform is compared against the run that matches its size.
  *
- * Only the pairs marked `assert` decide the exit status. x11-vs-win is MEASURED and printed but not
- * asserted: it differs by about 2% of pixels and the cause is not settled, so a tolerance invented to
- * make it pass would be a check that cannot fail.
+ * Only the pairs marked `assert` decide the exit status. `x11 == dos` is asserted and holds exactly:
+ * 64,000 pixels and 768 palette bytes, identical, on two platform layers that share nothing but the
+ * renderer. `x11 vs win` is MEASURED and printed but not asserted, because the cause is not settled
+ * and a tolerance invented to make it pass would be a check that cannot fail.
  *
- * What is established about those 1513 pixels, at frame 60 of demo1:
+ * What is established about those 1219 pixels, at frame 60 of demo1 and 320x200 on all three:
  *
- *   - They are at the SAME demo frame. win@60 differs from x11@60 by 1513 pixels and from x11@59 or
- *     x11@61 by about 45,000, so it is not a phase offset.
- *   - Every one of them is the same change: x11 holds index 0, win holds index 48. Not one is the
- *     other way round.
- *   - They sit on the torch flames and the lit highlights -- the brightest parts of the picture.
- *   - The palettes are byte-identical, and both builds do the same rendering work (284 R_DrawSurface,
- *     3046 D_CacheSurface, r_numparticles 2048) and size their cache with the same
- *     D_SurfaceCacheForRes(320, 240).
+ *   - Same demo frame. win@60 differs from x11@60 by 1219 and from x11@59 or x11@61 by ~45,000.
+ *   - EVERY one is the same change: x11 holds index 0, win holds 48. Not one is the other way round.
+ *   - They are inside the 3D view only -- none in the status bar or the top rows.
+ *   - 832 of them were already 48 in win@59, so it is a persistent set that drifts slowly rather
+ *     than a per-frame accident.
+ *   - x11 and dos agree EXACTLY, so win is the outlier: two independent platform layers produce the
+ *     0 and only one produces the 48.
  *
- * Refuted: a PRNG divergence (3 rand() calls before the first world frame and 66 by frame 60, on
- * both) and a differing surface-cache size.
+ * Four hypotheses measured and refuted, which is worth more than the guesses that remain:
  *
- * The open lead is that the two platform layers buffer differently -- vid_x.c keeps TWO framebuffers
- * and alternates (`x_framebuffer[2]`, `current_framebuffer`, lines 974 and 1015) while the Win32
- * build renders into one memory DC. A pixel the renderer does not repaint therefore shows the frame
- * before last on X11 and the frame before on Win32. Testing that directly was inconclusive because
- * index 0 is far too common in a dark scene to discriminate on equality alone.
+ *   - a phase offset (frame 60 is thirty times closer than 59 or 61);
+ *   - a PRNG divergence (3 rand() calls before the first world frame, 66 by frame 60, on both);
+ *   - a differing surface cache (same D_SurfaceCacheForRes(320, 200), same 284 R_DrawSurface and
+ *     3046 D_CacheSurface);
+ *   - `vid.numpages` (vid_x.c:455 sets 2, vid_win.c:1353 sets 1 -- but vid_vga.c:365 sets 1 for the
+ *     DOS build too, and DOS matches X11 exactly).
  */
 const pairs = [
-  { a: 'x11@320x200', b: 'dos', assert: true },
-  { a: 'x11@320x240', b: 'win', assert: false },
+  { a: 'x11', b: 'dos', assert: true },
+  { a: 'x11', b: 'win', assert: false },
 ];
 let bad = 0;
 console.log('');

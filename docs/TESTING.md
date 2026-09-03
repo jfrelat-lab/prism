@@ -2002,3 +2002,53 @@ Win32 picture is reachable, but through `MGL_createDisplayDC` and the fullscreen
 for a windowed size the game does not offer. X11 is the pivot instead: it honours `-width`/`-height`
 (`vid_x.c:501`), so it is run twice and each other platform is compared against the run that matches
 it.
+
+### All three at 320x200, and how WinQuake chooses a windowed size
+
+I was wrong to say WinQuake has no 320x200 windowed mode. Its list looks fixed -- 320x240, 640x480,
+800x600, written into `vid_win.c:647` -- but `modelist[2]` is **MODE_SETTABLE_WINDOW**, and
+`VID_CheckModedescFixup` (`vid_win.c:1031`) rebuilds it from two archived cvars every time it is
+selected:
+
+```c
+if (vid_config_x.value < (320 << stretch)) vid_config_x.value = 320 << stretch;
+if (vid_config_y.value < (200 << stretch)) vid_config_y.value = 200 << stretch;
+```
+
+The floor is exactly 320x200. So the game's own way of asking for that size is
+
+```
++vid_stretch_by_2 0 +vid_config_x 320 +vid_config_y 200 +vid_mode 2
+```
+
+and no MGL fullscreen mode had to be invented for it. In the real game the player never types that:
+`vid_config_x` and `vid_config_y` are archived cvars (`true` in their declaration, so they are saved
+to config.cfg), and the video menu's "settable window" entry is what edits them -- Options → Video,
+where the width and height are adjusted with the arrow keys and applied by selecting that mode.
+`vid_mode` then records the choice.
+
+With all three at one size the gate compares them directly, and the answer changed the question:
+
+```
+x11 == dos   identical, 64000 pixels and 768 palette bytes
+x11 != win   differ: 1219 of 64000 pixels, 0/768 palette bytes
+```
+
+The size was never the cause. What is now known about the 1219: every one is the same change, x11
+holding index 0 where win holds 48 and never the reverse; they are inside the 3D view only; 832 of
+them were already 48 the frame before, so it is a persistent set that drifts slowly; and since X11 and
+DOS agree exactly, **win is the outlier** -- two independent platform layers produce the 0.
+
+Four hypotheses measured and refuted, which is worth recording because each looked plausible:
+
+| hypothesis | measurement |
+|---|---|
+| a phase offset | frame 60 is thirty times closer than 59 or 61 |
+| a PRNG divergence | 3 `rand()` calls before the first world frame, 66 by frame 60, on both |
+| a differing surface cache | same `D_SurfaceCacheForRes(320, 200)`, same 284 `R_DrawSurface`, 3046 `D_CacheSurface` |
+| `vid.numpages` | `vid_x.c:455` sets 2 and `vid_win.c:1353` sets 1 -- but `vid_vga.c:365` sets 1 for DOS too, and DOS matches X11 exactly |
+
+One method note. An early count said `D_DrawParticle` ran 0 times while `R_DrawParticles` ran 60:
+PRISM emits DIRECT calls, so wrapping `program.F[name]` does not intercept a call made from another
+compiled function unless the rebinder reaches it. Numbers taken that way have to be checked against a
+function that is definitely being intercepted before they mean anything.
