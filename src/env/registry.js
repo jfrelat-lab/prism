@@ -47,7 +47,9 @@ export const ENV = {
    */
   pit: { needs: ['ports'], install: (M, c, o) => installPIT(c.machine, M, o) },
   crtstatus: { needs: ['ports'], install: (M, c, o) => installCrtStatus(c.machine, o) },
-  vgadac: { needs: ['ports'], install: (M, c, o) => installVgaDac(c.machine, o) },
+  // Reachable as M.dac, the way the keyboard controller is M.kbd: a harness that wants to know what
+  // colours the program set has nowhere else to ask, and gate-pixels.mjs needs exactly that.
+  vgadac: { needs: ['ports'], install: (M, c, o) => (M.dac = installVgaDac(c.machine, o)) },
   // The keyboard controller is reached as M.kbd by everything that pushes a scan code into it.
   kbd8042: { needs: ['ports'], install: (M, c, o) => (M.kbd = installKbd8042(c.machine, o)) },
 

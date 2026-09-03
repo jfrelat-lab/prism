@@ -1940,3 +1940,65 @@ FixedMul(65536,65536)=65536   FixedDiv2(65536,131072)=32768   hash=2223268735
 169 multiplications and 156 divisions over negative operands and INT_MAX, identical either way. And
 OpenDUNE's intro renders the same 37,405 pixels in the same 62 colours as it did from the
 hand-written C, which is why `tools/opendune-dos-vars.c` no longer exists.
+
+## The cross-platform pixel gate
+
+```
+node tools/gate-pixels.mjs --data=<dir with id1/> [--frames=60] [--png=/tmp/gp]
+
+  x11@320x200  320x200, 129 colours, 60 world frames of 70 presented
+  dos          320x200, 129 colours, 60 world frames of 70 presented
+  x11@320x240  320x240, 130 colours, 60 world frames of 70 presented
+  win          320x240, 131 colours, 60 world frames of 186 presented
+
+  x11@320x200 == dos   identical, 64000 pixels and 768 palette bytes
+```
+
+Quake's DOS, X11 and Win32 builds share every line of the renderer. What differs is the platform
+layer -- how a frame is presented, where the palette goes, which clock the game reads -- and all of
+that is PRISM's code, not id's. So the same demo at the same point must produce the same pixels, and
+any difference is this project's, somewhere a frame counter and an fps figure cannot see. It cost
+nothing to build because the three targets already existed, and it would have caught the WinQuake
+palette being four times too bright.
+
+**Four things had to be right before the comparison meant anything**, and the first run got each of
+them wrong in a way that produced a confident, useless number.
+
+`+host_framerate` pins the frame time. `Sys_FloatTime` reads the real clock on every platform, so
+without it frame N lands wherever N rendered frames get to and depends on how fast the machine is
+going -- which is how an earlier capture of mine disagreed with a later one for no reason at all.
+
+**Count frames of the WORLD, not presented frames.** At frame 120 the Win32 build was still showing
+its console: it prints more start-up lines than the others and presents every one of them, so the
+three were being compared at different moments in the program (186 presented frames to the others'
+70, for the same 60 frames of game). `R_RenderView` is engine code, shared by all three, and runs
+only when the 3D view is drawn. It also needs no struct offsets, which is the other reason to prefer
+it to reading `cls.demoplayback`.
+
+`-nocdaudio`, because the DOS build otherwise stops on "Press a key" when MSCDEX is absent. Waiting
+there is correct behaviour and would simply never reach the demo.
+
+**Compare palettes at six bits, and know which side is already scaled.** The DAC holds six bits per
+component and `vid_dos.c` shifts Quake's values down by two on the way in -- but `src/env/vgadac.js`
+stores `(v & 0x3f) << 2`, putting them back. Scaling again in the gate was a second multiply nobody
+asked for, and it left 678 of 768 palette bytes "differing" between two builds that had set identical
+colours. (`installVgaDac`'s result is now reachable as `M.dac`, the way the keyboard controller is
+`M.kbd`; a harness had nowhere else to ask.)
+
+**What it asserts, and what it only measures.** `x11 == dos` is asserted and holds exactly: 64,000
+pixels and 768 palette bytes, identical. `x11 vs win` differs by about 2% of pixels -- a scatter of
+one to three per row across 120 rows -- and is printed but NOT asserted, because I have not found out
+why and a tolerance invented to make it pass would be a check that cannot fail.
+
+What is known about that 2%: the palettes are byte-identical, both builds consume the PRNG identically
+(3 `rand()` calls before the first world frame, 66 by frame 60), and both size their surface cache
+through the same `D_SurfaceCacheForRes(320, 240)`. Two hypotheses measured, two refuted. The number is
+printed every run, so a change in it is visible.
+
+**Why not all three at one size.** WinQuake's windowed mode list is written into the game's own source
+(`vid_win.c:647`): 320x240, 640x480, 800x600. What MGL supplies -- and therefore what
+`src/env/mgl.c` controls -- is the FULLSCREEN list, which this build returns empty. So a 320x200
+Win32 picture is reachable, but through `MGL_createDisplayDC` and the fullscreen path, not by asking
+for a windowed size the game does not offer. X11 is the pivot instead: it honours `-width`/`-height`
+(`vid_x.c:501`), so it is run twice and each other platform is compared against the run that matches
+it.
