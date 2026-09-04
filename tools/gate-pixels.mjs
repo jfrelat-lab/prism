@@ -173,15 +173,44 @@ function capture(variant, extraArgs, envExtra = {}) {
   return { frames, world, width: s.w, height: s.h, pixels, palette: s.palette };
 }
 
-/** Two captures, compared as pictures: the indices first, then the colours they name. */
-function compare(a, b) {
+/**
+ * WinQuake's own remap of palette index 0.
+ *
+ * vid_win.c:2117 says why: "GDI doesn't let us remap palette index 0, so we'll remap color mappings
+ * from that black to another one". It then walks the WHOLE colormap and replaces every entry equal
+ * to 0 with the index whose colour is closest to palette entry 0 -- 48 in ID1. So any pixel that
+ * reached the screen THROUGH the colormap, which means the 3D view, is 48 on Windows where it is 0
+ * on DOS and X11. This is id's code doing what id wrote, not a defect in the platform layer, and it
+ * is why the Win32 comparison is asserted modulo exactly this substitution and nothing else.
+ */
+function winBlackRemap(palette) {
+  let best = 0, metric = 256 * 256 * 3;
+  for (let i = 1; i < 256; i++) {
+    const dr = palette[0] - palette[i * 3], dg = palette[1] - palette[i * 3 + 1],
+          db = palette[2] - palette[i * 3 + 2];
+    const t = dr * dr + dg * dg + db * db;
+    if (t < metric) { metric = t; best = i; if (t === 0) break; }
+  }
+  return best;
+}
+
+/**
+ * Two captures, compared as pictures: the indices first, then the colours they name.
+ *
+ * `allow` names differences the platforms are ENTITLED to have. It is given the two indices and
+ * says whether this one is expected; anything it does not claim counts against the gate.
+ */
+function compare(a, b, allow = null) {
   if (a.error || b.error) return { verdict: 'error', detail: a.error ?? b.error };
   if (a.width !== b.width || a.height !== b.height) {
     return { verdict: 'size', detail: `${a.width}x${a.height} vs ${b.width}x${b.height}` };
   }
-  let differing = 0, firstAt = -1;
+  let differing = 0, firstAt = -1, explained = 0;
   for (let i = 0; i < a.pixels.length; i++) {
-    if (a.pixels[i] !== b.pixels[i]) { if (firstAt < 0) firstAt = i; differing++; }
+    if (a.pixels[i] === b.pixels[i]) continue;
+    if (allow && allow(a.pixels[i], b.pixels[i])) { explained++; continue; }
+    if (firstAt < 0) firstAt = i;
+    differing++;
   }
   // Six bits, which is what a VGA DAC holds and therefore all the three have in common.
   let palDiff = 0;
@@ -191,11 +220,14 @@ function compare(a, b) {
   const rows = [];
   for (let y = 0; y < a.height; y++) {
     let n = 0;
-    for (let x = 0; x < a.width; x++) if (a.pixels[y * a.width + x] !== b.pixels[y * a.width + x]) n++;
+    for (let x = 0; x < a.width; x++) {
+      const i = y * a.width + x;
+      if (a.pixels[i] !== b.pixels[i] && !(allow && allow(a.pixels[i], b.pixels[i]))) n++;
+    }
     if (n) rows.push(`${y}:${n}`);
   }
-  return { verdict: differing || palDiff ? 'differ' : 'identical', differing, palDiff, firstAt,
-           total: a.pixels.length, rows };
+  return { verdict: differing || palDiff ? 'differ' : 'identical', differing, explained, palDiff,
+           firstAt, total: a.pixels.length, rows };
 }
 
 console.log(`Quake, one renderer over three platform layers — frame ${FRAMES}, ` +
@@ -225,47 +257,51 @@ for (const [name, run] of Object.entries(runs)) {
 /*
  * X11 is the pivot: each other platform is compared against the run that matches its size.
  *
- * Only the pairs marked `assert` decide the exit status. `x11 == dos` is asserted and holds exactly:
- * 64,000 pixels and 768 palette bytes, identical, on two platform layers that share nothing but the
- * renderer. `x11 vs win` is MEASURED and printed but not asserted, because the cause is not settled
- * and a tolerance invented to make it pass would be a check that cannot fail.
+ * ALL THREE pairs are asserted. `x11 == dos` holds exactly -- 64,000 pixels and 768 palette bytes,
+ * identical, on two platform layers that share nothing but the renderer. `x11 vs win` holds modulo
+ * ONE named substitution, and the story of that number is the reason this gate was worth building.
  *
- * What is established about those 1219 pixels, at frame 60 of demo1 and 320x200 on all three:
- *
- *   - Same demo frame. win@60 differs from x11@60 by 1219 and from x11@59 or x11@61 by ~45,000.
- *   - EVERY one is the same change: x11 holds index 0, win holds 48. Not one is the other way round.
- *   - They are inside the 3D view only -- none in the status bar or the top rows.
- *   - 832 of them were already 48 in win@59, so it is a persistent set that drifts slowly rather
- *     than a per-frame accident.
- *   - x11 and dos agree EXACTLY, so win is the outlier: two independent platform layers produce the
- *     0 and only one produces the 48.
- *
- * Four hypotheses measured and refuted, which is worth more than the guesses that remain:
+ * The Win32 picture differed from the other two in 1219 of 64,000 pixels. Six hypotheses were
+ * measured and all six refuted:
  *
  *   - a phase offset (frame 60 is thirty times closer than 59 or 61);
  *   - a PRNG divergence (3 rand() calls before the first world frame, 66 by frame 60, on both);
- *   - a differing surface cache (same D_SurfaceCacheForRes(320, 200), same 284 R_DrawSurface and
- *     3046 D_CacheSurface);
- *   - `vid.numpages` (vid_x.c:455 sets 2, vid_win.c:1353 sets 1 -- but vid_vga.c:365 sets 1 for the
- *     DOS build too, and DOS matches X11 exactly);
- *   - the Win32 build's THREE mode sets. tools/trace-platforms.mjs found them -- VID_SetMode runs 3
- *     times on win and does not exist on x11, and each one destroys and recreates the memory DC. But
- *     all three, and both surface creations, happen before world frame 0, so they cannot account for
- *     a difference that is still there at frame 60. (And PRISM's calloc does zero, so a fresh surface
- *     carries nothing over.)
+ *   - the surface cache's SIZE (same D_SurfaceCacheForRes(320, 200) on both);
+ *   - vid.numpages (vid_x.c:455 sets 2, vid_win.c:1353 sets 1 -- but vid_vga.c:365 sets 1 for DOS
+ *     too, and DOS matches X11 exactly);
+ *   - the Win32 build's three mode sets, all of which happen before world frame 0;
+ *   - the surface cache's PLACEMENT and an uninitialised read. Both builds take it from the high
+ *     hunk right after the z-buffer; tools/written.mjs showed 267 distinct blocks filled at the same
+ *     offsets in the same order on both, and not one block was read without having been written.
+ *
+ * What the answer turned out to be, once every input to the rasteriser had been compared and found
+ * equal -- span geometry, cachewidth, mip level, lightadj, d_lightstylevalue, dynamic lights, and
+ * the texture bytes themselves -- was the ONE input that is not shared engine code: vid.colormap.
+ * vid_win.c:2117 replaces every zero entry in it with the nearest colour to palette index 0, because
+ * GDI will not let a program remap index 0. That is 48 in ID1, and every one of the 1219 pixels is
+ * 0 on X11/DOS and 48 on Win32 -- not one is the other way round.
+ *
+ * So the difference is Quake's, not PRISM's, and the gate now asserts it in that exact shape: a
+ * Win32 pixel may differ from an X11 one only by being the black-remap index where X11 has 0.
+ * Anything else fails.
  */
+const remap = got.x11.error ? 0 : winBlackRemap(got.x11.palette);
 const pairs = [
   { a: 'x11', b: 'dos', assert: true },
-  { a: 'x11', b: 'win', assert: false },
+  { a: 'x11', b: 'win', assert: true,
+    allow: (l, r) => l === 0 && r === remap,
+    note: `allowing X11's index 0 to be Win32's black remap, index ${remap}` },
 ];
 let bad = 0;
 console.log('');
-for (const { a, b, assert: strict } of pairs) {
-  const r = compare(got[a], got[b]);
+for (const { a, b, assert: strict, allow, note } of pairs) {
+  const r = compare(got[a], got[b], allow);
+  if (note) console.log(`  (${note})`);
   if (r.verdict === 'identical') {
-    console.log(`  ${a} == ${b}   identical, ${got[a].pixels.length} pixels and 768 palette bytes`);
+    console.log(`  ${a} == ${b}   identical, ${got[a].pixels.length} pixels and 768 palette bytes` +
+      (r.explained ? `, plus ${r.explained} explained by the remap` : ''));
   } else {
-    if (strict) bad++; else console.log('  (not asserted — see the note in this file)');
+    if (strict) bad++;
     console.log(`  ${a} != ${b}   ${r.verdict}` +
       (r.verdict === 'differ'
         ? `: ${r.differing} of ${r.total} pixels, ${r.palDiff}/768 palette bytes\n` +

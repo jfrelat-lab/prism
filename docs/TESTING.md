@@ -2141,3 +2141,63 @@ different point on each. An earlier bracket at frame 3 found exactly that: the d
 inside `SCR_DrawConsole`, a notify glyph drawn on one platform and not the other. It is NOT the
 explanation for frame 60 (`+con_notifytime 0` leaves the count at exactly 1219), but it is a second,
 independent way for two platforms to disagree, and it would have been mistaken for the first.
+
+### The answer: it is Quake's own black remap, and the gate now asserts it
+
+`D_DrawSpans8` was the right place and the wrong conclusion. "x11 reads 0 -- an unfilled block" read
+a zero as the absence of a write, which is exactly the mistake this document warns about elsewhere.
+Zero was the *value*, not the *state*, and the placement lead written above is wrong on its facts:
+both builds take the cache from the high hunk immediately after the z-buffer, and at 320x200
+`D_SurfaceCacheForRes` returns `SURFCACHE_SIZE_AT_320X200` on all three.
+
+The renderer is the same C compiled by the same PRISM on every platform, so at equal inputs it must
+produce equal output. That turns the hunt into an enumeration, and every input was compared:
+
+| input | how | result |
+|---|---|---|
+| span geometry | `espan_t` is `{u,v,count,next}` -- no struct offsets needed | identical over 16 spans |
+| `cachewidth`, block address | globals | identical, block at +397600 on both |
+| block placement over the run | every `cacheblock` seen, relative to `sc_base` | 267 blocks, same offsets, same order |
+| a block read but never written | the same set | none, on either platform |
+| `r_framecount`, `d_lightstylevalue[0..63]` | globals | identical |
+| dynamic lights | `cl_dlights`, `r_dlightframecount` | none alive; counters equal |
+| the texture BYTES | `texture_t.offsets[0]`, `width*height` | identical for all four textures drawn |
+
+Which left the one input that is *not* shared engine code. `vid` is a `viddef_t` and each platform
+fills it in itself:
+
+```
+win  vid.colormap first 16 bytes: 48 2 4 6 8 10 12 14 254 254 ...
+x11                              :  0 2 4 6 8 10 12 14 254 254 ...
+dos                              :  0 2 4 6 8 10 12 14 254 254 ...
+```
+
+`vid_win.c:2117` says why, in id's own words: *"GDI doesn't let us remap palette index 0, so we'll
+remap color mappings from that black to another one"*. It then walks the whole colormap and replaces
+every zero entry with the index whose colour is nearest palette entry 0 -- 48 in ID1. All 1219
+differing pixels are that substitution and only that one:
+
+```
+most common index changes: 0->48(1219)
+```
+
+So the 2% was never PRISM's. It is WinQuake behaving as written, and the gate now says so instead of
+declining to judge:
+
+```
+  x11 == dos   identical, 64000 pixels and 768 palette bytes
+  (allowing X11's index 0 to be Win32's black remap, index 48)
+  x11 == win   identical, 64000 pixels and 768 palette bytes, plus 1219 explained by the remap
+```
+
+The allowance is computed from the captured palette by re-running id's own nearest-colour loop, not
+hard-coded, and it is narrow: substituting 47 for 48 fails the gate with all 1219 pixels back. A
+tolerance that cannot fail would have been worth nothing.
+
+**Two of the measurements on the way there were contaminated, and the shape of the contamination is
+the lesson.** `D_CacheSurface` returns early on a cache hit without touching `cacheblock` or
+`r_drawsurf`, so reading either of them *after* the call yields the previous fill -- the give-away
+was sixteen consecutive surfaces all reporting `16x112 mip=0`. And a checksum of the whole surface
+cache "diverges at world frame 0" on two runs that agree perfectly, because it includes the bytes
+nobody has written yet. Both channels answered confidently and both answers were noise; the frame-0
+comparison, where every call is a real fill, was the one that could be trusted.
