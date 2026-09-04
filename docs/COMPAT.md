@@ -1007,3 +1007,42 @@ genuinely the program's own option for a machine with no sound card.
 
 gate-run 32/32, c-testsuite 204/219, gate-abi 1745/1745, Lua 14+8 of 27, and Doom, Heretic, OpenDUNE,
 MAME 0.2 and both other Quake variants unchanged.
+
+## A real window, because the program owns one
+
+**Does a resolution change move the window in the real WinQuake?** Yes, and the source says how:
+`VID_SetWindowedMode` calls `SetWindowPos` twice -- once to RESIZE to `WindowRect`, with
+`Sys_Error("Couldn't resize DIB window")` if it fails, and once to REPOSITION at `vid_window_x` /
+`vid_window_y` with `SWP_SHOWWINDOW | SWP_DRAWFRAME`. Then `VID_UpdateWindowStatus` reads
+`GetWindowRect` back and writes the position into those two cvars, which are archived.
+
+Our shim swallowed all of it: `SetWindowPos` returned TRUE and forgot, `GetWindowRect` answered a
+fixed rectangle at the origin. So the window could not move and a resolution change was invisible.
+`src/env/win32.c` now keeps the rectangle, and it is measurably the program's:
+
+```
+default            window 320x240 at (0,0)  visible=1  title="WinQuake"
+320x200 settable   window 320x200 at (0,0)  visible=1  title="WinQuake"
+```
+
+The page draws a window around it -- title bar, border, close button -- and **is the window manager**,
+which is not a metaphor. Dragging the frame writes the new position into the control block, the guest
+applies it through `prism_win32_move`, and `GetWindowRect` then reports it, so the program learns
+where its window is exactly the way it would on Windows. Measured: the guest's rectangle went from
+(0,0) to (40,12) after one drag.
+
+It goes through SHARED MEMORY rather than postMessage for the reason the keyboard does: once the
+guest is inside `prog.run` its worker never returns to an event loop, so a message posted to it is
+never delivered.
+
+Two defects of mine, both found by using it:
+
+  * **The window jumped when dragged.** `paintWindow` set `position: absolute` from JavaScript, so at
+    the first positioning the frame left the stage's centred grid flow and snapped to the corner of
+    its nearest positioned ancestor -- of which there was none. It is absolute in the CSS now, inside
+    a `position: relative` stage. It looked like a drag bug and was a layout one.
+  * **The close button did nothing.** It posted WM_CLOSE correctly, and `vid_win.c:3020` answers it
+    with `MessageBox(..., MB_YESNO)` and quits only on `IDYES`. The shim returned `IDOK`, which is 1,
+    not 6. A person who clicks a window's close box has already answered that question, so a
+    `MB_YESNO` box now returns `IDYES` -- and the program quits through its own `Sys_Quit`, which is
+    the point of posting the message rather than terminating the worker.

@@ -377,6 +377,46 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     if (!at.surface || !key) throw new Error('this build has no MGL/Win32 layer compiled in');
 
     /*
+     * The window, published from the program and driven back into it. src/env/win32.c keeps the
+     * rectangle because the PROGRAM moves and resizes it; the page draws a frame around the picture
+     * and, when somebody drags that frame, writes the new position here for the guest to apply.
+     * GetWindowRect then reports it, which is how Quake learns it moved -- exactly what a window
+     * manager does.
+     */
+    const win = {
+      x: sym('prism_win32_x'), y: sym('prism_win32_y'),
+      w: sym('prism_win32_w'), h: sym('prism_win32_h'),
+      title: sym('prism_win32_title'),
+    };
+    const move = prog.F.prism_win32_move, closeWin = prog.F.prism_win32_close;
+    let lastDrag = 0, lastTitle = '';
+    Atomics.store(ctrl, SLOT.WIN_HAS, win.x ? 1 : 0);
+
+    const pumpWindow = () => {
+      if (!win.x) return;
+      const dvv = prog.mod.dv;
+      Atomics.store(ctrl, SLOT.WIN_X, dvv.getInt32(win.x, true));
+      Atomics.store(ctrl, SLOT.WIN_Y, dvv.getInt32(win.y, true));
+      Atomics.store(ctrl, SLOT.WIN_W, dvv.getInt32(win.w, true));
+      Atomics.store(ctrl, SLOT.WIN_H, dvv.getInt32(win.h, true));
+      let title = '';
+      for (let i = 0; i < 127 && prog.M.u8[win.title + i]; i++) {
+        title += String.fromCharCode(prog.M.u8[win.title + i]);
+      }
+      if (title !== lastTitle) { lastTitle = title; post('window', { title }); }
+
+      const gen = Atomics.load(ctrl, SLOT.DRAG_GEN);
+      if (gen !== lastDrag && move) {
+        lastDrag = gen;
+        move(Atomics.load(ctrl, SLOT.DRAG_X), Atomics.load(ctrl, SLOT.DRAG_Y));
+      }
+      if (Atomics.load(ctrl, SLOT.WIN_CLOSE) && closeWin) {
+        Atomics.store(ctrl, SLOT.WIN_CLOSE, 0);
+        closeWin();
+      }
+    };
+
+    /*
      * MGL's palette_t is BGRA and holds the FULL 0..255 -- vid_win.c writes `pal[i].red =
      * palette[i*3]` with no shift. Scaling it as if it were the DAC's six bits made the first
      * capture four times too bright, which is the kind of mistake that looks like a gamma setting.
@@ -409,6 +449,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
        * shorter and would have tested nothing.
        */
       for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+      pumpWindow();
       reader.endFrame();
       pace();
       return r;

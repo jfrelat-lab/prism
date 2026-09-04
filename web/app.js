@@ -343,6 +343,58 @@ addEventListener('blur', releaseAll);
 // still down would never get their break code.
 addEventListener('focusin', () => { if (typing()) releaseAll(); });
 
+// ---------------------------------------------------------------- the window, when there is one
+//
+// The page is the WINDOW MANAGER here, and that is not a metaphor: src/env/win32.c keeps the
+// rectangle because the program moves and resizes it, `GetWindowRect` reports it back, and
+// VID_UpdateWindowStatus writes the position into Quake's archived `vid_window_x` / `vid_window_y`.
+// So dragging this frame does not move a div -- it tells the program where its window now is, and
+// the program agrees on the next frame. A resolution change resizes it from the other direction.
+let dragging = null, dragGen = 0;
+
+function paintWindow() {
+  const frame = $('winframe');
+  if (!views) { frame.hidden = true; return; }
+  const has = Atomics.load(views.ctrl, SLOT.WIN_HAS) === 1;
+  frame.hidden = !has;
+  if (!has || dragging) return;
+  // Position is the guest's to give; while a drag is in flight the page owns it for that moment.
+  const x = Atomics.load(views.ctrl, SLOT.WIN_X), y = Atomics.load(views.ctrl, SLOT.WIN_Y);
+  frame.style.left = `${Math.max(0, x)}px`;
+  frame.style.top = `${Math.max(0, y)}px`;
+}
+
+$('wintitle').onpointerdown = (e) => {
+  if (e.target === $('winclose') || !views) return;
+  const frame = $('winframe');
+  const r = frame.getBoundingClientRect();
+  dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+  $('wintitle').setPointerCapture(e.pointerId);
+};
+$('wintitle').onpointermove = (e) => {
+  if (!dragging || !views) return;
+  const stage = $('stage').getBoundingClientRect();
+  const x = Math.round(e.clientX - stage.left - dragging.dx);
+  const y = Math.round(e.clientY - stage.top - dragging.dy);
+  $('winframe').style.left = `${x}px`;
+  $('winframe').style.top = `${y}px`;
+  Atomics.store(views.ctrl, SLOT.DRAG_X, x);
+  Atomics.store(views.ctrl, SLOT.DRAG_Y, y);
+  Atomics.store(views.ctrl, SLOT.DRAG_GEN, ++dragGen);
+};
+$('wintitle').onpointerup = () => { dragging = null; };
+
+/*
+ * The close button posts WM_CLOSE into the guest's own message queue, which is what a real one does.
+ * Quake's MainWndProc handles it and quits through its own path; terminating the worker instead
+ * would skip everything the program does on the way out.
+ */
+$('winclose').onclick = () => {
+  if (!views) return;
+  Atomics.store(views.ctrl, SLOT.WIN_CLOSE, 1);
+  log('close requested — WM_CLOSE posted to the program');
+};
+
 // ---------------------------------------------------------------- run / stop
 /** Split a command line the way a shell would, so a quoted argument survives as one. */
 function tokenise(s) {
@@ -381,6 +433,8 @@ $('run').onclick = () => {
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'log') log(m.line, m.kind);
+    // The window's caption comes from the program: CreateWindowEx's name, or SetWindowText later.
+    else if (m.type === 'window') { if (m.title) $('wincaption').textContent = m.title; }
     else if (m.type === 'ready') {
       /*
        * The guest's memory, and paint() will not draw a single pixel without it -- the graphics
@@ -558,6 +612,7 @@ function paint() {
   } else {
     paintText();
   }
+  paintWindow();
   requestAnimationFrame(paint);
 }
 

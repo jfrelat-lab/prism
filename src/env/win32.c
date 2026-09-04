@@ -40,6 +40,37 @@ static int next_handle = 1;
 
 static int screen_w = 640, screen_h = 480;
 
+/*
+ * ---- THE WINDOW.
+ *
+ * Not bookkeeping that can be thrown away: the program MOVES and RESIZES it, and reads back where it
+ * ended up. VID_SetWindowedMode resizes with one SetWindowPos and repositions with a second --
+ * failing the first is `Sys_Error("Couldn't resize DIB window")` -- and VID_UpdateWindowStatus calls
+ * GetWindowRect to store the position in the `vid_window_x` / `vid_window_y` cvars, which are
+ * archived. A shim that swallowed all of that and answered a fixed rectangle made the window
+ * unmovable and a resolution change invisible.
+ *
+ * These are published as plain integers so a host can draw a real window around the picture -- title
+ * bar, border, close button -- and, when the person drags it, call prism_win32_move. That is not a
+ * decoration: it is what a window manager does, and the program is written to be told.
+ */
+int prism_win32_x = 0, prism_win32_y = 0;
+int prism_win32_w = 640, prism_win32_h = 480;
+int prism_win32_visible = 0;
+int prism_win32_minimized = 0;
+int prism_win32_closed = 0;
+char prism_win32_title[128] = "";
+
+/** The host moved the window. GetWindowRect will report it, which is how the game finds out. */
+void prism_win32_move(int x, int y)
+{
+    prism_win32_x = x;
+    prism_win32_y = y;
+}
+
+/** The host clicked the close button. WM_CLOSE is what a real one posts. */
+void prism_win32_close(void);
+
 /* ---------------------------------------------------------------- the clock */
 
 /*
@@ -252,10 +283,12 @@ HWND WINAPI CreateWindowEx(DWORD exStyle, LPCSTR cls, LPCSTR name, DWORD style,
                            int x, int y, int w, int h, HWND parent, HMENU menu,
                            HINSTANCE inst, LPVOID param)
 {
-    (void)exStyle; (void)cls; (void)name; (void)style; (void)x; (void)y;
-    (void)parent; (void)menu; (void)inst; (void)param;
-    if (w > 0) screen_w = w;
-    if (h > 0) screen_h = h;
+    (void)exStyle; (void)cls; (void)style; (void)parent; (void)menu; (void)inst; (void)param;
+    if (w > 0) prism_win32_w = w;
+    if (h > 0) prism_win32_h = h;
+    if (x != CW_USEDEFAULT) prism_win32_x = x;
+    if (y != CW_USEDEFAULT) prism_win32_y = y;
+    if (name) { strncpy(prism_win32_title, name, sizeof(prism_win32_title) - 1); }
     msg_window = HANDLE_OF(HWND);
     return msg_window;
 }
@@ -266,12 +299,40 @@ LRESULT WINAPI DefWindowProc(HWND w, UINT m, WPARAM wp, LPARAM lp)
     (void)w; (void)m; (void)wp; (void)lp;
     return 0;
 }
-BOOL WINAPI ShowWindow(HWND w, int cmd) { (void)w; (void)cmd; return TRUE; }
+BOOL WINAPI ShowWindow(HWND w, int cmd)
+{
+    (void)w;
+    switch (cmd) {
+    case SW_HIDE:            prism_win32_visible = 0; break;
+    case SW_MINIMIZE:
+    case SW_SHOWMINIMIZED:
+    case SW_SHOWMINNOACTIVE: prism_win32_minimized = 1; prism_win32_visible = 1; break;
+    default:                 prism_win32_minimized = 0; prism_win32_visible = 1; break;
+    }
+    return TRUE;
+}
+int WINAPI SetWindowText(HWND w, LPCSTR text)
+{
+    (void)w;
+    if (text) strncpy(prism_win32_title, text, sizeof(prism_win32_title) - 1);
+    return 1;
+}
+void prism_win32_close(void) { prism_win32_closed = 1; post(WM_CLOSE, 0, 0); }
 BOOL WINAPI UpdateWindow(HWND w) { (void)w; return TRUE; }
 BOOL WINAPI SetForegroundWindow(HWND w) { (void)w; return TRUE; }
+/*
+ * The one call a resolution change goes through, so its flags have to be read rather than ignored.
+ * VID_SetWindowedMode resizes with SWP_NOCOPYBITS|SWP_NOZORDER|SWP_HIDEWINDOW and then repositions
+ * with SWP_NOSIZE|SWP_NOZORDER|SWP_SHOWWINDOW|SWP_DRAWFRAME -- two calls that mean opposite things
+ * and were both answered TRUE and forgotten.
+ */
 BOOL WINAPI SetWindowPos(HWND w, HWND after, int x, int y, int cx, int cy, UINT flags)
 {
-    (void)w; (void)after; (void)x; (void)y; (void)cx; (void)cy; (void)flags;
+    (void)w; (void)after;
+    if (!(flags & SWP_NOMOVE)) { prism_win32_x = x; prism_win32_y = y; }
+    if (!(flags & SWP_NOSIZE) && cx > 0 && cy > 0) { prism_win32_w = cx; prism_win32_h = cy; }
+    if (flags & SWP_SHOWWINDOW) prism_win32_visible = 1;
+    if (flags & SWP_HIDEWINDOW) prism_win32_visible = 0;
     return TRUE;
 }
 LONG WINAPI SetWindowLong(HWND w, int index, LONG value) { (void)w; (void)index; (void)value; return 0; }
@@ -281,10 +342,18 @@ HWND WINAPI CreateDialog(HINSTANCE i, LPCSTR t, HWND p, LPVOID proc)
     (void)i; (void)t; (void)p; (void)proc;
     return NULL;
 }
+/*
+ * There is no dialog here, so the answer has to be the one the host already gave.
+ *
+ * WM_CLOSE in vid_win.c:3020 asks "Are you sure you want to quit?" with MB_YESNO and quits only on
+ * IDYES. Returning IDOK -- which is 1, not 6 -- meant the close button posted its message, the game
+ * asked its question, and nothing happened. A person who clicks a window's close box has answered
+ * that question; anything else is a modal dialog nobody can see.
+ */
 int WINAPI MessageBox(HWND w, LPCSTR text, LPCSTR caption, UINT type)
 {
-    (void)w; (void)text; (void)caption; (void)type;
-    return IDOK;
+    (void)w; (void)text; (void)caption;
+    return (type & MB_YESNO) ? IDYES : IDOK;
 }
 UINT WINAPI RegisterWindowMessage(LPCSTR name) { (void)name; return (UINT)(WM_USER + next_handle++); }
 LRESULT WINAPI SendMessage(HWND w, UINT m, WPARAM wp, LPARAM lp)
@@ -355,14 +424,27 @@ BOOL WINAPI AdjustWindowRectEx(LPRECT r, DWORD style, BOOL menu, DWORD exStyle)
     (void)r; (void)style; (void)menu; (void)exStyle;
     return TRUE;
 }
+/*
+ * The CLIENT rectangle is the picture, at the origin. The WINDOW rectangle is where it sits on the
+ * screen -- and the difference matters: VID_UpdateWindowStatus reads GetWindowRect to save the
+ * position into `vid_window_x` and `vid_window_y`, so answering the client rectangle for both told
+ * the game the window was always at 0,0 and it dutifully wrote that down.
+ */
 BOOL WINAPI GetClientRect(HWND w, LPRECT r)
 {
     (void)w;
     if (!r) return FALSE;
-    r->left = r->top = 0; r->right = screen_w; r->bottom = screen_h;
+    r->left = r->top = 0; r->right = prism_win32_w; r->bottom = prism_win32_h;
     return TRUE;
 }
-BOOL WINAPI GetWindowRect(HWND w, LPRECT r) { return GetClientRect(w, r); }
+BOOL WINAPI GetWindowRect(HWND w, LPRECT r)
+{
+    (void)w;
+    if (!r) return FALSE;
+    r->left = prism_win32_x; r->top = prism_win32_y;
+    r->right = prism_win32_x + prism_win32_w; r->bottom = prism_win32_y + prism_win32_h;
+    return TRUE;
+}
 
 /* ---------------------------------------------------------------- mouse and cursor */
 

@@ -69,6 +69,25 @@ export const SLOT = {
   KBD_TAIL: 22,    // guest → host: read cursor
   WAKE: 23,        // a pure wake channel, always 0: the host notifies it, a parked guest waits on it
   AUDIO_READ: 24,  // host → guest: total frames ever consumed by the page
+
+  /*
+   * The WINDOW, for a program that has one. Win32 Quake moves and resizes its own window and reads
+   * back where it ended up -- VID_UpdateWindowStatus stores the position into the archived cvars
+   * `vid_window_x` and `vid_window_y` -- so this is a two-way channel, not decoration.
+   *
+   * It goes through the control block rather than postMessage for the reason the keyboard does: once
+   * the guest is inside `prog.run` its worker never returns to an event loop, so a message posted to
+   * it is never delivered. Shared memory is the only thing that reaches a running program.
+   */
+  WIN_X: 25,       // guest → host: where the program has put its window
+  WIN_Y: 26,
+  WIN_W: 27,       // guest → host: and how big it made it -- a resolution change resizes it
+  WIN_H: 28,
+  WIN_HAS: 29,     // guest → host: 1 when this platform has a window at all
+  DRAG_X: 30,      // host → guest: where the person dragged it to
+  DRAG_Y: 31,
+  DRAG_GEN: 32,    // host → guest: bumped per drag, so the guest applies each one once
+  WIN_CLOSE: 33,   // host → guest: the close button was clicked; the guest posts itself WM_CLOSE
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };

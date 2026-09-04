@@ -77,7 +77,7 @@
   }
 
   #stage { display: grid; place-items: center; padding: 12px; min-height: 0; overflow: hidden;
-           background: #000; }
+           background: #000; position: relative; }
   /* The guest decides the resolution; the canvas is scaled with no smoothing, because a 224x288
      arcade framebuffer interpolated to fit looks like a different program. */
   /*
@@ -97,6 +97,28 @@
    * out wrong in both directions. A flex box with a black ground and `object-fit` semantics from
    * max-width/max-height keeps the guest's own shape, letterboxed.
    */
+  /*
+   * A window, when the program has one.
+   *
+   * Win32 Quake owns this rectangle: it sizes it when the resolution changes and reads back where it
+   * sits, so the frame here is positioned FROM the guest and dragging it writes back INTO the guest
+   * rather than moving a div and telling nobody. Without a window the frame is hidden and the canvas
+   * fills the stage as before -- an X11 or DOS program has no window to draw.
+   */
+  /* Absolute FROM THE START, and inside a positioned stage. Switching it from the grid's centred
+     flow to absolute at the first paint made the window jump to the corner the moment it was
+     positioned -- which looked like a drag bug and was a layout one. */
+  #winframe { position: absolute; left: 0; top: 0; border: 2px outset #b8b8b8; background: #b8b8b8; box-shadow: 2px 2px 6px #0008;
+              display: flex; flex-direction: column; max-width: 100%; max-height: 100%; }
+  #wintitle { display: flex; align-items: center; gap: 6px; padding: 2px 3px; cursor: move;
+              background: linear-gradient(90deg, #000080, #1084d0); color: #fff;
+              font: bold 12px/1.4 system-ui, sans-serif; user-select: none; }
+  #wincaption { flex: 1; padding-left: 3px; }
+  #winclose { border: 1px outset #d4d0c8; background: #d4d0c8; color: #000; cursor: pointer;
+              font: bold 10px/1 system-ui, sans-serif; width: 18px; height: 16px; padding: 0; }
+  #winclose:active { border-style: inset; }
+  #winframe #screen { display: block; }
+
   #stage:fullscreen { display: flex; align-items: center; justify-content: center;
                       width: 100vw; height: 100vh; background: #000; }
   #stage:fullscreen #screen { width: 100vw; height: 100vh; object-fit: contain; }
@@ -149,7 +171,12 @@
 </div>
 
 <main>
-  <div id="stage"><canvas id="screen" width="720" height="400"></canvas></div>
+  <div id="stage">
+    <div id="winframe" hidden>
+      <div id="wintitle"><span id="wincaption">WinQuake</span><button id="winclose" title="close">&#10005;</button></div>
+      <canvas id="screen" width="720" height="400"></canvas>
+    </div>
+  </div>
   <aside>
     <div class="bar"><span id="stats">idle</span></div>
     <div class="bar" id="controls"></div>
