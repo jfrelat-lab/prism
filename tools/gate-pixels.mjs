@@ -247,7 +247,12 @@ for (const [name, run] of Object.entries(runs)) {
  *   - a differing surface cache (same D_SurfaceCacheForRes(320, 200), same 284 R_DrawSurface and
  *     3046 D_CacheSurface);
  *   - `vid.numpages` (vid_x.c:455 sets 2, vid_win.c:1353 sets 1 -- but vid_vga.c:365 sets 1 for the
- *     DOS build too, and DOS matches X11 exactly).
+ *     DOS build too, and DOS matches X11 exactly);
+ *   - the Win32 build's THREE mode sets. tools/trace-platforms.mjs found them -- VID_SetMode runs 3
+ *     times on win and does not exist on x11, and each one destroys and recreates the memory DC. But
+ *     all three, and both surface creations, happen before world frame 0, so they cannot account for
+ *     a difference that is still there at frame 60. (And PRISM's calloc does zero, so a fresh surface
+ *     carries nothing over.)
  */
 const pairs = [
   { a: 'x11', b: 'dos', assert: true },
