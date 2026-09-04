@@ -2098,3 +2098,46 @@ command buffer (forty `+wait`s then `+vid_mode 2`) left the presented size at 32
 and `vid_mode` reading 0 at the end. Either the deferred command never ran or the mode set failed and
 `vid_win.c:2382` reset the cvar to the mode actually obtained. Not chased further; recorded because a
 menu that silently does nothing is worse than one that is missing.
+
+### Instrumenting the write: it is D_DrawSpans8
+
+The surface is ordinary guest memory and PRISM emits direct stores into it, so there is no write
+barrier to hook. But the value can be READ after any function the harness can intercept, which makes
+the hunt a bracket in two stages: `tools/trace-platforms.mjs` finds the frame,
+`tools/bracket-pixel.mjs` finds the function.
+
+```
+node tools/bracket-pixel.mjs 60 160 22
+
+-> win: D_DrawSpans8: 16->48        x11: D_DrawSpans8: 16->0
+-> win: D_DrawSurfaces: 16->48      x11: D_DrawSurfaces: 16->0
+-> win: R_ScanEdges: 16->48         x11: R_ScanEdges: 16->0
+...
+```
+
+Everything above `D_DrawSpans8` merely propagates what it wrote. **The divergence is born in the
+innermost span rasteriser of the software renderer**, and it reads from the SURFACE CACHE: win reads
+a texel of 48, x11 reads 0 -- an unfilled block. That is a far more specific answer than "somewhere in
+the 3D view", and it re-opens the surface-cache question that call counts had closed: the two builds
+size their cache identically (`D_SurfaceCacheForRes(320, 200)`, same 284 `R_DrawSurface`, same 3046
+`D_CacheSurface`) but they do not place it in the same memory. `vid_x.c` allocates it INSIDE the X11
+buffer block (`X11_buffersize += vid_surfcachesize`); the Win32 build takes it from the hunk.
+
+**Stage zero matters**: nineteen of the twenty-five candidate functions do fire, so the direct-call
+blind spot is narrower than the first attempt suggested -- but it is real, and the tool reports which
+names never fired rather than letting a zero be read as "never called".
+
+The same run turned up a structural fact worth keeping. At the same world frame and the same
+`host_framecount`, the game's clock is different on every platform:
+
+```
+x11  realtime=3.500   dos  realtime=0.840   win  realtime=4.845     (world frame 60, host_framecount 59)
+```
+
+`realtime` accumulates over ALL Host_Frames, including the ones each platform spends on its own
+start-up console, and `+host_framerate` pins the increment per frame but not the COUNT. So anything
+time-dependent that is not the demo -- notify lines, `scr_centertime`, the console slide -- is at a
+different point on each. An earlier bracket at frame 3 found exactly that: the divergence there was
+inside `SCR_DrawConsole`, a notify glyph drawn on one platform and not the other. It is NOT the
+explanation for frame 60 (`+con_notifytime 0` leaves the count at exactly 1219), but it is a second,
+independent way for two platforms to disagree, and it would have been mistaken for the first.

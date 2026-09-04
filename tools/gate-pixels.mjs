@@ -69,7 +69,7 @@ const files = {};
 })(dataDir);
 
 /* The same demo, pinned to the same frame time, on every platform. */
-const COMMON = ['-nosound', '-nocdaudio', '+host_framerate', '0.05'];
+const COMMON = ['-nosound', '-nocdaudio', '+host_framerate', '0.05', '+con_notifytime', '0'];
 
 /**
  * Run one platform to `FRAMES` presented frames and return what it was showing.
