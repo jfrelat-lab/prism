@@ -40,7 +40,26 @@ static int prism_handle_seq;
 /* ---- device contexts */
 HDC WINAPI CreateCompatibleDC(HDC dc) { (void)dc; return NEW_HANDLE(HDC); }
 BOOL WINAPI DeleteDC(HDC dc) { (void)dc; return 1; }
-HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj) { (void)dc; return obj; }
+/*
+ * SelectObject REMEMBERS, at least the brush.
+ *
+ * Rectangle fills with the SELECTED BRUSH and outlines with the selected pen -- it does not use the
+ * text colour, which is what this drew with while SelectObject returned its argument and kept
+ * nothing. PuTTY paints the area around its terminal with Rectangle, so the whole window came out in
+ * the foreground colour: 187,187,187 where it should have been black.
+ *
+ * One brush for all device contexts, like the surface: this program has one window.
+ */
+static HBRUSH prism_brush;
+static COLORREF brush_colour(HBRUSH b);
+
+HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj)
+{
+    HGDIOBJ old = obj;
+    (void)dc;
+    if ((ULONG_PTR)obj & PRISM_BRUSH_TAG) { old = (HGDIOBJ)prism_brush; prism_brush = (HBRUSH)obj; }
+    return old;
+}
 /* GetDeviceCaps lives in win32.c, which already answers for the screen. */
 int WINAPI SetMapMode(HDC dc, int mode) { (void)dc; (void)mode; return 1; }
 int WINAPI SetBkMode(HDC dc, int mode) { (void)dc; (void)mode; return 1; }
@@ -252,15 +271,25 @@ BOOL WINAPI LineTo(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; return 1;
 BOOL WINAPI MoveToEx(HDC dc, int x, int y, POINT *old) { (void)dc; (void)x; (void)y; (void)old; return 1; }
 BOOL WINAPI Polyline(HDC dc, const POINT *p, int n) { (void)dc; (void)p; (void)n; return 1; }
 BOOL WINAPI Rectangle(HDC dc, int l, int t, int r, int b)
-{ (void)dc; prism_fill(l, t, r, b, prism_fg); return 1; }
+{
+    (void)dc;
+    prism_fill(l, t, r, b, brush_colour(prism_brush));
+    return 1;
+}
 COLORREF WINAPI SetPixel(HDC dc, int x, int y, COLORREF c) { (void)dc; prism_pixel(x, y, c); return c; }
 COLORREF WINAPI GetPixel(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; return 0; }
 
+/* A brush carries its colour in the handle; anything else is not one, and falls back to the
+   background, which is what an unrecognised brush would most nearly be. */
+static COLORREF brush_colour(HBRUSH b)
+{
+    return ((ULONG_PTR)b & PRISM_BRUSH_TAG) ? (COLORREF)((ULONG_PTR)b & 0x00FFFFFF) : prism_bk;
+}
+
 int WINAPI FillRect(HDC dc, const RECT *r, HBRUSH b)
 {
-    COLORREF c = ((ULONG_PTR)b & PRISM_BRUSH_TAG) ? (COLORREF)((ULONG_PTR)b & 0x00FFFFFF) : prism_bk;
     (void)dc;
-    if (r) prism_fill(r->left, r->top, r->right, r->bottom, c);
+    if (r) prism_fill(r->left, r->top, r->right, r->bottom, brush_colour(b));
     return 1;
 }
 int WINAPI DrawText(HDC dc, LPCSTR s, int n, RECT *r, UINT f)

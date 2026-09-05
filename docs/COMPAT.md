@@ -1420,6 +1420,23 @@ was invisible while nothing arrived:
 | `SetTimer` and `KillTimer` did nothing | PuTTY does not repaint when data arrives — it schedules a timer and repaints when it fires. The bytes reached the terminal, the terminal recorded them, and the screen stayed blank |
 | `PRISM_BRUSH_TAG` defined BELOW its first use | `CreateSolidBrush` therefore never emitted, silently, below the twelfth-most-common cause in the build report. `--failures=40` is why it was found |
 
-**What is still wrong, precisely:** the terminal's background is cleared to 187,187,187, which is
-PuTTY's default *foreground*. Text draws with contrast on the first two rows and the rest of the
-screen is a solid block of the wrong colour. That is a specific place to look, not a mystery.
+**And it draws:**
+
+```
+Hello from PRISM
+$
+```
+
+on a black terminal, 642x386, in the VGA ROM font — `node tools/putty-testserver.mjs &` then
+`node tools/putty-session.mjs <port>`, which writes /tmp/puttytel.png.
+
+Two more defects stood between "connects" and "shows text", and both were about COLOUR:
+
+- **`Rectangle` filled with the text colour.** Windows fills it with the *selected brush* and
+  outlines with the selected pen; `SelectObject` returned its argument and remembered nothing, so
+  PuTTY's paint of the area around its terminal covered the whole window in 187,187,187 — which is
+  PuTTY's default foreground, and looked exactly like a background bug.
+- **The test server was corrupting the protocol.** Echoing everything back sent telnet negotiation
+  bytes to the terminal, which decodes UTF-8 (PuTTY's `decode_codepage` answers 65001), and the
+  screen filled with U+FFFD. The server's fault, not the terminal's, and worth recording because the
+  symptom pointed squarely at the character-set code.
