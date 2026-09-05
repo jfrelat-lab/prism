@@ -140,8 +140,6 @@ DWORD WINAPI GetCurrentDirectory(DWORD len, LPSTR buf)
     return 1;
 }
 
-DWORD WINAPI GetLastError(void) { return 0; }
-void WINAPI SetLastError(DWORD e) { (void)e; }
 
 /* ---------------------------------------------------------------- memory */
 
@@ -176,9 +174,6 @@ BOOL WINAPI UnmapViewOfFile(LPCVOID p) { (void)p; return TRUE; }
  * `LoadLibrary("dsound.dll")` + GetProcAddress, so failing here is how a machine without DirectSound
  * answers, and the program's own fallback runs.
  */
-HMODULE WINAPI LoadLibrary(LPCSTR name) { (void)name; return NULL; }
-BOOL WINAPI FreeLibrary(HMODULE m) { (void)m; return TRUE; }
-FARPROC WINAPI GetProcAddress(HMODULE m, LPCSTR name) { (void)m; (void)name; return NULL; }
 HMODULE WINAPI GetModuleHandle(LPCSTR name) { (void)name; return NULL; }
 
 /* ---------------------------------------------------------------- threads and events */
@@ -222,8 +217,6 @@ DWORD WINAPI MsgWaitForMultipleObjects(DWORD n, HANDLE *h, BOOL all, DWORD ms, D
     (void)n; (void)h; (void)all; (void)ms; (void)mask;
     return WAIT_OBJECT_0;
 }
-BOOL WINAPI CloseHandle(HANDLE h) { (void)h; return TRUE; }
-HANDLE WINAPI GetCurrentProcess(void) { return HANDLE_OF(HANDLE); }
 HANDLE WINAPI GetCurrentThread(void) { return HANDLE_OF(HANDLE); }
 BOOL WINAPI SetPriorityClass(HANDLE h, DWORD c) { (void)h; (void)c; return TRUE; }
 BOOL WINAPI SetThreadPriority(HANDLE h, int p) { (void)h; (void)p; return TRUE; }
@@ -627,15 +620,40 @@ DWORD WINAPI mciSendCommand(DWORD id, UINT msg, DWORD flags, DWORD parms)
  */
 extern int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPSTR lpCmdLine, int nCmdShow);
 
+/*
+ * The command line, published for GetCommandLine as well as passed to WinMain.
+ *
+ * Both are needed and they are not the same thing: WinMain's lpCmdLine is the ARGUMENTS, while
+ * GetCommandLine returns the program name FOLLOWED by them. PuTTY reads the second -- windows/
+ * putty.c goes through cmdline_arg_list_from_GetCommandLineW -- so passing only the first left it
+ * with no arguments at all and it fell through to its configuration box every time.
+ */
+char prism_win32_cmdline[1024];
+char prism_win32_cmdline_full[1152];
+
 int main(int argc, char **argv)
 {
-    static char cmdline[1024];
     int i;
-    cmdline[0] = 0;
+    prism_win32_cmdline[0] = 0;
     for (i = 1; i < argc; i++) {
-        if (i > 1) strcat(cmdline, " ");
-        if (strlen(cmdline) + strlen(argv[i]) + 2 >= sizeof(cmdline)) break;
-        strcat(cmdline, argv[i]);
+        if (i > 1) strcat(prism_win32_cmdline, " ");
+        if (strlen(prism_win32_cmdline) + strlen(argv[i]) + 2 >= sizeof(prism_win32_cmdline)) break;
+        strcat(prism_win32_cmdline, argv[i]);
     }
-    return WinMain(NULL, NULL, cmdline, SW_SHOWNORMAL);
+    strcpy(prism_win32_cmdline_full, argc > 0 && argv[0] ? argv[0] : "program");
+    if (prism_win32_cmdline[0]) {
+        strcat(prism_win32_cmdline_full, " ");
+        strcat(prism_win32_cmdline_full, prism_win32_cmdline);
+    }
+    return WinMain(NULL, NULL, prism_win32_cmdline, SW_SHOWNORMAL);
 }
+
+/*
+ * SEVEN FUNCTIONS THAT USED TO BE HERE -- GetLastError, SetLastError, LoadLibrary, FreeLibrary,
+ * GetProcAddress, CloseHandle, GetCurrentProcess -- now live in win32-app.c.
+ *
+ * They are not about a window, and PuTTY needs them without one. The split is the point: this file
+ * is the WINDOW (a class, a message queue, a rectangle), win32-app.c is what a Win32 program calls
+ * when it is not drawing. Every target that includes this one must include that one too.
+ */
+

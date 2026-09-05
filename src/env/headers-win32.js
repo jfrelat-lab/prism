@@ -14,6 +14,61 @@
 // simplification, it is the form the program was written against.
 
 export const WIN32_HEADERS = {
+  /* Just enough of the shell's folder API for PuTTY to find %APPDATA% for its random seed. */
+  'shlobj.h': `
+#ifndef _PRISM_SHLOBJ_H
+#define _PRISM_SHLOBJ_H
+#include <windows.h>
+#define CSIDL_APPDATA        0x001a
+#define CSIDL_LOCAL_APPDATA  0x001c
+#define CSIDL_PERSONAL       0x0005
+#define SHGFP_TYPE_CURRENT   0
+#define SHGFP_TYPE_DEFAULT   1
+HRESULT WINAPI SHGetFolderPathA(HWND hwnd, int folder, HANDLE token, DWORD flags, LPSTR path);
+#endif
+`,
+
+  /*
+   * tchar.h: the TCHAR family, which resolves to the narrow one because UNICODE is not defined here.
+   * PuTTY uses only a handful and always through these names, which is the point of the header.
+   */
+  'tchar.h': `
+#ifndef _PRISM_TCHAR_H
+#define _PRISM_TCHAR_H
+#include <string.h>
+#define _tcslen   strlen
+#define _tcscpy   strcpy
+#define _tcscmp   strcmp
+#define _tcschr   strchr
+#define _tcsrchr  strrchr
+#define _tcscat   strcat
+#define _T(x)     x
+#define TEXT(x)   x
+#endif
+`,
+
+  /* The shell, at the depth PuTTY uses it: opening its own web page from the About box. */
+  'shellapi.h': `
+#ifndef _PRISM_SHELLAPI_H
+#define _PRISM_SHELLAPI_H
+#include <windows.h>
+HINSTANCE WINAPI ShellExecute(HWND hwnd, LPCTSTR verb, LPCTSTR file, LPCTSTR params,
+                              LPCTSTR dir, INT show);
+#endif
+`,
+
+  /* HTML Help, which PuTTY opens for its manual and otherwise leaves alone. */
+  'htmlhelp.h': `
+#ifndef _PRISM_HTMLHELP_H
+#define _PRISM_HTMLHELP_H
+#include <windows.h>
+#define HH_DISPLAY_TOPIC  0x0000
+#define HH_HELP_CONTEXT   0x000F
+#define HH_CLOSE_ALL      0x0012
+HWND WINAPI HtmlHelpA(HWND caller, LPCSTR file, UINT cmd, DWORD_PTR data);
+#endif
+`,
+
   /*
    * Winsock, at the depth PuTTY's event loop reaches. Not a network stack -- the point here is the
    * TYPES: a SOCKET is a handle, WSANETWORKEVENTS is what WSAEnumNetworkEvents fills in, and the
@@ -24,15 +79,172 @@ export const WIN32_HEADERS = {
 #ifndef _PRISM_WINSOCK2_H
 #define _PRISM_WINSOCK2_H
 #include <windows.h>
+/*
+ * Winsock 2, declared and not implemented. PRISM has no network stack, and PuTTY without one is
+ * still PuTTY: it opens its window, draws its terminal and reports that the connection failed --
+ * which is a real code path, not a stub, and is why this header exists rather than the target
+ * simply not linking network.c.
+ *
+ * The FAR that appears through this API is the 16-bit memory model's far pointer, meaningless on a
+ * flat target and empty here, exactly as it is in the real headers.
+ */
+#define FAR
+#define PASCAL_FAR
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+typedef unsigned int u_int;
+typedef unsigned long u_long;
 typedef UINT_PTR SOCKET;
 #define INVALID_SOCKET  ((SOCKET)~0)
 #define SOCKET_ERROR    (-1)
+
 #define FD_SETSIZE      64
+typedef struct fd_set { u_int fd_count; SOCKET fd_array[FD_SETSIZE]; } fd_set;
+#ifndef _PRISM_TIMEVAL
+#define _PRISM_TIMEVAL
+struct timeval { long tv_sec, tv_usec; };
+#endif
+
+/* ---- addresses */
+#define AF_UNSPEC   0
+#define AF_UNIX     1
+#define AF_INET     2
+#define AF_INET6    23
+#define SOCK_STREAM 1
+#define SOCK_DGRAM  2
+#define IPPROTO_IP  0
+#define IPPROTO_TCP 6
+#define IPPROTO_UDP 17
+#define SOMAXCONN   0x7fffffff
+#define INADDR_ANY  ((u_long)0)
+#define INADDR_LOOPBACK ((u_long)0x7f000001)
+#define INADDR_NONE ((u_long)0xffffffff)
+/* The all-zeros address, spelled as the SDK spells it: an initialiser, not an object. */
+#define IN6ADDR_ANY_INIT { { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 } } }
+#define IN6ADDR_LOOPBACK_INIT { { { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } } }
+#define INET_ADDRSTRLEN  16
+#define INET6_ADDRSTRLEN 46
+#define NI_MAXHOST       1025
+#define NI_MAXSERV       32
+#define NI_NUMERICHOST   0x02
+#define NI_NUMERICSERV   0x08
+#define AI_PASSIVE       0x01
+#define AI_CANONNAME     0x02
+#define AI_NUMERICHOST   0x04
+
+struct in_addr { union { struct { u_char s_b1, s_b2, s_b3, s_b4; } S_un_b; u_long S_addr; } S_un; };
+#define s_addr S_un.S_addr
+struct in6_addr { union { u_char Byte[16]; u_short Word[8]; } u; };
+struct sockaddr { u_short sa_family; char sa_data[14]; };
+struct sockaddr_in { short sin_family; u_short sin_port; struct in_addr sin_addr; char sin_zero[8]; };
+struct sockaddr_in6 { short sin6_family; u_short sin6_port; u_long sin6_flowinfo;
+                      struct in6_addr sin6_addr; u_long sin6_scope_id; };
+struct sockaddr_un { u_short sun_family; char sun_path[108]; };
+struct sockaddr_storage { short ss_family; char __pad[126]; };
+typedef struct sockaddr SOCKADDR, *LPSOCKADDR;
+typedef struct sockaddr_in SOCKADDR_IN;
+typedef struct sockaddr_un SOCKADDR_UN;
+typedef struct sockaddr_in6 SOCKADDR_IN6;
+typedef struct in_addr IN_ADDR;
+typedef struct in6_addr IN6_ADDR;
+#define IN6_IS_ADDR_LOOPBACK(a) \\
+    ((a)->u.Word[0] == 0 && (a)->u.Word[1] == 0 && (a)->u.Word[2] == 0 && (a)->u.Word[3] == 0 && \\
+     (a)->u.Word[4] == 0 && (a)->u.Word[5] == 0 && (a)->u.Word[6] == 0 && (a)->u.Byte[14] == 0 && \\
+     (a)->u.Byte[15] == 1)
+
+struct hostent { char *h_name, **h_aliases; short h_addrtype, h_length; char **h_addr_list; };
+#define h_addr h_addr_list[0]
+struct servent { char *s_name, **s_aliases; short s_port; char *s_proto; };
+struct addrinfo {
+    int ai_flags, ai_family, ai_socktype, ai_protocol;
+    size_t ai_addrlen;
+    char *ai_canonname;
+    struct sockaddr *ai_addr;
+    struct addrinfo *ai_next;
+};
+typedef struct addrinfo ADDRINFO, *LPADDRINFO;
+typedef int socklen_t;
+/* SIO_GET_INTERFACE_LIST's element: the local addresses, which network.c uses to spot a local peer. */
+typedef struct _INTERFACE_INFO {
+    u_long iiFlags;
+    union { struct sockaddr Address; struct sockaddr_in AddressIn; } iiAddress, iiBroadcastAddress, iiNetmask;
+} INTERFACE_INFO, *LPINTERFACE_INFO;
+#define SIO_GET_INTERFACE_LIST 0x4004747F
+#define IFF_UP          0x00000001
+#define IFF_LOOPBACK    0x00000004
+int WINAPI getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, DWORD hostlen,
+                       char *serv, DWORD servlen, int flags);
+/* WSAPROTOCOL_INFO is opaque to PuTTY: it only ever passes NULL. */
+typedef struct _WSAPROTOCOL_INFOA { BYTE opaque[512]; } WSAPROTOCOL_INFOA, WSAPROTOCOL_INFO, *LPWSAPROTOCOL_INFO;
+typedef OVERLAPPED WSAOVERLAPPED, *LPWSAOVERLAPPED;
+typedef void (CALLBACK *LPWSAOVERLAPPED_COMPLETION_ROUTINE)(DWORD, DWORD, LPWSAOVERLAPPED, DWORD);
+
+/* ---- options and shutdown */
+#define SOL_SOCKET      0xffff
+#define SO_REUSEADDR    0x0004
+#define SO_KEEPALIVE    0x0008
+#define SO_OOBINLINE    0x0100
+#define SO_EXCLUSIVEADDRUSE ((int)(~0x0004))
+#define TCP_NODELAY     0x0001
+#define SD_RECEIVE      0
+#define SD_SEND         1
+#define SD_BOTH         2
+#define MSG_OOB         0x1
+#define MSG_PEEK        0x2
+#define FIONBIO         0x8004667e
+#define FIONREAD        0x4004667f
+#define SIOCATMARK      0x40047307
+
+/* ---- the calls */
+SOCKET WINAPI socket(int af, int type, int protocol);
+int WINAPI closesocket(SOCKET s);
+int WINAPI bind(SOCKET s, const struct sockaddr *a, int len);
+int WINAPI listen(SOCKET s, int backlog);
+SOCKET WINAPI accept(SOCKET s, struct sockaddr *a, int *len);
+int WINAPI connect(SOCKET s, const struct sockaddr *a, int len);
+int WINAPI recv(SOCKET s, char *buf, int len, int flags);
+int WINAPI send(SOCKET s, const char *buf, int len, int flags);
+int WINAPI shutdown(SOCKET s, int how);
+int WINAPI select(int n, fd_set *r, fd_set *w, fd_set *e, const struct timeval *t);
+int WINAPI ioctlsocket(SOCKET s, long cmd, u_long *arg);
+int WINAPI getsockopt(SOCKET s, int level, int name, char *val, int *len);
+int WINAPI setsockopt(SOCKET s, int level, int name, const char *val, int len);
+int WINAPI getsockname(SOCKET s, struct sockaddr *a, int *len);
+int WINAPI getpeername(SOCKET s, struct sockaddr *a, int *len);
+struct hostent *WINAPI gethostbyname(const char *name);
+struct servent *WINAPI getservbyname(const char *name, const char *proto);
+int WINAPI getaddrinfo(const char *node, const char *service,
+                       const struct addrinfo *hints, struct addrinfo **out);
+void WINAPI freeaddrinfo(struct addrinfo *ai);
+char *WINAPI inet_ntoa(struct in_addr a);
+u_long WINAPI inet_addr(const char *s);
+u_short WINAPI htons(u_short v);
+u_short WINAPI ntohs(u_short v);
+u_long WINAPI htonl(u_long v);
+u_long WINAPI ntohl(u_long v);
+
+typedef void *WSAEVENT;
 #define FD_MAX_EVENTS   10
-typedef struct _WSANETWORKEVENTS {
-    long lNetworkEvents;
-    int iErrorCode[FD_MAX_EVENTS];
-} WSANETWORKEVENTS, *LPWSANETWORKEVENTS;
+typedef struct _WSANETWORKEVENTS { long lNetworkEvents; int iErrorCode[FD_MAX_EVENTS]; }
+    WSANETWORKEVENTS, *LPWSANETWORKEVENTS;
+typedef struct WSAData {
+    WORD wVersion, wHighVersion;
+    char szDescription[257], szSystemStatus[129];
+    unsigned short iMaxSockets, iMaxUdpDg;
+    char *lpVendorInfo;
+} WSADATA, *LPWSADATA;
+#define MAKEWORD(a, b) ((WORD)(((BYTE)(a)) | (((WORD)((BYTE)(b))) << 8)))
+int WINAPI WSAStartup(WORD version, LPWSADATA data);
+int WINAPI WSACleanup(void);
+int WINAPI WSAGetLastError(void);
+void WINAPI WSASetLastError(int e);
+int WINAPI WSAEnumNetworkEvents(SOCKET s, WSAEVENT h, LPWSANETWORKEVENTS out);
+int WINAPI WSAEventSelect(SOCKET s, WSAEVENT h, long events);
+int WINAPI WSAAsyncSelect(SOCKET s, HWND hwnd, u_int msg, long events);
+int WINAPI WSAIoctl(SOCKET s, DWORD code, LPVOID inb, DWORD incb, LPVOID outb, DWORD outcb,
+                    LPDWORD ret, LPVOID overlapped, LPVOID completion);
+int WINAPI WSAAddressToStringA(LPSOCKADDR a, DWORD alen, LPVOID info, char *buf, LPDWORD buflen);
+
 #define FD_READ_BIT     0
 #define FD_WRITE_BIT    1
 #define FD_OOB_BIT      2
@@ -48,8 +260,45 @@ typedef struct _WSANETWORKEVENTS {
 #define WSAMAKESELECTREPLY(event, error) ((WPARAM)(((WORD)(event)) | (((DWORD)(error)) << 16)))
 #define WSAGETSELECTEVENT(l)  ((int)LOWORD(l))
 #define WSAGETSELECTERROR(l)  ((int)HIWORD(l))
-int WINAPI WSAEnumNetworkEvents(SOCKET s, WSAEVENT h, LPWSANETWORKEVENTS out);
-int WINAPI WSAGetLastError(void);
+
+#define WSABASEERR              10000
+#define WSAEINTR                (WSABASEERR+4)
+#define WSAEACCES               (WSABASEERR+13)
+#define WSAEFAULT               (WSABASEERR+14)
+#define WSAEINVAL               (WSABASEERR+22)
+#define WSAEMFILE               (WSABASEERR+24)
+#define WSAEWOULDBLOCK          (WSABASEERR+35)
+#define WSAEINPROGRESS          (WSABASEERR+36)
+#define WSAEALREADY             (WSABASEERR+37)
+#define WSAENOTSOCK             (WSABASEERR+38)
+#define WSAEDESTADDRREQ         (WSABASEERR+39)
+#define WSAEMSGSIZE             (WSABASEERR+40)
+#define WSAEPROTOTYPE           (WSABASEERR+41)
+#define WSAENOPROTOOPT          (WSABASEERR+42)
+#define WSAEPROTONOSUPPORT      (WSABASEERR+43)
+#define WSAESOCKTNOSUPPORT      (WSABASEERR+44)
+#define WSAEOPNOTSUPP           (WSABASEERR+45)
+#define WSAEPFNOSUPPORT         (WSABASEERR+46)
+#define WSAEAFNOSUPPORT         (WSABASEERR+47)
+#define WSAEADDRINUSE           (WSABASEERR+48)
+#define WSAEADDRNOTAVAIL        (WSABASEERR+49)
+#define WSAENETDOWN             (WSABASEERR+50)
+#define WSAENETUNREACH          (WSABASEERR+51)
+#define WSAENETRESET            (WSABASEERR+52)
+#define WSAECONNABORTED         (WSABASEERR+53)
+#define WSAECONNRESET           (WSABASEERR+54)
+#define WSAENOBUFS              (WSABASEERR+55)
+#define WSAEISCONN              (WSABASEERR+56)
+#define WSAENOTCONN             (WSABASEERR+57)
+#define WSAESHUTDOWN            (WSABASEERR+58)
+#define WSAETIMEDOUT            (WSABASEERR+60)
+#define WSAECONNREFUSED         (WSABASEERR+61)
+#define WSAEHOSTDOWN            (WSABASEERR+64)
+#define WSAEHOSTUNREACH         (WSABASEERR+65)
+#define WSAEPROCLIM             (WSABASEERR+67)
+#define WSAEDISCON              (WSABASEERR+101)
+#define WSAHOST_NOT_FOUND       (WSABASEERR+1001)
+#define WSATRY_AGAIN            (WSABASEERR+1002)
 #endif
 `,
   'winsock.h': `#include <winsock2.h>
@@ -98,6 +347,10 @@ typedef struct _DOC_INFO_1A {
 
 void WINAPI InitCommonControls(void);
 #define WC_TREEVIEW "SysTreeView32"
+#define PROGRESS_CLASS "msctls_progress32"
+#define PBM_SETRANGE    (WM_USER + 1)
+#define PBM_SETPOS      (WM_USER + 2)
+#define PBM_SETRANGE32  (WM_USER + 6)
 #define WC_TABCONTROL "SysTabControl32"
 
 typedef struct _TREEITEM *HTREEITEM;
@@ -336,6 +589,9 @@ typedef unsigned long ULONG_PTR, DWORD_PTR;
 /* The signed/unsigned pointer-width pair. Win32 dialog procedures return INT_PTR. */
 typedef int INT_PTR;
 typedef unsigned char BOOLEAN;
+typedef HANDLE HKL;              /* a keyboard layout handle */
+typedef WORD *LPWORD;
+typedef float FLOAT;
 typedef const unsigned short *PCWSTR;
 /* Empty on purpose: an import declaration is a linkage hint, and PRISM has one linkage. */
 #define DECLSPEC_IMPORT
@@ -452,7 +708,21 @@ typedef struct tagWNDCLASS {
     UINT style; WNDPROC lpfnWndProc; int cbClsExtra, cbWndExtra;
     HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground;
     LPCSTR lpszMenuName, lpszClassName;
-} WNDCLASS, *LPWNDCLASS;
+} WNDCLASS, WNDCLASSA, *LPWNDCLASS;
+/* The wide twin. PuTTY registers BOTH and picks by whether the platform has the W entry points. */
+typedef struct tagWNDCLASSW {
+    UINT style; WNDPROC lpfnWndProc; int cbClsExtra, cbWndExtra;
+    HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground;
+    LPCWSTR lpszMenuName, lpszClassName;
+} WNDCLASSW, *LPWNDCLASSW;
+ATOM WINAPI RegisterClassA(const WNDCLASSA *c);
+ATOM WINAPI RegisterClassW(const WNDCLASSW *c);
+LRESULT WINAPI DefWindowProcA(HWND h, UINT m, WPARAM w, LPARAM l);
+LRESULT WINAPI DefWindowProcW(HWND h, UINT m, WPARAM w, LPARAM l);
+LRESULT WINAPI DispatchMessageA(const MSG *m);
+LRESULT WINAPI DispatchMessageW(const MSG *m);
+BOOL WINAPI GetMessageW(MSG *m, HWND h, UINT lo, UINT hi);
+BOOL WINAPI PeekMessageW(MSG *m, HWND h, UINT lo, UINT hi, UINT remove);
 typedef struct _OSVERSIONINFO {
     DWORD dwOSVersionInfoSize, dwMajorVersion, dwMinorVersion, dwBuildNumber, dwPlatformId;
     CHAR szCSDVersion[128];
@@ -840,6 +1110,15 @@ BOOL WINAPI SetWindowPlacement(HWND hwnd, const WINDOWPLACEMENT *wp);
 #define MB_DEFBUTTON1       0x00000000
 #define MB_DEFBUTTON2       0x00000100
 #define REG_MULTI_SZ        7
+#define REG_OPTION_NON_VOLATILE 0
+#define REG_OPTION_VOLATILE     1
+#define REG_CREATED_NEW_KEY     1
+#define REG_OPENED_EXISTING_KEY 2
+#define KEY_QUERY_VALUE     0x0001
+#define KEY_SET_VALUE       0x0002
+#define KEY_CREATE_SUB_KEY  0x0004
+LONG WINAPI RegEnumValue(HKEY key, DWORD i, LPTSTR name, DWORD *namelen, DWORD *res,
+                         DWORD *type, BYTE *data, DWORD *datalen);
 #define REG_EXPAND_SZ       2
 #ifndef MAKELONG
 #define MAKELONG(lo, hi) ((LONG)(((WORD)(lo)) | (((DWORD)((WORD)(hi))) << 16)))
@@ -847,6 +1126,10 @@ BOOL WINAPI SetWindowPlacement(HWND hwnd, const WINDOWPLACEMENT *wp);
 #define MAKELPARAM(lo, hi) ((LPARAM)MAKELONG(lo, hi))
 #define MAKEWPARAM(lo, hi) ((WPARAM)MAKELONG(lo, hi))
 BOOL WINAPI EndDialog(HWND dlg, INT_PTR result);
+HWND WINAPI CreateDialog(HINSTANCE inst, LPCTSTR tmpl, HWND parent, void *proc);
+LRESULT WINAPI DefDlgProc(HWND h, UINT m, WPARAM w, LPARAM l);
+INT_PTR WINAPI DialogBoxParam(HINSTANCE inst, LPCTSTR tmpl, HWND parent, void *proc, LPARAM init);
+#define DLGWINDOWEXTRA  30
 BOOL WINAPI MessageBeep(UINT type);
 UINT WINAPI GetCaretBlinkTime(void);
 HWND WINAPI GetCapture(void);
@@ -1088,6 +1371,542 @@ int WINAPI DrawText(HDC dc, LPCTSTR s, int n, RECT *r, UINT fmt);
 #define DT_SINGLELINE   0x0020
 #define DT_NOPREFIX     0x0800
 #define DT_CALCRECT     0x0400
+
+/* Monitors and per-monitor DPI: window.c resolves all of these dynamically, so only the types matter. */
+typedef HANDLE HMONITOR;
+typedef RECT *LPRECT;
+typedef struct tagMONITORINFO { DWORD cbSize; RECT rcMonitor, rcWork; DWORD dwFlags; } MONITORINFO, *LPMONITORINFO;
+#define MONITOR_DEFAULTTONULL       0x00000000
+#define MONITOR_DEFAULTTOPRIMARY    0x00000001
+#define MONITOR_DEFAULTTONEAREST    0x00000002
+
+#define SIF_DISABLENOSCROLL 0x0008
+#define TPM_LEFTALIGN   0x0000
+#define TPM_TOPALIGN    0x0000
+#define SYSTEM_FONT     13
+#define WHITE_PEN       6
+#define WMSZ_LEFT       1
+#define WMSZ_RIGHT      2
+#define WMSZ_TOP        3
+#define WMSZ_TOPLEFT    4
+#define WMSZ_TOPRIGHT   5
+#define WMSZ_BOTTOM     6
+#define WMSZ_BOTTOMLEFT 7
+#define WMSZ_BOTTOMRIGHT 8
+#define STM_SETICON     0x0170
+#define GWLP_ID         (-12)
+typedef struct _OVERLAPPED {
+    ULONG_PTR Internal, InternalHigh;
+    DWORD Offset, OffsetHigh;
+    HANDLE hEvent;
+} OVERLAPPED, *LPOVERLAPPED;
+/* The SDK spells these as macros over the C library, and so does this. */
+#ifndef ZeroMemory
+#define ZeroMemory(d, n)    memset((d), 0, (n))
+#define CopyMemory(d, s, n) memcpy((d), (s), (n))
+#define MoveMemory(d, s, n) memmove((d), (s), (n))
+#define FillMemory(d, n, v) memset((d), (v), (n))
+#endif
+BOOL WINAPI MoveWindow(HWND h, int x, int y, int w, int ht, BOOL repaint);
+HWND WINAPI CreateWindow(LPCTSTR cls, LPCTSTR name, DWORD style, int x, int y, int w, int h,
+                         HWND parent, HMENU menu, HINSTANCE inst, LPVOID param);
+UINT WINAPI GetDlgItemTextW(HWND dlg, int id, LPWSTR buf, int n);
+BOOL WINAPI GetUserName(LPSTR buf, LPDWORD n);
+UINT WINAPI GetWindowsDirectory(LPTSTR buf, UINT n);
+#define HTTRANSPARENT   (-1)
+#define ERROR_BROKEN_PIPE 109
+#define ERROR_HANDLE_EOF  38
+#define ERROR_IO_PENDING  997
+#define HTCLIENT        1
+#define HTCAPTION       2
+#define ERROR_FILE_NOT_FOUND 2
+#define ERROR_PATH_NOT_FOUND 3
+#define ERROR_ACCESS_DENIED  5
+HBRUSH WINAPI GetSysColorBrush(int index);
+UINT WINAPI GetSystemDirectory(LPTSTR buf, UINT n);
+HMODULE WINAPI LoadLibrary(LPCTSTR name);
+HMODULE WINAPI LoadLibraryA(LPCSTR name);
+UINT WINAPI GetSystemDirectoryA(LPSTR buf, UINT n);
+LPWSTR WINAPI GetCommandLineW(void);
+LPSTR WINAPI GetCommandLineA(void);
+DWORD WINAPI GetEnvironmentVariable(LPCTSTR name, LPTSTR buf, DWORD n);
+HANDLE WINAPI GetStdHandle(DWORD which);
+BOOL WINAPI AllocConsole(void);
+BOOL WINAPI WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, LPOVERLAPPED ov);
+BOOL WINAPI ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPOVERLAPPED ov);
+#define STD_INPUT_HANDLE  ((DWORD)-10)
+#define STD_OUTPUT_HANDLE ((DWORD)-11)
+#define STD_ERROR_HANDLE  ((DWORD)-12)
+BOOL WINAPI TextOut(HDC dc, int x, int y, LPCTSTR s, int n);
+int WINAPI GetWindowTextLength(HWND hwnd);
+int WINAPI GetWindowText(HWND hwnd, LPTSTR buf, int n);
+BOOL WINAPI DrawEdge(HDC dc, RECT *r, UINT edge, UINT flags);
+#define EDGE_SUNKEN     0x000A
+#define EDGE_ETCHED     0x0006
+#define BF_RECT         0x000F
+#define BF_ADJUST       0x2000
+#define GWL_ID          (-12)
+#define MB_DEFBUTTON3   0x00000200
+#define LBS_MULTIPLESEL 0x0008
+#define LBS_EXTENDEDSEL 0x0800
+#define LBS_OWNERDRAWFIXED 0x0010
+#define LBS_DISABLENOSCROLL 0x1000
+#define STM_SETIMAGE    0x0172
+#define ERROR_FILE_EXISTS 80
+#define ERROR_ALREADY_EXISTS 183
+#define BLACK_PEN       7
+#define NULL_PEN        8
+#define WHITE_BRUSH     0
+#define BLACK_BRUSH     4
+#define NULL_BRUSH      5
+#define CREATE_NEW      1
+#define CREATE_NEW_ALWAYS 2
+#define TRUNCATE_EXISTING 5
+#define ANSI_FIXED_FONT 11
+#define HWND_BOTTOM     ((HWND)1)
+#define HWND_NOTOPMOST  ((HWND)-2)
+HANDLE WINAPI FindResource(HMODULE mod, LPCTSTR name, LPCTSTR type);
+HANDLE WINAPI LoadResource(HMODULE mod, HANDLE res);
+LPVOID WINAPI LockResource(HANDLE res);
+DWORD WINAPI SizeofResource(HMODULE mod, HANDLE res);
+#define RT_RCDATA       ((LPCTSTR)10)
+#define TPM_BOTTOMALIGN 0x0020
+#define FILE_SHARE_READ  0x00000001
+#define FILE_SHARE_WRITE 0x00000002
+#define SND_ASYNC        0x0001
+#define SND_FILENAME     0x00020000
+#define SND_ALIAS_ID     0x00110000
+BOOL WINAPI PlaySound(LPCTSTR name, HMODULE mod, DWORD flags);
+#define TPM_LEFTBUTTON  0x0000
+#define TA_CENTER       6
+#define TA_RIGHT        2
+#define TA_BOTTOM       8
+#define CFS_DEFAULT     0x0000
+#define CFS_POINT       0x0002
+#define CFS_FORCE_POSITION 0x0020
+BOOL WINAPI DeleteFile(LPCTSTR name);
+DWORD WINAPI GetTempPath(DWORD n, LPTSTR buf);
+UINT WINAPI GetTempFileName(LPCTSTR dir, LPCTSTR pre, UINT unique, LPTSTR out);
+#define TA_NOUPDATECP   0
+#define FLI_MASK        0x103B      /* GetFontLanguageInfo's "any of these apply" mask */
+#define LOCALE_IDEFAULTANSICODEPAGE 0x00001004
+#define LOCALE_IDEFAULTCODEPAGE     0x0000000B
+#define GWL_USERDATA    (-21)
+#define GWL_WNDPROC     (-4)
+#define GWL_HINSTANCE   (-6)
+#define GWL_STYLE       (-16)
+#define GWL_EXSTYLE     (-20)
+#define FW_THIN         100
+#define FW_LIGHT        300
+#define FW_SEMIBOLD     600
+#define FW_HEAVY        900
+#define DEFAULT_PALETTE 15
+#define TMPF_FIXED_PITCH 0x01
+#define TMPF_VECTOR      0x02
+#define TMPF_TRUETYPE    0x04
+#define TMPF_DEVICE      0x08
+#define LBS_USETABSTOPS  0x0080
+HANDLE WINAPI CreateFile(LPCTSTR name, DWORD access, DWORD share, void *sa,
+                         DWORD disp, DWORD flags, HANDLE tmpl);
+BOOL WINAPI SetHandleInformation(HANDLE h, DWORD mask, DWORD flags);
+BOOL WINAPI ClearCommBreak(HANDLE h);
+BOOL WINAPI SetCommBreak(HANDLE h);
+#define GENERIC_READ    0x80000000
+#define GENERIC_WRITE   0x40000000
+#define OPEN_EXISTING   3
+#define CREATE_ALWAYS   2
+#define FILE_ATTRIBUTE_TEMPORARY 0x00000100
+#define FILE_FLAG_OVERLAPPED     0x40000000
+#define INVALID_HANDLE_VALUE ((HANDLE)(LONG_PTR)-1)
+#define HANDLE_FLAG_INHERIT  0x00000001
+/* MSVC spells the case-insensitive compares with an underscore; they are strcasecmp's. */
+#define _stricmp   strcasecmp
+#define _strnicmp  strncasecmp
+
+/* ---- the serial port. PuTTY is a serial terminal as well as a network one. */
+typedef struct _DCB {
+    DWORD DCBlength, BaudRate;
+    DWORD fBinary : 1, fParity : 1, fOutxCtsFlow : 1, fOutxDsrFlow : 1;
+    DWORD fDtrControl : 2, fDsrSensitivity : 1, fTXContinueOnXoff : 1;
+    DWORD fOutX : 1, fInX : 1, fErrorChar : 1, fNull : 1;
+    DWORD fRtsControl : 2, fAbortOnError : 1, fDummy2 : 17;
+    WORD wReserved, XonLim, XoffLim;
+    BYTE ByteSize, Parity, StopBits;
+    char XonChar, XoffChar, ErrorChar, EofChar, EvtChar;
+    WORD wReserved1;
+} DCB, *LPDCB;
+typedef struct _COMMTIMEOUTS {
+    DWORD ReadIntervalTimeout, ReadTotalTimeoutMultiplier, ReadTotalTimeoutConstant;
+    DWORD WriteTotalTimeoutMultiplier, WriteTotalTimeoutConstant;
+} COMMTIMEOUTS, *LPCOMMTIMEOUTS;
+BOOL WINAPI GetCommState(HANDLE h, LPDCB dcb);
+BOOL WINAPI SetCommState(HANDLE h, LPDCB dcb);
+BOOL WINAPI SetCommTimeouts(HANDLE h, LPCOMMTIMEOUTS t);
+#define NOPARITY        0
+#define ODDPARITY       1
+#define EVENPARITY      2
+#define MARKPARITY      3
+#define SPACEPARITY     4
+#define ONESTOPBIT      0
+#define ONE5STOPBITS    1
+#define TWOSTOPBITS     2
+#define DTR_CONTROL_DISABLE   0x00
+#define DTR_CONTROL_ENABLE    0x01
+#define DTR_CONTROL_HANDSHAKE 0x02
+#define RTS_CONTROL_DISABLE   0x00
+#define RTS_CONTROL_ENABLE    0x01
+#define RTS_CONTROL_HANDSHAKE 0x02
+
+/* ---- the shell's jump list, which is COM.
+ *
+ * jump-list.c declares every vtable it uses ITSELF -- ICustomDestinationList, IObjectCollection and
+ * the rest are written out in that file -- so what it needs from here is the surrounding furniture:
+ * the variant type, the class and interface ids, and CoCreateInstance. The ids are declared and left
+ * undefined; the program checks CoCreateInstance's HRESULT and gives up quietly when the shell is
+ * not there, which is exactly the path a machine with no Windows shell should take.
+ */
+typedef struct tagPROPVARIANT {
+    WORD vt, wReserved1, wReserved2, wReserved3;
+    union {
+        long lVal;
+        unsigned long ulVal;
+        wchar_t *pwszVal;
+        char *pszVal;
+        void *pv;
+        double dblVal;
+    };
+} PROPVARIANT;
+#define VT_EMPTY    0
+#define VT_LPSTR    30
+#define VT_LPWSTR   31
+typedef const GUID *REFCLSID;
+typedef GUID CLSID;
+HRESULT WINAPI CoCreateInstance(REFCLSID cls, void *outer, DWORD ctx, REFIID iid, void **out);
+#define CLSCTX_INPROC_SERVER 0x1
+#define CLSCTX_INPROC_HANDLER 0x2
+#define CLSCTX_LOCAL_SERVER  0x4
+#define CLSCTX_REMOTE_SERVER 0x10
+#define CLSCTX_ALL (CLSCTX_INPROC_SERVER | CLSCTX_INPROC_HANDLER | CLSCTX_LOCAL_SERVER | CLSCTX_REMOTE_SERVER)
+extern const GUID CLSID_DestinationList, CLSID_EnumerableObjectCollection, CLSID_ShellLink;
+extern const GUID IID_ICustomDestinationList, IID_IObjectArray, IID_IObjectCollection;
+extern const GUID IID_IPropertyStore, IID_IShellLinkA, IID_IShellLinkW, IID_IUnknown;
+
+/* CreateProcess and its two parameter blocks. PuTTY starts a copy of itself for "Duplicate Session". */
+typedef struct _STARTUPINFOA {
+    DWORD cb;
+    LPSTR lpReserved, lpDesktop, lpTitle;
+    DWORD dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+    WORD wShowWindow, cbReserved2;
+    LPBYTE lpReserved2;
+    HANDLE hStdInput, hStdOutput, hStdError;
+} STARTUPINFOA, STARTUPINFO, *LPSTARTUPINFO;
+typedef struct _PROCESS_INFORMATION {
+    HANDLE hProcess, hThread;
+    DWORD dwProcessId, dwThreadId;
+} PROCESS_INFORMATION, *LPPROCESS_INFORMATION;
+BOOL WINAPI CreateProcess(LPCSTR app, LPSTR cmd, void *psa, void *tsa, BOOL inherit,
+                          DWORD flags, LPVOID env, LPCSTR dir,
+                          LPSTARTUPINFO si, LPPROCESS_INFORMATION pi);
+HANDLE WINAPI CreateFileMapping(HANDLE file, void *sa, DWORD protect,
+                                DWORD hi, DWORD lo, LPCSTR name);
+LPVOID WINAPI MapViewOfFile(HANDLE map, DWORD access, DWORD hi, DWORD lo, SIZE_T bytes);
+BOOL WINAPI UnmapViewOfFile(LPCVOID addr);
+#define FILE_MAP_WRITE  0x0002
+#define FILE_MAP_READ   0x0004
+#define STARTF_USESHOWWINDOW 0x00000001
+
+/* ---- the rest of the message and virtual-key alphabet a terminal window needs. */
+#define WM_DESTROYCLIPBOARD 0x0307
+#define WM_VSCROLL          0x0115
+#define WM_INITMENUPOPUP    0x0117
+#define WM_NCMOUSEMOVE      0x00A0
+#define WM_MOUSEHWHEEL      0x020E
+#define WM_IME_STARTCOMPOSITION 0x010D
+#define WM_IME_COMPOSITION  0x010F
+#define WM_IME_CHAR         0x0286
+#define WM_DPICHANGED       0x02E0
+#define WM_DPICHANGED_BEFOREPARENT 0x02E2
+#define WM_DPICHANGED_AFTERPARENT  0x02E3
+#define WM_GETDPISCALEDSIZE 0x02E4
+
+#define MK_SHIFT        0x0004
+#define MK_CONTROL      0x0008
+#define SB_LINEUP       0
+#define SB_LINEDOWN     1
+#define SB_PAGEUP       2
+#define SB_PAGEDOWN     3
+#define SB_THUMBPOSITION 4
+#define SB_THUMBTRACK   5
+#define SB_TOP          6
+#define SB_BOTTOM       7
+#define SC_VSCROLL      0xF070
+#define SC_HSCROLL      0xF080
+#define SC_MOUSEMENU    0xF090
+#define SM_CXVSCROLL    2
+#define SW_MAXIMIZE     3
+#define MB_OKCANCEL     0x00000001
+#define MB_ICONHAND     0x00000010
+#define MB_SYSTEMMODAL  0x00001000
+#define IDC_IBEAM       ((LPCTSTR)32513)
+#define IDC_WAIT        ((LPCTSTR)32514)
+#define IDC_APPSTARTING ((LPCTSTR)32650)
+/* The high word of a WM_KEYDOWN lParam. */
+#define KF_EXTENDED     0x0100
+#define KF_ALTDOWN      0x2000
+#define KF_REPEAT       0x4000
+#define KF_UP           0x8000
+
+#define VK_CANCEL       0x03
+#define VK_CLEAR        0x0C
+#define VK_EXECUTE      0x2B
+#define VK_NUMPAD0      0x60
+#define VK_NUMPAD1      0x61
+#define VK_NUMPAD2      0x62
+#define VK_NUMPAD3      0x63
+#define VK_NUMPAD4      0x64
+#define VK_NUMPAD5      0x65
+#define VK_NUMPAD6      0x66
+#define VK_NUMPAD7      0x67
+#define VK_NUMPAD8      0x68
+#define VK_NUMPAD9      0x69
+#define VK_MULTIPLY     0x6A
+#define VK_ADD          0x6B
+#define VK_SUBTRACT     0x6D
+#define VK_DECIMAL      0x6E
+#define VK_DIVIDE       0x6F
+#define VK_F2           0x71
+#define VK_F3           0x72
+#define VK_F4           0x73
+#define VK_F5           0x74
+#define VK_F6           0x75
+#define VK_F7           0x76
+#define VK_F8           0x77
+#define VK_F9           0x78
+#define VK_F10          0x79
+#define VK_F11          0x7A
+#define VK_F13          0x7C
+#define VK_F14          0x7D
+#define VK_F15          0x7E
+#define VK_F16          0x7F
+#define VK_F17          0x80
+#define VK_F18          0x81
+#define VK_F19          0x82
+#define VK_F20          0x83
+#define VK_RMENU        0xA5
+#define VK_PROCESSKEY   0xE5
+#define VK_PACKET       0xE7
+
+/* ---- what a real GUI reaches for: menus, the clipboard, the caret, scrollbars, the IME.
+ *
+ * PuTTY's window.c is 6,000 lines of Win32 and this is the shape of its surface. Declared, not
+ * implemented: the linker reports what the program actually calls, which is a smaller set than what
+ * it names, and src/env/win32.c fills that in.
+ */
+typedef struct _ABC { int abcA; UINT abcB; int abcC; } ABC;
+typedef struct _ABCFLOAT { FLOAT abcfA, abcfB, abcfC; } ABCFLOAT;
+typedef struct tagSCROLLINFO {
+    UINT cbSize, fMask;
+    int nMin, nMax;
+    UINT nPage;
+    int nPos, nTrackPos;
+} SCROLLINFO, *LPSCROLLINFO;
+typedef struct { UINT cbSize; HWND hwnd; DWORD dwFlags; UINT uCount; DWORD dwTimeout; } FLASHWINFO;
+typedef struct tagCOMPOSITIONFORM { DWORD dwStyle; POINT ptCurrentPos; RECT rcArea; } COMPOSITIONFORM;
+typedef struct tagCHARSETINFO { UINT ciCharset, ciACP; DWORD fs[4]; } CHARSETINFO, *LPCHARSETINFO;
+typedef struct tagGCP_RESULTSW {
+    DWORD lStructSize;
+    LPWSTR lpOutString;
+    UINT *lpOrder;
+    INT *lpDx, *lpCaretPos;
+    LPSTR lpClass;
+    LPWSTR lpGlyphs;
+    UINT nGlyphs, nMaxFit;
+} GCP_RESULTSW;
+typedef struct _OUTLINETEXTMETRICA { UINT otmSize; TEXTMETRICA otmTextMetrics; BYTE otmFiller;
+                                     BYTE otmPanoseNumber[10]; UINT otmfsSelection, otmfsType;
+                                     int otmsCharSlopeRise, otmsCharSlopeRun, otmItalicAngle;
+                                     UINT otmEMSquare; int otmAscent, otmDescent;
+                                     UINT otmLineGap, otmsCapEmHeight, otmsXHeight;
+                                     RECT otmrcFontBox;
+                                     int otmMacAscent, otmMacDescent; UINT otmMacLineGap, otmusMinimumPPEM;
+                                     POINT otmptSubscriptSize, otmptSubscriptOffset;
+                                     POINT otmptSuperscriptSize, otmptSuperscriptOffset;
+                                     UINT otmsStrikeoutSize; int otmsStrikeoutPosition;
+                                     int otmsUnderscoreSize, otmsUnderscorePosition;
+                                     void *otmpFamilyName, *otmpFaceName, *otmpStyleName, *otmpFullName;
+} OUTLINETEXTMETRICA, OUTLINETEXTMETRIC, *LPOUTLINETEXTMETRIC;
+
+HMENU WINAPI CreateMenu(void);
+HMENU WINAPI CreatePopupMenu(void);
+HMENU WINAPI GetSystemMenu(HWND hwnd, BOOL revert);
+BOOL WINAPI AppendMenu(HMENU m, UINT flags, UINT_PTR id, LPCTSTR item);
+BOOL WINAPI InsertMenu(HMENU m, UINT pos, UINT flags, UINT_PTR id, LPCTSTR item);
+BOOL WINAPI DeleteMenu(HMENU m, UINT pos, UINT flags);
+DWORD WINAPI CheckMenuItem(HMENU m, UINT id, UINT check);
+BOOL WINAPI EnableMenuItem(HMENU m, UINT id, UINT enable);
+BOOL WINAPI TrackPopupMenu(HMENU m, UINT flags, int x, int y, int res, HWND hwnd, const RECT *r);
+#define MF_STRING       0x0000
+#define MF_ENABLED      0x0000
+#define MF_GRAYED       0x0001
+#define MF_DISABLED     0x0002
+#define MF_BYCOMMAND    0x0000
+#define MF_BYPOSITION   0x0400
+#define MF_SEPARATOR    0x0800
+#define MF_CHECKED      0x0008
+#define MF_UNCHECKED    0x0000
+#define MF_POPUP        0x0010
+#define TPM_RIGHTBUTTON 0x0002
+
+BOOL WINAPI OpenClipboard(HWND hwnd);
+BOOL WINAPI CloseClipboard(void);
+BOOL WINAPI EmptyClipboard(void);
+HANDLE WINAPI GetClipboardData(UINT fmt);
+HANDLE WINAPI SetClipboardData(UINT fmt, HANDLE h);
+UINT WINAPI RegisterClipboardFormat(LPCTSTR name);
+#define CF_TEXT         1
+#define CF_BITMAP       2
+#define CF_OEMTEXT      7
+#define CF_UNICODETEXT  13
+#define CF_LOCALE       16
+/* Rich text, which PuTTY offers alongside plain text when copying a coloured selection. */
+#define CF_RTF          RegisterClipboardFormat("Rich Text Format")
+HANDLE WINAPI GlobalAlloc(UINT flags, SIZE_T bytes);
+LPVOID WINAPI GlobalLock(HANDLE h);
+BOOL WINAPI GlobalUnlock(HANDLE h);
+HANDLE WINAPI GlobalFree(HANDLE h);
+SIZE_T WINAPI GlobalSize(HANDLE h);
+#define GMEM_MOVEABLE   0x0002
+#define GMEM_DDESHARE   0x2000
+#define GMEM_ZEROINIT   0x0040
+
+BOOL WINAPI CreateCaret(HWND hwnd, HBITMAP bm, int w, int h);
+BOOL WINAPI DestroyCaret(void);
+BOOL WINAPI ShowCaret(HWND hwnd);
+BOOL WINAPI HideCaret(HWND hwnd);
+BOOL WINAPI SetCaretPos(int x, int y);
+
+HBITMAP WINAPI CreateBitmap(int w, int h, UINT planes, UINT bits, const void *data);
+HBITMAP WINAPI CreateCompatibleBitmap(HDC dc, int w, int h);
+HDC WINAPI CreateCompatibleDC(HDC dc);
+BOOL WINAPI DeleteDC(HDC dc);
+HFONT WINAPI CreateFont(int h, int w, int esc, int orient, int weight, DWORD italic,
+                        DWORD underline, DWORD strike, DWORD charset, DWORD outprec,
+                        DWORD clipprec, DWORD quality, DWORD pitch, LPCTSTR face);
+HPEN WINAPI CreatePen(int style, int width, COLORREF c);
+BOOL WINAPI LineTo(HDC dc, int x, int y);
+BOOL WINAPI MoveToEx(HDC dc, int x, int y, POINT *old);
+BOOL WINAPI Polyline(HDC dc, const POINT *pts, int n);
+BOOL WINAPI Rectangle(HDC dc, int l, int t, int r, int b);
+COLORREF WINAPI SetPixel(HDC dc, int x, int y, COLORREF c);
+COLORREF WINAPI GetPixel(HDC dc, int x, int y);
+int WINAPI ExcludeClipRect(HDC dc, int l, int t, int r, int b);
+int WINAPI IntersectClipRect(HDC dc, int l, int t, int r, int b);
+int WINAPI SelectClipRgn(HDC dc, HRGN rgn);
+UINT WINAPI SetTextAlign(HDC dc, UINT align);
+int WINAPI GetBkMode(HDC dc);
+int WINAPI GetObject(HGDIOBJ obj, int n, void *out);
+BOOL WINAPI UnrealizeObject(HGDIOBJ obj);
+BOOL WINAPI UpdateColors(HDC dc);
+UINT WINAPI SetPaletteEntries(HPALETTE pal, UINT start, UINT n, const PALETTEENTRY *e);
+UINT WINAPI GetOutlineTextMetrics(HDC dc, UINT n, LPOUTLINETEXTMETRIC otm);
+BOOL WINAPI GetCharWidth(HDC dc, UINT first, UINT last, INT *out);
+BOOL WINAPI GetCharWidthW(HDC dc, UINT first, UINT last, INT *out);
+BOOL WINAPI GetCharWidth32(HDC dc, UINT first, UINT last, INT *out);
+BOOL WINAPI GetCharWidth32W(HDC dc, UINT first, UINT last, INT *out);
+BOOL WINAPI GetCharABCWidthsFloat(HDC dc, UINT first, UINT last, ABCFLOAT *out);
+DWORD WINAPI GetCharacterPlacementW(HDC dc, LPCWSTR s, int n, int maxext, GCP_RESULTSW *r, DWORD flags);
+BOOL WINAPI GetTextExtentExPoint(HDC dc, LPCTSTR s, int n, int maxext, INT *fit, INT *dx, SIZE *sz);
+#define TA_TOP          0
+#define TA_LEFT         0
+#define TA_UPDATECP     1
+#define PS_SOLID        0
+#define GCP_CLASSIN     0x00080000
+#define GCP_DIACRITIC   0x00000100
+#define GCPCLASS_NEUTRAL 3
+#define PALETTERGB(r, g, b) (0x02000000 | RGB(r, g, b))
+#ifndef GetRValue
+#define GetRValue(c) ((BYTE)((c) & 0xFF))
+#define GetGValue(c) ((BYTE)(((c) >> 8) & 0xFF))
+#define GetBValue(c) ((BYTE)(((c) >> 16) & 0xFF))
+#endif
+
+HWND WINAPI CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style,
+                            int x, int y, int w, int h, HWND parent, HMENU menu,
+                            HINSTANCE inst, LPVOID param);
+HWND WINAPI CreateWindowExW(DWORD ex, LPCWSTR cls, LPCWSTR name, DWORD style,
+                            int x, int y, int w, int h, HWND parent, HMENU menu,
+                            HINSTANCE inst, LPVOID param);
+BOOL WINAPI SetWindowTextA(HWND hwnd, LPCSTR t);
+BOOL WINAPI SetWindowTextW(HWND hwnd, LPCWSTR t);
+BOOL WINAPI IsIconic(HWND hwnd);
+BOOL WINAPI IsZoomed(HWND hwnd);
+BOOL WINAPI IsWindow(HWND hwnd);
+BOOL WINAPI IsDialogMessage(HWND dlg, MSG *msg);
+BOOL WINAPI EnableWindow(HWND hwnd, BOOL enable);
+HWND WINAPI GetDesktopWindow(void);
+HWND WINAPI GetForegroundWindow(void);
+HCURSOR WINAPI SetCursor(HCURSOR c);
+HANDLE WINAPI LoadImage(HINSTANCE inst, LPCTSTR name, UINT type, int cx, int cy, UINT load);
+BOOL WINAPI DrawIconEx(HDC dc, int x, int y, HICON icon, int cx, int cy,
+                       UINT step, HBRUSH flicker, UINT flags);
+BOOL WINAPI DestroyIcon(HICON icon);
+BOOL WINAPI FlashWindow(HWND hwnd, BOOL invert);
+BOOL WINAPI FlashWindowEx(FLASHWINFO *fi);
+BOOL WINAPI GetScrollInfo(HWND hwnd, int bar, LPSCROLLINFO si);
+int WINAPI SetScrollInfo(HWND hwnd, int bar, LPSCROLLINFO si, BOOL redraw);
+BOOL WINAPI OffsetRect(RECT *r, int dx, int dy);
+DWORD WINAPI SetClassLongPtr(HWND hwnd, int index, LONG_PTR v);
+UINT WINAPI GetDoubleClickTime(void);
+LONG WINAPI GetMessageTime(void);
+INT_PTR WINAPI DialogBox(HINSTANCE inst, LPCTSTR tmpl, HWND parent, void *proc);
+#define DI_NORMAL       0x0003
+#define FLASHW_STOP     0
+#define FLASHW_CAPTION  1
+#define FLASHW_TRAY     2
+#define FLASHW_ALL      3
+#define FLASHW_TIMER    4
+#define SB_VERT         1
+#define SIF_RANGE       0x0001
+#define SIF_PAGE        0x0002
+#define SIF_POS         0x0004
+#define SIF_TRACKPOS    0x0010
+#define SIF_ALL         (SIF_RANGE | SIF_PAGE | SIF_POS | SIF_TRACKPOS)
+#define SWP_NOREDRAW    0x0008
+#define DM_SETDEFID     (WM_USER + 1)
+#define LBS_NOTIFY      0x0001
+#define LBS_HASSTRINGS  0x0040
+#define MB_YESNOCANCEL  0x00000003
+#define IDI_QUESTION    ((LPCTSTR)32514)
+#define IDI_WARNING     ((LPCTSTR)32515)
+#define COLOR_WINDOW        5
+#define COLOR_WINDOWTEXT    8
+#define COLOR_HIGHLIGHT     13
+#define COLOR_HIGHLIGHTTEXT 14
+#define GCLP_HCURSOR    (-12)
+#define ERROR_CALL_NOT_IMPLEMENTED 120
+
+HKL WINAPI GetKeyboardLayout(DWORD thread);
+BOOL WINAPI GetKeyboardState(BYTE *state);
+BOOL WINAPI SetKeyboardState(BYTE *state);
+UINT WINAPI MapVirtualKeyEx(UINT code, UINT type, HKL layout);
+int WINAPI ToAsciiEx(UINT vk, UINT scan, const BYTE *state, LPWORD out, UINT flags, HKL layout);
+BOOL WINAPI TranslateCharsetInfo(DWORD *src, LPCHARSETINFO out, DWORD flags);
+int WINAPI GetLocaleInfo(DWORD locale, DWORD type, LPTSTR buf, int n);
+#define TCI_SRCCHARSET  1
+#define TCI_SRCCODEPAGE 2
+#define LOCALE_USER_DEFAULT 0x0400
+
+typedef HANDLE HIMC;
+HIMC WINAPI ImmGetContext(HWND hwnd);
+BOOL WINAPI ImmReleaseContext(HWND hwnd, HIMC imc);
+LONG WINAPI ImmGetCompositionStringW(HIMC imc, DWORD index, LPVOID buf, DWORD n);
+BOOL WINAPI ImmSetCompositionFont(HIMC imc, LPLOGFONT lf);
+BOOL WINAPI ImmSetCompositionWindow(HIMC imc, COMPOSITIONFORM *cf);
+#define GCS_RESULTSTR   0x0800
+
+BOOL WINAPI Beep(DWORD freq, DWORD dur);
+HRESULT WINAPI CoInitialize(LPVOID reserved);
+void WINAPI CoUninitialize(void);
 
 /* ---- commdlg's font and colour choosers, which PuTTY's Appearance panel opens. */
 typedef struct tagCHOOSEFONTA {

@@ -177,10 +177,62 @@ DWORD WINAPI GetCurrentProcessId(void) { return 1; }
 DWORD WINAPI GetCurrentThreadId(void) { return 1; }
 
 /*
- * NULL, on purpose -- see the note at the top. Every caller here checks.
+ * Dynamic loading, answered from what PRISM ACTUALLY HAS.
+ *
+ * A shim file that implements part of the platform publishes a name table, and this finds it through
+ * an `extern` that a target without that file never defines -- which PRISM reads as a null pointer,
+ * exactly as a linker would leave it. So a console target resolves nothing and a target that links
+ * win32-net.c resolves winsock, with no #ifdef anywhere.
+ *
+ * Everything not in a table still returns NULL, and that remains deliberate: PuTTY checks every one
+ * of these and has a path for absent. What it does NOT have a path for is a library that loads and
+ * then hands back a null WSAStartup, so "found nothing" and "no such library" have to stay
+ * different answers -- which is why LoadLibrary only admits to the modules a table covers.
  */
-void *WINAPI GetProcAddress(HMODULE mod, const char *name) { (void)mod; (void)name; return NULL; }
-HMODULE WINAPI LoadLibraryA(const char *name) { (void)name; return (HMODULE)0; }
+struct prism_export { const char *module; const char *name; void *fn; };
+extern const struct prism_export *prism_extra_exports;
+extern const int prism_extra_export_count;
+
+/*
+ * The BASENAME of a DLL path. PuTTY's load_system32_dll loads by full path on purpose -- "no attack
+ * is possible by placing a substitute DLL earlier on that path", says its own comment -- so what
+ * arrives here is C:\WINDOWS\SYSTEM32\ws2_32.dll and never the bare name.
+ */
+static const char *prism_basename(const char *p)
+{
+    const char *base = p;
+    if (!p) return "";
+    for (; *p; p++)
+        if (*p == '\\' || *p == '/') base = p + 1;
+    return base;
+}
+
+/*
+ * A module handle IS the module name in the table. That makes it non-null, stable, unique per
+ * module and directly comparable, without a registry of handles to keep in step.
+ */
+HMODULE WINAPI LoadLibraryA(const char *name)
+{
+    const char *base = prism_basename(name);
+    int i;
+    for (i = 0; i < prism_extra_export_count; i++)
+        if (!strcasecmp(prism_extra_exports[i].module, base))
+            return (HMODULE)prism_extra_exports[i].module;
+    return (HMODULE)0;
+}
+
+void *WINAPI GetProcAddress(HMODULE mod, const char *name)
+{
+    int i;
+    if (!mod || !name || !prism_extra_exports) return NULL;
+    for (i = 0; i < prism_extra_export_count; i++)
+        if ((const char *)mod == prism_extra_exports[i].module
+            && !strcmp(prism_extra_exports[i].name, name))
+            return prism_extra_exports[i].fn;
+    return NULL;
+}
+
+HMODULE WINAPI LoadLibrary(const char *name) { return LoadLibraryA(name); }
 HMODULE WINAPI LoadLibraryW(const wchar_t *name) { (void)name; return (HMODULE)0; }
 HMODULE WINAPI GetModuleHandleA(const char *name) { (void)name; return (HMODULE)0; }
 BOOL WINAPI FreeLibrary(HMODULE mod) { (void)mod; return 1; }
@@ -192,7 +244,123 @@ UINT WINAPI GetSystemDirectoryA(char *buf, UINT n)
     return len + 1;
 }
 
-/* The caret blink, in milliseconds. Windows' own default, which is what PuTTY's cursor uses. */
-UINT WINAPI GetCaretBlinkTime(void) { return 530; }
-BOOL WINAPI MessageBeep(UINT type) { (void)type; return 1; }
-HWND WINAPI GetCapture(void) { return (HWND)0; }
+UINT WINAPI GetSystemDirectory(LPSTR buf, UINT n) { return GetSystemDirectoryA(buf, n); }
+
+/*
+ * The command line, as one string: the program name followed by its arguments, which is what
+ * GetCommandLine returns and NOT what WinMain is handed. The narrow form is whatever win32.c built
+ * from argv; the wide one is that, widened here, because a program is free to ask for either and
+ * PuTTY asks for the wide one.
+ *
+ * `prism_win32_cmdline_full` is an extern that win32.c defines. A target without win32.c never
+ * defines it, PRISM reads that as a null pointer, and this reports an empty command line -- which is
+ * the linker's own behaviour and needs no conditional here.
+ */
+extern char prism_win32_cmdline_full[];
+static wchar_t prism_cmdline_w[1152];
+
+LPSTR WINAPI GetCommandLineA(void)
+{
+    return prism_win32_cmdline_full ? (LPSTR)prism_win32_cmdline_full : (LPSTR)"";
+}
+LPWSTR WINAPI GetCommandLineW(void)
+{
+    const char *s = prism_win32_cmdline_full ? prism_win32_cmdline_full : "";
+    size_t i;
+    for (i = 0; i + 1 < sizeof(prism_cmdline_w) / sizeof(prism_cmdline_w[0]) && s[i]; i++)
+        prism_cmdline_w[i] = (unsigned char)s[i];
+    prism_cmdline_w[i] = 0;
+    return prism_cmdline_w;
+}
+
+DWORD WINAPI GetEnvironmentVariable(LPCSTR name, LPSTR buf, DWORD n)
+{
+    const char *v = getenv(name);
+    DWORD len;
+    if (!v) { SetLastError(203 /* ERROR_ENVVAR_NOT_FOUND */); return 0; }
+    len = (DWORD)strlen(v);
+    if (n > len) { strcpy(buf, v); return len; }
+    return len + 1;
+}
+
+/*
+ * COM and the shell, answering "not available" the way a machine without them does.
+ *
+ * CoCreateInstance failing is the interesting one: PuTTY's jump-list code checks the HRESULT at
+ * every step and gives up quietly, so E_NOINTERFACE takes the program down a path it really has
+ * rather than a path invented for it here.
+ */
+#define PRISM_E_FAIL 0x80004005L
+
+HRESULT WINAPI CoInitialize(LPVOID reserved) { (void)reserved; return 0; }
+void WINAPI CoUninitialize(void) { }
+HRESULT WINAPI CoCreateInstance(REFCLSID cls, void *outer, DWORD ctx, REFIID iid, void **out)
+{
+    (void)cls; (void)outer; (void)ctx; (void)iid;
+    if (out) *out = NULL;
+    return PRISM_E_FAIL;
+}
+HRESULT WINAPI SHGetFolderPathA(HWND hwnd, int folder, HANDLE token, DWORD flags, LPSTR path)
+{
+    (void)hwnd; (void)folder; (void)token; (void)flags;
+    if (path) strcpy(path, "C:\\PUTTY");
+    return 0;
+}
+
+BOOL WINAPI IsProcessorFeaturePresent(DWORD feature) { (void)feature; return 0; }
+BOOL WINAPI SetHandleInformation(HANDLE h, DWORD mask, DWORD flags)
+{ (void)h; (void)mask; (void)flags; return 1; }
+
+/* No real files behind these: PuTTY checks and carries on without its random seed or its help file. */
+HANDLE WINAPI CreateFile(LPCSTR name, DWORD access, DWORD share, void *sa,
+                         DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    (void)name; (void)access; (void)share; (void)sa; (void)disp; (void)flags; (void)tmpl;
+    SetLastError(2 /* ERROR_FILE_NOT_FOUND */);
+    return INVALID_HANDLE_VALUE;
+}
+BOOL WINAPI DeleteFile(LPCSTR name) { (void)name; return 0; }
+DWORD WINAPI GetTempPath(DWORD n, LPSTR buf)
+{
+    const char *d = "C:\\TEMP\\";
+    DWORD len = (DWORD)strlen(d);
+    if (n > len) { strcpy(buf, d); return len; }
+    return len + 1;
+}
+HANDLE WINAPI FindResource(HMODULE mod, LPCSTR name, LPCSTR type)
+{ (void)mod; (void)name; (void)type; return (HANDLE)0; }
+
+/*
+ * The registry: there isn't one.
+ *
+ * Every open and create reports ERROR_FILE_NOT_FOUND, which is what a program sees on a machine
+ * where nobody has ever saved anything -- so PuTTY finds no stored sessions and falls back to the
+ * defaults compiled into it. That is a path the program has and tests; an in-memory registry that
+ * forgot everything between runs would be the same outcome dressed as a feature.
+ */
+LONG WINAPI RegOpenKeyEx(HKEY key, LPCSTR sub, DWORD opt, DWORD sam, PHKEY out)
+{
+    (void)key; (void)sub; (void)opt; (void)sam;
+    if (out) *out = (HKEY)0;
+    return 2;                                   /* ERROR_FILE_NOT_FOUND */
+}
+LONG WINAPI RegCreateKeyEx(HKEY key, LPCSTR sub, DWORD res, LPSTR cls, DWORD opt,
+                           DWORD sam, void *sa, PHKEY out, DWORD *disp)
+{
+    (void)key; (void)sub; (void)res; (void)cls; (void)opt; (void)sam; (void)sa;
+    if (out) *out = (HKEY)0;
+    if (disp) *disp = 0;
+    return 5;                                   /* ERROR_ACCESS_DENIED: read-only, and honest */
+}
+LONG WINAPI RegQueryValueEx(HKEY key, LPCSTR name, DWORD *res, DWORD *type, BYTE *data, DWORD *len)
+{ (void)key; (void)name; (void)res; (void)type; (void)data; (void)len; return 2; }
+LONG WINAPI RegSetValueEx(HKEY key, LPCSTR name, DWORD res, DWORD type, const BYTE *data, DWORD len)
+{ (void)key; (void)name; (void)res; (void)type; (void)data; (void)len; return 5; }
+LONG WINAPI RegDeleteValue(HKEY key, LPCSTR name) { (void)key; (void)name; return 2; }
+LONG WINAPI RegDeleteKey(HKEY key, LPCSTR sub) { (void)key; (void)sub; return 2; }
+LONG WINAPI RegEnumKey(HKEY key, DWORD i, LPSTR name, DWORD len)
+{ (void)key; (void)i; (void)name; (void)len; return 259; }   /* ERROR_NO_MORE_ITEMS */
+LONG WINAPI RegEnumValue(HKEY key, DWORD i, LPSTR name, DWORD *namelen, DWORD *res,
+                         DWORD *type, BYTE *data, DWORD *datalen)
+{ (void)key; (void)i; (void)name; (void)namelen; (void)res; (void)type; (void)data; (void)datalen; return 259; }
+LONG WINAPI RegCloseKey(HKEY key) { (void)key; return 0; }

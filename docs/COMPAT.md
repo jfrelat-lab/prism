@@ -1226,3 +1226,65 @@ The resolver also learned **static-library semantics**, in the one shape PuTTY l
 executable listing `no-jump-list.c` among its own sources also links the library holding
 `jump-list.c`, and a real link takes only the first. Modelling it properly needs symbol tables; what
 is modelled is the `no-X.c` naming convention, and every file it drops is reported.
+
+### PuTTYtel: the real GUI client, compiled, up to the message loop
+
+```
+PuTTYtel (Win32 GUI, no crypto) — 188 translation units, 57,049 lines, 22,7xx functions in 6.6 s
+start-up: WinMain -> ShowWindow -> ShowWindow -> cmdline_process_param x3
+          -> RegisterClassW -> CreateWindowExW
+window: "PuTTYtel"
+```
+
+`puttytel` is PuTTY's Windows client with the SSH stack left out: `window.c`, the configuration box,
+the terminal, telnet/rlogin/raw/serial. It **compiles**, and running it reaches its own window: it
+processes the command line, registers the wide window class and creates the terminal window with the
+title it chose.
+
+**What is NOT established: it does not get past the message loop.** Given `-telnet localhost` the
+program enters its event loop and does not come back, and the harness's hooks on `GetMessage`,
+`DispatchMessage`, `MsgWaitForMultipleObjects` and a dozen other candidates never fire — so the loop
+is somewhere those wrappers do not reach and the cause is not yet identified. Nothing is drawn: the
+GDI layer below accepts text and returns success without a raster behind it. Said plainly because
+"compiles and creates its window" is a real milestone and "runs" is not yet true.
+
+**The platform layer split three ways**, and each file's boundary is a claim about what it is:
+
+| file | what it is |
+|---|---|
+| `win32.c` | the WINDOW: a class, a message queue, a rectangle. Already Quake's. |
+| `win32-app.c` | what a Win32 program calls when it is NOT drawing: code pages (real UTF-8/UTF-16), memory, last-error, the registry, dynamic loading |
+| `win32-gui.c` | user32 and GDI for a program with a window but no screen |
+| `win32-net.c` | Winsock, present, with no network behind it |
+
+Seven functions moved out of `win32.c` into `win32-app.c` when PuTTY needed them without a window;
+Quake's `win` variant now links both, which is why that split is stated rather than implied.
+
+**Two of those files answer a question rather than dodging one.** Winsock exists and reports
+`WSAENETDOWN` — the same shape of answer PRISM gives for an absent CD drive or sound card — because
+without it `sk_init` calls `modalfatalbox("Unable to load any WinSock library")` and PuTTYtel exits
+before drawing anything. And the registry reports `ERROR_FILE_NOT_FOUND` for every key, so PuTTY
+finds no saved sessions and uses the defaults compiled into it: a path the program has and tests. An
+in-memory registry that forgot everything between runs would reach the same place dressed as a
+feature.
+
+`GetProcAddress` no longer returns NULL unconditionally. A shim file publishes a table of
+`{module, name, function}`, and `win32-app.c` finds it through an `extern` that a target without
+that file never defines — which PRISM reads as a null pointer, exactly as a linker would leave it. So
+a console target resolves nothing and a target linking `win32-net.c` resolves winsock and comctl32,
+with no conditional anywhere. It has to match on the DLL's **basename**: PuTTY's `load_system32_dll`
+loads by full path on purpose, and its own comment says why.
+
+**Three more things the build system hides that had to be modelled.** `be_list()` compiles one
+shared file per application with the backend list and the program's name — without it `backends[]`
+is empty and PuTTY asserts `n_ui_backends > 0` before it can build its configuration box.
+`$<TARGET_OBJECTS:logging>` embeds one library's objects in another, which no executable's link line
+mentions — dropping it left `log_init` undefined and killed PuTTYtel immediately after it created
+its window, the one failure in this target that was not a missing declaration. And `HAVE_*` guards
+have to be answered **twice**: once for file selection and once as preprocessor macros, and the two
+must agree — `HAVE_GCP_RESULTSW` was the one where "undefined means 0" was the wrong answer.
+
+**A known limitation, stated as one:** PRISM compiles no `.rc` resources, so `CreateDialog` has no
+template and returns NULL. PuTTY's configuration box therefore cannot be shown, and `ShinyDialogBox`
+spins waiting for a dialogue that will never end. Naming a session on the command line is the
+program's own way past it.

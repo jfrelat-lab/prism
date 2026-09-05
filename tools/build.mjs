@@ -150,7 +150,7 @@ if (program.failures?.length) {
     by.set(f.message, e);
   }
   console.log(`  ${program.failures.length} functions could not be emitted (they throw IF CALLED):`);
-  for (const [m, e] of [...by].sort((a, b) => b[1].n - a[1].n).slice(0, 12)) {
+  for (const [m, e] of [...by].sort((a, b) => b[1].n - a[1].n).slice(0, +(opt('failures') ?? 12))) {
     console.log(`    ${String(e.n).padStart(4)}  ${m}`);
     console.log(`          e.g. ${e.where}`);
   }

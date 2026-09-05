@@ -42,6 +42,8 @@ const lists = [];
 const libs = new Map();          // library -> [repo-relative .c]
 const execs = new Map();         // executable -> { files, libs }
 const unknownGuards = new Set();
+const embeds = new Map();        // library -> libraries whose objects it embeds
+const beLists = new Map();       // executable -> be_list.c and its per-application defines
 
 for (const path of lists) {
   const dir = dirname(path);
@@ -81,6 +83,16 @@ for (const path of lists) {
       const files = words.filter(w => w.endsWith('.c'))
         .map(w => relative(SRC, w.startsWith('/') ? w : join(dir, w)));
       libs.set(lib, (libs.get(lib) ?? []).concat(files));
+      /*
+       * A library can embed another library's objects: `add_library(settings STATIC settings.c
+       * $<TARGET_OBJECTS:logging>)`. Nothing names `logging` in an executable's link line, so
+       * dropping this left log_init undefined and PuTTYtel died on it just after creating its
+       * window -- the one failure in this whole target that was not a missing declaration.
+       */
+      for (const w of words) {
+        const m = /^\$<TARGET_OBJECTS:([^>]+)>$/.exec(w);
+        if (m) embeds.set(lib, (embeds.get(lib) ?? []).concat(m[1]));
+      }
     } else if (cmd === 'add_sources_from_current_dir') {
       const lib = words.shift();
       const files = words.filter(w => w.endsWith('.c'))
@@ -90,6 +102,26 @@ for (const path of lists) {
       const name = words.shift();
       execs.set(name, { dir, files: words.filter(w => w.endsWith('.c'))
         .map(w => relative(SRC, w.startsWith('/') ? w : join(dir, w))), libs: [] });
+    } else if (cmd === 'be_list') {
+      /*
+       * be_list(target Name [SSH] [SERIAL] [OTHERBACKENDS]) compiles ONE shared file, be_list.c,
+       * with per-application macros: which backends go in the backends[] array, and the program's
+       * own name. Without it that array is empty and PuTTY asserts `n_ui_backends > 0` before it can
+       * draw its configuration box -- so this is a source file AND a set of defines, and the caller
+       * is told about both.
+       */
+      const name = words.shift();
+      const app = words.shift();
+      const flags = new Set(words.map(w => w.toUpperCase()));
+      beLists.set(name, {
+        file: 'be_list.c',
+        defines: {
+          APPNAME: app,
+          SSH: flags.has('SSH') ? '1' : '0',
+          SERIAL: flags.has('SERIAL') ? '1' : '0',
+          OTHERBACKENDS: flags.has('OTHERBACKENDS') ? '1' : '0',
+        },
+      });
     } else if (cmd === 'target_link_libraries') {
       const name = words.shift();
       if (execs.has(name)) execs.get(name).libs.push(...words.filter(w => !w.startsWith('$')));
@@ -105,6 +137,8 @@ if (!WANT) {
 const e = execs.get(WANT);
 if (!e) { console.error(`no executable "${WANT}" -- run with no argument to list them`); process.exit(2); }
 const out = [...e.files];
+const be = beLists.get(WANT);
+if (be) out.unshift(be.file);
 
 /*
  * STATIC LIBRARY SEMANTICS, in the one shape PuTTY relies on everywhere.
@@ -125,7 +159,18 @@ for (const f of e.files) {
   if (m) shadowed.set(m[2], f);
 }
 const dropped = [];
-for (const l of e.libs) {
+/* An executable's libraries, plus whatever those libraries embed, transitively. */
+const wanted = [];
+const seenLib = new Set();
+const addLib = (l) => {
+  if (seenLib.has(l)) return;
+  seenLib.add(l);
+  wanted.push(l);
+  for (const inner of embeds.get(l) ?? []) addLib(inner);
+};
+for (const l of e.libs) addLib(l);
+
+for (const l of wanted) {
   if (!libs.has(l)) { console.error(`  ! library ${l} declares no sources`); continue; }
   for (const f of libs.get(l)) {
     if (out.includes(f)) continue;
@@ -137,4 +182,6 @@ for (const l of e.libs) {
 if (dropped.length) console.error(`not linked, the executable supplies its own:\n  ${dropped.join('\n  ')}`);
 console.log(JSON.stringify(out, null, 2));
 console.error(`\n${WANT} (${PLATFORM}): ${out.length} units from libraries ${e.libs.join(' ')}`);
+if (be) console.error(`be_list.c needs these defines, on that unit ALONE: ` +
+  Object.entries(be.defines).map(([k, v]) => `${k}=${v}`).join(' '));
 if (unknownGuards.size) console.error(`guards taken unconditionally: ${[...unknownGuards].join(' ')}`);
