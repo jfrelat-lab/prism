@@ -901,6 +901,9 @@ export class FunctionEmitter {
         if (t && (t.k === 'array' || t.k === 'func')) return this.#lvalAddrConst(e);
         return null;
       }
+      // An ARRAY compound literal decays to its own address, with no `&` written.
+      case 'compound':
+        return e.type?.k === 'array' ? this.#lvalAddrConst(e) : null;
       case 'bin': {
         if (e.op !== '+' && e.op !== '-') return null;
         const base = this.#addrConst(e.a);
@@ -919,6 +922,20 @@ export class FunctionEmitter {
   /** The constant address of a static lvalue: a global, a member of one, an element of one. */
   #lvalAddrConst(e) {
     switch (e.n) {
+      /*
+       * `&(struct S){ 1, 2 }` at file scope. A compound literal outside a function has STATIC
+       * storage duration (C99 6.5.2.5p5), so its address is an address constant -- it gets a real
+       * object in the image, initialised the same way a named one would be.
+       */
+      case 'compound': {
+        if (!e.type || e.type.size == null) return null;
+        if (e.staticAddr !== undefined) return e.staticAddr;
+        const addr = this.mod.alloc(e.type.size, e.type.align ?? 4);
+        this.mod.zero?.(addr, e.type.size);
+        try { this.initStatic(addr, e.type, e.init); } catch { return null; }
+        e.staticAddr = addr;                    // one object per literal, however often it is named
+        return addr;
+      }
       case 'ident': {
         const g = this.ctx.globals?.get(e.name);
         if (g) return g.addr;

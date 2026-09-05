@@ -276,6 +276,27 @@ int main(void)
 }
 `);
 
+// A compound literal at FILE SCOPE has static storage duration, so its address is an address
+// constant -- and the same literal named twice is one object, not two.
+C('static-compound-literal', `
+#include <stdio.h>
+struct S { int a, b; };
+struct S *p = &(struct S){ 1, 2 };
+struct S *q = &(struct S){ 3, 4 };
+int *r = (int []){ 10, 20, 30 };
+struct outer { struct S *s; int tag; };
+struct outer o = { &(struct S){ 5, 6 }, 7 };
+int main(void)
+{
+    printf("%d %d %d %d\\n", p->a, p->b, q->a, q->b);
+    printf("%d %d %d\\n", r[0], r[1], r[2]);
+    printf("%d %d %d\\n", o.s->a, o.s->b, o.tag);
+    p->a = 99;
+    printf("%d %d\\n", p->a, q->a);
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.
