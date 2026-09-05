@@ -160,6 +160,35 @@ int main(void)
 }
 `);
 
+// Brace elision in a LOCAL initialiser: an aggregate member with no braces of its own takes as many
+// items as it needs from the enclosing list. The static path had it; the dynamic one handed the
+// member a single scalar and asked for a struct-sized store.
+C('brace-elision-local', `
+#include <stdio.h>
+struct s { int f[4]; };
+struct pt { int x, y; };
+struct mix { char tag; struct pt p; int rest[3]; };
+union one { int v; };
+static int use(struct s v, int extra) { return v.f[3] + extra; }
+int main(void)
+{
+    struct s a = { 1, 2, 3, 4 };
+    struct pt row[2] = { 1, 2, 3, 4 };
+    struct mix m = { 'z', 5, 6, 7, 8, 9 };
+    struct { int c; union one u; } d = { .u = 3 };
+    struct { int c; union one u; } e = { 1, 4 };
+    /* A value that IS an aggregate is a copy, not a source of items for the member's first field. */
+    struct pt inner = { 11, 12 };
+    struct { int tag; struct pt p; } outer = { 3, inner };
+    printf("%d %d %d %d\\n", a.f[0], a.f[3], use(a, 700), (int)sizeof a);
+    printf("%d %d %d %d\\n", row[0].x, row[0].y, row[1].x, row[1].y);
+    printf("%c %d %d %d %d %d\\n", m.tag, m.p.x, m.p.y, m.rest[0], m.rest[1], m.rest[2]);
+    printf("%d %d %d %d\\n", d.c, d.u.v, e.c, e.u.v);
+    printf("%d %d %d\\n", outer.tag, outer.p.x, outer.p.y);
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

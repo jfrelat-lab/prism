@@ -599,13 +599,58 @@ export class FunctionEmitter {
     this.#initList(addr, type, init);
   }
 
+  /**
+   * Fill one elided aggregate from `items` starting at `i`, and return the index of the first item
+   * it did not take. The dynamic twin of #staticElided, and it exists for the same reason: `struct s
+   * s = { 1, 2, 3, 4 };` where the member is `int f[4]` hands the four scalars to the ARRAY, and
+   * before this the member was handed the first one and storeExpr was asked for an int[4] accessor.
+   */
+  #initElided(addr, type, items, i) {
+    if (type.k === 'array') {
+      const n = type.n ?? 0;
+      for (let idx = 0; idx < n && i < items.length; idx++) {
+        const it = items[i];
+        if (it.designators) return i;                 // a designator belongs to the outer object
+        const off = `(${addr}+${idx * type.of.size}|0)`;
+        if (it.value.n === 'initlist') { this.#initList(off, type.of, it.value); i++; }
+        else if (this.#elidable(type.of, it)) i = this.#initElided(off, type.of, items, i);
+        else { this.out.push(storeExpr(off, type.of, this.#rvalCoerced(it.value.expr, type.of)) + ';'); i++; }
+      }
+      return i;
+    }
+    const named = type.fields.filter(f => f.width !== 0
+      && (f.name || (f.bits === undefined && T.isRecord(f.type))));
+    const upto = type.k === 'union' ? Math.min(1, named.length) : named.length;
+    for (let k = 0; k < upto && i < items.length; k++) {
+      const it = items[i];
+      if (it.designators) return i;
+      const f = named[k];
+      if (f.flexible) unsup('initialising a flexible array member in a local');
+      if (f.bits !== undefined) {
+        this.#initBitfield(addr, f, this.#rvalCoerced(it.value.expr, f.type));
+        i++;
+      } else {
+        const off = `(${addr}+${f.offset}|0)`;
+        if (it.value.n === 'initlist') { this.#initList(off, f.type, it.value); i++; }
+        else if (this.#elidable(f.type, it)) i = this.#initElided(off, f.type, items, i);
+        else if (T.isRecord(f.type) || f.type.k === 'array') { this.#initDynamic(off, f.type, it.value); i++; }
+        else { this.out.push(storeExpr(off, f.type, this.#rvalCoerced(it.value.expr, f.type)) + ';'); i++; }
+      }
+    }
+    return i;
+  }
+
   #initList(addr, type, init) {
     if (type.k === 'array') {
       let idx = 0;
-      for (const it of init.items) {
+      for (let i = 0; i < init.items.length; i++) {
+        const it = init.items[i];
         if (it.designators) idx = it.designators[0].index ?? idx;
         const off = `(${addr}+${idx * type.of.size}|0)`;
         if (it.value.n === 'initlist') this.#initList(off, type.of, it.value);
+        // An element that takes items from THIS list with no braces of its own: `struct pt a[2] =
+        // {1,2,3,4}` gives the first two to a[0]. Brace elision, C89 6.7.8p17.
+        else if (this.#elidable(type.of, it)) i = this.#initElided(off, type.of, init.items, i) - 1;
         // An AGGREGATE element is a copy, not a store: `char name[23][8] = {"e2m1", ...}` gives each
         // row a string literal, and storeExpr has no accessor for a char[8]. Doom's D_DoomMain has
         // exactly that table, and it is the function that starts the game.
@@ -653,7 +698,8 @@ export class FunctionEmitter {
         return true;
       });
       let k = 0;
-      for (const it of init.items) {
+      for (let i = 0; i < init.items.length; i++) {
+        const it = init.items[i];
         let f = named[k];
         if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
         if (!f) break;
@@ -668,6 +714,7 @@ export class FunctionEmitter {
         } else {
           const off = `(${addr}+${t.off}|0)`;
           if (it.value.n === 'initlist') this.#initList(off, t.type, it.value);
+          else if (this.#elidable(t.type, it)) i = this.#initElided(off, t.type, init.items, i) - 1;
           /*
            * An AGGREGATE member given a single expression is a COPY, not a store -- `.magic =
            * (jint16_t){0x1985}` and `.pos = other.pos` alike. A record rvalue is its address in
@@ -675,8 +722,19 @@ export class FunctionEmitter {
            * accessor for a struct and refused (gcc's 20030224-2.c).
            */
           else if (T.isRecord(t.type) || t.type.k === 'array') {
-            const src = this.#lval(it.value.expr);
-            this.out.push(`M.copy(${off},${src.addr},${t.type.size});`);
+            const vt = it.value.expr?.type;
+            if (vt && (T.isRecord(vt) || vt.k === 'array')) {
+              const src = this.#lval(it.value.expr);
+              this.out.push(`M.copy(${off},${src.addr},${t.type.size});`);
+            } else {
+              /*
+               * A DESIGNATED aggregate given a bare scalar: `struct { int c; pthread_mutex_t m; } r
+               * = { .m = 0 };`. #elidable says no because of the designator -- rightly, since a
+               * designator names the outer object -- so the one item is elided into the member on
+               * its own (gcc's pr33631.c).
+               */
+              this.#initElided(off, t.type, [{ ...it, designators: null }], 0);
+            }
           } else this.out.push(storeExpr(off, t.type, this.#rvalCoerced(it.value.expr, t.type)) + ';');
         }
         k = named.indexOf(f) + 1;
@@ -1026,6 +1084,15 @@ export class FunctionEmitter {
     if (!e) return false;
     if (e.n === 'str' && type.k === 'array' && type.of.k === 'scalar'
         && (type.of.size === 1 || type.of.size === 4)) return false;
+    /*
+     * A value that is ALREADY an aggregate is a copy, never a source of items to spread across the
+     * member: `struct A a = { 2, b };` gives `b` to the whole struct-typed member, not its first
+     * field. Missing this turned two of gcc's programs into WRONG ANSWERS the moment the dynamic
+     * path learned elision -- the static path had never reached them, because a struct variable is
+     * not a constant initialiser.
+     */
+    const et = e.type;
+    if (et && (T.isRecord(et) || et.k === 'array')) return false;
     return true;
   }
 
