@@ -2232,3 +2232,30 @@ Returning TRUE from something a caller only *performs* is harmless; returning it
 caller *reads* invents an answer. Where the answer is read, the shim has to keep enough state to give
 a real one — so menus now count their items, which is four lines and the difference between a program
 that runs and one that hangs after creating its window.
+
+## A refusal that becomes a wrong answer
+
+Three times in one sitting, closing a gap turned a *refused* program into a *wrong* one. That is the
+transition the suite counts separately for, and it is worth stating why it keeps happening: a refusal
+hides everything downstream of it. The program never ran, so nothing it would have exercised was
+ever tested.
+
+- `__builtin_snprintf` was missing, so `pr78622.c` was refused. Supplying it revealed that printf
+  ignored the **narrowing** length modifiers entirely: `%hhd` of 4104 printed 4104, where C converts
+  to `signed char` first (7.19.6.1p7) and prints 8. The comment in that code claimed the modifier
+  mattered "for one case".
+- Resolving quoted `#include`s relative to the including file — the standard's own rule, and what
+  twelve torture programs need to compile a sibling test twice — revealed that `tmpnam` returned
+  NULL. `gcc_tmpnam.h` reads `ret[0]` on the next line, so NULL was a crash rather than a refusal.
+- Giving `tmpnam` a name revealed that `freopen` was a stub returning 0, and fixing *that* revealed
+  the real defect: **`printf`, `puts` and `putchar` wrote straight to the host console** instead of
+  through the stream. Indistinguishable from correct until something redirects stdout, and the same
+  shape as the `fprintf` that ignored its stream.
+
+`gcc.c-torture/execute`: **1294 → 1320**, zero wrong answers throughout.
+
+**A known asymmetry in `gate-run`**, found while writing the freopen case and left in place rather
+than papered over: PRISM's `stderr` lands in the same buffer as its `stdout`, and gcc's does not. A
+case that reports its findings on stderr is therefore not comparable. The stdout-redirect half of
+freopen is checked by gcc's own `printf-2.c` and `user-printf.c` instead, which is the better oracle
+for it.

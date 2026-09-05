@@ -17,6 +17,40 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// freopen on an ORDINARY stream, plus the file round trip underneath it.
+//
+// The other half -- freopen redirecting STDOUT, and the discovery that printf, puts and putchar
+// wrote straight to the host console instead of through the stream -- is checked by gcc's own
+// printf-2.c and user-printf.c, which is the better oracle for it anyway. It cannot be checked here:
+// this gate compares stdout, and PRISM's stderr lands in the same buffer while gcc's does not, so a
+// program that reports its findings on stderr is not comparable.
+C('freopen', `
+#include <stdio.h>
+int main(void)
+{
+    const char *a = "freopen-gate-a.tmp", *b = "freopen-gate-b.tmp";
+    FILE *f = fopen(a, "w");
+    if (!f) { perror("fopen a"); return 1; }
+    fputs("first\\n", f);
+
+    /* Reopen the SAME FILE* on another file: the old one is closed, the token is reused. */
+    f = freopen(b, "w", f);
+    if (!f) { perror("freopen b"); return 1; }
+    fprintf(f, "second %d\\n", 2);
+    fclose(f);
+
+    { char line[64]; FILE *g = fopen(a, "r");
+      printf("a: %s", g && fgets(line, sizeof line, g) ? line : "(nothing)\\n");
+      if (g) fclose(g); }
+    { char line[64]; FILE *g = fopen(b, "r");
+      printf("b: %s", g && fgets(line, sizeof line, g) ? line : "(nothing)\\n");
+      if (g) fclose(g); }
+    remove(a); remove(b);
+    printf("gone: %d %d\\n", fopen(a, "r") == 0, fopen(b, "r") == 0);
+    return 0;
+}
+`);
+
 // printf's LENGTH MODIFIERS. `h` and `hh` do not change how the argument arrives -- promotion has
 // already made it an int -- they change what the conversion prints (C99 7.19.6.1p7). gcc's
 // pr78622.c checks it, and was passing only because __builtin_snprintf was missing: a refusal was

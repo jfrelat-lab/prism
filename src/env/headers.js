@@ -152,6 +152,7 @@ int vfprintf(FILE *stream, const char *fmt, char *ap);
 int vsprintf(char *dst, const char *fmt, char *ap);
 int vsnprintf(char *dst, size_t n, const char *fmt, char *ap);
 FILE *fopen(const char *name, const char *mode);
+FILE *freopen(const char *name, const char *mode, FILE *stream);
 int fclose(FILE *stream);
 size_t fread(void *dst, size_t size, size_t count, FILE *stream);
 size_t fwrite(const void *src, size_t size, size_t count, FILE *stream);

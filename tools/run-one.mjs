@@ -7,15 +7,37 @@
 //
 //   node tools/run-one.mjs <file.c>   ->  {"ok":true,"code":0,"stdout":"…"} | {"ok":false,"err":"…"}
 
-import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
-import { compile } from '../src/compile.js';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
+import { compile, builtinHeaderResolver } from '../src/compile.js';
 
 const file = process.argv[2];
+const HERE = dirname(file);
+
+/*
+ * A QUOTED include is relative to the including file first -- the standard's rule, and not a
+ * courtesy: twelve of gcc's torture programs are a second file that does `#include "20040629-1.c"`
+ * to compile the first one twice under different options. Without this they were all reported as
+ * "missing header", which named the harness's gap as if it were the compiler's.
+ *
+ * Angled includes still go to PRISM's own table, so a program cannot reach the host's headers by
+ * accident.
+ */
+const std = builtinHeaderResolver();
+const resolve = (name, angled, from) => {
+  if (!angled) {
+    for (const dir of [from ? dirname(from) : HERE, HERE]) {
+      const p = join(dir, name);
+      if (existsSync(p) && statSync(p).isFile()) return { path: p, text: readFileSync(p, 'latin1') };
+    }
+  }
+  return std(name);
+};
+
 try {
   // 'latin1' is byte-transparent: a C source is a byte stream and need not be valid UTF-8.
   const src = readFileSync(file, 'latin1');
-  const m = compile(src, { file: basename(file) });
+  const m = compile(src, { file: basename(file), resolve });
   const r = m.run();
   process.stdout.write(JSON.stringify({ ok: true, code: r.code, stdout: r.stdout }));
 } catch (e) {

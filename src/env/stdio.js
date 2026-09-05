@@ -77,6 +77,12 @@ export function installStdio(M, {
   let next = FIRST;
 
   const fileOf = (fp) => handles.get(fp | 0) ?? null;
+  let tmpSeq = 0;
+  /*
+   * freopen's whole point: a standard stream that now goes somewhere else. Keyed by the SENTINEL,
+   * because `stdout` is not a handle in the store -- it is a token every writer checks for.
+   */
+  const redirected = new Map();
 
   const api = {
     fopen: (namePtr, modePtr) => {
@@ -99,7 +105,34 @@ export function installStdio(M, {
       return next++;
     },
 
-    fclose: (fp) => { handles.delete(fp | 0); return 0; },
+    fclose: (fp) => {
+      const f = fp | 0;
+      /* Closing a redirected standard stream puts it back where it belongs. */
+      if (redirected.has(f)) { handles.delete(redirected.get(f)); redirected.delete(f); return 0; }
+      handles.delete(f);
+      return 0;
+    },
+
+    /*
+     * freopen: reopen a STREAM on a new file. For an ordinary FILE* that is a close followed by an
+     * open reusing the same token; for stdout or stderr it is the only way a program can send its
+     * printf output to a file, which is what gcc's printf-2.c and user-printf.c do to check that
+     * printf was not optimised away.
+     */
+    freopen: (namePtr, modePtr, fp) => {
+      const f = fp | 0;
+      const fresh = api.fopen(namePtr, modePtr);
+      if (!fresh) return 0;
+      if (f === STDOUT || f === STDERR || f === STDIN) {
+        if (redirected.has(f)) handles.delete(redirected.get(f));
+        redirected.set(f, fresh);
+        return f;                          /* the STREAM comes back, not a new one */
+      }
+      handles.delete(f);
+      handles.set(f, handles.get(fresh));
+      handles.delete(fresh);
+      return f;
+    },
 
     fread: (dst, size, count, fp) => {
       const h = fileOf(fp);
@@ -172,6 +205,19 @@ export function installStdio(M, {
 
     fputc: (c, fp) => { writeByte(fp, c & 0xff); return c & 0xff; },
     putc: (c, fp) => { writeByte(fp, c & 0xff); return c & 0xff; },
+    /*
+     * printf, puts and putchar write to the STREAM stdout, not to the host's console.
+     *
+     * runtime.js sends all three straight to M.write, which is right until something redirects
+     * stdout -- and freopen is exactly that. It is the same shape as the fprintf that ignored its
+     * stream: a writer that knows where the bytes go instead of asking. Routing them through
+     * writeByte costs nothing and means one place decides.
+     */
+    printf: (fmtPtr, args) => putBytes(STDOUT, format(M, fmtPtr, args ?? [])),
+    vprintf: (fmtPtr, ap) => putBytes(STDOUT, format(M, fmtPtr, vaReader(M, ap))),
+    puts: (sPtr) => { putBytes(STDOUT, M.mod.cstr(sPtr)); writeByte(STDOUT, 10); return 1; },
+    putchar: (c) => { writeByte(STDOUT, c & 0xff); return c & 0xff; },
+
     fputs: (sPtr, fp) => {
       const bytes = enc.encode(M.mod.cstr(sPtr));
       for (const b of bytes) writeByte(fp, b);
@@ -246,8 +292,13 @@ export function installStdio(M, {
      */
     const sink = M.streamSinks?.get(f);
     if (sink) { sink(b); return; }
-    if (f === STDOUT || f === STDERR || !fileOf(fp)) { M.write(String.fromCharCode(b)); return; }
-    const h = fileOf(fp);
+    const via = redirected.get(f);         // freopen sent this stream somewhere else
+    if (via === undefined && (f === STDOUT || f === STDERR || !fileOf(fp))) {
+      M.write(String.fromCharCode(b));
+      return;
+    }
+    const h = fileOf(via ?? fp);
+    if (!h) { M.write(String.fromCharCode(b)); return; }
     grow(h, h.pos + 1);
     h.bytes[h.pos++] = b;
   }
@@ -560,9 +611,23 @@ export function installStdio(M, {
      * found: io.tmpfile() returning a bad handle would crash inside the test suite rather than
      * report "cannot open".
      */
-    freopen: () => 0,
     tmpfile: () => 0,
-    tmpnam: () => 0,
+    /*
+     * A NAME, not NULL. C says tmpnam returns null only when it cannot make a unique name, and a
+     * caller is entitled to use the result immediately -- gcc's gcc_tmpnam.h reads ret[0] on the
+     * next line, so NULL was a crash rather than a graceful refusal. The file system these names
+     * land in is the in-memory one above, which is exactly what a temporary file is for.
+     */
+    tmpnam: (buf) => {
+      const name = `/tmp/prism${String(++tmpSeq).padStart(6, '0')}`;
+      const bytes = [...name].map(c => c.charCodeAt(0));
+      if (buf) {
+        for (let i = 0; i < bytes.length; i++) u8()[buf + i] = bytes[i];
+        u8()[buf + bytes.length] = 0;
+        return buf;
+      }
+      return M.mod.intern([...bytes, 0]);
+    },
     system: () => -1,          // no shell; -1 is "the command could not be executed"
 
     setmntent: () => 0,
