@@ -501,6 +501,30 @@ export const BUILTINS = new Map(Object.entries({
   copysign: { ret: D, params: [D, D] },
   copysignf: { ret: FLT, params: [FLT, FLT] },
   signbit: { ret: I, params: [D], impl: '__builtin_signbit' },
+
+  /* Type-generic, so the emitter builds the call. Named rather than numbered: `overflow: 0`
+     for add is FALSY, and `rt?.overflow` then skipped the whole path. */
+  __builtin_add_overflow: { ret: I, overflow: 'add' },
+  __builtin_sub_overflow: { ret: I, overflow: 'sub' },
+  __builtin_mul_overflow: { ret: I, overflow: 'mul' },
+  __builtin_sadd_overflow: { ret: I, overflow: 'add' },
+  __builtin_ssub_overflow: { ret: I, overflow: 'sub' },
+  __builtin_smul_overflow: { ret: I, overflow: 'mul' },
+  __builtin_saddl_overflow: { ret: I, overflow: 'add' },
+  __builtin_ssubl_overflow: { ret: I, overflow: 'sub' },
+  __builtin_smull_overflow: { ret: I, overflow: 'mul' },
+  __builtin_saddll_overflow: { ret: I, overflow: 'add' },
+  __builtin_ssubll_overflow: { ret: I, overflow: 'sub' },
+  __builtin_smulll_overflow: { ret: I, overflow: 'mul' },
+  __builtin_uadd_overflow: { ret: I, overflow: 'add' },
+  __builtin_usub_overflow: { ret: I, overflow: 'sub' },
+  __builtin_umul_overflow: { ret: I, overflow: 'mul' },
+  __builtin_uaddl_overflow: { ret: I, overflow: 'add' },
+  __builtin_usubl_overflow: { ret: I, overflow: 'sub' },
+  __builtin_umull_overflow: { ret: I, overflow: 'mul' },
+  __builtin_uaddll_overflow: { ret: I, overflow: 'add' },
+  __builtin_usubll_overflow: { ret: I, overflow: 'sub' },
+  __builtin_umulll_overflow: { ret: I, overflow: 'mul' },
 }));
 
 /*

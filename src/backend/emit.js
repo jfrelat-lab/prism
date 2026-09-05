@@ -1649,6 +1649,34 @@ export class FunctionEmitter {
         if (!this.variadic) throw new EmitError('va_start outside a variadic function');
         return { js: '_va', type: T.ptr(T.CHAR) };
       }
+      /*
+       * The overflow builtins are TYPE-GENERIC, which is why they cannot be an ordinary table entry:
+       * `__builtin_add_overflow(a, b, &r)` computes in infinite precision and reports whether the
+       * result fits in whatever `r` is. So the width and signedness come from the third argument's
+       * POINTEE, which only the emitter knows, and the arithmetic happens in BigInt because that is
+       * the only thing here with the range to notice an overflow of a 64-bit type.
+       */
+      if (rt?.overflow) {
+        if (e.args.length !== 3) throw new EmitError(`${name} takes three arguments`);
+        const a = this.#rval(e.args[0]), b = this.#rval(e.args[1]), dst = this.#rval(e.args[2]);
+        const to = dst.type?.k === 'ptr' ? dst.type.to : null;   /* a pointer's target is `to`; `of` is an array's */
+        if (!to || to.k !== 'scalar') unsup(`${name} into a ${T.typeName(dst.type ?? T.INT)}`);
+        const isUnsigned = (t) => !!t && /^unsigned|^_Bool/.test(t.name ?? '');
+        /*
+         * Each operand carries ITS OWN type into the infinite-precision arithmetic -- there is no
+         * common type here, which is the whole point of these builtins. A 32-bit value comes out of
+         * the emitter as a signed i32, so an unsigned one has to be put back: 0xffffffffu read as -1
+         * turns `0xffffffffu + 1u` into 0 and reports NO overflow, which is how gcc's pr85095.c
+         * caught this.
+         */
+        const operand = (v) => (v.type?.k === 'scalar' && v.type.size <= 4 && isUnsigned(v.type)
+          ? `((${v.js})>>>0)` : v.js);
+        return {
+          js: `M.rt.__prism_overflow(${JSON.stringify(rt.overflow)},${operand(a)},${operand(b)},` +
+              `${dst.js},${to.size},${isUnsigned(to) ? 0 : 1})`,
+          type: T.INT,
+        };
+      }
       if (rt) {
         const args = e.args.map((a, i) => this.#rvalForCall(a, rt.params?.[i]));
         // A variadic runtime function takes its extras as one JS array, which is enough for

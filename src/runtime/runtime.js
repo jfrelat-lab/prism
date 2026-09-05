@@ -730,6 +730,31 @@ function makeLibc(M) {
     __builtin_expect: (v, _expected) => v,
 
     /*
+     * The overflow builtins, in BigInt because that is what can tell 2^63 from -2^63.
+     *
+     * Both halves are required and the second is the one that is easy to get wrong: the result is
+     * stored WRAPPED to the destination type whether or not it overflowed, and only the return value
+     * says which happened. gcc documents that, and its tests check the stored value in the overflow
+     * case.
+     */
+    __prism_overflow: (op, a, b, dst, size, signed) => {
+      const A = BigInt(a), B = BigInt(b);
+      const exact = op === 'add' ? A + B : op === 'sub' ? A - B : A * B;
+      const bits = BigInt(size * 8);
+      const wrapped = signed ? BigInt.asIntN(size * 8, exact) : BigInt.asUintN(size * 8, exact);
+      const dv = M.mod.dv;
+      if (dst) {
+        if (size === 1) dv.setUint8(dst, Number(BigInt.asUintN(8, exact)));
+        else if (size === 2) dv.setUint16(dst, Number(BigInt.asUintN(16, exact)), true);
+        else if (size === 4) dv.setUint32(dst, Number(BigInt.asUintN(32, exact)), true);
+        else if (size === 8) dv.setBigUint64(dst, BigInt.asUintN(64, exact), true);
+        else return 1;
+      }
+      void bits;
+      return exact === wrapped ? 0 : 1;
+    },
+
+    /*
      * The bit-counting builtins. gcc leaves ffs/clz/ctz UNDEFINED at zero and its own tests never
      * ask, so zero answers zero rather than inventing something a program might come to rely on.
      * Math.clz32 does the work for the 32-bit cases; the 64-bit ones arrive as BigInt.

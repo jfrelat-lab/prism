@@ -17,6 +17,39 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// The overflow builtins, which are TYPE-GENERIC: the width and signedness come from the third
+// argument's pointee, not from the call. Both halves are checked -- the return value AND the stored
+// result, which is wrapped to the destination type whether or not it overflowed.
+//
+// The result is taken into a variable BEFORE printing it. Putting the call and the destination in
+// one printf reads the destination at an unspecified moment: gcc evaluates its arguments right to
+// left and printed the value from before the call.
+C('overflow-builtins', `
+#include <stdio.h>
+#define SHOW(fmt, call, var) do { int r_ = (call); printf("%d " fmt "\\n", r_, var); } while (0)
+int main(void)
+{
+    int i; unsigned u; long long l; unsigned long long ul; unsigned char c; short s;
+    SHOW("%d",   __builtin_add_overflow(2147483647, 1, &i), i);
+    SHOW("%d",   __builtin_add_overflow(1, 2, &i), i);
+    SHOW("%u",   __builtin_sub_overflow(0u, 1u, &u), u);
+    SHOW("%d",   __builtin_mul_overflow(65536, 65536, &i), i);
+    SHOW("%lld", __builtin_mul_overflow(4000000000LL, 4000000000LL, &l), l);
+    SHOW("%llu", __builtin_mul_overflow(4000000000ULL, 4ULL, &ul), ul);
+    SHOW("%d",   __builtin_add_overflow(200, 100, &c), c);
+    SHOW("%d",   __builtin_sub_overflow(-32768, 1, &s), s);
+    SHOW("%lld", __builtin_add_overflow(9223372036854775807LL, 1LL, &l), l);
+    SHOW("%d",   __builtin_sadd_overflow(1, 2, &i), i);
+    /* The destination is one of the OPERANDS, and each operand keeps its own signedness: gcc's
+       pr85095.c is this, and 0xffffffffu read as -1 reports no overflow at all. */
+    { unsigned int a = 0xffffffffu; unsigned int r = __builtin_add_overflow(a, 1u, &a);
+      printf("%u %u\\n", r, a); }
+    { unsigned long a = 0xfffffffful; unsigned long r = __builtin_add_overflow(a, 1ul, &a);
+      printf("%lu %lu\\n", r, a); }
+    return 0;
+}
+`);
+
 // freopen on an ORDINARY stream, plus the file round trip underneath it.
 //
 // The other half -- freopen redirecting STDOUT, and the discovery that printf, puts and putchar
