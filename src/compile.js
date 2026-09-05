@@ -513,6 +513,10 @@ export const BUILTINS = new Map(Object.entries({
   /* The host's millisecond clock; see src/runtime/runtime.js. */
   prism_now_ms: { ret: D, params: [] },
 
+  /* Answered entirely from the argument's TYPE, and its value is never computed -- gcc does not
+     evaluate it either. */
+  __builtin_classify_type: { ret: I, classify: true },
+
   /* Type-generic, so the emitter builds the call. Named rather than numbered: `overflow: 0`
      for add is FALSY, and `rt?.overflow` then skipped the whole path. */
   __builtin_add_overflow: { ret: I, overflow: 'add' },

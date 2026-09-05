@@ -44,6 +44,32 @@ int main(void)
 }
 `);
 
+// __builtin_classify_type: a constant naming the class of its argument's TYPE, whose value is never
+// computed. The codes are gcc's, and this case is how they were established -- not from a header.
+C('classify-type', `
+#include <stdio.h>
+struct S { int a; }; union U { int a; }; enum E { E1 };
+static int calls = 0;
+static int bump(void) { return ++calls; }
+int fn(void);
+int main(void)
+{
+    int i; char c; unsigned char uc; short sh; long l; long long ll; _Bool b;
+    float f; double d; int *p; struct S s; union U u; enum E e; int arr[3]; char str[4];
+    printf("%d %d %d %d %d %d %d\\n", __builtin_classify_type(i), __builtin_classify_type(c),
+           __builtin_classify_type(uc), __builtin_classify_type(sh), __builtin_classify_type(l),
+           __builtin_classify_type(ll), __builtin_classify_type(b));
+    printf("%d %d %d\\n", __builtin_classify_type(f), __builtin_classify_type(d),
+           __builtin_classify_type(p));
+    printf("%d %d %d %d %d %d\\n", __builtin_classify_type(s), __builtin_classify_type(u),
+           __builtin_classify_type(e), __builtin_classify_type(arr), __builtin_classify_type(str),
+           __builtin_classify_type(fn));
+    /* The argument is NOT evaluated. */
+    printf("%d calls=%d\\n", __builtin_classify_type(bump()), calls);
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

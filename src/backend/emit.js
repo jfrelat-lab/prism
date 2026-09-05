@@ -1908,6 +1908,24 @@ export class FunctionEmitter {
         return { js: '_va', type: T.ptr(T.CHAR) };
       }
       /*
+       * `__builtin_classify_type(x)` is a constant naming the CLASS of x's type, and gcc does not
+       * evaluate x -- so neither does this. The codes are gcc's own, confirmed against the reference
+       * build rather than read off its header: every integer type is 1 (char, _Bool and an enum
+       * included, where the header still lists separate classes), every floating type is 8, and an
+       * array or a function is 5 because it has already decayed to a pointer.
+       */
+      if (rt?.classify) {
+        if (e.args.length !== 1) throw new EmitError(`${name} takes one argument`);
+        const t = T.decay(e.args[0].type ?? T.INT);
+        const code = t.k === 'ptr' ? 5
+          : t.k === 'struct' ? 12
+          : t.k === 'union' ? 13
+          : t.k === 'void' ? 0
+          : (t.k === 'scalar' && /float|double/.test(t.name ?? '')) ? 8
+          : 1;
+        return { js: String(code), type: T.INT };
+      }
+      /*
        * The overflow builtins are TYPE-GENERIC, which is why they cannot be an ordinary table entry:
        * `__builtin_add_overflow(a, b, &r)` computes in infinite precision and reports whether the
        * result fits in whatever `r` is. So the width and signedness come from the third argument's
