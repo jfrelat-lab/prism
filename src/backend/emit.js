@@ -1309,6 +1309,15 @@ export class FunctionEmitter {
         if (g) return { addr: String(g.addr), type: g.type };
         const f = this.ctx.funcs.get(e.name);
         if (f) return { addr: String(f.addr), type: f.type, isFunc: true };
+        /*
+         * `__func__` is not a variable a program declares -- C99 6.4.2.2 says the compiler provides
+         * it, as a static array holding the function's name. gcc's `__FUNCTION__` is the same thing
+         * spelled older, and `__PRETTY_FUNCTION__` is too in C.
+         */
+        if (/^(__func__|__FUNCTION__|__PRETTY_FUNCTION__)$/.test(e.name)) {
+          const bytes = [...this.decl.name].map(c => c.charCodeAt(0) & 0xff);
+          return { addr: String(this.mod.intern(bytes)), type: T.array(T.CHAR, bytes.length + 1) };
+        }
         throw new EmitError(`undeclared identifier '${e.name}'`);
       }
       case 'unary':
@@ -1558,6 +1567,16 @@ export class FunctionEmitter {
         return { js: String(t.size), type: T.UINT };
       }
       case 'alignoftype': return { js: String(e.target.align), type: T.UINT };
+      // `__alignof__ x` -- the alignment of the EXPRESSION's type, and like sizeof it does not
+      // evaluate x.
+      case 'alignofexpr': {
+        const t = e.expr?.type;
+        // A FUNCTION has no alignment here: its address is a table index, so `__alignof__(func)`
+        // could only ever be a plausible-looking wrong number (gcc's align-3.c asks for 256).
+        if (t?.k === 'func') unsup('__alignof__ of a function');
+        if (!t || t.align == null) throw new EmitError('__alignof__ of an expression of unknown type');
+        return { js: String(t.align), type: T.UINT };
+      }
       /*
        * As an rvalue. A record IS its address here -- that is how every record-valued expression
        * travels in tier-0, and it is what lets `return (File){...}` reach the sret buffer. A scalar
@@ -1657,7 +1676,10 @@ export class FunctionEmitter {
         const shb = `BigInt(${coerce(b.js, bt, T.INT)}&63)`;
         return { js: mask64(`((${A})${op === '<<' ? '<<' : '>>'}${shb})`, t), type: t };
       }
-      const sh = `((${b.js})&31)`;
+      // The COUNT is converted on its own -- a shift has no common type, C99 6.5.7p3 -- so a 64-bit
+      // count on a 32-bit value becomes an ordinary number. Left as a BigInt, `&31` threw
+      // "Cannot mix BigInt and other types" out of `(unsigned)a >> 3ULL` (gcc's pr82192.c).
+      const sh = `((${coerce(b.js, bt, T.INT)})&31)`;
       if (op === '<<') return { js: `((${A})<<${sh})`, type: t };
       return { js: T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`, type: t };
     }
@@ -1754,7 +1776,7 @@ export class FunctionEmitter {
         const shb = `BigInt(${coerce(b.js, bt, T.INT)}&63)`;
         return { js: mask64(`((${A})${op}${shb})`, t), type: t };
       }
-      const sh = `((${b.js})&31)`;
+      const sh = `((${coerce(b.js, bt, T.INT)})&31)`;
       return { js: op === '<<' ? `((${A})<<${sh})` : (T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`), type: t };
     }
     const c = T.usualArith(at, bt);

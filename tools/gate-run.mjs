@@ -91,6 +91,25 @@ int main(void)
 }
 `);
 
+// Three small things the compiler provides rather than the program: the shift count's own type
+// (a shift has no common type), __alignof__ of an expression, and __func__.
+C('small-gnu', `
+#include <stdio.h>
+unsigned long long big = 0x95dd3d896f7422e2ULL;
+struct wide { double d; };
+int main(void)
+{
+    struct wide w; long long n = 3; int i = 1;
+    /* The count is 64-bit and the value is not: no common type, C99 6.5.7p3. */
+    printf("%u\\n", ((unsigned) big) >> n);
+    printf("%llu\\n", big >> (unsigned char) 4);
+    printf("%d\\n", i << (long long) 5);
+    printf("%d %d %d\\n", (int)__alignof__(w), (int)__alignof__(w.d), (int)__alignof__(i));
+    printf("%s %s\\n", __func__, __FUNCTION__);
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.
