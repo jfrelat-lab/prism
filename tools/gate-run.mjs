@@ -17,6 +17,41 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// An inline asm whose TEMPLATE IS EMPTY emits no instructions, so everything it does is in its
+// constraints. A digit constraint on an input names the output it shares a register with, and with
+// nothing in between the output ends up holding the input. gcc has twenty of these; they exist to
+// defeat the optimiser, and the value carried through the tie is their whole observable effect.
+C('empty-asm', `
+#include <stdio.h>
+static int calls;
+static int slot;
+static int *bump(void) { calls++; return &slot; }
+static int low(long long x) { int i; __asm__("" : "=r"(i) : "0"(x)); return i; }
+int main(void)
+{
+    int a = 7, b = 0;
+    asm ("" : "=r"(b) : "0"(a));
+    printf("tie: %d\\n", b);
+    printf("truncated: %d\\n", low(-2147483647LL));
+    printf("wide: %d\\n", low(0x1234567800000009LL));
+
+    /* A read-write output evaluates its lvalue ONCE, side effects and all. */
+    slot = 5;
+    asm ("" : "+r"(*bump()));
+    printf("calls=%d slot=%d\\n", calls, slot);
+
+    /* Two ties at once, and an untied output keeps what it had. */
+    { int p = 1, q = 2, r = 30, s = 40;
+      asm ("" : "=r"(r), "=r"(s) : "0"(p), "1"(q));
+      printf("%d %d\\n", r, s); }
+
+    /* No outputs at all: the inputs are still evaluated. */
+    asm ("" : : "r"(bump()));
+    printf("calls=%d\\n", calls);
+    return 0;
+}
+`);
+
 // The parts of a stream that say NO. Every one of these was silently permissive, and each is what a
 // program checks when it wants to know whether something worked: gcc's suite never asks, and Lua's
 // files.lua asks about all of them.

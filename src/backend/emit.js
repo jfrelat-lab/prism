@@ -1106,9 +1106,48 @@ export class FunctionEmitter {
         // was wrong: a tied constraint carries a value through the shared register even with an
         // empty template, so `asm ("" : "=r" (i) : "0" (x))` copies x into i (gcc's 20030222-1.c).
         // Refusing is the honest answer until constraints are modelled.
-        if (text === '' && (s.outputs ?? []).length === 0) {
-          for (const op of s.inputs ?? []) {
-            if (op.expr) this.out.push(this.#rval(op.expr).js + ';');
+        const outputs = (s.outputs ?? []).filter(o => o.expr);
+        const inputs = (s.inputs ?? []).filter(o => o.expr);
+        if (text === '') {
+          /*
+           * An empty template emits no instructions, so what it does is entirely in its CONSTRAINTS.
+           *
+           * A digit constraint on an input names the output it shares a register with, and with no
+           * instructions in between the output simply ends up holding the input: `asm ("" : "=r"(i)
+           * : "0"(x))` copies x into i. gcc's own 20030222-1.c and 990130-1.c are that and nothing
+           * else -- they exist to stop the optimiser, and the value carried through the tie is the
+           * whole observable effect.
+           *
+           * An output with no tie is left ALONE. gcc leaves whatever the register held, which is
+           * undefined; keeping the variable's own value is the deterministic reading of that, and
+           * inventing a number would be worse than either.
+           *
+           * Inputs are evaluated in order whether or not they are tied, being ordinary C expressions
+           * that may have side effects -- 990130-1.c calls a function inside one.
+           */
+          /*
+           * The OUTPUT lvalues are evaluated first, and exactly once. That is not tidiness: gcc's
+           * 990130-1.c writes `asm("" : "+r"(*bar()))` and counts the calls to bar(), so an
+           * implementation that only looks at inputs never calls it at all.
+           */
+          /* A constraint arrives as a STRING TOKEN, quotes and all -- `"0"`, not `0`. */
+          const bare = (c) => String(c ?? '').replace(/^L?"|"$/g, '');
+          const dests = outputs.map(op => ({
+            place: this.#lvalPlace(op.expr),
+            constraint: bare(op.constraint),
+          }));
+          const values = inputs.map(op => {
+            const v = this.#rval(op.expr);
+            const t = this.newTmp();
+            this.#declareTmp(t);
+            this.out.push(`${t}=${v.js};`);
+            return { tmp: t, type: v.type, constraint: bare(op.constraint) };
+          });
+          for (let i = 0; i < values.length; i++) {
+            const m = /^[%&]*(\d+)$/.exec(values[i].constraint);
+            if (!m) continue;
+            const d = dests[+m[1]];
+            if (d) this.#storeAt(d.place, values[i].tmp, values[i].type);
           }
           return;
         }
@@ -1116,6 +1155,28 @@ export class FunctionEmitter {
       }
     }
     unsup(`statement '${s.n}'`);
+  }
+
+  /**
+   * Evaluate an lvalue ONCE and keep where it lands, so a later store does not re-run the address.
+   * `*bar()` must call bar exactly once however many times the place is written.
+   */
+  #lvalPlace(e) {
+    const l = this.#lval(e);
+    if (l.varJs) return { varJs: l.varJs, type: l.type };
+    const t = this.newTmp();
+    this.#declareTmp(t);
+    this.out.push(`${t}=${l.addr};`);
+    return { addr: t, type: l.type, bitfield: l.bitfield };
+  }
+
+  /** Store an already-computed JS value into a place from #lvalPlace. */
+  #storeAt(place, js, fromType) {
+    if (!place) return;
+    if (place.bitfield) { this.#initBitfield(place.addr, place.bitfield, js); return; }
+    const v = coerce(js, fromType ?? place.type, place.type);
+    if (place.varJs) { this.out.push(`${place.varJs}=${v};`); return; }
+    this.out.push(storeExpr(place.addr, place.type, v) + ';');
   }
 
   #truth(e) {
