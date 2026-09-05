@@ -17,6 +17,30 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// Bitfields in a brace initialiser, which is where a "two fields at one offset means an anonymous
+// union" rule quietly eats them: consecutive bitfields all report the offset of their storage unit.
+// gcc's bf-sign-1.c and 20000113-1.c are this, and they fail as WRONG ANSWERS rather than refusals.
+C('bitfield-init', `
+#include <stdio.h>
+struct S { signed int s:3; unsigned int u:3; int i:3; };
+struct X { unsigned x1:1, x2:2, x3:3; };
+struct M { int before; unsigned a:5, b:5, c:5; int after; };
+static struct X g = { 1, 2, 3 };
+int main(void)
+{
+    struct S x = { -1, -1, -1 };
+    struct X d = { 1, 2, 3 };
+    struct M m = { 11, 3, 5, 7, 22 };
+    struct X *c = &d;
+    printf("%d %u %d\\n", x.s, x.u, x.i);
+    printf("%u %u %u | %u %u %u\\n", d.x1, d.x2, d.x3, g.x1, g.x2, g.x3);
+    printf("%d %u %u %u %d\\n", m.before, m.a, m.b, m.c, m.after);
+    c->x3 += (d.x2 - d.x1) * c->x2;
+    printf("%u\\n", c->x3);
+    return 0;
+}
+`);
+
 // Shadowing, and shadowing in a function that has to be FLATTENED.
 //
 // The emitter keeps one map of locals per function and named its JS variables after the C ones, so

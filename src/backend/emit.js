@@ -535,10 +535,21 @@ export class FunctionEmitter {
        * object where the previous code had at least refused. Two members at one offset inside a
        * struct can only have come from a union.
        */
+      /*
+       * Two fields of a STRUCT at one offset can only have come from an anonymous union, which the
+       * parser folds into the parent's field list -- so the second is dropped rather than given the
+       * next item.
+       *
+       * BITFIELDS ARE THE EXCEPTION AND THEY ARE NOT RARE. `struct { unsigned a:1, b:2, c:3; }`
+       * packs all three into one storage unit, so all three report offset 0, and deduplicating by
+       * offset alone silently dropped every bitfield after the first: `{1, 2, 3}` initialised to
+       * 1, 0, 0. Two of gcc's torture programs are exactly that (bf-sign-1.c, 20000113-1.c) and it
+       * is a WRONG ANSWER rather than a refusal, which is the worst kind.
+       */
       const seen = new Set();
       const named = type.fields.filter((f) => {
         if (!f.name || f.width === 0) return false;
-        if (type.k === 'struct') {
+        if (type.k === 'struct' && f.bits === undefined) {
           if (seen.has(f.offset)) return false;
           seen.add(f.offset);
         }
