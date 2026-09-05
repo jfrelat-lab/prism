@@ -647,9 +647,9 @@ export class FunctionEmitter {
         const t = it.designators && it.designators.length > 1
           ? descendDesignators(f, it.designators.slice(1))
           : { off: f.offset, type: f.type, field: f };
-        // Initialising a FLEXIBLE array member writes past the struct's nominal size; it is a GNU
-        // extension and tier-0 refuses it rather than producing a plausible wrong object.
-        if (t.field.flexible) unsup('initialising a flexible array member');
+        // An object with automatic storage has no room past its own size, so a flexible array
+        // member cannot be filled in one -- gcc rejects it too.
+        if (t.field.flexible) unsup('initialising a flexible array member in a local');
         if (t.field.bits !== undefined) {
           this.#initBitfield(addr, { ...t.field, offset: t.off }, this.#rvalCoerced(it.value.expr, t.type));
         } else {
@@ -943,18 +943,22 @@ export class FunctionEmitter {
         const t = it.designators && it.designators.length > 1
           ? descendDesignators(f, it.designators.slice(1))
           : { off: f.offset, type: f.type, field: f };
-        // Initialising a FLEXIBLE array member writes past the struct's nominal size; it is a GNU
-        // extension and tier-0 refuses it rather than producing a plausible wrong object.
-        if (t.field.flexible) unsup('initialising a flexible array member');
+        /*
+         * A FLEXIBLE array member writes past the struct's nominal size, which is exactly what the
+         * extension is for. It has no length of its own, so it is given the one its initialiser
+         * implies -- and the object was allocated that much larger, by flexibleExtra(), before any
+         * of this ran.
+         */
+        const ft = t.field.flexible ? flexibleArrayType(t.type, it.value) : t.type;
         if (t.field.bits !== undefined) {
           let v;
           try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
           writeStaticBitfield(this.mod, addr, { ...t.field, offset: t.off }, v);
         } else if (it.value.n === 'initlist') {
-          this.#staticList(addr + t.off, t.type, it.value);
-        } else if (this.#elidable(t.type, it)) {
-          i = this.#staticElided(addr + t.off, t.type, init.items, i) - 1;
-        } else if (!this.#staticScalar(addr + t.off, t.type, it.value.expr)) {
+          this.#staticList(addr + t.off, ft, it.value);
+        } else if (this.#elidable(ft, it)) {
+          i = this.#staticElided(addr + t.off, ft, init.items, i) - 1;
+        } else if (!this.#staticScalar(addr + t.off, ft, it.value.expr)) {
           unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
             `into field '${t.field.name}' of type ${T.typeName(t.type)}`);
         }
@@ -1033,15 +1037,15 @@ export class FunctionEmitter {
       const it = items[i];
       if (it.designators) return i;
       const f = named[k];
-      if (f.flexible) unsup('initialising a flexible array member');
+      const ft = f.flexible ? flexibleArrayType(f.type, it.value) : f.type;
       if (f.bits !== undefined) {
         let v;
         try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
         writeStaticBitfield(this.mod, addr, f, v);
         i++;
-      } else if (it.value.n === 'initlist') { this.#staticList(addr + f.offset, f.type, it.value); i++; }
-      else if (this.#elidable(f.type, it)) i = this.#staticElided(addr + f.offset, f.type, items, i);
-      else if (this.#staticScalar(addr + f.offset, f.type, it.value.expr)) i++;
+      } else if (it.value.n === 'initlist') { this.#staticList(addr + f.offset, ft, it.value); i++; }
+      else if (this.#elidable(ft, it)) i = this.#staticElided(addr + f.offset, ft, items, i);
+      else if (this.#staticScalar(addr + f.offset, ft, it.value.expr)) i++;
       else unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
         `into field '${f.name}' of type ${T.typeName(f.type)}`);
     }
@@ -2346,6 +2350,50 @@ export function collectNestedRefs(node, out) {
     if (k === 'type' || k === 'sym' || k === 'loc') continue;
     collectNestedRefs(node[k], out);
   }
+}
+
+/**
+ * The length a flexible array member takes from its own initialiser: the items it is given, or the
+ * bytes of the string literal that fills it. `struct { int n; char s[]; } x = { 1, "abc" };` makes
+ * `s` four bytes long, terminator included, exactly as if the `[]` had said 4.
+ */
+export function flexibleArrayType(at, value) {
+  if (at?.k !== 'array') return at;
+  const of = at.of;
+  if (value?.n === 'initlist') return T.array(of, value.items.length);
+  let e = value?.expr;
+  while (e && e.n === 'cast') e = e.expr;
+  if (e?.n === 'str' && e.type?.size) return T.array(of, Math.ceil(e.type.size / (of.size || 1)));
+  return at;
+}
+
+/**
+ * How many bytes BEYOND `sizeof(type)` an initialiser writes, because it fills a flexible array
+ * member. The object needs that storage reserved before anything is written into it -- a linker
+ * sizes such an object from its initialiser, and without this the next global sits on top of it.
+ *
+ * Zero for everything else, which is every object in every target: this is walked once per
+ * file-scope definition and stops at the first member that cannot contain one.
+ */
+export function flexibleExtra(type, init) {
+  let end = 0;
+  const walk = (type, init, base) => {
+    if (!init || init.n !== 'initlist' || !T.isRecord(type)) return;
+    const named = type.fields.filter(f => f.width !== 0
+      && (f.name || (f.bits === undefined && T.isRecord(f.type))));
+    let k = 0;
+    for (const it of init.items) {
+      let f = named[k];
+      if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
+      if (!f) break;
+      k = named.indexOf(f) + 1;
+      if (f.flexible) end = Math.max(end, base + f.offset + (flexibleArrayType(f.type, it.value).size ?? 0));
+      else if (T.isRecord(f.type)) walk(f.type, it.value, base + f.offset);
+      if (type.k === 'union') break;       // a union takes one item, into its first member
+    }
+  };
+  walk(type, init, 0);
+  return Math.max(0, end - (type.size ?? 0));
 }
 
 /**

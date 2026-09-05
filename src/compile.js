@@ -7,7 +7,7 @@ import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
-import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
+import { FunctionEmitter, EmitError , jsIdent, flexibleExtra } from './backend/emit.js';
 import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
@@ -614,7 +614,9 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
     if (d.n === 'vardecl') {
       if (d.type.k === 'func') { funcs.set(d.name, mod.defineFunc(d.name, d.type)); continue; }
       if (d.storage === 'extern' && !d.init) continue;
-      const sym = mod.defineGlobal(d.name, d.type);
+      // A definition that fills a flexible array member is LARGER than its type says; the extra
+      // storage has to be reserved here, before the next global takes the address after it.
+      const sym = mod.defineGlobal(d.name, d.type, d.type.size + flexibleExtra(d.type, d.init));
       globals.set(d.name, { addr: sym.addr, type: d.type });
     } else if (d.n === 'func') {
       const f0 = mod.defineFunc(d.name, d.type);
@@ -780,7 +782,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
          * access fail in the unit that could see the members.
          */
         if (d.storage === 'extern' && !d.init) { (p.externDecls ??= []).push(d); continue; }
-        const sym = mod.defineGlobal(link, d.type);
+        const sym = mod.defineGlobal(link, d.type, d.type.size + flexibleExtra(d.type, d.init));
         (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type: d.type });
       } else if (d.n === 'func') {
         /*

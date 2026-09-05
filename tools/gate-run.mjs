@@ -17,6 +17,33 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// A flexible array member filled by the initialiser. The object is then LARGER than its type says,
+// which is the whole point -- and the case that matters is the global defined right after it, which
+// must not land on top of the extra bytes.
+C('flexible-array-init', `
+#include <stdio.h>
+struct str { int n; char s[]; };
+struct nums { int n; int v[]; };
+static struct str a = { 3, "wx" };
+static int between = 0x11223344;
+static struct str b = { 4, { 'e', 'b', 'c' } };
+static struct nums c = { 2, { 7, 8, 9, 10 } };
+static struct nums empty = { .n = 40, .v = {} };
+union both { struct str s; char pad[sizeof(struct str) + 8]; };
+static union both u = { { 5, "12345678" } };
+int main(void)
+{
+    printf("%d %c%c%d\\n", a.n, a.s[0], a.s[1], a.s[2]);
+    printf("%x\\n", between);
+    printf("%d %c%c%c\\n", b.n, b.s[0], b.s[1], b.s[2]);
+    printf("%d %d %d %d %d\\n", c.n, c.v[0], c.v[1], c.v[2], c.v[3]);
+    printf("%d\\n", empty.n);
+    printf("%d %s\\n", u.s.n, u.s.s);
+    printf("%d %d\\n", (int)sizeof(struct str), (int)sizeof(struct nums));
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

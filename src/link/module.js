@@ -76,11 +76,15 @@ export class Module {
     return a;
   }
 
-  defineGlobal(name, type) {
+  /**
+   * `size` overrides the type's, for the one case where an object is bigger than its type: a struct
+   * whose flexible array member the initialiser fills.
+   */
+  defineGlobal(name, type, size = type.size ?? 4) {
     const existing = this.symbols.get(name);
     if (existing) return existing;
-    const addr = this.alloc(type.size ?? 4, type.align ?? 4);
-    const sym = { name, addr, size: type.size ?? 4, type, kind: 'var' };
+    const addr = this.alloc(size, type.align ?? 4);
+    const sym = { name, addr, size, type, kind: 'var' };
     this.symbols.set(name, sym);
     return sym;
   }
