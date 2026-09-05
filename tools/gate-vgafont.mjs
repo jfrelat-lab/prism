@@ -1,4 +1,4 @@
-// gate-vgafont.mjs — the Win32 shim rasterises text, and these are the pixels.
+// gate-vgafont.mjs — the Win32 shim rasterises text, and knows when to repaint.
 //
 //   node tools/gate-vgafont.mjs [--png=/tmp/font.png]
 //
@@ -96,6 +96,55 @@ for (let i = 0; i < BOX.length && boxOk; i++) {
   }
 }
 check(boxOk, 'the six box-drawing characters reach their code page 437 glyphs');
+
+/*
+ * The update region, which is the other half of a window that draws.
+ *
+ * Windows remembers which part of a window is invalid and keeps producing WM_PAINT for as long as
+ * any part is; BeginPaint validates and the WM_PAINTs stop. All three of those are checked here,
+ * because getting two of them right leaves a program that either never repaints or repaints for
+ * ever, and neither looks like a bug from outside.
+ */
+console.log('\nthe update region');
+const msg = program.mod.alloc(28, 4);
+const message = () => dv.getInt32(msg + 4, true);
+const WM_PAINT = 0x000F;
+
+program.F.ValidateRect(0, 0);
+check(program.F.PeekMessage(msg, 0, 0, 0, 0) === 0, 'a clean window has no message waiting');
+
+program.F.InvalidateRect(0, 0, 1);
+check(program.F.GetMessage(msg, 0, 0, 0) !== 0 && message() === WM_PAINT,
+      'InvalidateRect makes the next GetMessage a WM_PAINT');
+check(program.F.GetMessage(msg, 0, 0, 0) !== 0 && message() === WM_PAINT,
+      'and it KEEPS being one -- removing the message does not validate');
+
+const ps = program.mod.alloc(64, 4);
+program.F.BeginPaint(0, ps);
+/* PAINTSTRUCT is hdc, fErase, then rcPaint -- so the rectangle starts at 8, not at 4. */
+const erase = dv.getInt32(ps + 4, true);
+const rc = [8, 12, 16, 20].map(o => dv.getInt32(ps + o, true));
+check(erase === 1 && rc[0] === 0 && rc[1] === 0 && rc[2] === w && rc[3] === h,
+      `BeginPaint reports fErase and the whole client rect (${rc[2]}x${rc[3]})`);
+check(program.F.PeekMessage(msg, 0, 0, 0, 0) === 0, 'BeginPaint validates: the WM_PAINTs stop');
+
+/* And a partial invalidation comes back as the rectangle the program named, not the whole window. */
+const r = program.mod.alloc(16, 4);
+[24, 32, 48, 64].forEach((v, i) => dv.setInt32(r + i * 4, v, true));
+program.F.InvalidateRect(0, r, 0);
+program.F.BeginPaint(0, ps);
+const rc2 = [8, 12, 16, 20].map(o => dv.getInt32(ps + o, true));
+check(rc2[0] === 24 && rc2[1] === 32 && rc2[2] === 48 && rc2[3] === 64,
+      `the named rectangle comes back (${rc2.join(',')})`);
+
+/*
+ * The one Windows behaviour that is deliberately NOT here: nothing invalidates on its own. Windows
+ * also repaints when a window is shown, resized or uncovered, and inventing those changed what Quake
+ * draws -- its WndProc answers WM_PAINT with SCR_UpdateWholeScreen, so gate-pixels went red on 152
+ * rows. Nothing in this host covers or resizes a window behind the program's back.
+ */
+program.F.ShowWindow(0, 5);
+check(program.F.PeekMessage(msg, 0, 0, 0, 0) === 0, 'ShowWindow does NOT invent a paint');
 
 if (pngPath) {
   const px = new Uint8Array(w * h);

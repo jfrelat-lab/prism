@@ -1333,3 +1333,46 @@ message loop, so it never repaints — the surface it leaves behind is the 100x1
 window with one glyph in it. Seeing a PuTTY terminal needs a session that starts, and the honest way
 to that is a real Winsock over the host's sockets rather than a peer invented here. That is the next
 piece, and it is a different piece.
+
+### WM_PAINT: the update region
+
+A window that never repaints is not a window. `win32.c` now keeps the thing that makes one: the
+region of the window that is invalid, and the three behaviours that hang off it —
+
+```
+the update region
+  ok    a clean window has no message waiting
+  ok    InvalidateRect makes the next GetMessage a WM_PAINT
+  ok    and it KEEPS being one -- removing the message does not validate
+  ok    BeginPaint reports fErase and the whole client rect (320x48)
+  ok    BeginPaint validates: the WM_PAINTs stop
+  ok    the named rectangle comes back (24,32,48,64)
+  ok    ShowWindow does NOT invent a paint
+```
+
+All three matter and getting two of them right is worse than getting none: a program that never
+repaints and a program that repaints for ever look the same from outside — busy — and neither looks
+like a bug.
+
+**`DefWindowProc` validates**, which is the half that is easy to leave out. Windows documents it as
+calling BeginPaint and EndPaint itself, and Quake is exactly the program that needs it: its
+`MainWndProc` handles WM_PAINT (`vid_win.c:2919`) but `Sys_SendKeyEvents` pumps with
+`while (PeekMessage(..., PM_NOREMOVE))`, so a WM_PAINT nobody validates is an infinite loop.
+
+**Nothing invalidates on its own, and that is a decision.** Windows also repaints when a window is
+shown, resized or uncovered. Doing that here made `gate-pixels` go red on 152 rows, because Quake
+answers WM_PAINT with `SCR_UpdateWholeScreen` — inventing paints invented full-screen redraws.
+Nothing in this host covers or resizes a window behind the program's back, so there is nothing for
+the platform to report, and guessing how many times a window manager would have done it is noise
+rather than fidelity. The gate asserts the absence.
+
+**Window words are real storage.** `SetWindowLong`/`GetWindowLong` used to return 0 and forget.
+PuTTY puts the pointer to its entire session into `GWLP_USERDATA` at `WM_NCCREATE` and reads it back
+at the top of every `WndProc` call, so forgetting means WndProc gets a null session on the first
+message it is sent. Keyed by window as well as by index, because PuTTY's hidden timing window and its
+terminal both use slot -21.
+
+**PuTTY's own painter is reached.** Standing in for the message loop the program cannot get to —
+invalidate, pump, dispatch — runs `WndProc` → `do_paint` → `term_paint`, and it stops there on
+`cline==NULL ... w=0 h=0`: the terminal has no lines because the session never started. That is the
+network, downstream, and not the window.

@@ -1408,6 +1408,7 @@ typedef struct _OVERLAPPED {
 #define FillMemory(d, n, v) memset((d), (v), (n))
 #endif
 BOOL WINAPI MoveWindow(HWND h, int x, int y, int w, int ht, BOOL repaint);
+BOOL WINAPI ValidateRect(HWND h, const RECT *r);
 HWND WINAPI CreateWindow(LPCTSTR cls, LPCTSTR name, DWORD style, int x, int y, int w, int h,
                          HWND parent, HMENU menu, HINSTANCE inst, LPVOID param);
 UINT WINAPI GetDlgItemTextW(HWND dlg, int id, LPWSTR buf, int n);

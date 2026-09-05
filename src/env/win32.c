@@ -287,9 +287,29 @@ HWND WINAPI CreateWindowEx(DWORD exStyle, LPCSTR cls, LPCSTR name, DWORD style,
 }
 
 BOOL WINAPI DestroyWindow(HWND w) { (void)w; return TRUE; }
+/*
+ * DefWindowProc VALIDATES on WM_PAINT, and that is not a detail: it is what stops a program that
+ * does not paint from being asked for ever. Windows documents it as calling BeginPaint and EndPaint
+ * itself, so the region is clean when it returns.
+ *
+ * Quake is exactly that program. Its MainWndProc ignores WM_PAINT, and Sys_SendKeyEvents pumps with
+ *
+ *     while (PeekMessage(&msg, NULL, 0, 0, PM_NOREMOVE)) { GetMessage(...); DispatchMessage(...); }
+ *
+ * so a WM_PAINT nobody validates is an infinite loop, and one that merely returns 0 changes what the
+ * game does each frame -- gate-pixels caught the second before anything caught the first.
+ */
+HDC WINAPI BeginPaint(HWND w, LPPAINTSTRUCT ps);
+BOOL WINAPI EndPaint(HWND w, const PAINTSTRUCT *ps);
+
 LRESULT WINAPI DefWindowProc(HWND w, UINT m, WPARAM wp, LPARAM lp)
 {
-    (void)w; (void)m; (void)wp; (void)lp;
+    (void)wp; (void)lp;
+    if (m == WM_PAINT) {
+        PAINTSTRUCT ps;
+        BeginPaint(w, &ps);
+        EndPaint(w, &ps);
+    }
     return 0;
 }
 BOOL WINAPI ShowWindow(HWND w, int cmd)
@@ -311,7 +331,12 @@ int WINAPI SetWindowText(HWND w, LPCSTR text)
     return 1;
 }
 void prism_win32_close(void) { prism_win32_closed = 1; post(WM_CLOSE, 0, 0); }
-BOOL WINAPI UpdateWindow(HWND w) { (void)w; return TRUE; }
+/* UpdateWindow paints NOW rather than queueing: it calls WM_PAINT directly if anything is invalid. */
+BOOL WINAPI UpdateWindow(HWND w)
+{
+    if (prism_dirty_any && wndproc) wndproc(w, WM_PAINT, 0, 0);
+    return TRUE;
+}
 BOOL WINAPI SetForegroundWindow(HWND w) { (void)w; return TRUE; }
 /*
  * The one call a resolution change goes through, so its flags have to be read rather than ignored.
@@ -328,8 +353,106 @@ BOOL WINAPI SetWindowPos(HWND w, HWND after, int x, int y, int cx, int cy, UINT 
     if (flags & SWP_HIDEWINDOW) prism_win32_visible = 0;
     return TRUE;
 }
-LONG WINAPI SetWindowLong(HWND w, int index, LONG value) { (void)w; (void)index; (void)value; return 0; }
-BOOL WINAPI InvalidateRect(HWND w, const RECT *r, BOOL erase) { (void)w; (void)r; (void)erase; return TRUE; }
+/*
+ * THE WINDOW WORDS: a program's own storage, hanging off the window handle.
+ *
+ * This is not bookkeeping that can be skipped. PuTTY puts the pointer to its whole session --
+ * WinGuiSeat, the terminal, the configuration, everything -- into GWLP_USERDATA at WM_NCCREATE and
+ * reads it back at the top of every WndProc call. Returning 0 and forgetting means WndProc gets a
+ * null session on the first message it is ever sent.
+ *
+ * Keyed by WINDOW as well as by index, because a program has more than one: PuTTY's hidden timing
+ * window and its terminal both use slot -21, and sharing them would have crossed the two.
+ */
+#define PRISM_WORDS 64
+static struct { HWND hwnd; int index; LONG value; int used; } prism_words[PRISM_WORDS];
+
+LONG WINAPI SetWindowLong(HWND w, int index, LONG value)
+{
+    int i, free_slot = -1;
+    for (i = 0; i < PRISM_WORDS; i++) {
+        if (prism_words[i].used && prism_words[i].hwnd == w && prism_words[i].index == index) {
+            LONG old = prism_words[i].value;
+            prism_words[i].value = value;
+            return old;
+        }
+        if (!prism_words[i].used && free_slot < 0) free_slot = i;
+    }
+    if (free_slot < 0) return 0;       /* out of slots: the value is dropped, not silently aliased */
+    prism_words[free_slot].hwnd = w;
+    prism_words[free_slot].index = index;
+    prism_words[free_slot].value = value;
+    prism_words[free_slot].used = 1;
+    return 0;
+}
+LONG WINAPI GetWindowLong(HWND w, int index)
+{
+    int i;
+    for (i = 0; i < PRISM_WORDS; i++)
+        if (prism_words[i].used && prism_words[i].hwnd == w && prism_words[i].index == index)
+            return prism_words[i].value;
+    return 0;
+}
+DWORD WINAPI GetClassLong(HWND w, int index) { (void)w; (void)index; return 0; }
+/*
+ * THE UPDATE REGION, which is what makes a window repaint.
+ *
+ * Windows does not hand a program its pixels and forget: it remembers which part of the window is
+ * invalid, and for as long as any part is, GetMessage keeps producing WM_PAINT. The program paints,
+ * calls BeginPaint -- which VALIDATES the region -- and only then do the WM_PAINTs stop.
+ *
+ * All three halves of that matter and none of them were here. InvalidateRect returned TRUE and
+ * forgot, so nothing was ever dirty; GetMessage never synthesised WM_PAINT, so nothing repainted;
+ * and a program that had drawn once never drew again. PuTTY's terminal is redrawn from WM_PAINT, so
+ * it would have shown its first frame and then frozen even with a working font behind it.
+ *
+ * The region is a single rectangle, unioned rather than tracked exactly. Windows keeps a real region
+ * and a program may paint less than it is asked to; painting MORE than necessary is always correct,
+ * and the difference is speed rather than pixels.
+ *
+ * WHAT INVALIDATES IS THE PROGRAM, and only the program. Windows also invalidates when a window is
+ * shown, resized, or uncovered, and doing that here changed what Quake draws: its MainWndProc
+ * answers WM_PAINT with SCR_UpdateWholeScreen (vid_win.c:2919), so inventing paints invented full
+ * screen redraws, and gate-pixels went red on 152 rows. Nothing in this host covers or resizes a
+ * window behind the program's back, so there is nothing for the platform to report -- and guessing
+ * how many times a window manager would have done it is not fidelity, it is noise.
+ */
+static RECT prism_dirty;
+static int prism_dirty_any;
+static int prism_dirty_erase;
+
+static void prism_invalidate(const RECT *r, int erase)
+{
+    RECT all;
+    if (!r) {
+        all.left = 0; all.top = 0;
+        all.right = prism_win32_w; all.bottom = prism_win32_h;
+        r = &all;
+    }
+    if (!prism_dirty_any) {
+        prism_dirty = *r;
+        prism_dirty_any = 1;
+    } else {
+        if (r->left < prism_dirty.left) prism_dirty.left = r->left;
+        if (r->top < prism_dirty.top) prism_dirty.top = r->top;
+        if (r->right > prism_dirty.right) prism_dirty.right = r->right;
+        if (r->bottom > prism_dirty.bottom) prism_dirty.bottom = r->bottom;
+    }
+    if (erase) prism_dirty_erase = 1;
+}
+
+BOOL WINAPI InvalidateRect(HWND w, const RECT *r, BOOL erase)
+{
+    (void)w;
+    prism_invalidate(r, erase);
+    return TRUE;
+}
+BOOL WINAPI ValidateRect(HWND w, const RECT *r)
+{
+    (void)w; (void)r;                  /* partial validation is not tracked; see the note above */
+    prism_dirty_any = 0;
+    return TRUE;
+}
 HWND WINAPI CreateDialog(HINSTANCE i, LPCSTR t, HWND p, LPVOID proc)
 {
     (void)i; (void)t; (void)p; (void)proc;
@@ -371,6 +494,15 @@ BOOL WINAPI PeekMessage(LPMSG msg, HWND w, UINT min, UINT max, UINT flags)
 {
     (void)w; (void)min; (void)max;
     if (msgq_head == msgq_tail) {
+        /*
+         * WM_PAINT is the LOWEST priority message: Windows produces it only when nothing else is
+         * waiting, which is why it is synthesised here rather than posted when the region goes bad.
+         * It is not removed by PM_REMOVE either -- BeginPaint is what makes it stop.
+         */
+        if (prism_dirty_any) {
+            if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT; }
+            return TRUE;
+        }
         if (msg) memset(msg, 0, sizeof(*msg));
         return FALSE;
     }
@@ -391,6 +523,10 @@ BOOL WINAPI GetMessage(LPMSG msg, HWND w, UINT min, UINT max)
 {
     (void)w; (void)min; (void)max;
     if (msgq_head == msgq_tail) {
+        if (prism_dirty_any) {
+            if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT; }
+            return TRUE;
+        }
         if (msg) memset(msg, 0, sizeof(*msg));
         return TRUE;                  /* nothing waiting is not a reason to stop */
     }
@@ -459,10 +595,24 @@ BOOL WINAPI SystemParametersInfo(UINT action, UINT param, LPVOID data, UINT win)
 
 HDC WINAPI GetDC(HWND w) { (void)w; return HANDLE_OF(HDC); }
 int WINAPI ReleaseDC(HWND w, HDC dc) { (void)w; (void)dc; return 1; }
+/*
+ * BeginPaint VALIDATES. That is the half of this that is easy to leave out and impossible to notice
+ * afterwards: without it the region stays dirty, GetMessage keeps handing out WM_PAINT, and the
+ * program repaints for ever instead of waiting for the next real event.
+ */
 HDC WINAPI BeginPaint(HWND w, LPPAINTSTRUCT ps)
 {
     (void)w;
-    if (ps) memset(ps, 0, sizeof(*ps));
+    if (ps) {
+        memset(ps, 0, sizeof(*ps));
+        ps->hdc = HANDLE_OF(HDC);
+        ps->fErase = prism_dirty_erase ? TRUE : FALSE;
+        if (prism_dirty_any) ps->rcPaint = prism_dirty;
+        else { ps->rcPaint.left = ps->rcPaint.top = 0;
+               ps->rcPaint.right = prism_win32_w; ps->rcPaint.bottom = prism_win32_h; }
+    }
+    prism_dirty_any = 0;
+    prism_dirty_erase = 0;
     return HANDLE_OF(HDC);
 }
 BOOL WINAPI EndPaint(HWND w, const PAINTSTRUCT *ps) { (void)w; (void)ps; return TRUE; }
