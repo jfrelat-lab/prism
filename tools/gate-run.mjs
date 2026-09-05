@@ -251,6 +251,31 @@ int main(void)
 }
 `);
 
+// __attribute__((mode(M))): the machine mode gives the WIDTH and the written type gives only the
+// signedness, which is the trap -- `unsigned int` with mode(QI) is an unsigned char, not an int.
+C('attribute-mode', `
+#include <stdio.h>
+typedef unsigned int u8 __attribute__((mode(QI)));
+typedef signed int s8 __attribute__((mode(QI)));
+typedef unsigned int u16 __attribute__((mode(HI)));
+typedef int s32 __attribute__((mode(SI)));
+typedef int s64 __attribute__((mode(DI)));
+typedef int word_t __attribute__((mode(word)));
+typedef float f64 __attribute__((mode(DF)));
+struct packed { char c; s64 big; };
+int main(void)
+{
+    u8 a = 250; s8 b = -3; u16 c = 70000; s64 d = 1; f64 e = 0.5;
+    printf("%d %d %d %d %d %d %d\\n", (int)sizeof(u8), (int)sizeof(s8), (int)sizeof(u16),
+           (int)sizeof(s32), (int)sizeof(s64), (int)sizeof(word_t), (int)sizeof(f64));
+    a += 10; b -= 200;
+    printf("%d %d %u %lld %.2f\\n", (int)a, (int)b, (unsigned)c, (long long)(d << 40), (double)e);
+    printf("%d %d\\n", (int)sizeof(struct packed), (int)__builtin_offsetof(struct packed, big));
+    { int x __attribute__((mode(QI))) = 300; printf("%d\\n", x); }
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

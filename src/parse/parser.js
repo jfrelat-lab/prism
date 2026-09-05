@@ -259,6 +259,7 @@ export class Parser {
       const d = this.#declarator(specs.type);
       const datt = this.#skipAttributeLike();
       if (!datt.alias && this.lastAlias) datt.alias = this.lastAlias;
+      if (datt.mode) d.type = applyMode(d.type, datt.mode, this.peek());
       if (datt.aligned) d.type = T.withAlign(d.type, datt.aligned);
 
       // K&R parameter declarations sit between the declarator and the body.
@@ -350,6 +351,7 @@ export class Parser {
     let inlineFn = false;
     let alignAttr = 0;
     let isComplex = false;
+    let modeAttr = null;
 
     for (;;) {
       const t = this.peek();
@@ -367,7 +369,7 @@ export class Parser {
        * declares its one piece of dialogue state this way.
        */
       if (v === '__thread' || v === '_Thread_local') { this.i++; continue; }
-      if (v === '__attribute__' || v === '__attribute') { const a = this.#skipAttributeLike(); if (a.aligned) alignAttr = Math.max(alignAttr, a.aligned); continue; }
+      if (v === '__attribute__' || v === '__attribute') { const a = this.#skipAttributeLike(); if (a.aligned) alignAttr = Math.max(alignAttr, a.aligned); if (a.mode) modeAttr = a.mode; continue; }
 
       if (v === 'signed' || v === '__signed' || v === '__signed__') { this.i++; signed++; sawTypeSpec = true; continue; }
       if (v === 'unsigned') { this.i++; unsigned++; sawTypeSpec = true; continue; }
@@ -399,6 +401,7 @@ export class Parser {
       type = this.#buildArithmetic({ base: base ?? (isComplex ? 'double' : base), signed, unsigned, longs, shorts },
         sawTypeSpec, allowNone);
     }
+    if (modeAttr) type = applyMode(type ?? T.INT, modeAttr, this.peek());
     if (isComplex) {
       if (!type || !T.isArith(type)) throw new ParseError('_Complex needs an arithmetic type', this.peek());
       type = T.complex(type);
@@ -497,6 +500,7 @@ export class Parser {
           if (this.eatP(':')) bits = Number(this.#constExpr());
         }
         const matt = this.#skipAttributeLike();
+        if (matt.mode) mtype = applyMode(mtype, matt.mode, this.peek());
         // Order matters and is observable: `packed` drops the member's alignment to 1, and a
         // following `aligned(N)` raises it to N. Applying only `aligned` put
         // `double d __attribute__((aligned(2),packed))` at offset 4 instead of 2.
@@ -558,7 +562,7 @@ export class Parser {
 
   /** `__attribute__((...))` and `__asm__("...")` in a declaration; returns what we care about. */
   #skipAttributeLike() {
-    const found = { packed: false, aligned: null, alias: null };
+    const found = { packed: false, aligned: null, alias: null, mode: null };
     for (;;) {
       if (this.isKw('__attribute__') || this.isKw('__attribute')) {
         this.i++;
@@ -576,7 +580,17 @@ export class Parser {
           // Most attributes are safe to ignore (noinline, unused, format…). These are NOT: they
           // change the TYPE, so ignoring them produces a wrong program instead of a refusal —
           // gcc's simd-*.c miscompiled silently until this list existed.
-          if (t.k === ID && /^_*(vector_size|mode|transparent_union|vector)_*$/.test(t.v)) {
+          /*
+           * `__attribute__((mode(SI)))` names a machine MODE, which selects the width: the type it
+           * is written on contributes only its signedness. `typedef unsigned int u8
+           * __attribute__((mode(QI)))` is an unsigned 8-bit integer, not an int.
+           */
+          if (t.k === ID && /^_*mode_*$/.test(t.v) && inner[k + 1]?.v === '(' && inner[k + 2]?.k === ID) {
+            found.mode = inner[k + 2].v.replace(/^__|__$/g, '');
+            k += 3;
+            continue;
+          }
+          if (t.k === ID && /^_*(vector_size|transparent_union|vector)_*$/.test(t.v)) {
             throw new ParseError(`__attribute__((${t.v})) changes the type and is not supported`, t);
           }
           /*
@@ -1461,6 +1475,31 @@ function consumeElided(type, items, i) {
 
 /** The length of a string literal in ELEMENTS — wide units for `L"…"`, bytes otherwise.
  *  Counting source BYTES here made `sizeof(L"Ä")` 12 instead of 8. */
+/**
+ * `__attribute__((mode(M)))`: the machine mode decides the WIDTH, the written type decides only the
+ * signedness. The i386 modes a program can name, and what they are here.
+ *
+ * A mode this does not know is refused rather than guessed: getting a width wrong is a wrong
+ * answer, and these types are used precisely where the width is the whole point.
+ */
+function applyMode(type, mode, at) {
+  const uns = T.isInteger(type) && T.isUnsigned(type);
+  const INT_MODES = {
+    QI: ['signed char', 'unsigned char'],
+    HI: ['short', 'unsigned short'],
+    SI: ['int', 'unsigned int'],
+    DI: ['long long', 'unsigned long long'],
+    byte: ['signed char', 'unsigned char'],
+    // On i386 a machine word and a pointer are both 32 bits.
+    word: ['int', 'unsigned int'],
+    pointer: ['int', 'unsigned int'],
+  };
+  if (INT_MODES[mode]) return T.scalar(INT_MODES[mode][uns ? 1 : 0]);
+  if (mode === 'SF') return T.scalar('float');
+  if (mode === 'DF') return T.scalar('double');
+  throw new ParseError(`__attribute__((mode(${mode}))) is not a mode tier-0 knows`, at);
+}
+
 /** The keywords a type name may START with -- shared by the three lookaheads, which disagreed. */
 const TYPE_STARTERS = ['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed',
   'unsigned', '_Bool', 'struct', 'union', 'enum', 'typeof', '__typeof__'];
