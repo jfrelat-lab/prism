@@ -17,6 +17,35 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// Bitfields whose declared type is 64-bit. The width is what decides the PROMOTION -- int if int
+// can hold every value, else unsigned int -- and the declared type is what decides the storage. Six
+// torture programs failed on the first with "Cannot mix BigInt and other types", which is what a
+// read that returns a BigInt does when the type says int.
+C('bitfield-64', `
+#include <stdio.h>
+struct A { unsigned long long a:8, b:32; };
+struct B { unsigned long long l1:24, l2:8; long long s:20; };
+int main(void)
+{
+    struct A x; struct B b;
+    /* Every one CAST: a narrow field promotes to int, so passing it bare to %llu misaligns the
+       varargs -- which is a property of the promotion working, not a bug. */
+    x.a = 12; x.b = 0xcdef1234;
+    printf("%llu %llu\\n", (unsigned long long)x.a, (unsigned long long)x.b);
+    b.l1 = 0xdeadbe; b.l2 = 0xef; b.s = -12345;
+    printf("%llx %llx %lld\\n", (unsigned long long)b.l1, (unsigned long long)b.l2,
+           (long long)b.s);
+    b.l2 += 1; b.s -= 1; x.b += 1;
+    printf("%llx %lld %llu\\n", (unsigned long long)b.l2, (long long)b.s,
+           (unsigned long long)x.b);
+    /* The promotion: a narrow field is an int, so this arithmetic is int arithmetic. */
+    printf("%d %d\\n", (int)(x.a * 2), (int)sizeof(x.a + 0));
+    { struct A y = { 200, 4000000000U };
+      printf("%llu %llu\\n", (unsigned long long)y.a, (unsigned long long)y.b); }
+    return 0;
+}
+`);
+
 // The overflow builtins, which are TYPE-GENERIC: the width and signedness come from the third
 // argument's pointee, not from the call. Both halves are checked -- the return value AND the stored
 // result, which is wrapped to the destination type whether or not it overflowed.

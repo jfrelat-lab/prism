@@ -1076,7 +1076,20 @@ export class Parser {
         if (arrow && rec) rec = T.decay(rec);
         if (arrow && rec?.k === 'ptr') rec = rec.to;
         const f = rec && T.isRecord(rec) ? findField(rec, field) : null;
-        e = { n: 'member', base: e, field, arrow, type: f?.type ?? T.INT, offset: f?.offset ?? null };
+        /*
+         * A BITFIELD's expression type is its PROMOTED type, not its declared one (C 6.3.1.1): int
+         * if int can hold every value the field can have, else unsigned int, else the field's own
+         * type. The emitter has always known this -- it is why `unsigned f:3` minus 1 is -1 and not
+         * a huge unsigned -- but the parser did not, and the parser is what answers `sizeof`. It
+         * never showed for an ordinary bitfield, whose declared type is already 4 bytes; a
+         * `long long a:8` made `sizeof(a + 0)` eight where gcc says four.
+         */
+        let mtype = f?.type ?? T.INT;
+        if (f && f.bits !== undefined && mtype.k === 'scalar' && T.isInteger(mtype)) {
+          if (f.width < 32) mtype = T.INT;
+          else if (f.width === 32) mtype = mtype.signed ? T.INT : T.UINT;
+        }
+        e = { n: 'member', base: e, field, arrow, type: mtype, offset: f?.offset ?? null };
         continue;
       }
       if (this.isP('++') || this.isP('--')) {

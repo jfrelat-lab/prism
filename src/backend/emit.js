@@ -1856,6 +1856,34 @@ export class FunctionEmitter {
    */
   #loadBitfield(l) {
     const f = l.bitfield;
+    /*
+     * A bitfield whose DECLARED TYPE is 64-bit goes through the runtime, whatever its width.
+     *
+     * Two reasons, and the first is not about width at all: `unsigned long long a:8` is eight bits
+     * wide but its type is 64-bit, so the value has to arrive as a BigInt or the first arithmetic on
+     * it throws "Cannot mix BigInt and other types" -- which is what six of gcc's torture programs
+     * did. The second is that a field wider than 32 bits cannot be assembled in a Number at all
+     * beyond 53 bits, and the byte path below multiplies rather than shifts precisely because JS
+     * shifts are 32-bit.
+     *
+     * A bitfield is not a hot path, so a call is cheaper than emitting the BigInt arithmetic inline
+     * and getting the sign extension wrong in two places instead of one.
+     */
+    if (is64(f.type)) {
+      /*
+       * WIDER THAN 32 BITS IS STILL REFUSED, and the reason is not the storage -- it is the
+       * ARITHMETIC. C 6.7.2.1p9 makes a bitfield "an integer type consisting of the specified number
+       * of bits", and gcc takes that literally: `unsigned long long b:40` shifted left by 32 is
+       * computed in FORTY-bit precision, so 0x100 << 32 is 0, not 0x10000000000. Doing that needs a
+       * width-parameterised integer type, which this type system does not have -- and pretending the
+       * type is 64-bit produces a plausible wrong answer instead of a refusal (bitfld-5.c,
+       * pr32244-1.c, pr34971.c). See docs/ROADMAP.md.
+       */
+      if (f.width > 32) unsup('a bitfield wider than 32 bits');
+      const get = `M.rt.__prism_bf_get64((${l.addr}|0),${f.bitOffset},${f.width},${f.type.signed ? 1 : 0})`;
+      // Narrow fields promote to int or unsigned int, so their value must arrive as a Number.
+      return is64(bitfieldPromoted(f)) ? get : `Number(${get})`;
+    }
     const shift = f.bitOffset & 31;
     if (shift + f.width <= 32) {
       const unitOff = (f.bitOffset >> 5) * 4;
@@ -1947,8 +1975,29 @@ function writeStaticBitfield(mod, base, f, value) {
 }
 
 /** The type a bitfield read has after the integer promotions. */
+/*
+ * C99 6.3.1.1: a bitfield promotes to int if int can hold every value it has, otherwise to unsigned
+ * int -- and otherwise to its own type, which is the case a 64-bit bitfield reaches. `long long
+ * a:40` cannot fit in an int, so it stays 64-bit and its arithmetic stays BigInt; saying INT here
+ * made every read mix a BigInt with a Number on the next operation.
+ */
 function bitfieldPromoted(f) {
   if (f.type.k !== 'scalar') return T.INT;
+  /*
+   * The rule is about VALUES, not about the declared type: int if int can represent every value the
+   * field can hold, otherwise unsigned int, otherwise the field's own type. So a `long long a:8`
+   * promotes to int like any other narrow field, and only a field wider than 32 bits stays 64-bit.
+   *
+   * Claiming the 64-bit type for narrow fields instead was tempting -- the read returns a BigInt
+   * whatever the width -- and gcc has four programs that fail on it (bf-sign-2.c, bitfld-5.c,
+   * pr32244-1.c, pr34971.c). #loadBitfield converts the BigInt down when the promotion says 32-bit;
+   * the representation follows the type rather than deciding it.
+   */
+  if (is64(f.type)) {
+    if (f.width < 32) return T.INT;
+    if (f.width === 32) return f.type.signed ? T.INT : T.UINT;
+    return f.type;
+  }
   if (f.type.signed) return T.INT;
   return f.width < 32 ? T.INT : T.UINT;
 }
@@ -1961,6 +2010,11 @@ function bitfieldPromoted(f) {
  * containing byte for the packed one.
  */
 function bitfieldPoke(f, atVar, valVar) {
+  /* The 64-bit twin of the read above: the value is a BigInt, so the store has to be too. */
+  if (is64(f.type)) {
+    if (f.width > 32) unsup('a bitfield wider than 32 bits');
+    return { unitOff: 0, poke: `M.rt.__prism_bf_set64(${atVar},${f.bitOffset},${f.width},${valVar})` };
+  }
   const shift = f.bitOffset & 31;
   if (shift + f.width <= 32) {
     const mask = (((2 ** f.width - 1) >>> 0) << shift) >>> 0;

@@ -730,6 +730,36 @@ function makeLibc(M) {
     __builtin_expect: (v, _expected) => v,
 
     /*
+     * Bitfields of a 64-bit type, byte-wise in BigInt.
+     *
+     * Bytes are the only unit that always contains the field -- a 64-bit-wide field starting at bit
+     * 7 spans nine of them -- and BigInt is the only arithmetic here that holds the result. The
+     * width and the DECLARED signedness decide the value that comes back; asIntN is the sign
+     * extension, done once rather than in each caller.
+     */
+    __prism_bf_get64: (addr, bitOffset, width, signed) => {
+      const byte = addr + (bitOffset >> 3), bit = BigInt(bitOffset & 7);
+      const n = Math.ceil(((bitOffset & 7) + width) / 8);
+      let raw = 0n;
+      for (let i = n - 1; i >= 0; i--) raw = (raw << 8n) | BigInt(M.u8[byte + i]);
+      const v = (raw >> bit) & ((1n << BigInt(width)) - 1n);
+      return signed ? BigInt.asIntN(width, v) : BigInt.asUintN(width, v);
+    },
+    __prism_bf_set64: (addr, bitOffset, width, value) => {
+      const byte = addr + (bitOffset >> 3), bit = bitOffset & 7;
+      const n = Math.ceil((bit + width) / 8);
+      const v = BigInt.asUintN(width, BigInt(value));
+      for (let i = 0; i < n; i++) {
+        const lo = Math.max(0, bit - 8 * i);              // first bit of this byte inside the field
+        const hi = Math.min(8, bit + width - 8 * i);      // one past the last
+        const keep = (~(((1 << hi) - (1 << lo)) & 0xff)) & 0xff;
+        const from = BigInt(8 * i - bit + lo);
+        const bits = Number((v >> from) & 0xffn) << lo;
+        M.u8[byte + i] = (M.u8[byte + i] & keep) | (bits & ~keep & 0xff);
+      }
+    },
+
+    /*
      * The overflow builtins, in BigInt because that is what can tell 2^63 from -2^63.
      *
      * Both halves are required and the second is the one that is easy to get wrong: the result is
