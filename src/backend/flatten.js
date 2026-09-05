@@ -71,6 +71,23 @@ function nestedCase(body) {
   return direct.some(st => ((st?.n === 'case' || st?.n === 'default') ? find(st.body) : find(st)));
 }
 
+/**
+ * A `case lo ... hi` too wide to spell out. The emitter's structured switch has to write one JS
+ * `case` per value, so past a few hundred the lowering to comparisons is the only way through --
+ * and gcc's corpus contains a range of 9e18 values.
+ */
+const RANGE_LIMIT = 256;
+function wideCaseRange(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some(wideCaseRange);
+  if (node.n === 'case' && node.hi !== null && node.hi !== undefined
+      && Number(node.hi) - Number(node.lo) > RANGE_LIMIT) return true;
+  for (const k of ['body', 'then', 'els', 'items']) if (wideCaseRange(node[k])) return true;
+  return false;
+}
+
+const is64Disc = (d) => /^(unsigned )?long long$/.test(d?.type?.name ?? '');
+
 export function needsFlattening(body) {
   let nested = false;
   const scan = (s, top) => {
@@ -89,7 +106,11 @@ export function needsFlattening(body) {
       case 'switch':
         // Inside a switch, a case that is not a DIRECT child of the body is one JavaScript cannot
         // express. The body's own statement list is direct; anything below it is not.
-        if (nestedCase(s.body)) { nested = true; return; }
+        // A WIDE case range is the other reason: a JavaScript switch has to list every value, and
+        // this pass turns the range into a single comparison instead.
+        // And a 64-bit discriminant, which a JavaScript `switch` cannot hold: the structured
+        // emission compares `disc|0` against `Number(case)`, truncating both to 32 bits.
+        if (nestedCase(s.body) || wideCaseRange(s.body) || is64Disc(s.disc)) { nested = true; return; }
         scan(s.body, false);
         return;
       case 'case': case 'default': scan(s.body, false); return;
@@ -236,13 +257,18 @@ export function flattenGotos(body, { unsup, newTemp }) {
         collectCases(s.body, arms);
         for (const a of arms) {
           if (a.kind === 'default') continue;
-          for (let v = a.lo; v <= (a.hi ?? a.lo); v++) {
-            // BigInt, because that is what the parser produces for a numeric literal and the
-            // emitter masks it with BigInt.asIntN. A plain Number threw "Cannot convert 1 to a
-            // BigInt" from inside the emitter, far from here.
-            jumpIf({ n: 'bin', op: '==', a: tmp.ref, b: { n: 'num', value: BigInt(v), type: T.INT }, type: T.INT },
-              a.name);
-          }
+          // BigInt, because that is what the parser produces for a numeric literal and the
+          // emitter masks it with BigInt.asIntN. A plain Number threw "Cannot convert 1 to a
+          // BigInt" from inside the emitter, far from here.
+          const num = (v) => ({ n: 'num', value: BigInt(v), type: tmp.ref.type });
+          const test = (op, v) => ({ n: 'bin', op, a: tmp.ref, b: num(v), type: T.INT });
+          if (a.hi === null || a.hi === a.lo) { jumpIf(test('==', a.lo), a.name); continue; }
+          /*
+           * A GNU case RANGE is one comparison here, not one arm per value. gcc's pr34154.c writes
+           * `case 1000000000000000000ULL ... 9999999999999999999ULL`, and expanding that ran the
+           * compiler out of memory building nine quintillion labels.
+           */
+          jumpIf({ n: 'bin', op: '&&', a: test('>=', a.lo), b: test('<=', a.hi), type: T.INT }, a.name);
         }
         const dflt = arms.find(a => a.kind === 'default');
         goto_(dflt ? dflt.name : out_);

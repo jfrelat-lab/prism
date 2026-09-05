@@ -189,6 +189,68 @@ int main(void)
 }
 `);
 
+// GNU/C99 complex arithmetic. A complex value is a two-member record here, so what is tested is the
+// arithmetic: the halves, the conversions each way, and division, which follows libgcc's Smith
+// method rather than the naive formula.
+C('complex', `
+#include <stdio.h>
+static _Complex double twice(_Complex double z) { return z * 2.0; }
+static _Complex double gd = 1.0 + 2.0i;
+static _Complex float gf = 3.0f + 4.0fi;
+static struct { int tag; _Complex double z; } gs = { 7, 1.5 - 2.5i };
+int main(void)
+{
+    _Complex double z = 3.0 + 4.0i, w;
+    printf("%d %d %d\\n", (int)sizeof(_Complex float), (int)sizeof(_Complex double),
+           (int)sizeof(_Complex int));
+    printf("%.2f %.2f\\n", __real__ z, __imag__ z);
+    w = z * z;      printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    w = z + 1.0;    printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    w = z - 2.0i;   printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    w = z / (1.0 + 1.0i); printf("%.4f %.4f\\n", __real__ w, __imag__ w);
+    w = z / 1e300;  printf("%.4e %.4e\\n", __real__ w, __imag__ w);
+    w = -z;         printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    w = ~z;         printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    w = twice(z);   printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    w = z; w += 1.0 + 1.0i; printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    __real__ w = 9.0; __imag__ w = -9.0; printf("%.2f %.2f\\n", __real__ w, __imag__ w);
+    printf("%d %d %d\\n", z == 3.0 + 4.0i, z == 3.0, z != 0.0);
+    printf("%.2f %.2f\\n", (double) z, (double) __builtin_cimag(z));
+    { _Complex double c = 5.0; printf("%.2f %.2f\\n", __real__ c, __imag__ c); }
+    { _Complex float f = gf * gf; printf("%.2f %.2f\\n", (double)__real__ f, (double)__imag__ f); }
+    { _Complex int n = 3 + 4i; n = n * n; printf("%d %d\\n", (int)__real__ n, (int)__imag__ n); }
+    { _Complex double cj = __builtin_conj(z); printf("%.2f %.2f\\n", __real__ cj, __imag__ cj); }
+    printf("%.2f %.2f %d %.2f %.2f\\n", __real__ gd, __imag__ gd, gs.tag, __real__ gs.z, __imag__ gs.z);
+    printf("%d\\n", z ? 1 : 0);
+    return 0;
+}
+`);
+
+// A `switch` whose discriminant does not fit in 32 bits, and a GNU case RANGE too wide to spell out
+// one label at a time.
+C('switch-wide', `
+#include <stdio.h>
+static int f(unsigned long long v)
+{
+    switch (v) {
+    case 0x100000000ULL: return 1;
+    case 2: return 2;
+    case 1000000000000000000ULL ... 9999999999999999999ULL: return 19;
+    default: return 3;
+    }
+}
+static int g(int c)
+{
+    switch (c) { case 'a' ... 'z': return 1; case '0' ... '9': return 2; default: return 0; }
+}
+int main(void)
+{
+    printf("%d %d %d %d\\n", f(0x100000000ULL), f(2), f(1000000000000000001ULL), f(7));
+    printf("%d %d %d\\n", g('q'), g('4'), g('!'));
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

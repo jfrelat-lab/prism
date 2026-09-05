@@ -517,6 +517,13 @@ export const BUILTINS = new Map(Object.entries({
   /* The host's millisecond clock; see src/runtime/runtime.js. */
   prism_now_ms: { ret: D, params: [] },
 
+  /* The complex family: the emitter builds these, because their argument and result are complex
+     and only it knows how a complex value travels. */
+  __builtin_conj: { ret: I, cx: 'conj' }, __builtin_conjf: { ret: I, cx: 'conj' },
+  __builtin_conjl: { ret: I, cx: 'conj' },
+  __builtin_creal: { ret: D, cx: 'real' }, __builtin_crealf: { ret: FLT, cx: 'real' },
+  __builtin_cimag: { ret: D, cx: 'imag' }, __builtin_cimagf: { ret: FLT, cx: 'imag' },
+
   /* Answered entirely from the argument's TYPE, and its value is never computed -- gcc does not
      evaluate it either. */
   __builtin_classify_type: { ret: I, classify: true },

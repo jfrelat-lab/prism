@@ -31,6 +31,7 @@ const KEYWORDS = new Set(['auto', 'break', 'case', 'char', 'const', 'continue', 
   '__attribute',
   '__extension__', '__typeof__', 'typeof', '__asm__', '__asm', 'asm', '__alignof__', '__alignof',
   '__builtin_offsetof', '__label__', '__complex__',
+  '__real__', '__real', '__imag__', '__imag',
   /*
    * Watcom's memory-model and calling-convention keywords, which Raven's Heretic and Hexen use.
    *
@@ -348,6 +349,7 @@ export class Parser {
     const cv = {};
     let inlineFn = false;
     let alignAttr = 0;
+    let isComplex = false;
 
     for (;;) {
       const t = this.peek();
@@ -371,10 +373,9 @@ export class Parser {
       if (v === 'unsigned') { this.i++; unsigned++; sawTypeSpec = true; continue; }
       if (v === 'long') { this.i++; longs++; sawTypeSpec = true; continue; }
       if (v === 'short') { this.i++; shorts++; sawTypeSpec = true; continue; }
-      if (/^_*(complex|Complex)_*$/.test(v) || v === '__real__'
-          || v === '__real' || v === '__imag__' || v === '__imag') {
-        throw new ParseError('GNU complex types are not supported', t);
-      }
+      // `_Complex` is a specifier that MODIFIES the arithmetic type beside it, in any order:
+      // `float _Complex`, `_Complex double`, and bare `_Complex` (which gcc reads as double).
+      if (isComplexSpelling(v)) { this.i++; isComplex = true; sawTypeSpec = true; continue; }
       if (v === 'int' || v === 'char' || v === 'double' || v === 'float' || v === 'void' || v === '_Bool') {
         this.i++; base = v; sawTypeSpec = true; continue;
       }
@@ -395,7 +396,12 @@ export class Parser {
     }
 
     if (!type) {
-      type = this.#buildArithmetic({ base, signed, unsigned, longs, shorts }, sawTypeSpec, allowNone);
+      type = this.#buildArithmetic({ base: base ?? (isComplex ? 'double' : base), signed, unsigned, longs, shorts },
+        sawTypeSpec, allowNone);
+    }
+    if (isComplex) {
+      if (!type || !T.isArith(type)) throw new ParseError('_Complex needs an arithmetic type', this.peek());
+      type = T.complex(type);
     }
     if (alignAttr) type = T.withAlign(type, alignAttr);
     return { storage, type: T.qualify(type, Object.keys(cv).length ? cv : null), inline: inlineFn, sawTypeSpec };
@@ -814,8 +820,7 @@ export class Parser {
     const t = this.peek();
     if (t.k !== ID) return false;
     if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
-    if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
-      'struct', 'union', 'enum', 'typeof', '__typeof__'].includes(t.v)) return true;
+    if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     return this.scope.isTypedef(t.v);
   }
 
@@ -889,11 +894,7 @@ export class Parser {
     if (t.k !== ID) return false;
     if (t.v === '__extension__') return true;
     if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
-    if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
-      'struct', 'union', 'enum'].includes(t.v)) return true;
-    // Route the GNU complex spellings into the DECLARATION path, where they get a clear refusal
-    // instead of surfacing as "expected ';'" from the expression parser.
-    if (/^_*(complex|Complex)_*$/.test(t.v)) return true;
+    if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     // `T x;` is a declaration; `T;` and `T:` are not, and neither is `T = 1` (T as a variable).
     return this.scope.isTypedef(t.v) && !this.isP(':', 1);
   }
@@ -1084,6 +1085,17 @@ export class Parser {
         }
         return { n: 'sizeofexpr', expr: this.unary(), type: T.UINT };
       }
+      /*
+       * `__real__ z` and `__imag__ z` are unary OPERATORS, and they are lvalues: `__real__ x = 5;`
+       * is how a program writes one half. On a real operand gcc lets them through -- __real__ is the
+       * value itself and __imag__ is a zero of the same type.
+       */
+      if (t.v === '__real__' || t.v === '__real' || t.v === '__imag__' || t.v === '__imag') {
+        this.i++;
+        const e = this.unary();
+        const part = /imag/.test(t.v) ? 1 : 0;
+        return { n: 'cxpart', part, expr: e, type: e.type?.complexOf ?? e.type ?? T.DOUBLE };
+      }
       if (t.v === '__alignof__' || t.v === '__alignof') {
         this.i++;
         if (this.isP('(') && this.#isTypeNameAhead()) {
@@ -1121,8 +1133,7 @@ export class Parser {
     const t = this.peek(1);
     if (t.k !== ID) return false;
     if (QUALS.has(t.v)) return true;
-    if (['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed', 'unsigned', '_Bool',
-      'struct', 'union', 'enum', 'typeof', '__typeof__'].includes(t.v)) return true;
+    if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     if (!this.scope.isTypedef(t.v)) return false;
     // `(T)` or `(T*)` or `(T[...])` is a cast; `(T + 1)` would be an expression using T as a value,
     // which cannot happen for a typedef name, so a typedef here is always a cast.
@@ -1261,6 +1272,14 @@ function binType(op, a, b) {
   if (bt.k === 'ptr' && T.isInteger(at)) return bt;
   if (at.k === 'ptr' && bt.k === 'ptr') return T.INT;
   if (op === '<<' || op === '>>') return T.promote(at);
+  /*
+   * COMPLEX wins: `z * 2.0` is complex, and its parts are computed in the common type of the two
+   * bases. Without this the expression was typed `double`, and the emitter -- which decides by TYPE
+   * -- refused it as "not an lvalue" the moment it was returned or passed.
+   */
+  if (T.isComplex(at) || T.isComplex(bt)) {
+    return T.complex(T.usualArith(T.isComplex(at) ? at.complexOf : at, T.isComplex(bt) ? bt.complexOf : bt));
+  }
   return T.usualArith(at, bt);
 }
 
@@ -1313,7 +1332,18 @@ function hexFloat(text) {
 }
 
 function numberLiteral(t) {
-  const text = t.v;
+  let text = t.v;
+  /*
+   * An IMAGINARY constant: `2.0i`, `1.0fi`, `3j`. gcc's own extension, and its complex tests are
+   * written with it. The value is the imaginary PART, so the constant's type is complex and its
+   * real part is zero.
+   */
+  const im = /^(.*?)([ij])([fFlL]?)$/.exec(text);
+  if (im && /[0-9.]/.test(im[1])) {
+    const inner = numberLiteral({ ...t, v: im[1] + im[3] });
+    const of = T.isFloat(inner.type) ? inner.type : T.DOUBLE;
+    return { n: 'imaginary', value: Number(inner.value), type: T.complex(of) };
+  }
   const hf = hexFloat(text.replace(/[fFlL]+$/, ''));
   if (hf !== null) {
     return { n: 'float', value: hf, type: /[fF]$/.test(text) ? T.scalar('float') : T.DOUBLE };
@@ -1431,6 +1461,12 @@ function consumeElided(type, items, i) {
 
 /** The length of a string literal in ELEMENTS — wide units for `L"…"`, bytes otherwise.
  *  Counting source BYTES here made `sizeof(L"Ä")` 12 instead of 8. */
+/** The keywords a type name may START with -- shared by the three lookaheads, which disagreed. */
+const TYPE_STARTERS = ['void', 'char', 'short', 'int', 'long', 'float', 'double', 'signed',
+  'unsigned', '_Bool', 'struct', 'union', 'enum', 'typeof', '__typeof__'];
+/** `_Complex`, `__complex__`, `__complex`, `_Complex_` -- gcc accepts them all. */
+const isComplexSpelling = (v) => /^_*(complex|Complex)_*$/.test(v);
+
 export const stringLiteralLength = (text) => literalUnits(text).length;
 
 export class ConstError extends Error {}

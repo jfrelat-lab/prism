@@ -261,9 +261,13 @@ export class FunctionEmitter {
         // The discriminant is evaluated ONCE, into a real local, because the dispatch chain that
         // replaces the switch would otherwise re-evaluate it per comparison.
         const name = `_sw${sw++}$${d.name}`;
+        // The temp keeps the discriminant's OWN type. Forcing it to int truncated a `switch` on a
+        // long long to 32 bits -- silently, because the case values were being truncated to match.
+        const dt = disc?.type ? T.promote(T.decay(disc.type)) : T.INT;
+        const type = T.isInteger(dt) ? dt : T.INT;
         return {
-          decl: { n: 'decls', decls: [{ n: 'vardecl', name, type: T.INT, storage: null, init: { expr: disc } }] },
-          ref: { n: 'ident', name, type: T.INT },
+          decl: { n: 'decls', decls: [{ n: 'vardecl', name, type, storage: null, init: { expr: disc } }] },
+          ref: { n: 'ident', name, type },
         };
       };
       d = { ...d, body: flattenGotos(d.body, { unsup, newTemp }) };
@@ -587,6 +591,13 @@ export class FunctionEmitter {
           this.out.push(`M.copy(${addr},${src},${Math.min(n + elem, type.size)});`);
           return;
         }
+        // A COMPLEX initialiser is an expression, not a place: `_Complex double z = 3.0 + 4.0i;`
+        // computes a value whose address is the result, and a real one converts.
+        if (T.isComplex(type)) {
+          const v = this.#cxConvert(this.#rval(init.expr), type);
+          this.out.push(`M.copy(${addr},${v.js},${type.size});`);
+          return;
+        }
         const r = this.#lval(init.expr);
         this.out.push(`M.copy(${addr},${r.addr},${type.size});`);
         return;
@@ -796,6 +807,16 @@ export class FunctionEmitter {
 
   /** One constant scalar, pointer or string into the image. Returns false if not constant. */
   #staticScalar(addr, type, expr) {
+    // A COMPLEX object at file scope: both halves are constants, folded here because the ordinary
+    // folder answers with one number and a complex constant is two.
+    if (T.isComplex(type)) {
+      const v = foldComplexConst(expr);
+      if (!v) return false;
+      const of = type.complexOf;
+      writeConst(this.mod, addr, of, v.re);
+      writeConst(this.mod, addr + of.size, of, v.im);
+      return true;
+    }
     // `(unsigned char *)"..."` is still a string literal. Peeling casts first costs nothing and is
     // what a program writes when it stores a literal into a typed pointer.
     while (expr.n === 'cast' && expr.expr?.n === 'str') expr = expr.expr;
@@ -1351,6 +1372,11 @@ export class FunctionEmitter {
 
   #truth(e) {
     const v = this.#rval(e);
+    // A complex value is true when EITHER half is non-zero.
+    if (T.isComplex(T.decay(v.type ?? T.INT))) {
+      const p = this.#cxParts(v, v.type.complexOf);
+      return `(${p.pin},((${p.re})!==0||(${p.im})!==0))`;
+    }
     // A BigInt is never `!== 0` in the Number sense — the comparison has to use 0n.
     return is64(T.decay(v.type ?? T.INT)) ? `(${v.js})!==0n` : `(${v.js})!==0`;
   }
@@ -1395,6 +1421,13 @@ export class FunctionEmitter {
           return { addr: String(this.mod.intern(bytes)), type: T.array(T.CHAR, bytes.length + 1) };
         }
         throw new EmitError(`undeclared identifier '${e.name}'`);
+      }
+      /* `__real__ x = 5;` -- half of a complex object is an ordinary place. */
+      case 'cxpart': {
+        const base = this.#lval(e.expr);
+        if (!T.isComplex(base.type)) unsup(`__real__/__imag__ of a ${T.typeName(base.type)}`);
+        const of = base.type.complexOf;
+        return { addr: e.part ? `(${base.addr}+${of.size}|0)` : base.addr, type: of };
       }
       case 'unary':
         if (e.op === '*') {
@@ -1522,6 +1555,15 @@ export class FunctionEmitter {
       }
     }
     /*
+     * A COMPLEX value that is not a place -- `f(z * w)`, `return z + 1.0`, `(_Complex double)1` --
+     * still has an address, because that is how a complex value travels here. Every caller that
+     * asks for an lvalue wants somewhere to copy FROM, and this is it.
+     */
+    if (T.isComplex(e.type ?? T.INT)) {
+      const v = this.#rval(e);
+      return { addr: v.js, type: v.type };
+    }
+    /*
      * An AST node name and nothing else is not a diagnostic. `'bin' is not an lvalue` sent me
      * reading a whole file for a variable called bin; the loc every node already carries says which
      * line, and the operator says which expression.
@@ -1615,6 +1657,7 @@ export class FunctionEmitter {
       case 'cast': {
         const v = this.#rval(e.expr);
         if (e.type.k === 'void') return { js: `(${v.js},0)`, type: T.VOID };
+        if (T.isComplex(e.type) || T.isComplex(v.type)) return this.#cxConvert(v, e.type);
         return { js: coerce(v.js, T.decay(v.type), e.type), type: e.type };
       }
       case 'cond': {
@@ -1635,6 +1678,19 @@ export class FunctionEmitter {
         const k = this.labels?.index.get(e.name);
         if (k === undefined) unsup(`the address of label '${e.name}'`);
         return { js: String(k), type: T.ptr(T.VOID) };
+      }
+      // `2.0i`: the constant IS the imaginary half.
+      case 'imaginary':
+        return this.#cxMake(e.type, T.isFloat(e.type.complexOf) ? '0' : '0', String(e.value));
+      case 'cxpart': {
+        const v = this.#rval(e.expr);
+        if (!T.isComplex(v.type)) {
+          // On a real operand: __real__ is the value, __imag__ is a zero of the same type.
+          return e.part === 0 ? v : { js: `(${v.js},0)`, type: T.decay(v.type) };
+        }
+        const of = v.type.complexOf;
+        const t = this.newTmp(); this.#declareTmp(t);
+        return { js: `(${t}=${v.js},${loadExpr(e.part ? `(${t}+${of.size}|0)` : t, of)})`, type: of };
       }
       case 'sizeoftype': return { js: String(e.target.size), type: T.UINT };
       case 'sizeofexpr': {
@@ -1688,6 +1744,17 @@ export class FunctionEmitter {
       return { js: loadExpr(l.addr, l.type), type: l.type };
     }
     const v = this.#rval(e.expr);
+    if (T.isComplex(T.decay(v.type))) {
+      // `-z` negates both halves; `~z` is the CONJUGATE, which is what gcc makes it mean on a
+      // complex value rather than a bitwise complement.
+      const of = v.type.complexOf;
+      const p = this.#cxParts(v, of);
+      if (e.op === '+') return { js: `(${p.pin},${this.#cxMake(v.type, p.re, p.im).js})`, type: v.type };
+      if (e.op === '-') return { js: `(${p.pin},${this.#cxMake(v.type, `-(${p.re})`, `-(${p.im})`).js})`, type: v.type };
+      if (e.op === '~') return { js: `(${p.pin},${this.#cxMake(v.type, p.re, `-(${p.im})`).js})`, type: v.type };
+      if (e.op === '!') return { js: `(${p.pin},((${p.re})===0&&(${p.im})===0)?1:0)`, type: T.INT };
+      unsup(`unary '${e.op}' on a complex value`);
+    }
     const t = T.promote(T.decay(v.type));
     const V = coerce(v.js, T.decay(v.type), t);
     if (is64(t)) {
@@ -1714,6 +1781,12 @@ export class FunctionEmitter {
 
     if (op === '&&') return { js: `((${this.#truth(e.a)}&&${this.#truth(e.b)})?1:0)`, type: T.INT };
     if (op === '||') return { js: `((${this.#truth(e.a)}||${this.#truth(e.b)})?1:0)`, type: T.INT };
+
+    // Complex arithmetic works on the halves, so it cannot share the scalar paths below.
+    if (T.isComplex(at) || T.isComplex(bt)) {
+      if (op === '==' || op === '!=') return this.#cxCompare(a, b, op);
+      return this.#cxBinary(a, b, op);
+    }
 
     // Pointer arithmetic scales by the pointee, and p - q divides by it.
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
@@ -1787,6 +1860,10 @@ export class FunctionEmitter {
     const rhsType = l.type;
 
     if (e.op === '=') {
+      if (T.isComplex(rhsType)) {
+        const v = this.#cxConvert(this.#rval(e.rhs), rhsType);
+        return { js: `M.copy(${l.addr},${v.js},${rhsType.size})`, type: rhsType };
+      }
       if (T.isRecord(rhsType) || rhsType.k === 'array') {
         // Struct assignment is a byte copy; C allows it and game code uses it constantly.
         const r = this.#lval(e.rhs);
@@ -1815,6 +1892,20 @@ export class FunctionEmitter {
     const rt = this.newTmp(); this.#declareTmp(rt);
     const rhsVal = { js: rt, type: rv.type };
 
+    /*
+     * `z += w` on a complex object. The result is a fresh complex value, so the assignment is the
+     * COPY back into the object -- not a store, which is what the scalar path below would emit.
+     */
+    if (T.isComplex(rhsType)) {
+      const at = this.newTmp(); this.#declareTmp(at);
+      const combined = this.#cxBinary({ js: at, type: l.type }, rhsVal, op);
+      const back = this.#cxConvert(combined, rhsType);
+      return {
+        js: `(${at}=${l.addr},${rt}=${rv.js},M.copy(${at},${back.js},${rhsType.size}),${at})`,
+        type: rhsType,
+      };
+    }
+
     if (l.varJs) {
       const combined = this.#binaryWithValue({ js: l.varJs, type: l.type }, rhsVal, op);
       return {
@@ -1841,6 +1932,10 @@ export class FunctionEmitter {
   /** Like #binaryWith but with BOTH sides already evaluated, so the caller controls the order. */
   #binaryWithValue(a, b, op) {
     const at = T.decay(a.type), bt = T.decay(b.type);
+    if (T.isComplex(at) || T.isComplex(bt)) {
+      if (op === '==' || op === '!=') return this.#cxCompare(a, b, op);
+      return this.#cxBinary(a, b, op);
+    }
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
       return { js: `((${a.js})${op}Math.imul(${indexJs(b)},${s})|0)`, type: at };
@@ -2012,6 +2107,25 @@ export class FunctionEmitter {
        * included, where the header still lists separate classes), every floating type is 8, and an
        * array or a function is 5 because it has already decayed to a pointer.
        */
+      /*
+       * The complex builtins. `__builtin_conj(z)` is `~z`, and creal/cimag are the two halves --
+       * the same three operations the operators already have, reached by name.
+       */
+      if (rt?.cx) {
+        if (e.args.length !== 1) throw new EmitError(`${name} takes one argument`);
+        const v = this.#rval(e.args[0]);
+        if (!T.isComplex(T.decay(v.type))) unsup(`${name} of a ${T.typeName(v.type)}`);
+        const of = v.type.complexOf;
+        if (rt.cx === 'conj') {
+          const p = this.#cxParts(v, of);
+          return { js: `(${p.pin},${this.#cxMake(v.type, p.re, `-(${p.im})`).js})`, type: v.type };
+        }
+        const t = this.newTmp(); this.#declareTmp(t);
+        return {
+          js: `(${t}=${v.js},${loadExpr(rt.cx === 'imag' ? `(${t}+${of.size}|0)` : t, of)})`,
+          type: of,
+        };
+      }
       if (rt?.classify) {
         if (e.args.length !== 1) throw new EmitError(`${name} takes one argument`);
         const t = T.decay(e.args[0].type ?? T.INT);
@@ -2192,7 +2306,11 @@ export class FunctionEmitter {
   #structArg(node, type) {
     if (type.size == null) unsup('passing an incomplete struct by value');
     const off = this.slot(type.size, type.align);
-    const src = this.#lval(node);
+    // A REAL argument for a complex parameter converts first: `foo(2)` where foo takes a
+    // `_Complex unsigned` has no object to copy from until one is made.
+    const src = T.isComplex(type) && !T.isComplex(T.decay(node.type ?? T.INT))
+      ? { addr: this.#cxConvert(this.#rval(node), type).js }
+      : this.#lval(node);
     const t = this.newTmp(); this.#declareTmp(t);
     return `(${t}=(_fp+${off}|0),M.copy(${t},${src.addr},${type.size}),${t})`;
   }
@@ -2209,8 +2327,121 @@ export class FunctionEmitter {
     return coerce(v.js, from, T.decay(want));
   }
 
+  // ------------------------------------------------------------- complex
+  /*
+   * A complex value is a two-member record -- `{ __real, __imag }` -- so it travels as its ADDRESS,
+   * exactly like a struct, and copies, arguments, returns and initialisers need nothing new. What
+   * follows is only the arithmetic, which a struct does not have.
+   */
+
+  /** A fresh complex object in this frame, given its two halves. */
+  #cxMake(cx, reJs, imJs) {
+    const of = cx.complexOf;
+    const off = this.slot(cx.size, cx.align);
+    const at = `(_fp+${off}|0)`;
+    return {
+      js: `(${storeExpr(at, of, reJs)},${storeExpr(`(${at}+${of.size}|0)`, of, imJs)},${at})`,
+      type: cx,
+    };
+  }
+
+  /**
+   * The two halves of a value, as JS expressions that may be used more than once.
+   *
+   * Pinning matters: complex multiplication mentions each half twice, and re-emitting the operand
+   * would run its side effects twice. A complex operand is pinned by its address, a real one by its
+   * value.
+   */
+  #cxParts(v, of) {
+    const t = this.newTmp();
+    this.#declareTmp(t);
+    if (T.isComplex(v.type)) {
+      const src = v.type.complexOf;
+      const re = coerce(loadExpr(t, src), src, of);
+      const im = coerce(loadExpr(`(${t}+${src.size}|0)`, src, src), src, of);
+      return { pin: `${t}=${v.js}`, re, im };
+    }
+    return { pin: `${t}=${coerce(v.js, T.decay(v.type), of)}`, re: t, im: T.isFloat(of) ? '0' : '0' };
+  }
+
+  /** The arithmetic type the two halves are computed in. */
+  #cxCommon(a, b) {
+    const ab = T.isComplex(a) ? a.complexOf : a;
+    const bb = T.isComplex(b) ? b.complexOf : b;
+    const of = T.usualArith(T.promote(ab), T.promote(bb));
+    if (is64(of)) unsup('a complex type as wide as long long');
+    return of;
+  }
+
+  /** `Math.fround` after every step for a float base -- a float complex is computed in float. */
+  #cxRound(js, of) { return of.name === 'float' ? `Math.fround(${js})` : js; }
+
+  #cxBinary(a, b, op) {
+    const of = this.#cxCommon(T.decay(a.type), T.decay(b.type));
+    const cx = T.complex(of);
+    const A = this.#cxParts(a, of), B = this.#cxParts(b, of);
+    const pins = `${A.pin},${B.pin}`;
+    const R = (js) => this.#cxRound(js, of);
+    const trunc = (js) => (T.isFloat(of) ? js : `((${js})|0)`);
+    let re, im;
+    if (op === '+' || op === '-') {
+      re = trunc(R(`(${A.re})${op}(${B.re})`));
+      im = trunc(R(`(${A.im})${op}(${B.im})`));
+    } else if (op === '*') {
+      re = trunc(R(`${R(`(${A.re})*(${B.re})`)}-${R(`(${A.im})*(${B.im})`)}`));
+      im = trunc(R(`${R(`(${A.re})*(${B.im})`)}+${R(`(${A.im})*(${B.re})`)}`));
+    } else if (op === '/') {
+      /*
+       * Smith's method, which is what libgcc's __divdc3 does: dividing by the LARGER of the two
+       * denominator halves keeps the intermediate products in range. The naive formula overflows to
+       * infinity for perfectly ordinary values, and gcc's own result is the reference here.
+       */
+      const t = this.newTmp(); this.#declareTmp(t);
+      const d = this.newTmp(); this.#declareTmp(d);
+      const big = `Math.abs(${B.re})>=Math.abs(${B.im})`;
+      re = `(${big}?((${t}=(${B.im})/(${B.re})),(${d}=(${B.re})+(${B.im})*${t}),` +
+           `${R(`((${A.re})+(${A.im})*${t})/${d}`)})` +
+           `:((${t}=(${B.re})/(${B.im})),(${d}=(${B.re})*${t}+(${B.im})),` +
+           `${R(`((${A.re})*${t}+(${A.im}))/${d}`)}))`;
+      // The second half reuses the SAME t and d, so it must be computed after the first: the caller
+      // emits real then imaginary, in that order, inside one comma expression.
+      im = `(${big}?${R(`((${A.im})-(${A.re})*${t})/${d}`)}:${R(`((${A.im})*${t}-(${A.re}))/${d}`)})`;
+      if (!T.isFloat(of)) { re = `((${re})|0)`; im = `((${im})|0)`; }
+    } else unsup(`'${op}' on a complex value`);
+    const made = this.#cxMake(cx, re, im);
+    return { js: `(${pins},${made.js})`, type: cx };
+  }
+
+  /** `==` and `!=`: both halves, and nothing else compares. */
+  #cxCompare(a, b, op) {
+    const of = this.#cxCommon(T.decay(a.type), T.decay(b.type));
+    const A = this.#cxParts(a, of), B = this.#cxParts(b, of);
+    const eq = `((${A.re})===(${B.re})&&(${A.im})===(${B.im}))`;
+    return { js: `(${A.pin},${B.pin},${op === '==' ? eq : `!${eq}`}?1:0)`, type: T.INT };
+  }
+
+  /** A conversion INTO a complex type, and out of one. */
+  #cxConvert(v, want) {
+    if (T.isComplex(want)) {
+      const of = want.complexOf;
+      if (T.isComplex(v.type)) {
+        const src = v.type.complexOf;
+        if (src.name === of.name) return v;
+        const p = this.#cxParts(v, of);
+        return { js: `(${p.pin},${this.#cxMake(want, p.re, p.im).js})`, type: want };
+      }
+      // A real becomes a complex with a zero imaginary part.
+      return this.#cxMake(want, coerce(v.js, T.decay(v.type), of), T.isFloat(of) ? '0' : '0');
+    }
+    // Out of a complex: the REAL part, which is what a cast to a real type takes.
+    const of = v.type.complexOf;
+    const t = this.newTmp(); this.#declareTmp(t);
+    return { js: `(${t}=${v.js},${coerce(loadExpr(t, of), of, want)})`, type: want };
+  }
+
   #rvalCoerced(node, want) {
     const v = this.#rval(node);
+    if (T.isComplex(want) || T.isComplex(v.type)) return this.#cxConvert(v, want).js;
     return coerce(v.js, T.decay(v.type), want);
   }
 
@@ -2487,6 +2718,58 @@ export function collectNestedRefs(node, out) {
   for (const k of Object.keys(node)) {
     if (k === 'type' || k === 'sym' || k === 'loc') continue;
     collectNestedRefs(node[k], out);
+  }
+}
+
+/**
+ * Fold a constant expression whose value is COMPLEX, into its two halves.
+ *
+ * `_Complex double x = 1.0 + 2.0i;` is one initialiser and two numbers, which is why the ordinary
+ * constant folder cannot answer it: it returns a number. Real constants come back as `{re, im: 0}`,
+ * so a real sub-expression needs no special case anywhere below.
+ *
+ * Returns null for anything it cannot fold, which the caller reports as a refusal by name.
+ */
+function foldComplexConst(e) {
+  if (!e) return null;
+  switch (e.n) {
+    case 'imaginary': return { re: 0, im: Number(e.value) };
+    case 'float': return { re: Number(e.value), im: 0 };
+    case 'num': return { re: Number(e.value), im: 0 };
+    case 'cast': {
+      const v = foldComplexConst(e.expr);
+      if (!v) return null;
+      // A cast to a REAL type drops the imaginary half; to a complex one it keeps both.
+      return T.isComplex(e.type) ? v : { re: v.re, im: 0 };
+    }
+    case 'unary': {
+      const v = foldComplexConst(e.expr);
+      if (!v) return null;
+      if (e.op === '+') return v;
+      if (e.op === '-') return { re: -v.re, im: -v.im };
+      if (e.op === '~') return { re: v.re, im: -v.im };      // conjugate, on a complex value
+      return null;
+    }
+    case 'cxpart': {
+      const v = foldComplexConst(e.expr);
+      if (!v) return null;
+      return { re: e.part ? v.im : v.re, im: 0 };
+    }
+    case 'bin': {
+      const a = foldComplexConst(e.a), b = foldComplexConst(e.b);
+      if (!a || !b) return null;
+      switch (e.op) {
+        case '+': return { re: a.re + b.re, im: a.im + b.im };
+        case '-': return { re: a.re - b.re, im: a.im - b.im };
+        case '*': return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re };
+        case '/': {
+          const d = b.re * b.re + b.im * b.im;
+          return { re: (a.re * b.re + a.im * b.im) / d, im: (a.im * b.re - a.re * b.im) / d };
+        }
+        default: return null;
+      }
+    }
+    default: return null;
   }
 }
 

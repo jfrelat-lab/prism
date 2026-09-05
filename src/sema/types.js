@@ -113,6 +113,20 @@ export const isArith = (t) => isInteger(t) || isFloat(t);
 export const isScalarType = (t) => isArith(t) || t.k === 'ptr';
 export const isRecord = (t) => t.k === 'struct' || t.k === 'union';
 
+/**
+ * A GNU/C99 complex type, `_Complex double`.
+ *
+ * It IS a two-member struct here -- `{ __real, __imag }` -- so storage, copies, passing by value,
+ * returning through the hidden pointer and initialisation all work through the paths records
+ * already use, and the layout is right by construction: 16 bytes for a complex double, its parts at
+ * 0 and 8. Only the arithmetic is new, and `complexOf` is how the emitter recognises it.
+ */
+export const complex = (of) => ({
+  ...record('struct', `_Complex ${of.name}`, [{ name: '__real', type: of }, { name: '__imag', type: of }]),
+  complexOf: of,
+});
+export const isComplex = (t) => !!t?.complexOf;
+
 /** Rank for the usual arithmetic conversions. */
 const RANK = {
   '_Bool': 0, 'char': 1, 'signed char': 1, 'unsigned char': 1,
