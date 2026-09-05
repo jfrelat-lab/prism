@@ -614,8 +614,12 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   // reference a global or take a function's address before its definition appears.
   const globals = new Map();
   const funcs = new Map();
+  // `__attribute__((alias("a")))` names an object that already exists, and the object it names may
+  // be declared further down the file -- so the aliases are resolved once every name has an address.
+  const aliases = [];
   for (const d of unit.decls) {
     if (d.n === 'vardecl') {
+      if (d.alias) { aliases.push(d); continue; }
       if (d.type.k === 'func') { funcs.set(d.name, mod.defineFunc(d.name, d.type)); continue; }
       if (d.storage === 'extern' && !d.init) continue;
       // A definition that fills a flexible array member is LARGER than its type says; the extra
@@ -626,6 +630,18 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
       const f0 = mod.defineFunc(d.name, d.type);
       f0.defined = true;                      // a body, not just a prototype
       funcs.set(d.name, f0);
+    }
+  }
+
+  for (const d of aliases) {
+    if (d.type.k === 'func') {
+      const target = funcs.get(d.alias);
+      if (!target) throw new CompileError(`__attribute__((alias("${d.alias}"))) names no function`);
+      funcs.set(d.name, target);
+    } else {
+      const target = globals.get(d.alias);
+      if (!target) throw new CompileError(`__attribute__((alias("${d.alias}"))) names no object`);
+      globals.set(d.name, { addr: target.addr, type: d.type });
     }
   }
 
@@ -769,6 +785,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
     for (const d of p.unit.decls) {
       const internal = d.storage === 'static';
       if (d.n === 'vardecl') {
+        if (d.alias) { (p.aliasDecls ??= []).push(d); continue; }
         const link = internal ? `${p.tag}$${d.name}` : qualify(d.name);
         if (d.type.k === 'func') {
           (internal ? p.funcs : home.funcs).set(d.name, mod.defineFunc(link, d.type));
@@ -920,6 +937,20 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   const undefinedData = new Map();      // extern variables nobody defines
   for (const p of parsed) {
     const seen = visible.get(p.module ?? MAIN);
+    /*
+     * An ALIAS is a second name for an object or function that already exists -- one address, two
+     * spellings. Resolved here, with everything else that borrows an address, and against the unit's
+     * own names first: `static int a; extern int b __attribute__((alias("a")));` aliases the static.
+     */
+    for (const d of p.aliasDecls ?? []) {
+      if (d.type?.k === 'func') {
+        const target = p.funcs.get(d.alias) ?? seen.funcs.get(d.alias);
+        if (target) p.funcs.set(d.name, target);
+        continue;
+      }
+      const target = p.globals.get(d.alias) ?? seen.globals.get(d.alias);
+      if (target) p.globals.set(d.name, { addr: target.addr, type: d.type });
+    }
     for (const d of p.externDecls ?? []) {
       if (d.type?.k === 'func' || p.globals.has(d.name)) continue;
       const shared = seen.globals.get(d.name);

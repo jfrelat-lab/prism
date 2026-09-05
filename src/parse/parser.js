@@ -254,8 +254,10 @@ export class Parser {
     }
 
     for (;;) {
+      this.lastAlias = null;
       const d = this.#declarator(specs.type);
       const datt = this.#skipAttributeLike();
+      if (!datt.alias && this.lastAlias) datt.alias = this.lastAlias;
       if (datt.aligned) d.type = T.withAlign(d.type, datt.aligned);
 
       // K&R parameter declarations sit between the declarator and the body.
@@ -296,7 +298,7 @@ export class Parser {
           }
         }
         this.scope.declare(d.name, { kind: type.k === 'func' ? 'func' : 'var', type });
-        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init });
+        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init, alias: datt.alias });
       }
       if (this.eatP(',')) continue;
       this.expectP(';');
@@ -550,7 +552,7 @@ export class Parser {
 
   /** `__attribute__((...))` and `__asm__("...")` in a declaration; returns what we care about. */
   #skipAttributeLike() {
-    const found = { packed: false, aligned: null };
+    const found = { packed: false, aligned: null, alias: null };
     for (;;) {
       if (this.isKw('__attribute__') || this.isKw('__attribute')) {
         this.i++;
@@ -570,6 +572,15 @@ export class Parser {
           // gcc's simd-*.c miscompiled silently until this list existed.
           if (t.k === ID && /^_*(vector_size|mode|transparent_union|vector)_*$/.test(t.v)) {
             throw new ParseError(`__attribute__((${t.v})) changes the type and is not supported`, t);
+          }
+          /*
+           * `__attribute__((alias("a")))` makes this name a SECOND name for an existing object --
+           * one address, two spellings. It is a linker fact, so only the name is kept here.
+           */
+          if (t.k === ID && /^_*alias_*$/.test(t.v) && inner[k + 1]?.v === '(' && inner[k + 2]?.k === STR) {
+            found.alias = String.fromCharCode(...literalUnits(inner[k + 2].v));
+            k += 3;
+            continue;
           }
           if (t.k === ID && /^_*aligned_*$/.test(t.v)) {
             // `aligned` with no argument means "the target's maximum"; with one it is a constant
@@ -684,7 +695,11 @@ export class Parser {
         this.i++;
         suffixes.push(this.#paramList());
         this.expectP(')');
-        this.#skipAttributeLike();
+        // An attribute right after the parameter list belongs to the DECLARATION, and `alias` is
+        // the one that must survive: `int f(int) __attribute__((alias("g")));` puts it here, where
+        // it was being skipped along with the noinlines and the unuseds.
+        const post = this.#skipAttributeLike();
+        if (post.alias) this.lastAlias = post.alias;
         continue;
       }
       break;

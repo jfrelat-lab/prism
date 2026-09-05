@@ -70,6 +70,27 @@ int main(void)
 }
 `);
 
+// __attribute__((alias)): a second NAME for an object that already exists, not a copy of it. The
+// test is that a write through one is read back through the other.
+C('symbol-alias', `
+#include <stdio.h>
+int a[4] = { 1, 2, 3, 4 };
+extern int b[4] __attribute__((alias("a")));
+static int counter = 7;
+extern int shadow __attribute__((alias("counter")));
+static int twice(int x) { return x * 2; }
+int doubled(int x) __attribute__((alias("twice")));
+int main(void)
+{
+    b[1] = 20;
+    printf("%d %d %d\\n", a[1], b[1], (int)(&a[1] == &b[1]));
+    shadow += 5;
+    printf("%d %d\\n", counter, shadow);
+    printf("%d %d\\n", doubled(21), twice(21));
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.
