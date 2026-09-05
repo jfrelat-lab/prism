@@ -102,7 +102,7 @@ export const TARGET_DEFINES = {
  * entry exists because a gate case referenced it.
  */
 const P = T.ptr(T.CHAR), I = T.INT, U = T.UINT, D = T.DOUBLE, V = T.VOID;
-const FLT = T.scalar('float');
+const FLT = T.scalar('float'), USHRT = T.scalar('unsigned short');
 export const BUILTINS = new Map(Object.entries({
   printf: { ret: I, params: [P], variadic: true },
   fprintf: { ret: I, params: [P, P], variadic: true },
@@ -441,6 +441,66 @@ export const BUILTINS = new Map(Object.entries({
   strrchr: { ret: P, params: [P, I] },
   strstr: { ret: P, params: [P, P] },
   memchr: { ret: P, params: [P, I, U] },
+
+  /*
+   * The rest of the __builtin_ aliases the torture suite reaches for, plus the handful that are
+   * FUNCTIONS rather than aliases. Ranked by how many programs each unblocks, which is the only
+   * reason to add any of them -- the surface is unbounded and the corpus is not.
+   */
+  __builtin_strncpy: { ret: P, params: [P, P, U], impl: 'strncpy' },
+  __builtin_strncmp: { ret: I, params: [P, P, U], impl: 'strncmp' },
+  __builtin_strcat: { ret: P, params: [P, P], impl: 'strcat' },
+  __builtin_strncat: { ret: P, params: [P, P, U], impl: 'strncat' },
+  __builtin_strchr: { ret: P, params: [P, I], impl: 'strchr' },
+  __builtin_strrchr: { ret: P, params: [P, I], impl: 'strrchr' },
+  __builtin_strstr: { ret: P, params: [P, P], impl: 'strstr' },
+  __builtin_strdup: { ret: P, params: [P], impl: 'strdup' },
+  __builtin_memchr: { ret: P, params: [P, I, U], impl: 'memchr' },
+  __builtin_sprintf: { ret: I, params: [P, P], variadic: true, impl: 'sprintf' },
+  __builtin_snprintf: { ret: I, params: [P, U, P], variadic: true, impl: 'snprintf' },
+  __builtin_fprintf: { ret: I, params: [P, P], variadic: true, impl: 'fprintf' },
+  __builtin_calloc: { ret: P, params: [U, U], impl: 'calloc' },
+  __builtin_realloc: { ret: P, params: [P, U], impl: 'realloc' },
+  __builtin_labs: { ret: T.LONG, params: [T.LONG], impl: 'labs' },
+  __builtin_trap: { ret: V, params: [], impl: 'abort' },
+  /* mempcpy is memcpy that returns the END of the copy -- a GNU extension, not an alias. */
+  mempcpy: { ret: P, params: [P, P, U], impl: 'mempcpy' },
+  __builtin_mempcpy: { ret: P, params: [P, P, U], impl: 'mempcpy' },
+  __builtin_stpcpy: { ret: P, params: [P, P], impl: 'stpcpy' },
+  stpcpy: { ret: P, params: [P, P], impl: 'stpcpy' },
+
+  /* The bit-counting family. Every one of these is defined only for a NON-ZERO argument except
+   * popcount and parity, and gcc's own tests never pass zero -- so the runtime answers 0 there
+   * rather than inventing a value. */
+  __builtin_ffs: { ret: I, params: [I], impl: '__builtin_ffs' },
+  __builtin_ffsl: { ret: I, params: [T.LONG], impl: '__builtin_ffs' },
+  __builtin_clz: { ret: I, params: [U], impl: '__builtin_clz' },
+  __builtin_clzl: { ret: I, params: [T.ULONG], impl: '__builtin_clz' },
+  __builtin_ctz: { ret: I, params: [U], impl: '__builtin_ctz' },
+  __builtin_ctzl: { ret: I, params: [T.ULONG], impl: '__builtin_ctz' },
+  __builtin_popcount: { ret: I, params: [U], impl: '__builtin_popcount' },
+  __builtin_popcountl: { ret: I, params: [T.ULONG], impl: '__builtin_popcount' },
+  __builtin_parity: { ret: I, params: [U], impl: '__builtin_parity' },
+  __builtin_bswap16: { ret: USHRT, params: [USHRT], impl: '__builtin_bswap16' },
+  __builtin_bswap32: { ret: U, params: [U], impl: '__builtin_bswap32' },
+  __builtin_bswap64: { ret: T.ULLONG, params: [T.ULLONG], impl: '__builtin_bswap64' },
+
+  /* Floating-point classification, which is arithmetic rather than a library call. */
+  __builtin_signbit: { ret: I, params: [D], impl: '__builtin_signbit' },
+  __builtin_signbitf: { ret: I, params: [FLT], impl: '__builtin_signbit' },
+  __builtin_isinf: { ret: I, params: [D], impl: '__builtin_isinf' },
+  __builtin_isinff: { ret: I, params: [FLT], impl: '__builtin_isinf' },
+  __builtin_isnan: { ret: I, params: [D], impl: '__builtin_isnan' },
+  __builtin_isnanf: { ret: I, params: [FLT], impl: '__builtin_isnan' },
+  __builtin_copysign: { ret: D, params: [D, D], impl: 'copysign' },
+  __builtin_copysignf: { ret: FLT, params: [FLT, FLT], impl: 'copysignf' },
+  __builtin_fabs: { ret: D, params: [D], impl: 'fabs' },
+  __builtin_fabsf: { ret: FLT, params: [FLT], impl: 'fabsf' },
+  __builtin_sqrt: { ret: D, params: [D], impl: 'sqrt' },
+  __builtin_sqrtf: { ret: FLT, params: [FLT], impl: 'sqrtf' },
+  copysign: { ret: D, params: [D, D] },
+  copysignf: { ret: FLT, params: [FLT, FLT] },
+  signbit: { ret: I, params: [D], impl: '__builtin_signbit' },
 }));
 
 /*

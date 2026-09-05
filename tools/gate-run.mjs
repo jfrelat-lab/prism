@@ -17,6 +17,48 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// printf's LENGTH MODIFIERS. `h` and `hh` do not change how the argument arrives -- promotion has
+// already made it an int -- they change what the conversion prints (C99 7.19.6.1p7). gcc's
+// pr78622.c checks it, and was passing only because __builtin_snprintf was missing: a refusal was
+// hiding a wrong answer, which is the transition worth watching for.
+C('printf-length-modifiers', `
+#include <stdio.h>
+int main(void)
+{
+    printf("[%hhd][%hhd][%hhu][%hd][%hu][%hhx][%hho]\\n",
+           4104, -1, 300, 70000, 70000, 300, 300);
+    printf("[%ld][%lu][%lld][%llu][%jd]\\n",
+           123456789L, 4000000000UL, -1LL, 18446744073709551615ULL, (long long)-7);
+    { char b[8]; int n = snprintf(b, sizeof b, "%hhd", 4104); printf("[%s][%d]\\n", b, n); }
+    return 0;
+}
+`);
+
+// The __builtin_ family gcc's torture suite reaches for. Most are aliases; the bit-counting and
+// classification ones are real functions, and each has an edge the obvious implementation misses --
+// ffs of zero, signbit of NEGATIVE zero, mempcpy returning the END of the copy.
+C('builtins', `
+#include <stdio.h>
+int main(void)
+{
+    printf("%d %d %d %d %d\\n", __builtin_ffs(0), __builtin_ffs(1), __builtin_ffs(6),
+           __builtin_ffs(0x80000000), __builtin_ffs(-1));
+    printf("%d %d %d %d\\n", __builtin_clz(1u), __builtin_clz(0xffffffffu),
+           __builtin_ctz(8u), __builtin_ctz(0x80000000u));
+    printf("%d %d %d\\n", __builtin_popcount(0xf0f0u), __builtin_parity(7u), __builtin_parity(3u));
+    printf("%x %x\\n", __builtin_bswap16(0x1234), __builtin_bswap32(0x11223344u));
+    printf("%llx\\n", (unsigned long long)__builtin_bswap64(0x0123456789abcdefULL));
+    printf("%d %d %d %d\\n", __builtin_signbit(-0.0), __builtin_signbit(1.0),
+           __builtin_isinf(1.0/0.0), __builtin_isnan(0.0/0.0));
+    printf("%f %f\\n", __builtin_copysign(3.0, -1.0), __builtin_copysign(-3.0, 1.0));
+    { char a[8] = "abc", b[8]; char *e = (char *)__builtin_mempcpy(b, a, 4);
+      printf("%s %d\\n", b, (int)(e - b)); }
+    { char b[8]; char *e = __builtin_stpcpy(b, "hello"); printf("%s %d\\n", b, (int)(e - b)); }
+    { char b[8]; __builtin_strncpy(b, "xy", 3); printf("%s %s\\n", b, __builtin_strchr(b, 'y')); }
+    return 0;
+}
+`);
+
 // Bitfields in a brace initialiser, which is where a "two fields at one offset means an anonymous
 // union" rule quietly eats them: consecutive bitfields all report the offset of their storage unit.
 // gcc's bf-sign-1.c and 20000113-1.c are this, and they fail as WRONG ANSWERS rather than refusals.

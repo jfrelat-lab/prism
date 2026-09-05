@@ -728,6 +728,40 @@ function makeLibc(M) {
 
     // --- gcc builtins that are not library calls
     __builtin_expect: (v, _expected) => v,
+
+    /*
+     * The bit-counting builtins. gcc leaves ffs/clz/ctz UNDEFINED at zero and its own tests never
+     * ask, so zero answers zero rather than inventing something a program might come to rely on.
+     * Math.clz32 does the work for the 32-bit cases; the 64-bit ones arrive as BigInt.
+     */
+    __builtin_ffs: (v) => { v |= 0; return v === 0 ? 0 : 32 - Math.clz32(v & -v); },
+    __builtin_clz: (v) => Math.clz32(v >>> 0),
+    __builtin_ctz: (v) => { v >>>= 0; return v === 0 ? 0 : 31 - Math.clz32(v & -v); },
+    __builtin_popcount: (v) => {
+      v = (v >>> 0) - ((v >>> 1) & 0x55555555);
+      v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+      return (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24;
+    },
+    __builtin_parity: (v) => lib.__builtin_popcount(v) & 1,
+    __builtin_bswap16: (v) => ((v & 0xff) << 8) | ((v >>> 8) & 0xff),
+    __builtin_bswap32: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) |
+                               ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) >>> 0,
+    __builtin_bswap64: (v) => {
+      let r = 0n, x = BigInt.asUintN(64, v);
+      for (let i = 0; i < 8; i++) { r = (r << 8n) | (x & 0xffn); x >>= 8n; }
+      return BigInt.asUintN(64, r);
+    },
+
+    /* Classification. signbit is about the SIGN BIT, so it must answer 1 for -0.0. */
+    __builtin_signbit: (v) => (v < 0 || Object.is(v, -0) ? 1 : 0),
+    __builtin_isinf: (v) => (v === Infinity ? 1 : v === -Infinity ? -1 : 0),
+    __builtin_isnan: (v) => (Number.isNaN(v) ? 1 : 0),
+    copysign: (x, y) => (lib.__builtin_signbit(y) ? -Math.abs(x) : Math.abs(x)),
+    copysignf: (x, y) => Math.fround(lib.copysign(x, y)),
+
+    /* mempcpy and stpcpy return the END rather than the start: the GNU point of both. */
+    mempcpy: (d, s, n) => { lib.memcpy(d, s, n); return (d + n) | 0; },
+    stpcpy: (d, s) => { const n = strlenAt(s); lib.memcpy(d, s, n + 1); return (d + n) | 0; },
     __builtin_prefetch: () => {},
     // A stub that returns 0 here does not "not support" the builtin, it LIES: the caller compares
     // the result and its own check fails, turning a clean refusal into a miscompile
@@ -866,20 +900,36 @@ export function format(M, fmtPtr, args) {
        */
       if (prec === '') prec = '0';
     }
-    // The length modifier MATTERS on i386 for one case: `ll` is 64 bits, and the emitter hands a
-    // BigInt for those. Everything else is 32 bits, `l` included.
+    /*
+     * The length modifier does two different jobs and only one of them was being done.
+     *
+     * WIDENING: `ll` (and q, j) is 64 bits on i386, and the emitter hands a BigInt for those.
+     * Everything else is 32 bits, `l` included.
+     *
+     * NARROWING: `h` and `hh` do not change how the argument ARRIVES -- default promotion has
+     * already made it an int -- they change what the conversion prints. C99 7.19.6.1p7 says the
+     * value is converted to short or signed char first, so `%hhd` of 4104 is 8, not 4104. gcc's
+     * pr78622.c checks exactly that and it was passing only because __builtin_snprintf was missing:
+     * a refusal was hiding a wrong answer.
+     */
     let len = '';
     while ('hlLqjzt'.includes(fmt[i])) len += fmt[i++];
     const wide64 = len.includes('ll') || len === 'q' || len === 'j';
+    const narrowBits = len === 'hh' ? 8 : len === 'h' ? 16 : 0;
+    const narrow = (v, signed) => {
+      if (!narrowBits || typeof v === 'bigint') return v;
+      const sh = 32 - narrowBits;
+      return signed ? (v << sh) >> sh : (v << sh) >>> sh;
+    };
 
     const conv = fmt[i];
     let body;
     switch (conv) {
-      case 'd': case 'i': body = String(intArg(wide64 ? src.i64() : src.i32(), wide64, true)); break;
-      case 'u': body = String(intArg(wide64 ? src.i64() : src.i32(), wide64, false)); break;
-      case 'x': body = intArg(wide64 ? src.i64() : src.i32(), wide64, false).toString(16); break;
-      case 'X': body = intArg(wide64 ? src.i64() : src.i32(), wide64, false).toString(16).toUpperCase(); break;
-      case 'o': body = intArg(wide64 ? src.i64() : src.i32(), wide64, false).toString(8); break;
+      case 'd': case 'i': body = String(intArg(narrow(wide64 ? src.i64() : src.i32(), true), wide64, true)); break;
+      case 'u': body = String(intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false)); break;
+      case 'x': body = intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false).toString(16); break;
+      case 'X': body = intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false).toString(16).toUpperCase(); break;
+      case 'o': body = intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false).toString(8); break;
       case 'c': body = String.fromCharCode(nextArg() & 0xff); break;
       case 's': {
         const p = nextArg() | 0;
