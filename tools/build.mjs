@@ -138,11 +138,21 @@ if (program.undefinedVars?.length) {
   }
 }
 if (program.failures?.length) {
+  /*
+   * Grouped by cause, with ONE example site each. The count says how much a gap is worth closing;
+   * the site says where to look, and without it a message like "'char[2]' has no member 'textbuf'"
+   * -- which is a compiler bug, not a missing declaration -- means grepping a 156-unit build by hand.
+   */
   const by = new Map();
-  for (const f of program.failures) by.set(f.message, (by.get(f.message) ?? 0) + 1);
+  for (const f of program.failures) {
+    const e = by.get(f.message) ?? { n: 0, where: `${f.unit}:${f.fn}` };
+    e.n++;
+    by.set(f.message, e);
+  }
   console.log(`  ${program.failures.length} functions could not be emitted (they throw IF CALLED):`);
-  for (const [m, n] of [...by].sort((a, b) => b[1] - a[1]).slice(0, 12)) {
-    console.log(`    ${String(n).padStart(4)}  ${m}`);
+  for (const [m, e] of [...by].sort((a, b) => b[1].n - a[1].n).slice(0, 12)) {
+    console.log(`    ${String(e.n).padStart(4)}  ${m}`);
+    console.log(`          e.g. ${e.where}`);
   }
 }
 /*

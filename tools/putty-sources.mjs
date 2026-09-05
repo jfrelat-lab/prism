@@ -23,7 +23,7 @@ const WANT = process.argv[2];
 /* Guards we answer for. Anything else met inside an if() is reported, not guessed. */
 const ASSUMED = new Map([
   ['HAVE_CONPTY', false],          // needs a real ConPTY; not what this target is about
-  ['HAVE_STRTOUMAX', false],       // PRISM's libc has no strtoumax, so PuTTY's own is wanted
+  ['HAVE_STRTOUMAX', true],        // src/env/inttypes.c supplies it, so PuTTY's workarounds stay off
   ['HAVE_WMEMCHR', false],
   ['NOT_UTMP', false],
 ]);
@@ -105,10 +105,36 @@ if (!WANT) {
 const e = execs.get(WANT);
 if (!e) { console.error(`no executable "${WANT}" -- run with no argument to list them`); process.exit(2); }
 const out = [...e.files];
+
+/*
+ * STATIC LIBRARY SEMANTICS, in the one shape PuTTY relies on everywhere.
+ *
+ * An executable that lists `no-jump-list.c` among its own sources also links the library holding
+ * `jump-list.c`. A real link does not take both: the executable's own object already defines the
+ * symbols, so the library member is never pulled. Treating the library as "every file in it" gave
+ * two definitions of the whole jump-list, storage and timing APIs.
+ *
+ * Modelling that properly needs symbol tables. What is modelled instead is PuTTY's own naming
+ * convention -- `no-X.c` and `noX.c` are the do-nothing versions of `X.c`, in stubs/ and in the
+ * platform directories -- and every file it drops is REPORTED, because a heuristic that hides what
+ * it did is worse than one that is occasionally wrong.
+ */
+const shadowed = new Map();
+for (const f of e.files) {
+  const m = /(^|\/)no-?(.+\.c)$/.exec(f);
+  if (m) shadowed.set(m[2], f);
+}
+const dropped = [];
 for (const l of e.libs) {
   if (!libs.has(l)) { console.error(`  ! library ${l} declares no sources`); continue; }
-  for (const f of libs.get(l)) if (!out.includes(f)) out.push(f);
+  for (const f of libs.get(l)) {
+    if (out.includes(f)) continue;
+    const base = f.replace(/^.*\//, '');
+    if (shadowed.has(base)) { dropped.push(`${f} (shadowed by ${shadowed.get(base)})`); continue; }
+    out.push(f);
+  }
 }
+if (dropped.length) console.error(`not linked, the executable supplies its own:\n  ${dropped.join('\n  ')}`);
 console.log(JSON.stringify(out, null, 2));
 console.error(`\n${WANT} (${PLATFORM}): ${out.length} units from libraries ${e.libs.join(' ')}`);
 if (unknownGuards.size) console.error(`guards taken unconditionally: ${[...unknownGuards].join(' ')}`);

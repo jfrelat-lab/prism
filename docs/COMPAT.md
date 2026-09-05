@@ -1165,3 +1165,64 @@ which is why the suite counts them separately. c-testsuite is now 205/219 with 0
 Also fixed on the way: `__thread` is accepted as a storage class (PRISM's target has one thread, so
 GCC's thread-local storage means an ordinary static object), and a static-initialiser refusal now
 names the object and the unit instead of only the shape it could not emit.
+
+### The terminal emulator itself: `Test suite passed`
+
+```
+PuTTY terminal core (self-checking) — 157 translation units, 37,475 lines, 17673 functions in 4.4 s
+running: putty/test-terminal
+Test suite passed
+```
+
+`test_terminal` drives PuTTY's VT emulator through its own table of cases and checks the screen it
+produced. 157 units, no window opened, and the answer is the program's own.
+
+Getting there needed the Win32 GUI header surface — fonts and text metrics, the window messages, the
+button/combo/list/edit control families, commctrl's tree view and drag list, commdlg's three
+dialogues, winspool, winsock's types — plus two headers the *build* writes rather than the tree
+(`tools/putty-generate.mjs` makes `licence.h` and `version.h` the way `cmake/licence.cmake` and
+`Buildscr` do), and `src/env/win32-app.c`, the non-graphical half of Win32: code pages with real
+UTF-8/UTF-16 conversion, memory, last-error. `GetProcAddress` there returns NULL **on purpose** —
+PuTTY loads secur32, winspool and half of kernel32 by name and checks the result, so NULL exercises
+the program's own fallback instead of faking a function nobody implements.
+
+Three defects in PRISM came out of it, and the middle one is the serious one.
+
+**The emitter had no block scoping.** `this.locals` was one flat map per function and JS variables
+were named `_v_<name>`, so two C locals of the same name shared both. `terminal.c:clipme` declares
+`char buf[2]` inside a block of a function whose outer `buf` is a `clip_workbuf`, and every use of
+the struct after that block resolved to `char[2]`. Fifteen lines reproduce it:
+
+```c
+struct W w; w.n = 1;
+{ char w[2]; w[0] = 'x'; }
+printf("%d", w.n);          /* 'char[2]' has no member 'n' */
+```
+
+Each declaration now gets a name unique within the function (`w`, `w$1` — `$` cannot appear in a C
+identifier), including the private symbol a `static` local gets, and blocks restore what they
+shadowed. c-testsuite went 205 → 206.
+
+**That let a refusal be lifted rather than worked around.** `flatten.js` refused a function needing
+control-flow flattening when two sibling blocks declared the same name, because hoisting them to
+function scope would have shared one variable — exactly the bug above. With storage now distinct per
+declaration, and flattened order being program order, the refusal has nothing left to protect and is
+gone. `terminal.c:term_out`, the emulator's central routine, is what it was blocking.
+
+**`inttypes.h` was a stub**, so `HAVE_STRTOUMAX` had to be answered "no", and PuTTY's own fallback
+declares a `static inline strtoumax` over MSVC's `_strtoui64` in *every* unit that includes
+`platform.h` — 105 functions lost to one missing declaration. A real `inttypes.h` plus
+`src/env/inttypes.c` (in C, because `intmax_t` is `long long` and PRISM's 64-bit convention is a
+BigInt the runtime would have to honour at the boundary) answers it "yes" and the workaround
+switches off. Note the shape of that number: **one gap, 105 casualties**, which is why the build
+groups its refusals by cause.
+
+Two smaller things paid for themselves immediately: `assert` now says *where* and on *stderr*
+(C99 7.2.1.1 — and stdout would leak into anything diffing a program's output against gcc's), and
+the build's refusal report names an example site per cause. `'char[2]' has no member 'textbuf'` is
+useless without `terminal.c:clipme` beside it.
+
+The resolver also learned **static-library semantics**, in the one shape PuTTY leans on: an
+executable listing `no-jump-list.c` among its own sources also links the library holding
+`jump-list.c`, and a real link takes only the first. Modelling it properly needs symbol tables; what
+is modelled is the `no-X.c` naming convention, and every file it drops is reported.

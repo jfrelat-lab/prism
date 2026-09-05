@@ -8,7 +8,8 @@
   "defines": {
     "_WIN32": "1",
     "WIN32": "1",
-    "__PRISM__": "1"
+    "__PRISM__": "1",
+    "HAVE_STRTOUMAX": "1"
   },
   "compile": {
     "memory": 512,
@@ -37,13 +38,10 @@
           "windows/controls.c",
           "windows/config.c",
           "windows/printing.c",
-          "windows/jump-list.c",
           "windows/sizetip.c",
           "cmdline.c",
           "settings.c",
-          "windows/storage.c",
           "callback.c",
-          "timing.c",
           "windows/cliloop.c",
           "windows/handle-wait.c",
           "stubs/null-lp.c",
@@ -178,7 +176,6 @@
           "windows/utils/version.c",
           "windows/utils/win_strerror.c",
           "windows/unicode.c",
-          "windows/utils/strtoumax.c",
           "windows/utils/wmemchr.c"
         ]
       },
@@ -189,11 +186,14 @@
       "include": [
         "windows",
         "charset",
-        "terminal"
+        "terminal",
+        "../putty-generated"
       ],
       "_generated": "wide.c is the wide-character corner of the C library. It is C rather than JavaScript because its contract is wchar_t's WIDTH, which the compiler knows and the runtime does not -- the same argument that makes mgl.c C.",
       "generated": [
-        "src/env/wide.c"
+        "src/env/wide.c",
+        "src/env/inttypes.c",
+        "src/env/win32-app.c"
       ]
     },
     "test-argv": {
@@ -204,7 +204,8 @@
       "include": [
         "windows",
         "charset",
-        "terminal"
+        "terminal",
+        "../putty-generated"
       ],
       "units": {
         "list": [
@@ -341,7 +342,6 @@
           "windows/utils/version.c",
           "windows/utils/win_strerror.c",
           "windows/unicode.c",
-          "windows/utils/strtoumax.c",
           "windows/utils/wmemchr.c"
         ]
       },
@@ -350,7 +350,9 @@
       ],
       "_generated": "wide.c is the wide-character corner of the C library. It is C rather than JavaScript because its contract is wchar_t's WIDTH, which the compiler knows and the runtime does not -- the same argument that makes mgl.c C.",
       "generated": [
-        "src/env/wide.c"
+        "src/env/wide.c",
+        "src/env/inttypes.c",
+        "src/env/win32-app.c"
       ],
       "unitDefines": {
         "windows/test/test_split_into_argv.c": {
@@ -364,5 +366,7 @@
     }
   },
   "_state": "IN PROGRESS -- this target does not build yet, and the file records where it stops rather than pretending otherwise. It now gets through defs.h, putty.h, windows/platform.h and most of terminal.c, and stops in the Win32 GUI headers (HFONT, LOGFONT, the WS_/HKEY_/CP_/BN_ constant families). That surface is MEASURED, not guessed: see docs/COMPAT.md.",
-  "_why_win32": "The unix variant was resolved and compared rather than assumed: `--unix` pulls in GTK (unix/window.c, unifont.c, config-gtk.c), which is a larger and less useful surface than Win32's. So Windows is the cheaper platform here, which is the opposite of what it is for Quake."
+  "_why_win32": "The unix variant was resolved and compared rather than assumed: `--unix` pulls in GTK (unix/window.c, unifont.c, config-gtk.c), which is a larger and less useful surface than Win32's. So Windows is the cheaper platform here, which is the opposite of what it is for Quake.",
+  "_generated_headers": "licence.h and version.h do not exist in the tree -- cmake/licence.cmake and Buildscr write them. `node tools/putty-generate.mjs` does the same, into corpus/putty-generated/, which is outside the source tree and gitignored; the include path picks it up from there. Run it after fetch.",
+  "_have_strtoumax": "The same answer the resolver gives, in the form the PREPROCESSOR needs. CMake writes its feature tests into cmake.h; PuTTY reads HAVE_STRTOUMAX both to pick source files and, in windows/platform.h:128, to decide whether to define a static inline strtoumax over MSVC's _strtoui64. Answering only the first left that inline in every unit and cost 206 functions."
 }

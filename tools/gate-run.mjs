@@ -17,6 +17,81 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// Shadowing, and shadowing in a function that has to be FLATTENED.
+//
+// The emitter keeps one map of locals per function and named its JS variables after the C ones, so
+// two `i`s in sibling blocks shared a variable and a struct shadowed by a `char[2]` broke every use
+// of the struct after that block. The `goto` is not decoration: it forces the control-flow
+// flattening pass, which hoists every declaration to function scope and is where the sharing bites.
+C('shadowed-locals', `
+#include <stdio.h>
+struct W { int n; char *p; };
+static int flat(int k)
+{
+    int total = 0;
+    struct W w;
+    w.n = 10; w.p = "outer";
+    if (k > 2) goto late;
+    { int i; for (i = 0; i < 3; i++) total += i; }
+    { char i = 'A'; total += i; }
+    { static int i = 100; i++; total += i; }
+    {
+        char w[2];
+        w[0] = 'z'; w[1] = 0;
+        total += w[0];
+    }
+late:
+    { static int i = 200; i++; total += i; }
+    total += w.n + (int)w.p[0];
+    { int i; for (i = 0; i < 2; i++) total += i * 1000; }
+    return total;
+}
+int main(void)
+{
+    /* One call per statement: these have side effects and argument evaluation order is unspecified. */
+    int a = flat(0), b = flat(0), c = flat(5), d = flat(5);
+    printf("%d %d %d %d\\n", a, b, c, d);
+    return 0;
+}
+`);
+
+// Designated initialisers that go MORE THAN ONE LEVEL DEEP, and bitfields among them. PuTTY's
+// conf_key_info writes `.default_value.ival = x` into a struct whose union member is anonymous, and
+// c-testsuite has no case of that shape -- which is how a first fix here could write every
+// designated bitfield as zero and still pass 205/219.
+C('designator-chain', `
+#include <stdio.h>
+struct S {
+    int subkey, vtype;
+    union { int i; const char *s; } dv;
+    int save_custom : 1;
+    int not_saved : 1;
+    int arr[3];
+    const char *kw;
+};
+static const struct S t[] = {
+    { .vtype = 11, .dv.i = 42, .kw = "a" },
+    { .subkey = 3, .dv.i = 5, .not_saved = 1, .kw = "b" },
+    { .vtype = 7, .not_saved = 1, .dv.i = -1, .arr[1] = 9 },
+    { 9, 8, { .i = 4 }, 1, 0, { 1, 2, 3 }, "d" },
+};
+int main(void)
+{
+    int i;
+    for (i = 0; i < 4; i++)
+        printf("%d %d | %d | %d %d | %d %d %d | %s\\n", t[i].subkey, t[i].vtype, t[i].dv.i,
+               t[i].save_custom, t[i].not_saved, t[i].arr[0], t[i].arr[1], t[i].arr[2],
+               t[i].kw ? t[i].kw : "-");
+    {
+        struct S local = { .vtype = 2, .dv.i = 3, .not_saved = 1, .arr[2] = 6, .kw = "local" };
+        printf("%d %d | %d | %d %d | %d %d %d | %s\\n", local.subkey, local.vtype, local.dv.i,
+               local.save_custom, local.not_saved, local.arr[0], local.arr[1], local.arr[2],
+               local.kw);
+    }
+    return 0;
+}
+`);
+
 // Zero fill on the integer conversions. Both halves of this were wrong and neither was visible in
 // anything the corpus prints: `%04X` of a value with an a-f digit lost its fill because the inf/nan
 // check tested EVERY conversion for a letter, and `#` put the zeros before the 0x instead of after.

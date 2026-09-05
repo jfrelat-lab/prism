@@ -207,6 +207,7 @@ export class FunctionEmitter {
     this.decl = decl;
     this.ctx = ctx;                 // {globals: Map, funcs: Map, builtins: Set}
     this.locals = new Map();        // name -> {kind:'var'|'slot', js?, off?, type}
+    this.nameSeq = new Map();       // how many times a name has been declared in this function
     this.frameSize = 0;
     this.tmp = 0;
     this.out = [];
@@ -423,8 +424,10 @@ export class FunctionEmitter {
       return;
     }
     if (d.storage === 'static') {
-      // A static local is a global with a private name; its address must survive the call.
-      const sym = this.mod.defineGlobal(`${this.decl.name}.${d.name}`, d.type);
+      // A static local is a global with a private name; its address must survive the call. The name
+      // has to be unique within the FUNCTION, not just the block: two `static int i;` in sibling
+      // blocks are two objects, and one symbol for both would silently share their storage.
+      const sym = this.mod.defineGlobal(`${this.decl.name}.${this.#uniq(d.name)}`, d.type);
       this.locals.set(d.name, { kind: 'global', addr: sym.addr, type: d.type });
       if (d.init) this.initStatic(sym.addr, d.type, d.init);
       return;
@@ -438,10 +441,39 @@ export class FunctionEmitter {
       if (d.init) this.#initDynamic(`(_fp+${off}|0)`, d.type, d.init);
       return;
     }
-    const js = `_v_${d.name}`;
+    /*
+     * A JS `var` is FUNCTION-scoped, so two C locals of the same name in different blocks cannot
+     * share one. `$` is the separator because no C identifier can contain it.
+     */
+    const js = `_v_${this.#uniq(d.name)}`;
     this.locals.set(d.name, { kind: 'var', js, type: d.type });
     const init = d.init ? this.#rvalCoerced(d.init.expr, d.type) : (is64(d.type) ? '0n' : '0');
     this.out.push(`var ${js}=${init};`);
+  }
+
+  /**
+   * A name unique within this function: `w`, then `w$1`, `w$2`.
+   *
+   * C lets a block redeclare a name it shadows, and the emitter's `locals` map and JS variable names
+   * are both flat over the function. PuTTY's terminal.c has a `char buf[2]` inside a block of a
+   * function whose outer `buf` is a struct, and every use of the outer one after that point resolved
+   * to the inner type.
+   */
+  #uniq(name) {
+    const n = this.nameSeq.get(name) ?? 0;
+    this.nameSeq.set(name, n + 1);
+    return n ? `${name}$${n}` : name;
+  }
+
+  /**
+   * Run `fn` with a nested declaration scope: whatever it declares is forgotten on the way out, and
+   * whatever it shadowed comes back. Costs one Map copy per block, which is compile time and small
+   * beside the source this emitter writes.
+   */
+  #scoped(fn) {
+    const outer = this.locals;
+    this.locals = new Map(outer);
+    try { fn(); } finally { this.locals = outer; }
   }
 
   #initDynamic(addr, type, init) {
@@ -518,14 +550,13 @@ export class FunctionEmitter {
         if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
         if (!f) break;
         const t = it.designators && it.designators.length > 1
-          ? descendDesignators({ off: f.offset, type: f.type, bits: f.bits,
-                                 flexible: f.flexible, name: f.name }, it.designators.slice(1))
-          : { off: f.offset, type: f.type, bits: f.bits, flexible: f.flexible, name: f.name };
+          ? descendDesignators(f, it.designators.slice(1))
+          : { off: f.offset, type: f.type, field: f };
         // Initialising a FLEXIBLE array member writes past the struct's nominal size; it is a GNU
         // extension and tier-0 refuses it rather than producing a plausible wrong object.
-        if (t.flexible) unsup('initialising a flexible array member');
-        if (t.bits !== undefined) {
-          this.#initBitfield(addr, { ...t, offset: t.off }, this.#rvalCoerced(it.value.expr, t.type));
+        if (t.field.flexible) unsup('initialising a flexible array member');
+        if (t.field.bits !== undefined) {
+          this.#initBitfield(addr, { ...t.field, offset: t.off }, this.#rvalCoerced(it.value.expr, t.type));
         } else {
           const off = `(${addr}+${t.off}|0)`;
           if (it.value.n === 'initlist') this.#initList(off, t.type, it.value);
@@ -808,23 +839,22 @@ export class FunctionEmitter {
         if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
         if (!f) break;
         const t = it.designators && it.designators.length > 1
-          ? descendDesignators({ off: f.offset, type: f.type, bits: f.bits,
-                                 flexible: f.flexible, name: f.name }, it.designators.slice(1))
-          : { off: f.offset, type: f.type, bits: f.bits, flexible: f.flexible, name: f.name };
+          ? descendDesignators(f, it.designators.slice(1))
+          : { off: f.offset, type: f.type, field: f };
         // Initialising a FLEXIBLE array member writes past the struct's nominal size; it is a GNU
         // extension and tier-0 refuses it rather than producing a plausible wrong object.
-        if (t.flexible) unsup('initialising a flexible array member');
-        if (t.bits !== undefined) {
+        if (t.field.flexible) unsup('initialising a flexible array member');
+        if (t.field.bits !== undefined) {
           let v;
           try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
-          writeStaticBitfield(this.mod, addr, { ...t, offset: t.off }, v);
+          writeStaticBitfield(this.mod, addr, { ...t.field, offset: t.off }, v);
         } else if (it.value.n === 'initlist') {
           this.#staticList(addr + t.off, t.type, it.value);
         } else if (this.#elidable(t.type, it)) {
           i = this.#staticElided(addr + t.off, t.type, init.items, i) - 1;
         } else if (!this.#staticScalar(addr + t.off, t.type, it.value.expr)) {
           unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
-            `into field '${t.name}' of type ${T.typeName(t.type)}`);
+            `into field '${t.field.name}' of type ${T.typeName(t.type)}`);
         }
         k = named.indexOf(f) + 1;
       }
@@ -921,7 +951,7 @@ export class FunctionEmitter {
       case 'empty': return;
       case 'block': {
         this.out.push('{');
-        this.#block(s, escaped);
+        this.#scoped(() => this.#block(s, escaped));
         this.out.push('}');
         return;
       }
@@ -950,14 +980,17 @@ export class FunctionEmitter {
       }
       case 'for': {
         // The init clause may declare, so it is emitted BEFORE the loop and the JS `for` gets an
-        // empty init — block scoping is already handled by the parser's scopes.
-        if (s.init) this.#item(s.init.n === 'decls' ? s.init : s.init, escaped);
-        const cond = s.cond ? this.#truth(s.cond) : 'true';
-        const step = s.step ? this.#rval(s.step).js : '';
-        this.out.push(`for(;${cond};${step}){`);
-        this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
-        if (this.ctx.safepoints) this.out.push(this.#safepoint());
-        this.out.push('}');
+        // empty init. `for (int i = ...)` opens a scope of its own, which is why the whole statement
+        // is wrapped: the `i` it declares must not outlive the loop.
+        this.#scoped(() => {
+          if (s.init) this.#item(s.init.n === 'decls' ? s.init : s.init, escaped);
+          const cond = s.cond ? this.#truth(s.cond) : 'true';
+          const step = s.step ? this.#rval(s.step).js : '';
+          this.out.push(`for(;${cond};${step}){`);
+          this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
+          if (this.ctx.safepoints) this.out.push(this.#safepoint());
+          this.out.push('}');
+        });
         return;
       }
       case 'switch': {
@@ -965,7 +998,7 @@ export class FunctionEmitter {
         this.out.push(`switch(${d.js}|0){`);
         // The braces of the body are dropped on purpose: `switch(x){{case 0:...}}` is a syntax
         // error in JavaScript, where a switch's cases must be direct children.
-        if (s.body.n === 'block') this.#block(s.body, escaped);
+        if (s.body.n === 'block') this.#scoped(() => this.#block(s.body, escaped));
         else this.#stmt(s.body, escaped);
         this.out.push('}');
         return;
@@ -2080,20 +2113,25 @@ function castConst(v, t) {
  * The caller keeps the FIRST-level field for its own bookkeeping: an item after a designated one
  * continues from the member following that outermost one, not from wherever the chain ended.
  */
-function descendDesignators(start, rest) {
-  let { off, type, bits, flexible, name } = start;
+function descendDesignators(field, rest) {
+  let off = field.offset, type = field.type, f = field;
   for (const d of rest) {
     if (d.field !== undefined && d.field !== null) {
       if (!T.isRecord(type)) unsup(`a field designator '.${d.field}' on ${T.typeName(type)}`);
       const g = findField(type, d.field);
       if (!g) unsup(`no field '${d.field}' in ${T.typeName(type)}`);
-      off += g.offset; type = g.type; bits = g.bits; flexible = g.flexible; name = g.name;
+      off += g.offset; type = g.type; f = g;
     } else if (d.index !== undefined && d.index !== null) {
       if (type.k !== 'array') unsup(`an array designator on ${T.typeName(type)}`);
-      off += d.index * type.of.size; type = type.of; bits = undefined; flexible = false;
+      off += d.index * type.of.size; type = type.of; f = { ...type, bits: undefined, name: f.name };
     }
   }
-  return { off, type, bits, flexible, name };
+  /*
+   * The FIELD comes back, not a summary of it. Returning {off, type, bits, name} instead dropped
+   * bitOffset, width and signedness, so every designated bitfield initialiser wrote zero -- and the
+   * c-testsuite does not cover that shape, so only PuTTY's conf table noticed.
+   */
+  return { off, type, field: f };
 }
 
 function writeConst(mod, addr, type, v) {

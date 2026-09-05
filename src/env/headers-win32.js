@@ -15,6 +15,159 @@
 
 export const WIN32_HEADERS = {
   /*
+   * Winsock, at the depth PuTTY's event loop reaches. Not a network stack -- the point here is the
+   * TYPES: a SOCKET is a handle, WSANETWORKEVENTS is what WSAEnumNetworkEvents fills in, and the
+   * FD_ bits are the event mask. Anything that actually moves bytes stays an undefined symbol and
+   * is listed as one.
+   */
+  'winsock2.h': `
+#ifndef _PRISM_WINSOCK2_H
+#define _PRISM_WINSOCK2_H
+#include <windows.h>
+typedef UINT_PTR SOCKET;
+#define INVALID_SOCKET  ((SOCKET)~0)
+#define SOCKET_ERROR    (-1)
+#define FD_SETSIZE      64
+#define FD_MAX_EVENTS   10
+typedef struct _WSANETWORKEVENTS {
+    long lNetworkEvents;
+    int iErrorCode[FD_MAX_EVENTS];
+} WSANETWORKEVENTS, *LPWSANETWORKEVENTS;
+#define FD_READ_BIT     0
+#define FD_WRITE_BIT    1
+#define FD_OOB_BIT      2
+#define FD_ACCEPT_BIT   3
+#define FD_CONNECT_BIT  4
+#define FD_CLOSE_BIT    5
+#define FD_READ         (1 << FD_READ_BIT)
+#define FD_WRITE        (1 << FD_WRITE_BIT)
+#define FD_OOB          (1 << FD_OOB_BIT)
+#define FD_ACCEPT       (1 << FD_ACCEPT_BIT)
+#define FD_CONNECT      (1 << FD_CONNECT_BIT)
+#define FD_CLOSE        (1 << FD_CLOSE_BIT)
+#define WSAMAKESELECTREPLY(event, error) ((WPARAM)(((WORD)(event)) | (((DWORD)(error)) << 16)))
+#define WSAGETSELECTEVENT(l)  ((int)LOWORD(l))
+#define WSAGETSELECTERROR(l)  ((int)HIWORD(l))
+int WINAPI WSAEnumNetworkEvents(SOCKET s, WSAEVENT h, LPWSANETWORKEVENTS out);
+int WINAPI WSAGetLastError(void);
+#endif
+`,
+  'winsock.h': `#include <winsock2.h>
+`,
+
+  /*
+   * winspool, at the depth PuTTY's printing.c reaches: it enumerates printers at level 4 or 5 and
+   * spools raw bytes. Every entry point is loaded from winspool.drv by name, so the header supplies
+   * the structures and nothing else.
+   */
+  'winspool.h': `
+#ifndef _PRISM_WINSPOOL_H
+#define _PRISM_WINSPOOL_H
+#include <windows.h>
+typedef struct _PRINTER_INFO_4A {
+    LPSTR pPrinterName, pServerName;
+    DWORD Attributes;
+} PRINTER_INFO_4A, PRINTER_INFO_4, *LPPRINTER_INFO_4;
+typedef struct _PRINTER_INFO_5A {
+    LPSTR pPrinterName, pPortName;
+    DWORD Attributes, DeviceNotSelectedTimeout, TransmissionRetryTimeout;
+} PRINTER_INFO_5A, PRINTER_INFO_5, *LPPRINTER_INFO_5;
+typedef struct _PRINTER_DEFAULTSA {
+    LPSTR pDatatype;
+    void *pDevMode;
+    DWORD DesiredAccess;   /* ACCESS_MASK, which is a DWORD */
+} PRINTER_DEFAULTSA, PRINTER_DEFAULTS, *LPPRINTER_DEFAULTS;
+typedef struct _DOC_INFO_1A {
+    LPSTR pDocName, pOutputFile, pDatatype;
+} DOC_INFO_1A, DOC_INFO_1, *LPDOC_INFO_1;
+#define PRINTER_ENUM_LOCAL       0x00000002
+#define PRINTER_ENUM_CONNECTIONS 0x00000004
+#endif
+`,
+
+  /*
+   * The common controls, as far as PuTTY's configuration box reaches into them: a tree view for the
+   * category list, and the NMHDR every WM_NOTIFY carries. The TreeView_* names are MACROS over
+   * SendMessage in the real header, which is why they need no entry points of their own -- and why
+   * getting the message numbers right matters more here than anywhere else in this file.
+   */
+  'commctrl.h': `
+#ifndef _PRISM_COMMCTRL_H
+#define _PRISM_COMMCTRL_H
+#include <windows.h>
+
+void WINAPI InitCommonControls(void);
+#define WC_TREEVIEW "SysTreeView32"
+#define WC_TABCONTROL "SysTabControl32"
+
+typedef struct _TREEITEM *HTREEITEM;
+
+/* The drag list box: a list box that reports drags through a registered message. */
+typedef struct tagDRAGLISTINFO { UINT uNotification; HWND hWnd; POINT ptCursor; } DRAGLISTINFO, *LPDRAGLISTINFO;
+#define DL_BEGINDRAG    (WM_USER + 133)
+#define DL_DRAGGING     (WM_USER + 134)
+#define DL_DROPPED      (WM_USER + 135)
+#define DL_CANCELDRAG   (WM_USER + 136)
+#define DL_CURSORSET    0
+#define DL_STOPCURSOR   1
+#define DL_COPYCURSOR   2
+#define DL_MOVECURSOR   3
+#define DRAGLISTMSGSTRING "commctrl_DragListMsg"
+BOOL WINAPI MakeDragList(HWND hLB);
+void WINAPI DrawInsert(HWND handParent, HWND hLB, int nItem);
+int WINAPI LBItemFromPt(HWND hLB, POINT pt, BOOL bAutoScroll);
+typedef struct tagNMHDR { HWND hwndFrom; UINT_PTR idFrom; UINT code; } NMHDR, *LPNMHDR;
+
+#define TVIF_TEXT       0x0001
+#define TVIF_IMAGE      0x0002
+#define TVIF_PARAM      0x0004
+#define TVIF_STATE      0x0008
+#define TVIF_HANDLE     0x0010
+#define TVI_ROOT        ((HTREEITEM)(ULONG_PTR)-0x10000)
+#define TVI_FIRST       ((HTREEITEM)(ULONG_PTR)-0x0FFFF)
+#define TVI_LAST        ((HTREEITEM)(ULONG_PTR)-0x0FFFE)
+#define TVE_COLLAPSE    0x0001
+#define TVE_EXPAND      0x0002
+#define TVS_HASBUTTONS      0x0001
+#define TVS_HASLINES        0x0002
+#define TVS_LINESATROOT     0x0004
+#define TVS_DISABLEDRAGDROP 0x0010
+#define TVS_SHOWSELALWAYS   0x0020
+
+typedef struct tagTVITEMA {
+    UINT mask;
+    HTREEITEM hItem;
+    UINT state, stateMask;
+    LPSTR pszText;
+    int cchTextMax, iImage, iSelectedImage, cChildren;
+    LPARAM lParam;
+} TVITEMA, TVITEM, TV_ITEM, *LPTVITEM;
+typedef struct tagTVINSERTSTRUCTA {
+    HTREEITEM hParent, hInsertAfter;
+    TVITEMA item;
+} TVINSERTSTRUCTA, TVINSERTSTRUCT, TV_INSERTSTRUCT, *LPTVINSERTSTRUCT;
+
+/* The SDK spells these as SendMessage macros, and so does this: same numbers, same behaviour. */
+#define TV_FIRST                0x1100
+#define TVM_INSERTITEMA         (TV_FIRST + 0)
+#define TVM_EXPAND              (TV_FIRST + 2)
+#define TVM_GETITEMA            (TV_FIRST + 12)
+#define TVM_SELECTITEM          (TV_FIRST + 11)
+#define TVGN_CARET              0x0009
+#define TreeView_InsertItem(h, i) \
+    ((HTREEITEM)SendMessage((h), TVM_INSERTITEMA, 0, (LPARAM)(const TVINSERTSTRUCT *)(i)))
+#define TreeView_Expand(h, it, c) \
+    ((BOOL)SendMessage((h), TVM_EXPAND, (WPARAM)(c), (LPARAM)(HTREEITEM)(it)))
+#define TreeView_GetItem(h, i) \
+    ((BOOL)SendMessage((h), TVM_GETITEMA, 0, (LPARAM)(TVITEM *)(i)))
+#define TreeView_SelectItem(h, it) \
+    ((BOOL)SendMessage((h), TVM_SELECTITEM, TVGN_CARET, (LPARAM)(HTREEITEM)(it)))
+#define TreeView_GetSelection(h) \
+    ((HTREEITEM)SendMessage((h), TV_FIRST + 10, TVGN_CARET, 0))
+#endif
+`,
+
+  /*
    * advapi32's ACL and token types. PuTTY uses these to build the security descriptor for its named
    * pipes, and reaches most of the entry points through GetProcAddress -- so what it needs from here
    * are the TYPES and the constants. The few it calls directly are declared and left undefined, the
@@ -91,7 +244,6 @@ typedef struct _EXPLICIT_ACCESS_A {
 #define SECURITY_WORLD_SID_AUTHORITY   { 0, 0, 0, 0, 0, 1 }
 #define SECURITY_WORLD_RID             0x00000000
 #define SECURITY_NETWORK_RID           0x00000002
-#define ERROR_INSUFFICIENT_BUFFER      122
 #define LPTR                           0x0040
 
 /* Called directly rather than through GetProcAddress; undefined until something implements them. */
@@ -656,6 +808,327 @@ typedef struct _WIN32_FIND_DATAA {
 HANDLE WINAPI FindFirstFileW(LPCWSTR name, WIN32_FIND_DATAW *out);
 HANDLE WINAPI FindFirstFileA(LPCSTR name, WIN32_FIND_DATAA *out);
 BOOL WINAPI FindClose(HANDLE h);
+
+/* Owner draw: what WM_DRAWITEM's lParam points at. */
+typedef struct tagDRAWITEMSTRUCT {
+    UINT CtlType, CtlID, itemID, itemAction, itemState;
+    HWND hwndItem;
+    HDC hDC;
+    RECT rcItem;
+    ULONG_PTR itemData;
+} DRAWITEMSTRUCT, *LPDRAWITEMSTRUCT;
+#define ODT_BUTTON      4
+#define ODT_STATIC      5
+#define ODS_SELECTED    0x0001
+#define ODS_FOCUS       0x0010
+#define MM_TEXT         1
+int WINAPI SetMapMode(HDC dc, int mode);
+BOOL WINAPI GetTextExtentPoint32(HDC dc, LPCTSTR s, int n, SIZE *sz);
+BOOL WINAPI GetTextExtentPoint32W(HDC dc, LPCWSTR s, int n, SIZE *sz);
+
+typedef struct tagWINDOWPLACEMENT {
+    UINT length, flags;
+    UINT showCmd;
+    POINT ptMinPosition, ptMaxPosition;
+    RECT rcNormalPosition;
+} WINDOWPLACEMENT;
+BOOL WINAPI GetWindowPlacement(HWND hwnd, WINDOWPLACEMENT *wp);
+BOOL WINAPI SetWindowPlacement(HWND hwnd, const WINDOWPLACEMENT *wp);
+
+#define CBS_HASSTRINGS      0x0200
+#define CBS_OWNERDRAWFIXED  0x0010
+#define MB_DEFBUTTON1       0x00000000
+#define MB_DEFBUTTON2       0x00000100
+#define REG_MULTI_SZ        7
+#define REG_EXPAND_SZ       2
+#ifndef MAKELONG
+#define MAKELONG(lo, hi) ((LONG)(((WORD)(lo)) | (((DWORD)((WORD)(hi))) << 16)))
+#endif
+#define MAKELPARAM(lo, hi) ((LPARAM)MAKELONG(lo, hi))
+#define MAKEWPARAM(lo, hi) ((WPARAM)MAKELONG(lo, hi))
+BOOL WINAPI EndDialog(HWND dlg, INT_PTR result);
+BOOL WINAPI MessageBeep(UINT type);
+UINT WINAPI GetCaretBlinkTime(void);
+HWND WINAPI GetCapture(void);
+HWND WINAPI GetParent(HWND hwnd);
+
+/* The dialog-item helpers: every one is a thin wrapper over SendMessage/FindWindow in the SDK, and
+ * PuTTY's controls.c uses them rather than the messages directly. */
+HWND WINAPI GetDlgItem(HWND dlg, int id);
+LRESULT WINAPI SendDlgItemMessage(HWND dlg, int id, UINT msg, WPARAM wp, LPARAM lp);
+BOOL WINAPI SetDlgItemText(HWND dlg, int id, LPCSTR text);
+BOOL WINAPI SetDlgItemTextW(HWND dlg, int id, LPCWSTR text);
+UINT WINAPI GetDlgItemText(HWND dlg, int id, LPSTR buf, int n);
+UINT WINAPI IsDlgButtonChecked(HWND dlg, int id);
+BOOL WINAPI CheckDlgButton(HWND dlg, int id, UINT check);
+BOOL WINAPI CheckRadioButton(HWND dlg, int first, int last, int check);
+BOOL WINAPI MapDialogRect(HWND dlg, RECT *r);
+UINT_PTR WINAPI SetTimer(HWND hwnd, UINT_PTR id, UINT elapse, void *proc);
+BOOL WINAPI KillTimer(HWND hwnd, UINT_PTR id);
+LPVOID WINAPI VirtualAlloc(LPVOID addr, SIZE_T size, DWORD type, DWORD protect);
+BOOL WINAPI VirtualFree(LPVOID addr, SIZE_T size, DWORD type);
+BOOL WINAPI VirtualLock(LPVOID addr, SIZE_T size);
+BOOL WINAPI VirtualUnlock(LPVOID addr, SIZE_T size);
+#define MEM_COMMIT      0x00001000
+#define MEM_RESERVE     0x00002000
+#define MEM_RELEASE     0x00008000
+#define PAGE_READWRITE  0x04
+#define PAGE_NOACCESS   0x01
+
+#define CBS_SIMPLE          0x0001
+#define CBS_DROPDOWN        0x0002
+#define CBS_DROPDOWNLIST    0x0003
+#define CBS_AUTOHSCROLL     0x0040
+#define MB_ICONWARNING      0x00000030
+#define MB_ICONERROR        0x00000010
+#define MB_ICONQUESTION     0x00000020
+#define MB_ICONINFORMATION  0x00000040
+#define ERROR_INSUFFICIENT_BUFFER 122
+
+/* ---- the dialogue surface: messages, notifications and control styles.
+ *
+ * PuTTY's configuration box is built from raw Win32 controls -- windows/controls.c speaks to buttons,
+ * combo boxes, list boxes and edit fields by message -- so even a terminal test that never opens a
+ * window links all of it. Values are the SDK's; nothing here implements the messages, and a wrong
+ * number would be invisible until something did.
+ */
+#define WM_NULL             0x0000
+#define WM_SETREDRAW        0x000B
+#define WM_SETTEXT          0x000C
+#define WM_DRAWITEM         0x002B
+#define WM_SETFONT          0x0030
+#define WM_GETFONT          0x0031
+#define WM_COPYDATA         0x004A
+#define WM_NOTIFY           0x004E
+#define WM_HELP             0x0053
+#define WM_NCHITTEST        0x0084
+#define WM_CTLCOLORSTATIC   0x0138
+#define WM_APP              0x8000
+
+#define BN_CLICKED          0
+#define BN_DOUBLECLICKED    5
+#define BN_SETFOCUS         6
+#define BN_KILLFOCUS        7
+#define BS_PUSHBUTTON       0x00000000
+#define BS_DEFPUSHBUTTON    0x00000001
+#define BS_AUTOCHECKBOX     0x00000003
+#define BS_GROUPBOX         0x00000007
+#define BS_AUTORADIOBUTTON  0x00000009
+#define BS_NOTIFY           0x00004000
+
+#define CBN_SELCHANGE       1
+#define CBN_SETFOCUS        3
+#define CBN_KILLFOCUS       4
+#define CBN_EDITCHANGE      5
+#define CB_ADDSTRING        0x0143
+#define CB_DELETESTRING     0x0144
+#define CB_GETCURSEL        0x0147
+#define CB_GETLBTEXT        0x0148
+#define CB_GETLBTEXTLEN     0x0149
+#define CB_RESETCONTENT     0x014B
+#define CB_SETCURSEL        0x014E
+#define CB_GETITEMDATA      0x0150
+#define CB_SETITEMDATA      0x0151
+
+#define EN_SETFOCUS         0x0100
+#define EN_KILLFOCUS        0x0200
+#define EN_CHANGE           0x0300
+#define EM_SETSEL           0x00B1
+#define EM_GETLINECOUNT     0x00BA
+#define ES_MULTILINE        0x0004
+#define ES_PASSWORD         0x0020
+#define ES_AUTOHSCROLL      0x0080
+
+#define LBN_SELCHANGE       1
+#define LBN_DBLCLK          2
+#define LBN_SETFOCUS        4
+#define LBN_KILLFOCUS       5
+#define LB_ERR              (-1)
+#define LB_ADDSTRING        0x0180
+#define LB_INSERTSTRING     0x0181
+#define LB_DELETESTRING     0x0182
+#define LB_RESETCONTENT     0x0184
+#define LB_SETSEL           0x0185
+#define LB_SETCURSEL        0x0186
+#define LB_GETSEL           0x0187
+#define LB_GETCURSEL        0x0188
+#define LB_GETTEXT          0x0189
+#define LB_GETTEXTLEN       0x018A
+#define LB_GETCOUNT         0x018B
+#define LB_SETTOPINDEX      0x0197
+#define LB_GETITEMDATA      0x0199
+#define LB_SETITEMDATA      0x019A
+#define LB_GETSELCOUNT      0x0190
+#define LB_GETSELITEMS      0x0191
+#define LB_SETTABSTOPS      0x0192
+
+#define SS_LEFTNOWORDWRAP   0x0000000C
+#define SS_OWNERDRAW        0x0000000D
+#define SS_ETCHEDHORZ       0x00000010
+
+#define WS_TABSTOP          0x00010000
+#define WS_GROUP            0x00020000
+#define WS_VSCROLL          0x00200000
+#define WS_CHILD            0x40000000
+#define WS_EX_TOOLWINDOW    0x00000080
+#define WS_EX_WINDOWEDGE    0x00000100
+#define WS_EX_CLIENTEDGE    0x00000200
+#define WS_EX_CONTEXTHELP   0x00000400
+#define WS_EX_STATICEDGE    0x00020000
+
+#define CS_DBLCLKS          0x0008
+#define CS_SAVEBITS         0x0800
+#define CS_BYTEALIGNWINDOW  0x2000
+#define GCL_HCURSOR         (-12)
+
+#define IDHELP              9
+#define IDCONTINUE          11
+#define IMAGE_ICON          1
+#define IMAGE_BITMAP        0
+#define LR_SHARED           0x8000
+#define LR_DEFAULTCOLOR     0x0000
+#define DWL_MSGRESULT       0
+#define COLOR_BACKGROUND    1
+#define COLOR_BTNFACE       15
+#define COLOR_INFOTEXT      23
+#define COLOR_INFOBK        24
+#define SM_CXICON           11
+#define SM_CYICON           12
+#define SPI_GETNONCLIENTMETRICS 0x0029
+#define SW_SHOWMAXIMIZED    3
+#define SW_SHOWNOACTIVATE   4
+
+/* The tree-view notification, from commctrl: TVN_FIRST is (0U-400U) and this is two below it. */
+#define TVN_SELCHANGED      ((UINT)(0U - 400U - 2U))
+
+/* ---- GDI: fonts, pens, regions and the text metrics a terminal sizes its cells from.
+ *
+ * PuTTY's window.c keeps an array of HFONT per attribute combination and measures with
+ * GetTextMetrics, so a terminal that never opens a window still needs the TYPES.
+ */
+typedef HANDLE HFONT, HPEN, HRGN;
+#define LF_FACESIZE 32
+#define PRISM_LOGFONT(CH, TAG) \
+    struct TAG { \
+        LONG lfHeight, lfWidth, lfEscapement, lfOrientation, lfWeight; \
+        BYTE lfItalic, lfUnderline, lfStrikeOut, lfCharSet, lfOutPrecision; \
+        BYTE lfClipPrecision, lfQuality, lfPitchAndFamily; \
+        CH lfFaceName[LF_FACESIZE]; \
+    }
+typedef PRISM_LOGFONT(char, tagLOGFONTA) LOGFONTA, LOGFONT, *PLOGFONT, *LPLOGFONT;
+typedef PRISM_LOGFONT(wchar_t, tagLOGFONTW) LOGFONTW, *PLOGFONTW, *LPLOGFONTW;
+#undef PRISM_LOGFONT
+
+#define PRISM_TEXTMETRIC(CH, TAG) \
+    struct TAG { \
+        LONG tmHeight, tmAscent, tmDescent, tmInternalLeading, tmExternalLeading; \
+        LONG tmAveCharWidth, tmMaxCharWidth, tmWeight, tmOverhang; \
+        LONG tmDigitizedAspectX, tmDigitizedAspectY; \
+        CH tmFirstChar, tmLastChar, tmDefaultChar, tmBreakChar; \
+        BYTE tmItalic, tmUnderlined, tmStruckOut, tmPitchAndFamily, tmCharSet; \
+    }
+typedef PRISM_TEXTMETRIC(char, tagTEXTMETRICA) TEXTMETRICA, TEXTMETRIC, *LPTEXTMETRIC;
+typedef PRISM_TEXTMETRIC(wchar_t, tagTEXTMETRICW) TEXTMETRICW, *LPTEXTMETRICW;
+#undef PRISM_TEXTMETRIC
+
+/* Font enumeration and quality, as vid_win.c's cousins in PuTTY ask for them. */
+#define ANSI_CHARSET        0
+#define DEFAULT_CHARSET     1
+#define SYMBOL_CHARSET      2
+#define OEM_CHARSET         255
+#define FW_DONTCARE         0
+#define FW_NORMAL           400
+#define FW_BOLD             700
+#define OUT_DEFAULT_PRECIS  0
+#define CLIP_DEFAULT_PRECIS 0
+#define DEFAULT_QUALITY     0
+#define NONANTIALIASED_QUALITY 3
+#define ANTIALIASED_QUALITY 4
+#define DEFAULT_PITCH       0
+#define FIXED_PITCH         1
+#define VARIABLE_PITCH      2
+#define FF_DONTCARE         0
+#define TRANSPARENT         1
+#define OPAQUE              2
+#define ETO_OPAQUE          0x0002
+#define ETO_CLIPPED         0x0004
+#define ETO_GLYPH_INDEX     0x0010
+
+HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj);
+HFONT WINAPI CreateFontIndirect(const LOGFONT *lf);
+HFONT WINAPI CreateFontIndirectW(const LOGFONTW *lf);
+BOOL WINAPI GetTextMetrics(HDC dc, LPTEXTMETRIC tm);
+BOOL WINAPI GetTextMetricsW(HDC dc, LPTEXTMETRICW tm);
+BOOL WINAPI ExtTextOut(HDC dc, int x, int y, UINT opts, const RECT *r,
+                       LPCTSTR str, UINT n, const INT *dx);
+BOOL WINAPI ExtTextOutW(HDC dc, int x, int y, UINT opts, const RECT *r,
+                        LPCWSTR str, UINT n, const INT *dx);
+int WINAPI SetBkMode(HDC dc, int mode);
+COLORREF WINAPI SetTextColor(HDC dc, COLORREF c);
+COLORREF WINAPI SetBkColor(HDC dc, COLORREF c);
+
+/* SystemParametersInfo(SPI_GETNONCLIENTMETRICS) -- how PuTTY's size tip picks the system font. */
+typedef struct tagNONCLIENTMETRICSA {
+    UINT cbSize;
+    int iBorderWidth, iScrollWidth, iScrollHeight;
+    int iCaptionWidth, iCaptionHeight;
+    LOGFONTA lfCaptionFont;
+    int iSmCaptionWidth, iSmCaptionHeight;
+    LOGFONTA lfSmCaptionFont;
+    int iMenuWidth, iMenuHeight;
+    LOGFONTA lfMenuFont, lfStatusFont, lfMessageFont;
+} NONCLIENTMETRICSA, NONCLIENTMETRICS, *LPNONCLIENTMETRICS;
+COLORREF WINAPI GetSysColor(int index);
+HBRUSH WINAPI CreateSolidBrush(COLORREF c);
+int WINAPI FillRect(HDC dc, const RECT *r, HBRUSH b);
+int WINAPI DrawText(HDC dc, LPCTSTR s, int n, RECT *r, UINT fmt);
+#define DT_LEFT         0x0000
+#define DT_CENTER       0x0001
+#define DT_TOP          0x0000
+#define DT_SINGLELINE   0x0020
+#define DT_NOPREFIX     0x0800
+#define DT_CALCRECT     0x0400
+
+/* ---- commdlg's font and colour choosers, which PuTTY's Appearance panel opens. */
+typedef struct tagCHOOSEFONTA {
+    DWORD lStructSize;
+    HWND hwndOwner;
+    HDC hDC;
+    LPLOGFONT lpLogFont;
+    INT iPointSize;
+    DWORD Flags, rgbColors;
+    LPARAM lCustData;
+    void *lpfnHook;
+    LPCSTR lpTemplateName;
+    HINSTANCE hInstance;
+    LPSTR lpszStyle;
+    WORD nFontType, ___MISSING_ALIGNMENT__;
+    INT nSizeMin, nSizeMax;
+} CHOOSEFONTA, CHOOSEFONT, *LPCHOOSEFONT;
+BOOL WINAPI ChooseFont(LPCHOOSEFONT cf);
+#define CF_SCREENFONTS          0x00000001
+#define CF_INITTOLOGFONTSTRUCT  0x00000040
+#define CF_FIXEDPITCHONLY       0x00004000
+#define CF_FORCEFONTEXIST       0x00010000
+
+typedef struct tagCHOOSECOLORA {
+    DWORD lStructSize;
+    HWND hwndOwner, hInstance;
+    COLORREF rgbResult;
+    COLORREF *lpCustColors;
+    DWORD Flags;
+    LPARAM lCustData;
+    void *lpfnHook;
+    LPCSTR lpTemplateName;
+} CHOOSECOLORA, CHOOSECOLOR, *LPCHOOSECOLOR;
+BOOL WINAPI ChooseColor(LPCHOOSECOLOR cc);
+#define CC_RGBINIT      0x00000001
+#define CC_FULLOPEN     0x00000002
+
+int WINAPI MulDiv(int a, int b, int c);
+int WINAPI GetDeviceCaps(HDC dc, int index);
+#define LOGPIXELSX      88
+#define LOGPIXELSY      90
 
 /* ---- commdlg's file dialogue, in both encodings: PuTTY uses each explicitly. */
 #define OFN_ALLOWMULTISELECT 0x00000200

@@ -40,6 +40,56 @@ typedef unsigned int wint_t;
 #endif
 `;
 
+const INTTYPES = `
+#ifndef _PRISM_INTTYPES_H
+#define _PRISM_INTTYPES_H
+#include <stdint.h>
+/*
+ * The i386 widths: int and long are 32 bits, long long is 64, and intmax_t is the long long. So the
+ * 64-bit conversions need the ll modifier and the 32-bit ones need none -- which is the whole reason
+ * these macros exist rather than being spelled inline at each call.
+ */
+#define PRId8    "d"
+#define PRIi8    "i"
+#define PRIu8    "u"
+#define PRIx8    "x"
+#define PRIX8    "X"
+#define PRId16   "d"
+#define PRIi16   "i"
+#define PRIu16   "u"
+#define PRIx16   "x"
+#define PRIX16   "X"
+#define PRId32   "d"
+#define PRIi32   "i"
+#define PRIu32   "u"
+#define PRIo32   "o"
+#define PRIx32   "x"
+#define PRIX32   "X"
+#define PRId64   "lld"
+#define PRIi64   "lli"
+#define PRIu64   "llu"
+#define PRIo64   "llo"
+#define PRIx64   "llx"
+#define PRIX64   "llX"
+#define PRIdMAX  PRId64
+#define PRIiMAX  PRIi64
+#define PRIuMAX  PRIu64
+#define PRIxMAX  PRIx64
+#define PRIXMAX  PRIX64
+#define PRIdPTR  "d"
+#define PRIuPTR  "u"
+#define PRIxPTR  "x"
+#define SCNd32   "d"
+#define SCNu32   "u"
+#define SCNx32   "x"
+#define SCNd64   "lld"
+#define SCNu64   "llu"
+#define SCNx64   "llx"
+intmax_t strtoimax(const char *nptr, char **endptr, int base);
+uintmax_t strtoumax(const char *nptr, char **endptr, int base);
+#endif
+`;
+
 const WCHAR_H = `
 #ifndef _PRISM_WCHAR_H
 #define _PRISM_WCHAR_H
@@ -55,6 +105,7 @@ size_t wcslen(const wchar_t *s);
 wchar_t *wcscpy(wchar_t *d, const wchar_t *s);
 wchar_t *wcsncpy(wchar_t *d, const wchar_t *s, size_t n);
 int wcscmp(const wchar_t *a, const wchar_t *b);
+int wcsncmp(const wchar_t *a, const wchar_t *b, size_t n);
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
 size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
 #endif
@@ -288,9 +339,17 @@ const ASSERT = `
 #ifdef NDEBUG
 #define assert(e) ((void)0)
 #else
+#include <stdio.h>
 void abort(void);
-int printf(const char *fmt, ...);
-#define assert(e) ((e) ? (void)0 : (printf("assertion failed\\n"), abort()))
+/*
+ * WHERE, and WHAT. "assertion failed" on its own means bisecting the program by hand to find out
+ * which one -- 156 translation units of PuTTY is where that stopped being tolerable. C99 7.2.1.1
+ * requires the text of the expression, the file and the line, and requires them on STDERR: writing
+ * them to stdout would also put them into anything that diffs a program's output against gcc's.
+ */
+#define assert(e) \
+    ((e) ? (void)0 \
+         : (fprintf(stderr, "%s:%d: assertion failed: %s\\n", __FILE__, __LINE__, #e), abort()))
 #endif
 #endif
 `;
@@ -1424,6 +1483,7 @@ int sigaddset(sigset_t *set, int sig);
   'unistd.h': UNISTD,
   'dirent.h': DIRENT,
   'locale.h': LOCALE_H,
+  'inttypes.h': INTTYPES,
   'wchar.h': WCHAR_H,
   'wctype.h': WCTYPE_H,
   'dlfcn.h': DLFCN,

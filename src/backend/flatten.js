@@ -152,25 +152,17 @@ export function flattenGotos(body, { unsup, newTemp }) {
         for (const it of s.items) walk(it, brk, cont);
         return;
 
-      case 'decls': {
+      case 'decls':
         /*
-         * Hoisting a nested declaration to function scope is safe only while no two of them share a
-         * name. C lets sibling blocks each declare `i`; flattened, the second would silently reuse
-         * the first's storage. Refuse instead of miscompiling — the emitter's locals map is keyed by
-         * name and would not notice.
+         * Hoisting a nested declaration to function scope used to be refused when two of them shared
+         * a name, because the emitter keyed its locals by name and named its JS variables after the
+         * C ones -- so sibling `int i`s would have shared one variable, and sibling `static int i`s
+         * one symbol. Both are now distinct per declaration (FunctionEmitter's `#uniq`), and the
+         * flattened statement order is the program order, so a use between two declarations still
+         * sees the one that precedes it. gate-run's `shadowed-locals` is the case that says so.
          */
-        for (const d of s.decls) {
-          if (!d.name || d.n !== 'vardecl') continue;
-          const prev = declared.get(d.name);
-          if (prev && prev !== d) {
-            unsup(`two declarations of '${d.name}' in sibling blocks, in a function that needs ` +
-              `control-flow flattening`);
-          }
-          declared.set(d.name, d);
-        }
         emit(s);
         return;
-      }
 
       case 'label':
         // The label itself becomes a top-level marker; whatever it labelled follows it.

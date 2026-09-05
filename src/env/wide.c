@@ -70,3 +70,10 @@ int iswprint(wint_t c)
 {
     return c >= 0x20 && c < 0x7F;
 }
+
+int wcsncmp(const wchar_t *a, const wchar_t *b, size_t n)
+{
+    while (n && *a && *a == *b) { a++; b++; n--; }
+    if (!n) return 0;
+    return *a < *b ? -1 : (*a > *b ? 1 : 0);
+}
