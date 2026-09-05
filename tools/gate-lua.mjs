@@ -19,6 +19,25 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
+import { spawnSync } from 'node:child_process';
+
+/*
+ * A BIGGER JAVASCRIPT STACK, and the gate asks for it itself rather than expecting to be run with a
+ * flag.
+ *
+ * PRISM emits a JS function per C function, so a C call is a JS call and C recursion depth is JS
+ * recursion depth -- with a frame that carries the emitter's temporaries as well as the program's.
+ * Node's default stack is about a megabyte, which is far less than the stack a C program of this era
+ * assumes, and three of Lua's files (calls, coroutine, errors) simply ran out of it. That is the
+ * HOST failing to provide a stack, not the language failing a test, and reporting it as the second
+ * would have been measuring the harness.
+ */
+if (!process.env.PRISM_LUA_STACK) {
+  const r = spawnSync(process.execPath,
+    ['--stack-size=30000', fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+    { stdio: 'inherit', env: { ...process.env, PRISM_LUA_STACK: '30000' } });
+  process.exit(r.status ?? 1);
+}
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TESTES = join(ROOT, 'corpus/lua/testes');
@@ -53,12 +72,20 @@ const files = readdirSync(TESTES).filter(f => f.endsWith('.lua')).sort()
   .filter(f => !(f in SKIP))
   .filter(f => !only || only.some(o => f === o || f === `${o}.lua`));
 
-/* The whole directory is visible to each run: several tests read and write files beside themselves. */
+/*
+ * The whole directory TREE is visible to each run: several tests read and write files beside
+ * themselves, and attrib.lua writes into `libs/`, which the flat listing never saw. That went
+ * unnoticed for as long as the in-memory store accepted any path at all; once it grew directories,
+ * a write to a directory nobody had loaded was correctly refused and the test failed.
+ */
 const data = {};
-for (const f of readdirSync(TESTES)) {
-  const p = join(TESTES, f);
-  if (statSync(p).isFile()) data[f] = new Uint8Array(readFileSync(p));
-}
+(function walk(dir, prefix = '') {
+  for (const f of readdirSync(dir)) {
+    const p = join(dir, f);
+    if (statSync(p).isDirectory()) { walk(p, `${prefix}${f}/`); continue; }
+    data[prefix + f] = new Uint8Array(readFileSync(p));
+  }
+})(TESTES);
 
 const target = loadTarget(join(ROOT, 'targets/lua.json'));
 const results = [];

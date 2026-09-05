@@ -2283,3 +2283,39 @@ The implemented case is deliberately narrow — the outermost extent of a LOCAL 
 That is exactly a VLA's lifetime, so nothing else had to know about it: the local is recorded as an
 address in a variable, which is the shape a by-value struct parameter already uses, and indexing,
 decay and `&x` all work without another case.
+
+## P8.4 — Lua's test suite as a gate, and the five stdio defects it named
+
+`node tools/gate-lua.mjs` went from **14 pass / 5 fail** to **16 pass / 1 fail**, and every fix on
+the way was a real one. Lua's files are self-checking and they ask stdio questions no game and no
+compiler test ever asks: not "does this work" but "does this FAIL when it should".
+
+**Three of the five failures were the harness, not the language.** `calls`, `coroutine` and `errors`
+ran out of JavaScript stack. PRISM emits a JS function per C function, so C recursion depth *is* JS
+recursion depth, with a frame carrying the emitter's temporaries as well as the program's — and
+node's default megabyte is far less than the stack a C program of this era assumes. The gate now
+re-executes itself with `--stack-size=30000` rather than expecting to be run with a flag: that is the
+host providing a stack, and reporting it as a language failure would have been measuring the
+harness. `constructs` wanted more than 256 MB of guest heap and now has 512.
+
+**The other five were stdio being silently permissive**, each found by `files.lua`:
+
+| what | what it did | what it must do |
+|---|---|---|
+| `fopen(path, "w")` | succeeded for any path at all | fail when the directory does not exist — so the store grew directories, seeded from the files in it |
+| `ungetc(EOF, f)` | stepped back a byte and cleared the EOF flag | fail and leave the stream unchanged (7.19.7.11). A program that reads to the end and pushes EOF back re-read its last character |
+| writing an `"r"` stream | appended | fail |
+| reading a `"w"` stream | returned the bytes | fail |
+| `fopen(path, "r+")` | **truncated the file** | keep it — the comment in that code described the rule correctly and the code did not |
+
+`attrib.lua` then failed, and its failure was the useful kind: it writes into `libs/`, and the gate
+only ever loaded the files sitting flat in `testes/`. That went unnoticed for exactly as long as the
+store accepted any path — once directories existed, a write into one nobody had loaded was correctly
+refused. The gate walks the tree now.
+
+**What is left is buffering.** `files.lua:678` checks that a `setvbuf("full")` write is NOT visible
+to a separate reader until close, and PRISM's writes reach the store immediately.
+
+**And a third time in one sitting, a gate case of mine read a value at an unspecified moment.**
+`printf("%d %d %d", fgetc(r), fgetc(r), fgetc(r))` comes out backwards under gcc. Reads go one per
+statement now; so do the overflow builtins and the shadowed-locals case, for the same reason.

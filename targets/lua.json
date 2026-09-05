@@ -44,7 +44,7 @@
     ]
   },
   "compile": {
-    "memory": 256,
+    "memory": 512,
     "collect": true
   },
   "_defines": "LUA_USE_C89 keeps it to what PRISM's tier-0 already promises. The default build reaches for POSIX (dlopen for require, popen, locale) through LUA_USE_LINUX; C89 is Lua's own switch for a host without those, which is exactly this one.",

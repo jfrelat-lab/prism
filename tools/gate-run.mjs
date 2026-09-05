@@ -17,6 +17,44 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// The parts of a stream that say NO. Every one of these was silently permissive, and each is what a
+// program checks when it wants to know whether something worked: gcc's suite never asks, and Lua's
+// files.lua asks about all of them.
+//
+// The RETURN VALUES are asserted and the error INDICATOR is not: C leaves it unspecified whether a
+// wrong-direction operation sets it, and glibc does not. Reads are one per statement, because
+// argument evaluation order is unspecified and three getc calls in one printf come out backwards.
+C('stream-refusals', `
+#include <stdio.h>
+int main(void)
+{
+    const char *f = "refusals-gate.tmp";
+    FILE *w = fopen(f, "w");
+    fputs("ab", w);
+    printf("read from a write stream: %d\\n", fgetc(w));
+    fclose(w);
+
+    FILE *r = fopen(f, "r");
+    printf("write to a read stream: %d\\n", (int)fwrite("z", 1, 1, r));
+    clearerr(r);
+    { int a = fgetc(r); int b = fgetc(r); int c = fgetc(r);
+      printf("%d %d %d eof=%d\\n", a, b, c, feof(r) != 0); }
+    { int c = fgetc(r); int u = ungetc(c, r); int e = feof(r) != 0; int n = fgetc(r);
+      printf("ungetc(EOF)=%d eof still %d, next=%d\\n", u, e, n); }
+    fclose(r);
+
+    /* r+ opens for UPDATE and must not truncate. */
+    FILE *u = fopen(f, "r+");
+    { char b[4] = {0}; fread(b, 1, 2, u); printf("r+ kept [%s]\\n", b); }
+    fclose(u);
+
+    /* A file cannot be created in a directory that does not exist. */
+    printf("no such dir: %d\\n", fopen("/a/b/c/d", "w") == 0);
+    remove(f);
+    return 0;
+}
+`);
+
 // Variable-length arrays, for LOCALS. The storage is alloca'd, which puts it on the same shadow
 // stack as the frame and therefore releases it at return -- exactly a VLA's lifetime.
 C('vla', `

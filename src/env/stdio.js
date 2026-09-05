@@ -78,6 +78,30 @@ export function installStdio(M, {
 
   const fileOf = (fp) => handles.get(fp | 0) ?? null;
   let tmpSeq = 0;
+
+  /*
+   * DIRECTORIES EXIST, even in a flat store.
+   *
+   * `fopen(name, "w")` used to succeed for any name at all, which is not what a filesystem does:
+   * `io.open('/a/b/c/d', 'w')` must fail, and Lua's files.lua asserts exactly that on line 46. A
+   * store with no notion of directories cannot answer, so it gets one -- the set of directories that
+   * hold a file, plus the ones a program made.
+   *
+   * Reading is unaffected: a read of a missing file already failed, whatever its path.
+   */
+  const dirsOf = (key) => {
+    const out = [];
+    const parts = key.split('/');
+    for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('/') || '/');
+    return out;
+  };
+  const directories = new Set(['', '/', '.', '/tmp']);
+  for (const k of store.keys()) for (const d of dirsOf(k)) directories.add(d);
+  const dirExists = (key) => {
+    const i = key.lastIndexOf('/');
+    if (i < 0) return true;                          // no directory component at all
+    return directories.has(key.slice(0, i) || '/');
+  };
   /*
    * freopen's whole point: a standard stream that now goes somewhere else. Keyed by the SENTINEL,
    * because `stdout` is not a handle in the store -- it is a token every writer checks for.
@@ -85,23 +109,41 @@ export function installStdio(M, {
   const redirected = new Map();
 
   const api = {
+    /*
+     * The four modes, each doing what it says. The comment here used to describe them correctly and
+     * the code did not: "r+" took the create-and-truncate path, so opening a file for UPDATE emptied
+     * it. Lua's files.lua:628 reads back what it wrote through an "r+" handle.
+     *
+     *   r   must exist. read only.  position 0, content kept.
+     *   r+  must exist. read+write. position 0, content kept.
+     *   w   created.    write only. truncated.
+     *   w+  created.    read+write. truncated.
+     *   a   created.    write only. content kept, writes go to the end.
+     *   a+  created.    read+write. content kept, writes go to the end.
+     */
     fopen: (namePtr, modePtr) => {
       const name = M.mod.cstr(namePtr);
       const mode = M.mod.cstr(modePtr);
-      const writing = /[wa+]/.test(mode);
       const key = find(name);
+      const update = mode.includes('+');
+      const kind = mode[0];
+      const readable = kind === 'r' || update;
+      const writable = kind !== 'r' || update;
 
-      if (!writing) {
-        if (key === null) return 0;                       // NULL: not found, which programs check
-        handles.set(next, { key, bytes: store.get(key), pos: 0, write: false, eof: false });
+      if (kind === 'r') {
+        if (key === null) return 0;                     // NULL: not found, which programs check
+        handles.set(next, { key, bytes: store.get(key), pos: 0,
+                            read: true, write: update, eof: false });
         return next++;
       }
-      // "w" truncates, "a" appends, "r+" keeps.
+      // A new file can only be created in a directory that exists.
+      if (key === null && !dirExists(norm(name))) return 0;
       const existing = key !== null ? store.get(key) : null;
-      const start = /^a/.test(mode) && existing ? existing : new Uint8Array(0);
+      const start = kind === 'a' && existing ? existing : new Uint8Array(0);
       const k = key ?? norm(name);
       store.set(k, start);
-      handles.set(next, { key: k, bytes: start, pos: start.length, write: true, eof: false });
+      handles.set(next, { key: k, bytes: start, pos: kind === 'a' ? start.length : 0,
+                          read: readable, write: writable, append: kind === 'a', eof: false });
       return next++;
     },
 
@@ -137,6 +179,7 @@ export function installStdio(M, {
     fread: (dst, size, count, fp) => {
       const h = fileOf(fp);
       if (!h) return 0;
+      if (!h.read) { h.err = true; return 0; }
       const want = (size | 0) * (count | 0);
       const got = Math.max(0, Math.min(want, h.bytes.length - h.pos));
       u8().set(h.bytes.subarray(h.pos, h.pos + got), dst);
@@ -154,6 +197,12 @@ export function installStdio(M, {
         }
         return count | 0;
       }
+      /*
+       * A STREAM OPENED FOR READING REFUSES TO BE WRITTEN. Obvious, and it was not checked anywhere:
+       * a write to an "r" handle simply appended. Lua's files.lua:299 does `io.input():write("xuxu")`
+       * and asserts it fails with a message and an errno, which is the whole point of the test.
+       */
+      if (!h.write) { h.err = true; return 0; }
       grow(h, h.pos + n);
       h.bytes.set(u8().slice(src, src + n), h.pos);
       h.pos += n;
@@ -174,7 +223,21 @@ export function installStdio(M, {
 
     fgetc: (fp) => readByte(fp),
     getc: (fp) => readByte(fp),
-    ungetc: (c, fp) => { const h = fileOf(fp); if (h && h.pos > 0) { h.pos--; h.eof = false; } return c | 0; },
+    /*
+     * C 7.19.7.11: pushing back EOF FAILS, and the stream is unchanged -- the end-of-file indicator
+     * included. Accepting it stepped the position back a byte and cleared the flag, so a program
+     * that reads to the end, gets EOF and dutifully pushes it back re-read the last character. Lua's
+     * files.lua does exactly that (test_eof does getc then ungetc unconditionally) and its
+     * `f:read(0)` at end of file then answered "not at the end".
+     */
+    ungetc: (c, fp) => {
+      if ((c | 0) === -1) return -1;
+      const h = fileOf(fp);
+      if (!h || h.pos <= 0) return -1;
+      h.pos--;
+      h.eof = false;                 // a SUCCESSFUL push-back clears it, and only that
+      return c & 0xff;
+    },
 
     fgets: (dst, n, fp) => {
       let i = 0;
@@ -225,8 +288,8 @@ export function installStdio(M, {
     },
 
     feof: (fp) => { const h = fileOf(fp); return h && h.eof ? 1 : 0; },
-    ferror: () => 0,
-    clearerr: (fp) => { const h = fileOf(fp); if (h) h.eof = false; },
+    ferror: (fp) => { const h = fileOf(fp); return h && h.err ? 1 : 0; },
+    clearerr: (fp) => { const h = fileOf(fp); if (h) { h.eof = false; h.err = false; } },
     fflush: () => 0,                        // every write is already visible; nothing is buffered
 
     unlink: (namePtr) => { const k = find(M.mod.cstr(namePtr)); if (k) store.delete(k); return k ? 0 : -1; },
@@ -271,6 +334,7 @@ export function installStdio(M, {
     if (f === STDIN) return readChar();
     const h = fileOf(fp);
     if (!h) return -1;
+    if (!h.read) { h.err = true; return -1; }      // a write-only stream is not readable
     if (h.pos >= h.bytes.length) { h.eof = true; return -1; }
     return h.bytes[h.pos++];
   }
@@ -299,6 +363,7 @@ export function installStdio(M, {
     }
     const h = fileOf(via ?? fp);
     if (!h) { M.write(String.fromCharCode(b)); return; }
+    if (!h.write) { h.err = true; return; }        // see fwrite: an "r" stream is not writable
     grow(h, h.pos + 1);
     h.bytes[h.pos++] = b;
   }
@@ -560,11 +625,11 @@ export function installStdio(M, {
     geteuid: () => 0,
     getuid: () => 0,
     getgid: () => 0,
-    mkdir: () => 0,
+    mkdir: (p) => { directories.add(norm(M.mod.cstr(p))); return 0; },
     // Watcom and MSVC spell it with the underscore, and OpenDUNE's File_MakeDirectory calls that
     // name under __WATCOMC__. Both succeed: directories here are derived from paths, so there is
     // nothing to create and nothing that can fail.
-    _mkdir: () => 0,
+    _mkdir: (p) => { directories.add(norm(M.mod.cstr(p))); return 0; },
     _rmdir: () => 0,
     rmdir: () => 0,
     chdir: () => 0,
