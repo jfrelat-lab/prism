@@ -76,12 +76,24 @@ export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true
     if (c === '/' && text[i + 1] === '*') {
       const end = text.indexOf('*/', i + 2);
       if (end < 0) { errors.push(`${file}:${lineAt(i)}: unterminated comment`); i = N; break; }
-      // `bol` means "no real token yet on this line". A comment is whitespace, so a comment that
-      // spans lines leaves the next token at the start of a line — which is why
-      //     /* comment
-      //     */ #define X 1
-      // is a valid directive.
-      if (text.slice(i, end).includes('\n')) bol = true;
+      /*
+       * A comment becomes ONE SPACE (5.1.1.2p1 phase 3), and the newlines inside it go with it. So a
+       * comment never starts a line and never ends one, however many lines it spans, and `bol` is
+       * left exactly as the last real newline set it. Both halves of that matter and cc agrees:
+       *
+       *   #define M(X) \        a multi-line comment between two continuation lines does NOT end
+       *       X(one) \          the directive -- PuTTY's putty.h:130 writes its colour list that
+       *       /* ...             way and expands to `F(one) F(two)`.
+       *        * ... *\/ \
+       *       X(two)
+       *
+       *   int x; /* c           and `#` after a comment that began mid-line is NOT a directive:
+       *   *\/ #define Y 1        cc -E leaves `int x; #define Y 1` as text.
+       *
+       * Setting `bol` from the comment's own content got the first wrong and the second wrong in the
+       * opposite direction. The case that motivated it -- a comment starting at the beginning of a
+       * line -- needs nothing: `bol` is already true from the newline before it.
+       */
       i = end + 2; ws = true; continue;
     }
     if (c === '/' && text[i + 1] === '/') {

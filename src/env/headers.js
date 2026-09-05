@@ -18,6 +18,21 @@ const STDDEF = `
 #define _PRISM_STDDEF_H
 typedef unsigned int size_t;
 typedef int ptrdiff_t;
+#ifndef _PRISM_WCHAR_T
+#define _PRISM_WCHAR_T
+/*
+ * Two ABIs disagree about this and both are in use here. i386 SysV makes wchar_t a signed int, which
+ * is what DJGPP and Linux targets get; the Microsoft ABI makes it a 16-bit UTF-16 code unit, and a
+ * Win32 program that calls the W entry points or walks a wide string depends on that width.
+ */
+#ifdef _WIN32
+typedef unsigned short wchar_t;
+typedef unsigned short wint_t;
+#else
+typedef int wchar_t;
+typedef unsigned int wint_t;
+#endif
+#endif
 #ifndef NULL
 #define NULL ((void *)0)
 #endif

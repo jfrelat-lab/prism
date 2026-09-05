@@ -398,6 +398,26 @@ C('include-pragma-once', `
 ONCE_VAL
 `, { 'd0/o.h': '#pragma once\n#define ONCE_VAL 9\n' });
 
+// A block comment is ONE SPACE, so the newlines inside it are not there afterwards. That cuts both
+// ways and PuTTY's putty.h needs the first half: a multi-line comment between two continuation lines
+// does not end the directive. The second half is the trap that comes with fixing the first -- a `#`
+// after a comment that STARTED mid-line is ordinary text, not a directive.
+C('comment-spans-lines-in-define', `
+#define M(X) \\
+    X(one) \\
+    /* a comment
+     * spanning lines
+     */ \\
+    X(two)
+M(F)
+`);
+
+C('comment-does-not-open-a-directive', `
+int x; /* comment
+*/ #define Y 1
+int z = Y;
+`);
+
 // #include_next: the same header name in two directories; the first chains to the second.
 C('include-next', `
 #include <n.h>

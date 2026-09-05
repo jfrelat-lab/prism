@@ -1046,3 +1046,72 @@ Two defects of mine, both found by using it:
     not 6. A person who clicks a window's close box has already answered that question, so a
     `MB_YESNO` box now returns `IDYES` -- and the program quits through its own `Sys_Quit`, which is
     the point of posting the message rather than terminating the worker.
+
+## PuTTY (Win32) — in progress
+
+The first target here that is neither a game nor a 1990s DOS program: modern C99, a real Win32 GUI,
+and a build system that is itself data. Different evidence from the rest — Quake shows PRISM runs a
+renderer; this would show it runs an application.
+
+**The unit list is computed, not transcribed.** `tools/putty-sources.mjs` reads every CMakeLists.txt
+in the tree, resolves `add_library` / `add_sources_from_current_dir` into libraries and each
+executable into the libraries it links. PuTTY moves functions between units in `utils/` constantly,
+so a hand-copied list would go stale within weeks. It answers CMake's `if()` guards from a small
+table and *reports* every guard it had to take on faith, because guessing one silently is how you
+link two definitions of `strtoumax` and blame the compiler. Unknown `HAVE_*` guards default to "no",
+since they name compiler or CPU features PRISM does not have.
+
+**The first milestone is `test_terminal`, not the GUI.** It is PuTTY's own unit test for the terminal
+emulator: it links `guiterminal`, opens no window, and reports its own pass/fail. An oracle, not a
+demo — it says whether the emulator runs before a single GDI call has to exist. 158 units.
+
+**Windows was chosen by measurement, not habit.** The resolver also runs `--unix`, and that variant
+pulls in GTK (`unix/window.c`, `unix/unifont.c`, `unix/config-gtk.c`): a larger surface than Win32's,
+and the opposite of the situation for Quake. What Win32 does drag in even for a windowless test is
+`windows/dialog.c`, `controls.c` and `config.c`, because that is how PuTTY's libraries are shaped.
+
+### Where it stops, and what got fixed on the way
+
+It now clears `defs.h`, `putty.h`, `windows/platform.h` and most of `terminal.c`, and stops in the
+Win32 GUI headers. Four defects were real and are fixed:
+
+| what | why it mattered |
+|---|---|
+| a block comment inside a `#define` ended the directive | **a preprocessor bug**, see below |
+| `wchar_t` was undeclared | and it is 2 bytes under `_WIN32`, 4 under i386 SysV — the Microsoft ABI makes it a UTF-16 code unit and PuTTY's Unicode handling depends on that width |
+| `wint_t` likewise | `(wint_t)0x9F` would not parse as a cast, so `terminal.c:7147` failed |
+| `INT_PTR`, `PCWSTR`, `DECLSPEC_IMPORT`, the `...LongPtr` names, the `WAIT_*` constants | ordinary header surface |
+
+The preprocessor one is worth stating in full, because the fix was wrong in **both** directions
+before and `cc -E` settled it rather than a reading of the standard. A comment becomes one space
+(5.1.1.2p1 phase 3) and the newlines inside it go with it. So:
+
+```c
+#define M(X) \
+    X(one) \
+    /* a comment
+     * spanning lines
+     */ \
+    X(two)
+```
+
+does **not** end at the comment — `M(F)` expands to `F(one) F(two)`, and `putty.h:130` writes its
+colour list exactly that way. And the converse:
+
+```c
+int x; /* comment
+*/ #define Y 1
+```
+
+is **not** a directive: `cc -E` leaves `int x; #define Y 1` as text. PRISM set `bol` from whether the
+comment's own text contained a newline, which got the first case wrong and the second wrong the other
+way. A comment now leaves `bol` exactly as the last real newline set it. Both cases are in
+`gate-cpp.mjs`.
+
+### The remaining surface, measured
+
+Ranking every identifier the 158 units use against what `headers-win32.js` declares gives the
+families rather than a list of names: window styles (`WS_*`, `WS_EX_*`), dialog and control messages
+(`BN_*`, `CB_*`, `LB_*`), the registry (`HKEY_*`, `RegOpenKeyEx` and friends), code pages (`CP_ACP`,
+`CP_UTF8`), and GDI's handles and structs (`HFONT`, `LOGFONT`, `TEXTMETRIC`). Bounded, and boring in
+a way that Quake's platform layer was not.

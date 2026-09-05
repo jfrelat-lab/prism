@@ -66,6 +66,14 @@ typedef unsigned long COLORREF;
 typedef unsigned long SIZE_T;
 typedef long LONG_PTR;
 typedef unsigned long ULONG_PTR, DWORD_PTR;
+/* The signed/unsigned pointer-width pair. Win32 dialog procedures return INT_PTR. */
+typedef int INT_PTR;
+typedef const unsigned short *PCWSTR;
+/* Empty on purpose: an import declaration is a linkage hint, and PRISM has one linkage. */
+#define DECLSPEC_IMPORT
+typedef unsigned int UINT_PTR;
+typedef long SSIZE_T;
+typedef unsigned long SIZE_T;
 typedef long long LONGLONG;
 typedef unsigned long long ULONGLONG, DWORDLONG;
 
@@ -477,6 +485,27 @@ BOOL WINAPI SetConsoleWindowInfo(HANDLE, BOOL, const SMALL_RECT *);
 #define MAKEWORD(a,b) ((WORD)(((BYTE)(a))|(((WORD)((BYTE)(b)))<<8)))
 #define MAKEINTRESOURCE(i) ((LPCSTR)((DWORD)((WORD)(i))))
 #define RGB(r,g,b) ((COLORREF)(((BYTE)(r)|((WORD)((BYTE)(g))<<8))|(((DWORD)(BYTE)(b))<<16)))
+/*
+ * The ...LongPtr names. On Win64 these are separate entry points taking LONG_PTR; on 32-bit Windows
+ * the real headers define them as macros onto the plain ...Long forms, because the two are the same
+ * width there. PRISM's ABI is 32-bit, so this is what the platform actually does, not a shortcut.
+ */
+#define GetWindowLongPtr    GetWindowLong
+#define SetWindowLongPtr    SetWindowLong
+#define GetClassLongPtr     GetClassLong
+#define GWLP_USERDATA       GWL_USERDATA
+#define GWLP_WNDPROC        GWL_WNDPROC
+#define GWLP_HINSTANCE      GWL_HINSTANCE
+#define DWLP_MSGRESULT      0
+#define CLEARTYPE_QUALITY   5
+#define MAXIMUM_WAIT_OBJECTS 64
+#define WAIT_OBJECT_0       0
+#define WAIT_ABANDONED_0    0x00000080
+#define WAIT_TIMEOUT        258
+#define WAIT_FAILED         0xFFFFFFFF
+#define INFINITE            0xFFFFFFFF
+typedef void *WSAEVENT;
+
 #define FIELD_OFFSET(type, field) ((LONG)(LONG_PTR)&(((type *)0)->field))
 
 /* ---- the functions. Declared here, resolved by src/env/win32.js -- or reported as undefined,
