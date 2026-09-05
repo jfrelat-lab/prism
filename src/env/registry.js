@@ -31,6 +31,7 @@ import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
 import { installSDL2 } from './sdl2.js';
 import { installConsole } from './console.js';
+import { installVgaFont } from './vgafont.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
 const machineOf = (M) => (M.machine ?? installPorts(M));
@@ -68,6 +69,12 @@ export const ENV = {
   dsp: { install: (M, _c, o) => installDsp(M, o) },
   // dlopen over PRISM's symbol table: the modules are the target's, passed by buildTarget.
   dl: { install: (M, _c, o) => installDl(M, o) },
+  /*
+   * The VGA ROM font, for a platform layer that has to RASTERISE text rather than hand it to a
+   * toolkit. The Win32 shim's ExtTextOut needs one; nothing else does yet.
+   */
+  vgafont: { install: (M, _c, o) => installVgaFont(M, o) },
+
   // SDL2 for the Open* family. See src/env/sdl2.js.
   sdl2: { install: (M, _c, o) => installSDL2(M, o) },
 };

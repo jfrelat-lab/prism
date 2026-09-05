@@ -18,6 +18,8 @@
 #include <string.h>
 #include <windows.h>
 
+extern int prism_win32_w, prism_win32_h;   /* the window win32.c is keeping */
+
 #define PRISM_FONT_W 8
 #define PRISM_FONT_H 16
 
@@ -33,8 +35,6 @@ HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj) { (void)dc; return obj; }
 int WINAPI SetMapMode(HDC dc, int mode) { (void)dc; (void)mode; return 1; }
 int WINAPI SetBkMode(HDC dc, int mode) { (void)dc; (void)mode; return 1; }
 int WINAPI GetBkMode(HDC dc) { (void)dc; return 2; }
-COLORREF WINAPI SetTextColor(HDC dc, COLORREF c) { (void)dc; return c; }
-COLORREF WINAPI SetBkColor(HDC dc, COLORREF c) { (void)dc; return c; }
 UINT WINAPI SetTextAlign(HDC dc, UINT a) { (void)dc; return a; }
 int WINAPI ExcludeClipRect(HDC dc, int l, int t, int r, int b)
 { (void)dc; (void)l; (void)t; (void)r; (void)b; return 1; }
@@ -57,7 +57,7 @@ HFONT WINAPI CreateFont(int h, int w, int e, int o, int wt, DWORD it, DWORD un, 
     return NEW_HANDLE(HFONT);
 }
 HPEN WINAPI CreatePen(int style, int w, COLORREF c) { (void)style; (void)w; (void)c; return NEW_HANDLE(HPEN); }
-HBRUSH WINAPI CreateSolidBrush(COLORREF c) { (void)c; return NEW_HANDLE(HBRUSH); }
+HBRUSH WINAPI CreateSolidBrush(COLORREF c) { return (HBRUSH)(ULONG_PTR)(PRISM_BRUSH_TAG | (c & 0x00FFFFFF)); }
 HBITMAP WINAPI CreateBitmap(int w, int h, UINT pl, UINT bits, const void *d)
 { (void)w; (void)h; (void)pl; (void)bits; (void)d; return NEW_HANDLE(HBITMAP); }
 HBITMAP WINAPI CreateCompatibleBitmap(HDC dc, int w, int h)
@@ -113,23 +113,159 @@ BOOL WINAPI GetCharABCWidthsFloat(HDC dc, UINT f, UINT l, ABCFLOAT *o)
 DWORD WINAPI GetCharacterPlacementW(HDC dc, LPCWSTR s, int n, int m, GCP_RESULTSW *r, DWORD fl)
 { (void)dc; (void)s; (void)n; (void)m; (void)r; (void)fl; return 0; }
 
-/* ---- drawing, which goes nowhere: there is no screen behind this yet. */
+/* ---- drawing, into a real framebuffer with a real font.
+ *
+ * THE SURFACE is one buffer for the whole window, and every HDC draws into it. Windows would give
+ * each DC its own target; this program has one window and paints it through whichever DC it last
+ * asked for, so one buffer is the honest simplification and is named as one here rather than hidden.
+ *
+ * THE FONT is the IBM VGA 8x16 ROM font, put in guest memory by src/env/vgafont.js -- 256 glyphs of
+ * 16 rows, one byte per row, most significant bit leftmost. `prism_vga_font` stays null if that
+ * environment was not installed, and then text draws as background: blank, not garbage.
+ *
+ * Pixels are four bytes, R G B A, because that is what a PNG writer and a canvas both want and it
+ * spares everyone a palette. COLORREF is 0x00bbggrr, which is why the channels come out of it in
+ * that order.
+ */
+const unsigned char *prism_vga_font = 0;
+
+int prism_gdi_w, prism_gdi_h, prism_gdi_pitch;
+unsigned char *prism_gdi_surface;
+int prism_gdi_draws;                    /* how many glyph cells have been written, for a harness */
+
+static COLORREF prism_fg = 0x00c0c0c0;  /* light grey on black, until the program says otherwise */
+static COLORREF prism_bk = 0x00000000;
+
+static void prism_surface_ensure(void)
+{
+    int w = prism_win32_w > 0 ? prism_win32_w : 640;
+    int h = prism_win32_h > 0 ? prism_win32_h : 480;
+    if (prism_gdi_surface && prism_gdi_w == w && prism_gdi_h == h) return;
+    if (prism_gdi_surface) free(prism_gdi_surface);
+    prism_gdi_w = w;
+    prism_gdi_h = h;
+    prism_gdi_pitch = w * 4;
+    prism_gdi_surface = (unsigned char *)calloc((size_t)h, (size_t)prism_gdi_pitch);
+}
+
+static void prism_pixel(int x, int y, COLORREF c)
+{
+    unsigned char *p;
+    if (!prism_gdi_surface || x < 0 || y < 0 || x >= prism_gdi_w || y >= prism_gdi_h) return;
+    p = prism_gdi_surface + y * prism_gdi_pitch + x * 4;
+    p[0] = (unsigned char)(c & 0xFF);            /* COLORREF is 0x00bbggrr */
+    p[1] = (unsigned char)((c >> 8) & 0xFF);
+    p[2] = (unsigned char)((c >> 16) & 0xFF);
+    p[3] = 0xFF;
+}
+
+static void prism_fill(int l, int t, int r, int b, COLORREF c)
+{
+    int x, y;
+    prism_surface_ensure();
+    for (y = t; y < b; y++)
+        for (x = l; x < r; x++) prism_pixel(x, y, c);
+}
+
+/* One glyph cell. `code` is already the byte the ROM font is indexed by. */
+static void prism_glyph(int x, int y, unsigned code, int opaque)
+{
+    const unsigned char *g;
+    int row, col;
+    if (opaque) prism_fill(x, y, x + PRISM_FONT_W, y + PRISM_FONT_H, prism_bk);
+    if (!prism_vga_font) return;
+    g = prism_vga_font + (code & 0xFF) * PRISM_FONT_H;
+    for (row = 0; row < PRISM_FONT_H; row++) {
+        unsigned bits = g[row];
+        for (col = 0; col < PRISM_FONT_W; col++)
+            if (bits & (0x80u >> col)) prism_pixel(x + col, y + row, prism_fg);
+    }
+    prism_gdi_draws++;
+}
+
+/*
+ * Unicode down to one ROM byte.
+ *
+ * The font has 256 glyphs in code page 437, and PuTTY hands over UTF-16. Latin-1 is the part the two
+ * agree on and is passed through; the box-drawing characters PuTTY uses for its own frames are
+ * mapped by hand, because a terminal drawing lines out of question marks would look broken in a way
+ * that has nothing to do with the terminal. Everything else becomes a filled box, which is what a
+ * font without the glyph is supposed to show.
+ */
+static unsigned prism_cp437(unsigned wc)
+{
+    if (wc < 0x100) return wc;
+    switch (wc) {
+      case 0x2500: return 0xC4;  case 0x2502: return 0xB3;
+      case 0x250C: return 0xDA;  case 0x2510: return 0xBF;
+      case 0x2514: return 0xC0;  case 0x2518: return 0xD9;
+      case 0x251C: return 0xC3;  case 0x2524: return 0xB4;
+      case 0x252C: return 0xC2;  case 0x2534: return 0xC1;
+      case 0x253C: return 0xC5;  case 0x2591: return 0xB0;
+      case 0x2592: return 0xB1;  case 0x2593: return 0xB2;
+      case 0x2588: return 0xDB;  case 0x25A0: return 0xFE;
+      case 0x2022: return 0xF9;  case 0x00B7: return 0xFA;
+      case 0x2190: return 0x1B;  case 0x2192: return 0x1A;
+      case 0x2191: return 0x18;  case 0x2193: return 0x19;
+      default: return 0xFE;      /* a filled box: "this font has no such character" */
+    }
+}
+
+static BOOL prism_textout(int x, int y, UINT opts, const RECT *r,
+                          const void *str, UINT n, const INT *dx, int wide)
+{
+    UINT i;
+    int cx = x;
+    prism_surface_ensure();
+    /* ETO_OPAQUE with a rectangle is how a terminal clears: PuTTY passes n == 0 to do exactly that. */
+    if ((opts & ETO_OPAQUE) && r) prism_fill(r->left, r->top, r->right, r->bottom, prism_bk);
+    for (i = 0; i < n; i++) {
+        unsigned c = wide ? prism_cp437(((const unsigned short *)str)[i])
+                          : (unsigned char)((const char *)str)[i];
+        prism_glyph(cx, y, c, (opts & ETO_OPAQUE) && !r);
+        cx += dx ? dx[i] : PRISM_FONT_W;
+    }
+    return 1;
+}
+
 BOOL WINAPI ExtTextOut(HDC dc, int x, int y, UINT o, const RECT *r, LPCSTR s, UINT n, const INT *dx)
-{ (void)dc; (void)x; (void)y; (void)o; (void)r; (void)s; (void)n; (void)dx; return 1; }
+{ (void)dc; return prism_textout(x, y, o, r, s, n, dx, 0); }
 BOOL WINAPI ExtTextOutW(HDC dc, int x, int y, UINT o, const RECT *r, LPCWSTR s, UINT n, const INT *dx)
-{ (void)dc; (void)x; (void)y; (void)o; (void)r; (void)s; (void)n; (void)dx; return 1; }
+{ (void)dc; return prism_textout(x, y, o, r, s, n, dx, 1); }
 BOOL WINAPI TextOut(HDC dc, int x, int y, LPCSTR s, int n)
-{ (void)dc; (void)x; (void)y; (void)s; (void)n; return 1; }
+{ (void)dc; return prism_textout(x, y, 0, NULL, s, (UINT)n, NULL, 0); }
+
+COLORREF WINAPI SetTextColor(HDC dc, COLORREF c) { COLORREF o = prism_fg; (void)dc; prism_fg = c; return o; }
+COLORREF WINAPI SetBkColor(HDC dc, COLORREF c) { COLORREF o = prism_bk; (void)dc; prism_bk = c; return o; }
+
 BOOL WINAPI LineTo(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; return 1; }
 BOOL WINAPI MoveToEx(HDC dc, int x, int y, POINT *old) { (void)dc; (void)x; (void)y; (void)old; return 1; }
 BOOL WINAPI Polyline(HDC dc, const POINT *p, int n) { (void)dc; (void)p; (void)n; return 1; }
 BOOL WINAPI Rectangle(HDC dc, int l, int t, int r, int b)
-{ (void)dc; (void)l; (void)t; (void)r; (void)b; return 1; }
-COLORREF WINAPI SetPixel(HDC dc, int x, int y, COLORREF c) { (void)dc; (void)x; (void)y; return c; }
+{ (void)dc; prism_fill(l, t, r, b, prism_fg); return 1; }
+COLORREF WINAPI SetPixel(HDC dc, int x, int y, COLORREF c) { (void)dc; prism_pixel(x, y, c); return c; }
 COLORREF WINAPI GetPixel(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; return 0; }
-int WINAPI FillRect(HDC dc, const RECT *r, HBRUSH b) { (void)dc; (void)r; (void)b; return 1; }
+
+/*
+ * A brush IS its colour here: CreateSolidBrush hands back the COLORREF with a tag bit, so FillRect
+ * needs no table. PuTTY only ever fills with brushes it made itself or with a system colour.
+ */
+#define PRISM_BRUSH_TAG 0x40000000
+int WINAPI FillRect(HDC dc, const RECT *r, HBRUSH b)
+{
+    COLORREF c = ((ULONG_PTR)b & PRISM_BRUSH_TAG) ? (COLORREF)((ULONG_PTR)b & 0x00FFFFFF) : prism_bk;
+    (void)dc;
+    if (r) prism_fill(r->left, r->top, r->right, r->bottom, c);
+    return 1;
+}
 int WINAPI DrawText(HDC dc, LPCSTR s, int n, RECT *r, UINT f)
-{ (void)dc; (void)s; (void)n; (void)r; (void)f; return PRISM_FONT_H; }
+{
+    (void)f;
+    if (n < 0) { n = 0; while (s && s[n]) n++; }
+    if (r) prism_textout(r->left, r->top, 0, NULL, s, (UINT)n, NULL, 0);
+    (void)dc;
+    return PRISM_FONT_H;
+}
 BOOL WINAPI DrawEdge(HDC dc, RECT *r, UINT e, UINT f) { (void)dc; (void)r; (void)e; (void)f; return 1; }
 BOOL WINAPI DrawIconEx(HDC dc, int x, int y, HICON i, int cx, int cy, UINT s, HBRUSH b, UINT f)
 { (void)dc; (void)x; (void)y; (void)i; (void)cx; (void)cy; (void)s; (void)b; (void)f; return 1; }
@@ -137,7 +273,7 @@ BOOL WINAPI DestroyIcon(HICON i) { (void)i; return 1; }
 
 /* ---- colours */
 COLORREF WINAPI GetSysColor(int i) { (void)i; return 0x00C0C0C0; }
-HBRUSH WINAPI GetSysColorBrush(int i) { (void)i; return NEW_HANDLE(HBRUSH); }
+HBRUSH WINAPI GetSysColorBrush(int i) { return CreateSolidBrush(GetSysColor(i)); }
 
 /* ---- windows */
 HWND WINAPI GetDesktopWindow(void) { return (HWND)0; }
@@ -300,27 +436,16 @@ int WINAPI MulDiv(int a, int b, int c) { return c ? (int)(((long long)a * b) / c
  * running says what it CALLS. defuse_showwindow is the one that named most of them: PuTTY creates a
  * throwaway window and destroys it, so that the shell's "show state" is spent on that one instead of
  * on the terminal.
+ *
+ * Anything that MOVES OR DESTROYS a window is win32.c's, not this file's -- that is the whole point
+ * of the split, and six of these had to go back there once PuTTY called them.
  */
 HWND WINAPI SetActiveWindow(HWND h) { return h; }
 HWND WINAPI SetFocus(HWND h) { return h; }
 HWND WINAPI GetFocus(void) { return (HWND)0; }
-BOOL WINAPI SetForegroundWindow(HWND h) { (void)h; return 1; }
 BOOL WINAPI BringWindowToTop(HWND h) { (void)h; return 1; }
-BOOL WINAPI DestroyWindow(HWND h) { (void)h; return 1; }
-BOOL WINAPI InvalidateRect(HWND h, const RECT *r, BOOL erase) { (void)h; (void)r; (void)erase; return 1; }
-BOOL WINAPI UpdateWindow(HWND h) { (void)h; return 1; }
 BOOL WINAPI ScrollWindow(HWND h, int dx, int dy, const RECT *sc, const RECT *cl)
 { (void)h; (void)dx; (void)dy; (void)sc; (void)cl; return 1; }
-int WINAPI GetSystemMetrics(int i)
-{
-    switch (i) {
-      case 0:  return 640;    /* SM_CXSCREEN */
-      case 1:  return 480;    /* SM_CYSCREEN */
-      case 2:  return 16;     /* SM_CXVSCROLL */
-      case 11: case 12: return 32;   /* SM_CXICON / SM_CYICON */
-      default: return 0;
-    }
-}
 
 BOOL WINAPI MoveWindow(HWND h, int x, int y, int w, int ht, BOOL repaint)
 { (void)h; (void)x; (void)y; (void)w; (void)ht; (void)repaint; return 1; }
@@ -365,8 +490,6 @@ HGDIOBJ WINAPI GetStockObject(int i) { return NEW_HANDLE(HGDIOBJ); }
  * dialogue to create and this returns NULL. PuTTY's ShinyDialogBox checks it and returns -1, which
  * is its own "the box could not be shown"; do_config then behaves as if the user cancelled.
  */
-HWND WINAPI CreateDialog(HINSTANCE inst, LPCSTR tmpl, HWND parent, void *proc)
-{ (void)inst; (void)tmpl; (void)parent; (void)proc; return (HWND)0; }
 INT_PTR WINAPI DialogBoxParam(HINSTANCE inst, LPCSTR tmpl, HWND parent, void *proc, LPARAM init)
 { (void)inst; (void)tmpl; (void)parent; (void)proc; (void)init; return -1; }
 LRESULT WINAPI DefDlgProc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProc(h, m, w, l); }

@@ -1288,3 +1288,48 @@ must agree — `HAVE_GCP_RESULTSW` was the one where "undefined means 0" was the
 template and returns NULL. PuTTY's configuration box therefore cannot be shown, and `ShinyDialogBox`
 spins waiting for a dialogue that will never end. Naming a session on the command line is the
 program's own way past it.
+
+### The Win32 shim rasterises text
+
+`win32-gui.c` now has a framebuffer and a font instead of drawing calls that returned success into
+nothing. `node tools/gate-vgafont.mjs --png=/tmp/font.png`:
+
+```
+the font
+  ok    prism_vga_font is bound (1222808)
+  ok    4096 bytes in guest memory match the ROM file
+the surface
+  ok    allocated (320x48, pitch 1280)
+  ok    sized from the window rectangle, not guessed
+  ok    20 glyph cells drawn for 20 characters
+the glyphs, against the ROM bytes
+  ok    all 20 glyphs match the ROM exactly
+  ok    the six box-drawing characters reach their code page 437 glyphs
+```
+
+**The font was already here.** `assets/vga-rom-8x16.bin` is what `web/app.js` draws DOS text mode
+with — 256 glyphs of 16 rows, most significant bit leftmost. `src/env/vgafont.js` interns those 4096
+bytes in guest memory and points a global at them, so compiled C can read the same file the page
+does. Not a C array in the shim, which would be a second copy free to drift; not fetched at run time,
+because the font is not the program's data, it is the **platform's** — a Windows box has fonts before
+any program starts.
+
+**Unicode reaches the ROM through code page 437.** Latin-1 passes through, the box-drawing characters
+PuTTY frames its own UI with are mapped by hand, and everything else becomes the filled box a font
+without the glyph is supposed to show. That map is the one part of this that is a decision rather
+than a copy, so the gate checks it separately.
+
+**What the gate checks is not "pixels changed".** Each glyph is compared against the ROM bytes it
+came from, bit for bit, so a font loaded at the wrong offset, a row drawn upside down, or a leftmost
+pixel taken from the low bit all fail here instead of looking plausible.
+
+Two simplifications, named rather than hidden: **one surface for the whole window**, because every
+HDC draws into it — Windows would give each DC its own target, and this program has one window; and
+**a brush is its colour**, tagged into the handle, because PuTTY only ever fills with brushes it made
+or with a system colour.
+
+**PuTTY still cannot show it.** With no network it reports "Host does not exist" and exits before its
+message loop, so it never repaints — the surface it leaves behind is the 100x100 hidden timing
+window with one glyph in it. Seeing a PuTTY terminal needs a session that starts, and the honest way
+to that is a real Winsock over the host's sockets rather than a peer invented here. That is the next
+piece, and it is a different piece.

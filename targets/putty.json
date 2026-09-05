@@ -202,7 +202,8 @@
         "src/env/wide.c",
         "src/env/inttypes.c",
         "src/env/win32-app.c"
-      ]
+      ],
+      "web": false
     },
     "test-argv": {
       "host": "console",
@@ -370,7 +371,8 @@
           "_MSC_VER": "1400"
         }
       },
-      "_msc_ver": "Not a workaround -- a CONFIGURATION, and PuTTY's source is what makes it necessary. split_into_argv.c:158 picks its behaviour with `#if _MSC_VER < 1400`, so a compiler that is not MSVC at all reads as older than Visual Studio 7 and gets the mod-3 quirk, while the TEST file -- which cannot see a macro defined inside a .c -- always expects the modern behaviour. Left alone the two halves disagree and 51 of 92 cases fail; the same would happen under MinGW. Saying _MSC_VER=1400 for this one unit says 'this compiler is not Visual Studio 7', which is true, and the two halves then agree exactly: 92/92."
+      "_msc_ver": "Not a workaround -- a CONFIGURATION, and PuTTY's source is what makes it necessary. split_into_argv.c:158 picks its behaviour with `#if _MSC_VER < 1400`, so a compiler that is not MSVC at all reads as older than Visual Studio 7 and gets the mod-3 quirk, while the TEST file -- which cannot see a macro defined inside a .c -- always expects the modern behaviour. Left alone the two halves disagree and 51 of 92 cases fail; the same would happen under MinGW. Saying _MSC_VER=1400 for this one unit says 'this compiler is not Visual Studio 7', which is true, and the two halves then agree exactly: 92/92.",
+      "web": false
     },
     "tel": {
       "host": "win32",
@@ -583,7 +585,8 @@
         "src/env/win32.c"
       ],
       "env": [
-        "stdio"
+        "stdio",
+        "vgafont"
       ],
       "_unitDefines": "be_list.c is compiled once PER APPLICATION -- it is what fills the backends[] array and names the program -- so its macros belong to that one unit. `node tools/putty-sources.mjs puttytel` prints them.",
       "unitDefines": {
@@ -596,12 +599,14 @@
       },
       "args": "-telnet localhost",
       "_args": "A session named on the COMMAND LINE, which is the program's own way past a configuration box PRISM cannot show: no .rc resources are compiled, so CreateDialog has no template. With this the run goes all the way through -- window created, connection attempted, \"Host does not exist\" reported, which is the right answer on a machine with no network.",
-      "_state": "RUNS. WinMain, the command line, RegisterClassW, CreateWindowExW, and then PuTTY's own error box. The window comes out 642x386, which is 80x24 cells of the 8x16 font win32-gui.c reports plus a border -- the font metric propagates all the way to the window size. Nothing is DRAWN yet: the GDI layer accepts text and returns success with no raster behind it."
+      "_state": "RUNS. WinMain, the command line, RegisterClassW, CreateWindowExW, and then PuTTY's own error box. The window comes out 642x386, which is 80x24 cells of the 8x16 font win32-gui.c reports plus a border -- the font metric propagates all the way to the window size. Nothing is DRAWN yet: the GDI layer accepts text and returns success with no raster behind it.",
+      "web": false
     }
   },
   "_state": "IN PROGRESS -- this target does not build yet, and the file records where it stops rather than pretending otherwise. It now gets through defs.h, putty.h, windows/platform.h and most of terminal.c, and stops in the Win32 GUI headers (HFONT, LOGFONT, the WS_/HKEY_/CP_/BN_ constant families). That surface is MEASURED, not guessed: see docs/COMPAT.md.",
   "_why_win32": "The unix variant was resolved and compared rather than assumed: `--unix` pulls in GTK (unix/window.c, unifont.c, config-gtk.c), which is a larger and less useful surface than Win32's. So Windows is the cheaper platform here, which is the opposite of what it is for Quake.",
   "_generated_headers": "licence.h and version.h do not exist in the tree -- cmake/licence.cmake and Buildscr write them. `node tools/putty-generate.mjs` does the same, into corpus/putty-generated/, which is outside the source tree and gitignored; the include path picks it up from there. Run it after fetch.",
   "_have_strtoumax": "The same answer the resolver gives, in the form the PREPROCESSOR needs. CMake writes its feature tests into cmake.h; PuTTY reads HAVE_STRTOUMAX both to pick source files and, in windows/platform.h:128, to decide whether to define a static inline strtoumax over MSVC's _strtoui64. Answering only the first left that inline in every unit and cost 206 functions.",
-  "_have_guards": "CMake writes its feature tests into cmake.h and PuTTY reads them with #if, so an UNDEFINED one is 0 -- which is the right answer for most of these but not for HAVE_GCP_RESULTSW, where windows.h here does declare the type and the 0 would have selected the narrow fallback struct. tools/putty-sources.mjs answers the same table for file selection; the two must agree."
+  "_have_guards": "CMake writes its feature tests into cmake.h and PuTTY reads them with #if, so an UNDEFINED one is 0 -- which is the right answer for most of these but not for HAVE_GCP_RESULTSW, where windows.h here does declare the type and the 0 would have selected the narrow fallback struct. tools/putty-sources.mjs answers the same table for file selection; the two must agree.",
+  "_web": "NODE ONLY, for now. The page has no host branch for a Win32 application -- it draws MGL and DOS and X11 -- and src/env/vgafont.js reads the ROM off disk, which a worker cannot do (it takes a `bytes` option for exactly that day). Saying so here rather than letting the page offer a target it cannot run."
 }
