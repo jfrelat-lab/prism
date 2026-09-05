@@ -336,7 +336,7 @@ export class FunctionEmitter {
       if (this.hasSetjmp) {
         // A longjmp aimed at THIS frame resumes; anything else keeps unwinding. The stack pointer is
         // put back to this frame's base, because everything the abandoned path pushed is gone.
-        this.out.push('} }catch(_e){ if(_e&&_e.__prismJmp===_fp){ _sjv=_e.val; _pc=_e.pc; M.sp=_fp; continue _top; } throw _e; } break _top; }');
+        this.out.push('} }catch(_e){ if(_e&&_e.__prismJmp===_fp){ _sjv=_e.val; _pc=_e.pc; M.sp=_e.sp; continue _top; } throw _e; } break _top; }');
       } else {
         this.out.push('} break _top; }');
       }

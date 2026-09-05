@@ -441,6 +441,10 @@ export const BUILTINS = new Map(Object.entries({
   // machine, which a plain call cannot express. longjmp is an ordinary runtime call that throws.
   setjmp: { ret: I, params: [P], setjmp: true },
   longjmp: { ret: V, params: [P, I] },
+  // gcc's own pair. Same contract, and the same buffer: a program that uses them never includes
+  // <setjmp.h> and declares the buffer itself, usually as `void *buf[5]`.
+  __builtin_setjmp: { ret: I, params: [P], setjmp: true },
+  __builtin_longjmp: { ret: V, params: [P, I], impl: 'longjmp' },
   __prism_setjmp: { ret: I, params: [P, P, I] },
   __prism_va_start: { ret: P, params: [], vaStart: true },
   __prism_va_next: { ret: P, params: [P, U] },

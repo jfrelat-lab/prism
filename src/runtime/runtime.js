@@ -717,13 +717,17 @@ function makeLibc(M) {
     __prism_setjmp: (env, fp, pc) => {
       dv().setInt32(env, fp | 0, true);
       dv().setInt32(env + 4, pc | 0, true);
+      // The stack pointer AS IT IS HERE, which is not the frame base: anything alloca'd before the
+      // setjmp is still alive after the longjmp, and gcc's built-in-setjmp.c reads exactly that.
+      dv().setInt32(env + 8, M.sp | 0, true);
       return 0;
     },
     longjmp: (env, val) => {
       const fp = dv().getInt32(env, true);
       const pc = dv().getInt32(env + 4, true);
+      const sp = dv().getInt32(env + 8, true);
       // C says longjmp(env, 0) makes setjmp return 1.
-      throw { __prismJmp: fp, pc, val: (val | 0) === 0 ? 1 : (val | 0) };
+      throw { __prismJmp: fp, pc, sp, val: (val | 0) === 0 ? 1 : (val | 0) };
     },
 
     // --- gcc builtins that are not library calls

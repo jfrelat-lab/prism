@@ -110,6 +110,33 @@ int main(void)
 }
 `);
 
+// setjmp/longjmp, in both spellings, with the thing that separates a correct resume from a
+// plausible one: memory alloca'd BEFORE the setjmp is still alive after the longjmp.
+C('setjmp-resume', `
+#include <stdio.h>
+#include <setjmp.h>
+#include <string.h>
+static jmp_buf env;
+static void deeper(int n) { if (n) deeper(n - 1); else longjmp(env, 7); }
+static void *bbuf[8];
+static void jump_back(void) { __builtin_longjmp(bbuf, 1); }
+int main(void)
+{
+    char *p = (char *) __builtin_alloca(24);
+    strcpy(p, "before");
+    int v = setjmp(env);
+    if (v == 0) { printf("out %s\\n", p); deeper(3); printf("unreachable\\n"); }
+    else printf("back %d %s\\n", v, p);
+    {
+        char *q = (char *) __builtin_alloca(16);
+        strcpy(q, "second");
+        if (__builtin_setjmp(bbuf) == 0) jump_back();
+        else printf("builtin %s %s\\n", q, p);
+    }
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.
