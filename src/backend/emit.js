@@ -286,6 +286,7 @@ export class FunctionEmitter {
     // "a few times slower than native" and "tens of times".
     const escaped = new Set();
     collectAddressTaken(d.body, escaped);
+    this.escaped = escaped;
     /*
      * A nested function reaches the enclosing frame through MEMORY and nothing else, so every name
      * it mentions has to be in a slot rather than a JS variable. Collected before the body is
@@ -687,10 +688,17 @@ export class FunctionEmitter {
     for (const line of captured) {
       const t = String(line).trim();
       if (!t) continue;
+      /*
+       * A temporary DECLARES itself at the top of whatever buffer was current when it was asked
+       * for, and here that buffer is this capture -- so `var _t0=0;` would land inside the comma
+       * expression, where JavaScript does not allow a declaration. It belongs to the function, so
+       * it is put back at the top of the function, which is where #declareTmp meant to put it.
+       */
+      if (/^var \w+=0;$/.test(t)) { this.out.unshift(t); continue; }
       if (t.includes('\n') || /^(if|for|while|do|switch|\{)/.test(t) || t.endsWith('{')) {
         throw new EmitError('a compound literal whose initialiser needs a statement, not an expression');
       }
-      steps.push(t.replace(/;$/, ''));
+      steps.push(...topLevelStatements(t));
     }
     return steps;
   }
@@ -1379,6 +1387,16 @@ export class FunctionEmitter {
         const steps = this.#captureInit(at, t, e.init);
         return { addr: steps.length ? `(${steps.join(',')},${at})` : at, type: t };
       }
+      /*
+       * A record-valued statement expression. Same rule as the comma and the conditional above: the
+       * result is not an lvalue, but a record travels as its address in tier-0, and `({...}).x` is
+       * ordinary GNU C.
+       */
+      case 'stmtexpr': {
+        if (!T.isRecord(e.type ?? T.INT)) break;
+        const v = this.#stmtExpr(e);
+        return { addr: v.js, type: v.type };
+      }
       case 'cond': {
         if (!T.isRecord(e.type ?? T.INT)) break;
         const off = this.slot(e.type.size, e.type.align);
@@ -1524,7 +1542,8 @@ export class FunctionEmitter {
         if (T.isRecord(l.type) || l.type.k === 'array') return { js: l.addr, type: l.type };
         return { js: loadExpr(l.addr, l.type), type: l.type };
       }
-      case 'offsetof': case 'stmtexpr':
+      case 'stmtexpr': return this.#stmtExpr(e);
+      case 'offsetof':
         return unsup(`'${e.n}'`);
     }
     throw new EmitError(`cannot emit expression '${e.n}'`);
@@ -1770,6 +1789,51 @@ export class FunctionEmitter {
       return { js: `(${at}=${l.addr},${old}=${loaded},${nt}=${nv},${storeExpr(at, l.type, nt)},${nt})`, type: l.type };
     }
     return { js: `(${at}=${l.addr},${old}=${loaded},${storeExpr(at, l.type, nv)},${old})`, type: l.type };
+  }
+
+  /*
+   * A GNU statement expression, `({ ... })`. Its value is the last statement, and the last statement
+   * is a STATEMENT -- so the thing JavaScript has no syntax for is exactly the thing this needs.
+   *
+   * It becomes an arrow function called on the spot. The obvious alternative, hoisting the body
+   * ahead of the enclosing statement and leaving a temporary behind, is wrong wherever the
+   * expression is not evaluated unconditionally: gcc's 950906-1.c puts one in a `while` condition,
+   * where hoisting would run the body once instead of once per iteration, and `a ? ({...}) : b`
+   * would run it even when the branch is not taken. An arrow evaluates where it is written.
+   *
+   * The body's locals are ordinary emitted `var`s, scoped to the arrow, and its frame slots are
+   * this function's -- which is what 20020320-1.c checks by returning a struct from one statement
+   * expression and reading it after a second one has run: slot offsets only grow, so the storage a
+   * statement expression used is still there afterwards.
+   *
+   * A jump that LEAVES the body cannot be an arrow's: `return` would return from the arrow, and
+   * `break`/`continue`/`goto` have no target across a function boundary. Each is refused by name.
+   */
+  #stmtExpr(e) {
+    escapingJump(e.body);
+    const outer = this.out;
+    this.out = [];
+    let value = null;
+    try {
+      this.#scoped(() => {
+        const items = e.body.items;
+        for (let i = 0; i < items.length; i++) {
+          const tail = i === items.length - 1;
+          if (tail && items[i].n === 'exprstmt') {
+            value = this.#rval(items[i].expr);
+            this.out.push(`return ${value.js};`);
+          } else this.#item(items[i], this.escaped);
+        }
+      });
+    } finally {
+      var lines = this.out;
+      this.out = outer;
+    }
+    // Joined onto ONE line, not for compactness: an emitted line that contains a newline is how
+    // #captureInit tells a statement from an expression, and this is an expression whichever way it
+    // is spelled. Every line the emitter produces already ends in `;` or a brace, and none of them
+    // carry a `//` comment, so a space is a safe join.
+    return { js: `(()=>{${lines.join(' ')}})()`, type: value ? value.type : T.VOID };
   }
 
   #declareTmp(name) {
@@ -2282,6 +2346,65 @@ export function collectNestedRefs(node, out) {
     if (k === 'type' || k === 'sym' || k === 'loc') continue;
     collectNestedRefs(node[k], out);
   }
+}
+
+/**
+ * Split one emitted line into the statements it holds, at its TOP-LEVEL semicolons.
+ *
+ * A single push is not always a single statement -- a bitfield store emits `_t0=addr; _t1=value;
+ * D.setUint32(...)` as one line -- and a comma expression cannot hold a semicolon. Depth is tracked
+ * because a semicolon inside an arrow function's body (a statement expression) belongs to that body,
+ * not to this line.
+ */
+function topLevelStatements(line) {
+  const out = [];
+  let depth = 0, start = 0, quote = 0;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = 0; continue; }
+    if (c === '"' || c === "'" || c === '`') { quote = c; continue; }
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === ';' && depth === 0) { out.push(line.slice(start, i)); start = i + 1; }
+  }
+  const last = line.slice(start).trim();
+  if (last) out.push(last);
+  return out.map(x => x.trim()).filter(Boolean);
+}
+
+/**
+ * Refuse a statement expression whose body jumps OUT of itself, naming the jump. Depth counts the
+ * loops and switches the body opens for itself: a `break` inside one of those is the body's own.
+ */
+function escapingJump(body) {
+  const walk = (node, depth, sw) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { for (const x of node) walk(x, depth, sw); return; }
+    switch (node.n) {
+      case 'return': unsup('a `return` inside a statement expression');
+      case 'goto': case 'gotoexpr': unsup('a `goto` out of a statement expression');
+      case 'label': unsup('a label inside a statement expression');
+      case 'case': case 'default':
+        if (!sw) unsup('a case label inside a statement expression');
+        walk(node.body, depth, sw);
+        return;
+      case 'break': if (!depth && !sw) unsup('a `break` out of a statement expression'); return;
+      case 'continue': if (!depth) unsup('a `continue` out of a statement expression'); return;
+      case 'while': case 'do': case 'for':
+        walk(node.cond, depth, sw); walk(node.init, depth, sw); walk(node.step, depth, sw);
+        walk(node.body, depth + 1, sw);
+        return;
+      case 'switch': walk(node.disc, depth, sw); walk(node.body, depth, true); return;
+      // A nested statement expression checks itself when it is emitted.
+      case 'stmtexpr': return;
+      case 'func': return;
+    }
+    for (const k of Object.keys(node)) {
+      if (k === 'type' || k === 'sym' || k === 'loc') continue;
+      walk(node[k], depth, sw);
+    }
+  };
+  walk(body, 0, false);
 }
 
 export function collectAddressTaken(node, out) {

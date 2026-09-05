@@ -17,6 +17,36 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
+// body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
+// `?:` -- rather than being hoisted ahead of the statement.
+C('stmt-expressions', `
+#include <stdio.h>
+#define MAX(a,b) ({ int _a = (a), _b = (b); _a > _b ? _a : _b; })
+struct pair { int x, y; };
+static int calls = 0;
+static int bump(void) { calls++; return calls; }
+int main(void)
+{
+    int i = 3, n = 0;
+    printf("%d\\n", MAX(2 + 2, 5));
+    /* In a loop condition: once per iteration, not once. */
+    while ( ({ i--; }) ) n++;
+    printf("%d %d\\n", i, n);
+    /* In the untaken arm of a conditional: must not run at all. */
+    printf("%d\\n", 1 ? 7 : ({ bump(); 9; }));
+    printf("calls=%d\\n", calls);
+    /* A struct value, and a member read straight off it. */
+    printf("%d\\n", ({ struct pair p; p.x = 4; p.y = 6; p; }).y);
+    /* Its own loop and switch inside, whose break belongs to them. */
+    printf("%d\\n", ({ int s = 0, k; for (k = 0; k < 4; k++) { if (k == 3) break; s += k; }
+                       switch (s) { case 3: s = 30; break; default: s = -1; } s; }));
+    /* Void: the last statement is not an expression. */
+    ({ int unused = 1; (void)unused; });
+    return 0;
+}
+`);
+
 // GNU nested functions. They become sibling JS functions taking the enclosing FRAME as a hidden
 // first parameter -- not JavaScript closures, which would capture the emitted variables when what a
 // nested C function needs is the frame. Every name one mentions is therefore pinned to a slot.

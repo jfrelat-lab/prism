@@ -1185,7 +1185,11 @@ export class Parser {
       if (this.isP('{')) {
         const body = this.#compound();
         this.expectP(')');
-        return { n: 'stmtexpr', body, type: T.INT };
+        // The value of a statement expression is its LAST statement, so that is where its type
+        // comes from; anything else -- a declaration, a loop -- makes it void, as gcc does.
+        const tail = body.items[body.items.length - 1];
+        const type = tail?.n === 'exprstmt' ? (tail.expr.type ?? T.INT) : T.VOID;
+        return { n: 'stmtexpr', body, type };
       }
       const e = this.expression();
       this.expectP(')');
