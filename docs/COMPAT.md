@@ -1376,3 +1376,50 @@ terminal both use slot -21.
 invalidate, pump, dispatch — runs `WndProc` → `do_paint` → `term_paint`, and it stops there on
 `cline==NULL ... w=0 h=0`: the terminal has no lines because the session never started. That is the
 network, downstream, and not the window.
+
+### P10.7 — Winsock over the host's sockets: PuTTY connects, and the terminal draws
+
+```
+  +   51ms getaddrinfo -> 0
+  +   52ms socket -> 1        setsockopt -> 0    bind -> 0    WSAAsyncSelect -> 0
+  +   52ms connect -> -1      (WSAEWOULDBLOCK, as a non-blocking socket must)
+  +   82ms netevent(sock=1, FD_CONNECT, err=0) / FD_READ / FD_WRITE
+  +  114ms recv -> 20         "Hello from PRISM\r\n$ "
+  +  140ms recv -> 49
+```
+
+A real TCP connection to a real server, and the bytes reach PuTTY's terminal, which draws them
+through the VGA ROM font.
+
+**Why a thread.** `program.run` is one long JavaScript call, so node's event loop cannot run while
+the guest is executing and an asynchronous socket can never fire. The sockets therefore live on
+another thread (`tools/net-worker.mjs`) and share memory with the guest — the same arrangement the
+browser build already uses for sound and stdin. `src/env/wsock.js` is the guest's half and hands the
+compiled C six primitives; everything Winsock-shaped stays in `src/env/win32-net.c`, because the
+shape is a contract the compiler settles better than hand-written offsets.
+
+**The guest never blocks on a socket**, and that is PuTTY's doing rather than a design of ours: its
+Windows client asks to be TOLD when a socket is ready (`WSAAsyncSelect` → `WM_NETEVENT`), so `recv`
+is only called when bytes are already there. The one place it waits is
+`MsgWaitForMultipleObjects`, and that now waits on the socket thread's ring.
+
+**An address here is a TOKEN.** The socket thread connects by name — node's `connect` does its own
+lookup — but PuTTY resolves first and connects to a `sockaddr` second, so `getaddrinfo` hands back
+`10.0.0.N`, meaning "the Nth name this program asked about", and `connect` turns it back. No packet
+carries it and nothing outside that file reads it; the cost is that a program printing the peer's
+address would print the wrong one, which is why it is written down.
+
+Five defects in the platform layer came out of making a session actually run, and every one of them
+was invisible while nothing arrived:
+
+| what | why it mattered |
+|---|---|
+| events posted in ASCENDING BIT ORDER | `FD_WRITE` (2) reached PuTTY before `FD_CONNECT` (16), so it heard "you may write" about a socket it did not believe was connected, and closed it. Windows reports the connection first and the close last |
+| every message carried ONE global window | a program reads its own state back out of the handle a message carries, and PuTTY does `GetWindowLongPtr(hwnd, GWLP_USERDATA)` at the top of every `WndProc` call. A `WM_PAINT` delivered under the hidden timing window's handle handed it a null session — the crash surfaced four calls away, inside `terminal.c`, as a terminal whose every field was zero |
+| ONE window procedure for all classes | PuTTY registers a class for its terminal and another for a window that exists only to receive `WM_TIMER`; the last registration won, so every timer went to the terminal's procedure, which ignores it |
+| `SetTimer` and `KillTimer` did nothing | PuTTY does not repaint when data arrives — it schedules a timer and repaints when it fires. The bytes reached the terminal, the terminal recorded them, and the screen stayed blank |
+| `PRISM_BRUSH_TAG` defined BELOW its first use | `CreateSolidBrush` therefore never emitted, silently, below the twelfth-most-common cause in the build report. `--failures=40` is why it was found |
+
+**What is still wrong, precisely:** the terminal's background is cleared to 187,187,187, which is
+PuTTY's default *foreground*. Text draws with contrast on the first two rows and the rest of the
+screen is a solid block of the wrong colour. That is a specific place to look, not a mystery.

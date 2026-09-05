@@ -212,11 +212,6 @@ DWORD WINAPI WaitForMultipleObjects(DWORD n, HANDLE *h, BOOL all, DWORD ms)
     (void)n; (void)h; (void)all; (void)ms;
     return WAIT_OBJECT_0;
 }
-DWORD WINAPI MsgWaitForMultipleObjects(DWORD n, HANDLE *h, BOOL all, DWORD ms, DWORD mask)
-{
-    (void)n; (void)h; (void)all; (void)ms; (void)mask;
-    return WAIT_OBJECT_0;
-}
 HANDLE WINAPI GetCurrentThread(void) { return HANDLE_OF(HANDLE); }
 BOOL WINAPI SetPriorityClass(HANDLE h, DWORD c) { (void)h; (void)c; return TRUE; }
 BOOL WINAPI SetThreadPriority(HANDLE h, int p) { (void)h; (void)p; return TRUE; }
@@ -228,11 +223,81 @@ BOOL WINAPI SetThreadPriority(HANDLE h, int p) { (void)h; (void)p; return TRUE; 
  * address is ever handed over -- which also makes the pair a real test of PRISM's function-pointer
  * table: the callback goes out through a struct field and comes back as a call.
  */
-static WNDPROC wndproc = NULL;
+/*
+ * ONE WINDOW PROCEDURE PER CLASS, and one class per window.
+ *
+ * A single global was enough for a game, which registers one class and opens one window. It is not
+ * enough for an application: PuTTY registers a class for its terminal and another for a hidden
+ * window that exists only to receive WM_TIMER, and the last registration won -- so every timer
+ * message was delivered to the terminal's procedure, which ignores it. The terminal then never
+ * repainted after data arrived, because PuTTY does not repaint on data: it schedules a timer.
+ *
+ * The class NAME is the key, because that is what CreateWindowEx is given.
+ */
+#define MAX_CLASSES 8
+#define MAX_WINDOWS 8
+static struct { char name[64]; WNDPROC proc; int used; } classes[MAX_CLASSES];
+static struct { HWND hwnd; WNDPROC proc; int used; } windows[MAX_WINDOWS];
+static WNDPROC wndproc = NULL;          /* the most recent, for messages with no window */
+
+static WNDPROC proc_for_class(const char *name)
+{
+    int i;
+    if (!name) return wndproc;
+    for (i = 0; i < MAX_CLASSES; i++)
+        if (classes[i].used && !strcmp(classes[i].name, name)) return classes[i].proc;
+    return wndproc;
+}
+static WNDPROC proc_for_window(HWND h)
+{
+    int i;
+    for (i = 0; i < MAX_WINDOWS; i++)
+        if (windows[i].used && windows[i].hwnd == h) return windows[i].proc;
+    return wndproc;
+}
+static void remember_window(HWND h, WNDPROC p)
+{
+    int i;
+    for (i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i].used && windows[i].hwnd != h) continue;
+        windows[i].hwnd = h; windows[i].proc = p; windows[i].used = 1;
+        return;
+    }
+}
+
+/*
+ * Turn whatever the outside world has done into messages, before the queue is examined. Supplied by
+ * src/env/win32-net.c when a target links it; undefined -- and therefore null -- when it does not.
+ */
+/*
+ * A FLAG, not a pointer to the function. A function that is declared and never defined still has an
+ * address here -- PRISM gives it one and reports it -- so `if (prism_net_pump)` is always true and
+ * the call would throw for every target that has no network. An undefined VARIABLE reads as zero,
+ * which is the linker's own behaviour and the thing to test.
+ */
+extern int prism_net_present;
+extern void prism_net_pump(void);
+static void prism_timers_pump(void);
+static void prism_win32_pump(void)
+{
+    prism_timers_pump();
+    if (prism_net_present) prism_net_pump();
+}
 
 ATOM WINAPI RegisterClass(const WNDCLASS *wc)
 {
-    if (wc && wc->lpfnWndProc) wndproc = wc->lpfnWndProc;
+    int i;
+    if (!wc || !wc->lpfnWndProc) return 0;
+    wndproc = wc->lpfnWndProc;
+    for (i = 0; i < MAX_CLASSES; i++) {
+        if (classes[i].used && strcmp(classes[i].name, wc->lpszClassName ? wc->lpszClassName : ""))
+            continue;
+        strncpy(classes[i].name, wc->lpszClassName ? wc->lpszClassName : "", sizeof(classes[i].name) - 1);
+        classes[i].name[sizeof(classes[i].name) - 1] = 0;
+        classes[i].proc = wc->lpfnWndProc;
+        classes[i].used = 1;
+        break;
+    }
     return (ATOM)next_handle++;
 }
 
@@ -247,17 +312,119 @@ static MSG msgq[MSGQ];
 static int msgq_head = 0, msgq_tail = 0;
 static HWND msg_window = NULL;
 
-static void post(UINT message, WPARAM wParam, LPARAM lParam)
+/*
+ * Posting is public, because a device outside this file has messages to deliver: src/env/win32-net.c
+ * turns a socket's readiness into WM_NETEVENT, which is how PuTTY hears about the network at all.
+ */
+/*
+ * TIMERS, which a program uses to schedule ITSELF.
+ *
+ * SetTimer and KillTimer used to succeed and do nothing, which looks harmless and is not: PuTTY's
+ * terminal does not repaint when data arrives, it schedules an update and repaints when the timer
+ * fires (timer_change_notify -> SetTimer -> WM_TIMER -> term_update). With no WM_TIMER the bytes
+ * reached the terminal, the terminal recorded them, and the screen stayed blank -- which is a very
+ * quiet way to fail.
+ *
+ * Windows timers REPEAT until killed, so a fired timer is rescheduled rather than removed.
+ */
+#define MAX_TIMERS 16
+static struct { HWND hwnd; UINT_PTR id; unsigned interval; double due; int used; } timers[MAX_TIMERS];
+
+extern double prism_now_ms(void);
+
+UINT_PTR WINAPI SetTimer(HWND hwnd, UINT_PTR id, UINT elapse, void *proc)
+{
+    int i, free_slot = -1;
+    (void)proc;                        /* a callback proc would bypass the queue; PuTTY passes NULL */
+    for (i = 0; i < MAX_TIMERS; i++) {
+        if (timers[i].used && timers[i].hwnd == hwnd && timers[i].id == id) break;
+        if (!timers[i].used && free_slot < 0) free_slot = i;
+    }
+    if (i == MAX_TIMERS) { i = free_slot; if (i < 0) return 0; }
+    timers[i].hwnd = hwnd;
+    timers[i].id = id;
+    timers[i].interval = elapse;
+    timers[i].due = prism_now_ms() + (double)elapse;
+    timers[i].used = 1;
+    return id ? id : (UINT_PTR)(i + 1);
+}
+
+BOOL WINAPI KillTimer(HWND hwnd, UINT_PTR id)
+{
+    int i;
+    for (i = 0; i < MAX_TIMERS; i++)
+        if (timers[i].used && timers[i].hwnd == hwnd && timers[i].id == id) timers[i].used = 0;
+    return TRUE;
+}
+
+static void prism_timers_pump(void)
+{
+    double now = prism_now_ms();
+    int i;
+    for (i = 0; i < MAX_TIMERS; i++) {
+        if (!timers[i].used || now < timers[i].due) continue;
+        timers[i].due = now + (double)(timers[i].interval ? timers[i].interval : 1);
+        post_to(timers[i].hwnd, WM_TIMER, (WPARAM)timers[i].id, 0);
+    }
+}
+
+void prism_win32_post(UINT message, WPARAM wParam, LPARAM lParam);
+
+/*
+ * A MESSAGE BELONGS TO A WINDOW, and `msg_window` -- the last window created -- is not always the
+ * right one. A program with more than one window reads its own state back out of the handle the
+ * message carries: PuTTY does `GetWindowLongPtr(hwnd, GWLP_USERDATA)` at the top of every WndProc
+ * call, so a WM_PAINT delivered under the hidden timing window's handle handed it a null session and
+ * a terminal whose every field was zero. The crash came out inside terminal.c, four calls away.
+ */
+static void post_to(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     MSG *m = &msgq[msgq_head % MSGQ];
     memset(m, 0, sizeof(*m));
-    m->hwnd = msg_window;
+    m->hwnd = hwnd ? hwnd : msg_window;
     m->message = message;
     m->wParam = wParam;
     m->lParam = lParam;
     msgq_head++;
     if (msgq_head - msgq_tail > MSGQ) msgq_tail = msgq_head - MSGQ;
 }
+
+static void post(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    post_to(msg_window, message, wParam, lParam);
+}
+
+void prism_win32_post(UINT message, WPARAM wParam, LPARAM lParam)
+{
+    post(message, wParam, lParam);
+}
+
+/*
+ * THE ONE PLACE THE PROGRAM WAITS.
+ *
+ * PuTTY's event loop (window.c:837) calls this with INFINITE when it has nothing to do, and that is
+ * the only point in the whole program where waiting is the right thing. Answering WAIT_OBJECT_0
+ * immediately turns the loop into a spin, which is what it was before anything could arrive.
+ *
+ * `prism_win32_idle` is supplied by whatever knows how to wait -- src/env/wsock.js waits on the
+ * socket thread's ring. A target without one leaves the extern undefined, PRISM reads that as a null
+ * pointer, and this falls back to returning at once: the old behaviour, for a program with nothing
+ * to wait FOR.
+ */
+extern int prism_net_wait(int ms);
+
+DWORD WINAPI MsgWaitForMultipleObjects(DWORD n, HANDLE *h, BOOL all, DWORD ms, DWORD mask)
+{
+    (void)h; (void)all; (void)mask;
+    prism_win32_pump();
+    if (msgq_head != msgq_tail) return WAIT_OBJECT_0 + n;   /* a message is waiting */
+    if (ms != 0 && prism_net_present) {
+        prism_net_wait(ms == INFINITE ? 50 : (int)ms);
+        prism_win32_pump();
+    }
+    return msgq_head != msgq_tail ? WAIT_OBJECT_0 + n : WAIT_TIMEOUT;
+}
+
 
 /*
  * The host's way in: one key, pressed or released.
@@ -276,14 +443,25 @@ HWND WINAPI CreateWindowEx(DWORD exStyle, LPCSTR cls, LPCSTR name, DWORD style,
                            int x, int y, int w, int h, HWND parent, HMENU menu,
                            HINSTANCE inst, LPVOID param)
 {
-    (void)exStyle; (void)cls; (void)style; (void)parent; (void)menu; (void)inst; (void)param;
-    if (w > 0) prism_win32_w = w;
-    if (h > 0) prism_win32_h = h;
-    if (x != CW_USEDEFAULT) prism_win32_x = x;
-    if (y != CW_USEDEFAULT) prism_win32_y = y;
-    if (name) { strncpy(prism_win32_title, name, sizeof(prism_win32_title) - 1); }
-    msg_window = HANDLE_OF(HWND);
-    return msg_window;
+    HWND hwnd;
+    (void)exStyle; (void)style; (void)parent; (void)menu; (void)inst; (void)param;
+    hwnd = HANDLE_OF(HWND);
+    remember_window(hwnd, proc_for_class(cls));
+    /*
+     * The RECTANGLE still belongs to whichever window was made last, because there is one of those
+     * and a program may have several. PuTTY's hidden timing window is 100x100 and its terminal is
+     * not, so a window with no visible size does not get to claim it: a window created with
+     * CW_USEDEFAULT or hidden leaves the record alone.
+     */
+    if (w > 0 && h > 0 && !(style & WS_CHILD) && w > 100) {
+        prism_win32_w = w;
+        prism_win32_h = h;
+        if (x != CW_USEDEFAULT) prism_win32_x = x;
+        if (y != CW_USEDEFAULT) prism_win32_y = y;
+        if (name) strncpy(prism_win32_title, name, sizeof(prism_win32_title) - 1);
+    }
+    msg_window = hwnd;
+    return hwnd;
 }
 
 BOOL WINAPI DestroyWindow(HWND w) { (void)w; return TRUE; }
@@ -420,6 +598,7 @@ DWORD WINAPI GetClassLong(HWND w, int index) { (void)w; (void)index; return 0; }
 static RECT prism_dirty;
 static int prism_dirty_any;
 static int prism_dirty_erase;
+static HWND prism_dirty_hwnd;          /* whose region it is; the WM_PAINT goes there */
 
 static void prism_invalidate(const RECT *r, int erase)
 {
@@ -443,7 +622,7 @@ static void prism_invalidate(const RECT *r, int erase)
 
 BOOL WINAPI InvalidateRect(HWND w, const RECT *r, BOOL erase)
 {
-    (void)w;
+    if (w) prism_dirty_hwnd = w;
     prism_invalidate(r, erase);
     return TRUE;
 }
@@ -500,7 +679,8 @@ BOOL WINAPI PeekMessage(LPMSG msg, HWND w, UINT min, UINT max, UINT flags)
          * It is not removed by PM_REMOVE either -- BeginPaint is what makes it stop.
          */
         if (prism_dirty_any) {
-            if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT; }
+            if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT;
+                       msg->hwnd = prism_dirty_hwnd ? prism_dirty_hwnd : msg_window; }
             return TRUE;
         }
         if (msg) memset(msg, 0, sizeof(*msg));
@@ -524,7 +704,8 @@ BOOL WINAPI GetMessage(LPMSG msg, HWND w, UINT min, UINT max)
     (void)w; (void)min; (void)max;
     if (msgq_head == msgq_tail) {
         if (prism_dirty_any) {
-            if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT; }
+            if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT;
+                       msg->hwnd = prism_dirty_hwnd ? prism_dirty_hwnd : msg_window; }
             return TRUE;
         }
         if (msg) memset(msg, 0, sizeof(*msg));
@@ -539,8 +720,11 @@ BOOL WINAPI TranslateMessage(const MSG *m) { (void)m; return FALSE; }
 
 LRESULT WINAPI DispatchMessage(const MSG *m)
 {
-    if (!m || !wndproc) return 0;
-    return wndproc(m->hwnd, m->message, m->wParam, m->lParam);
+    WNDPROC p;
+    if (!m) return 0;
+    p = proc_for_window(m->hwnd);
+    if (!p) return 0;
+    return p(m->hwnd, m->message, m->wParam, m->lParam);
 }
 
 /*

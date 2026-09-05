@@ -20,6 +20,16 @@
 
 extern int prism_win32_w, prism_win32_h;   /* the window win32.c is keeping */
 
+/*
+ * A brush IS its colour: CreateSolidBrush hands back the COLORREF with a tag bit, so FillRect needs
+ * no table. PuTTY only ever fills with brushes it made itself or with a system colour.
+ *
+ * Defined HERE, at the top, because a macro must exist before its first use and this one sat below
+ * CreateSolidBrush -- which therefore failed to emit, silently, below the twelfth-most-common cause
+ * in the build report.
+ */
+#define PRISM_BRUSH_TAG 0x40000000
+
 #define PRISM_FONT_W 8
 #define PRISM_FONT_H 16
 
@@ -246,11 +256,6 @@ BOOL WINAPI Rectangle(HDC dc, int l, int t, int r, int b)
 COLORREF WINAPI SetPixel(HDC dc, int x, int y, COLORREF c) { (void)dc; prism_pixel(x, y, c); return c; }
 COLORREF WINAPI GetPixel(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; return 0; }
 
-/*
- * A brush IS its colour here: CreateSolidBrush hands back the COLORREF with a tag bit, so FillRect
- * needs no table. PuTTY only ever fills with brushes it made itself or with a system colour.
- */
-#define PRISM_BRUSH_TAG 0x40000000
 int WINAPI FillRect(HDC dc, const RECT *r, HBRUSH b)
 {
     COLORREF c = ((ULONG_PTR)b & PRISM_BRUSH_TAG) ? (COLORREF)((ULONG_PTR)b & 0x00FFFFFF) : prism_bk;
@@ -365,8 +370,7 @@ DWORD WINAPI CheckMenuItem(HMENU m, UINT id, UINT c) { (void)m; (void)id; (void)
 BOOL WINAPI EnableMenuItem(HMENU m, UINT id, UINT e) { (void)m; (void)id; (void)e; return 1; }
 BOOL WINAPI TrackPopupMenu(HMENU m, UINT f, int x, int y, int r, HWND h, const RECT *rc)
 { (void)m; (void)f; (void)x; (void)y; (void)r; (void)h; (void)rc; return 0; }
-UINT_PTR WINAPI SetTimer(HWND h, UINT_PTR id, UINT ms, void *p) { (void)h; (void)ms; (void)p; return id ? id : 1; }
-BOOL WINAPI KillTimer(HWND h, UINT_PTR id) { (void)h; (void)id; return 1; }
+/* SetTimer and KillTimer live in win32.c: a timer is a message, not a drawing. */
 BOOL WINAPI MessageBeep(UINT t) { (void)t; return 1; }
 HWND WINAPI GetCapture(void) { return (HWND)0; }
 BOOL WINAPI Beep(DWORD f, DWORD d) { (void)f; (void)d; return 1; }
@@ -560,3 +564,8 @@ BOOL WINAPI GetMessageW(MSG *m, HWND h, UINT lo, UINT hi) { return GetMessage(m,
 BOOL WINAPI PeekMessageW(MSG *m, HWND h, UINT lo, UINT hi, UINT r) { return PeekMessage(m, h, lo, hi, r); }
 BOOL WINAPI SetWindowTextA(HWND h, LPCSTR t) { return SetWindowText(h, t); }
 BOOL WINAPI SetWindowTextW(HWND h, LPCWSTR t) { return SetWindowText(h, prism_narrow(t)); }
+
+/* Palettes. A 32-bit surface has no palette to select, so these succeed and change nothing. */
+HPALETTE WINAPI CreatePalette(const LOGPALETTE *p) { (void)p; return NEW_HANDLE(HPALETTE); }
+HPALETTE WINAPI SelectPalette(HDC dc, HPALETTE p, BOOL bg) { (void)dc; (void)bg; return p; }
+UINT WINAPI RealizePalette(HDC dc) { (void)dc; return 0; }

@@ -730,6 +730,13 @@ function makeLibc(M) {
     __builtin_expect: (v, _expected) => v,
 
     /*
+     * The host's millisecond clock, for a platform layer that has to schedule -- Win32 timers are
+     * the first caller. It belongs here rather than in a device: a clock is not a socket, and a
+     * target that has one and not the other should not have to choose.
+     */
+    prism_now_ms: () => Date.now(),
+
+    /*
      * Bitfields of a 64-bit type, byte-wise in BigInt.
      *
      * Bytes are the only unit that always contains the field -- a 64-bit-wide field starting at bit

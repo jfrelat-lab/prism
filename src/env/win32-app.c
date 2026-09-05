@@ -372,6 +372,9 @@ LONG WINAPI RegCloseKey(HKEY key) { (void)key; return 0; }
  */
 #include <time.h>
 
+/* Milliseconds since some fixed point; the runtime's clock, not a C library one. */
+extern double prism_now_ms(void);
+
 void WINAPI GetLocalTime(LPSYSTEMTIME t)
 {
     time_t now = time(NULL);
@@ -402,3 +405,9 @@ void WINAPI GetSystemTime(LPSYSTEMTIME t)
 }
 BOOL WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME ft)
 { (void)st; if (ft) { ft->dwLowDateTime = 0; ft->dwHighDateTime = 0; } return 1; }
+
+/*
+ * The millisecond clock, from the host's. PuTTY schedules everything off it -- the cursor blink, the
+ * bell, its timers -- so a frozen one makes every timer fire at once or never.
+ */
+DWORD WINAPI GetTickCount(void) { return (DWORD)(prism_now_ms() & 0xFFFFFFFFu); }

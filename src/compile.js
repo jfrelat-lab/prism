@@ -11,6 +11,7 @@ import { FunctionEmitter, EmitError , jsIdent } from './backend/emit.js';
 import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
+import { wsockBuiltins } from './env/wsock.js';
 import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
 import { dlBuiltins } from './env/dl.js';
@@ -509,6 +510,8 @@ export const BUILTINS = new Map(Object.entries({
   copysign: { ret: D, params: [D, D] },
   copysignf: { ret: FLT, params: [FLT, FLT] },
   signbit: { ret: I, params: [D], impl: '__builtin_signbit' },
+  /* The host's millisecond clock; see src/runtime/runtime.js. */
+  prism_now_ms: { ret: D, params: [] },
 
   /* Type-generic, so the emitter builds the call. Named rather than numbered: `overflow: 0`
      for add is FALSY, and `rt?.overflow` then skipped the whole path. */
@@ -542,6 +545,8 @@ export const BUILTINS = new Map(Object.entries({
 for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
 // The Watcom/DOS4GW runtime Heretic and Hexen call; see src/env/watcom.js.
 for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
+/* The socket thread's six primitives; see src/env/wsock.js. */
+for (const [k, v] of Object.entries(wsockBuiltins(T))) BUILTINS.set(k, v);
 // DJGPP's DPMI floor, which Quake's dos_v2.c builds all of dosisms.h on; see src/env/go32.js.
 for (const [k, v] of Object.entries(go32Builtins(T))) BUILTINS.set(k, v);
 for (const [k, v] of Object.entries(dlBuiltins(T))) BUILTINS.set(k, v);

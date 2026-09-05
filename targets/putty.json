@@ -586,7 +586,8 @@
       ],
       "env": [
         "stdio",
-        "vgafont"
+        "vgafont",
+        "wsock"
       ],
       "_unitDefines": "be_list.c is compiled once PER APPLICATION -- it is what fills the backends[] array and names the program -- so its macros belong to that one unit. `node tools/putty-sources.mjs puttytel` prints them.",
       "unitDefines": {

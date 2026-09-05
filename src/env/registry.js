@@ -32,6 +32,7 @@ import { installDl } from './dl.js';
 import { installSDL2 } from './sdl2.js';
 import { installConsole } from './console.js';
 import { installVgaFont } from './vgafont.js';
+import { installWsock } from './wsock.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
 const machineOf = (M) => (M.machine ?? installPorts(M));
@@ -74,6 +75,11 @@ export const ENV = {
    * toolkit. The Win32 shim's ExtTextOut needs one; nothing else does yet.
    */
   vgafont: { install: (M, _c, o) => installVgaFont(M, o) },
+  /*
+   * Real TCP, on a thread of its own. NODE ONLY: a browser cannot open a socket at all, and the same
+   * C would need a WebSocket relay behind it there -- which is a host binding, not a different shim.
+   */
+  wsock: { install: (M, _c, o) => installWsock(M, o) },
 
   // SDL2 for the Open* family. See src/env/sdl2.js.
   sdl2: { install: (M, _c, o) => installSDL2(M, o) },

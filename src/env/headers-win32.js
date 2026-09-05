@@ -1424,6 +1424,9 @@ UINT WINAPI GetWindowsDirectory(LPTSTR buf, UINT n);
 #define ERROR_PATH_NOT_FOUND 3
 #define ERROR_ACCESS_DENIED  5
 HBRUSH WINAPI GetSysColorBrush(int index);
+HPALETTE WINAPI CreatePalette(const LOGPALETTE *p);
+HPALETTE WINAPI SelectPalette(HDC dc, HPALETTE p, BOOL bg);
+UINT WINAPI RealizePalette(HDC dc);
 UINT WINAPI GetSystemDirectory(LPTSTR buf, UINT n);
 HMODULE WINAPI LoadLibrary(LPCTSTR name);
 HMODULE WINAPI LoadLibraryA(LPCSTR name);
@@ -2030,6 +2033,7 @@ typedef struct _SYSTEMTIME {
     WORD wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
 } SYSTEMTIME, *LPSYSTEMTIME;
 void WINAPI GetLocalTime(LPSYSTEMTIME t);
+DWORD WINAPI GetTickCount(void);
 void WINAPI GetSystemTime(LPSYSTEMTIME t);
 BOOL WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME ft);
 BOOL WINAPI IsProcessorFeaturePresent(DWORD feature);
