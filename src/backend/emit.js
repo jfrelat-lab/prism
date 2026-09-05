@@ -209,9 +209,18 @@ export class FunctionEmitter {
     this.locals = new Map();        // name -> {kind:'var'|'slot', js?, off?, type}
     this.nameSeq = new Map();       // how many times a name has been declared in this function
     this.frameSize = 0;
+    this.frameAlign = 4;        // the strictest alignment any slot in this frame asked for
     this.tmp = 0;
     this.out = [];
     this.loopDepth = 0;
+    /*
+     * A NESTED function is emitted as a top-level one taking the enclosing frame as a hidden first
+     * parameter -- the "static link" a C compiler would put in a register. `parent` is the emitter
+     * that owns that frame, and is consulted for any name this function does not declare itself.
+     */
+    this.parent = ctx.parentEmitter ?? null;
+    this.nested = new Map();        // name -> { jsName, decl }
+    this.extra = [];                // the nested functions' own emitted text
   }
 
   newTmp() { return `_t${this.tmp++}`; }
@@ -225,6 +234,13 @@ export class FunctionEmitter {
   slot(size, align) {
     const off = Math.ceil(this.frameSize / align) * align;
     this.frameSize = off + size;
+    /*
+     * A slot's alignment is only as good as the FRAME's. Offsets inside the frame are aligned here,
+     * but `_fp` is wherever the stack pointer happened to be -- so `__attribute__((aligned))`, which
+     * means the target's maximum and is 16 on i386, was landing on a 4-byte boundary. gcc's
+     * nest-align-1.c checks the address itself, and it was a wrong answer rather than a refusal.
+     */
+    if (align > this.frameAlign) this.frameAlign = align;
     return off;
   }
 
@@ -258,6 +274,8 @@ export class FunctionEmitter {
     this.sret = T.isRecord(d.type.ret);
     const params = d.type.params.map((p, i) => (p.name ? paramIdent(p.name) : `_unused${i}`));
     if (this.sret) params.unshift('_sret');
+    /* The static link comes FIRST, before even the sret buffer: it is the frame, not an argument. */
+    if (this.parent) params.unshift('_up');
     // A variadic function takes the caller-packed argument buffer as a hidden last parameter, which
     // is what `va_start` resolves to.
     this.variadic = !!d.type.variadic;
@@ -268,6 +286,12 @@ export class FunctionEmitter {
     // "a few times slower than native" and "tens of times".
     const escaped = new Set();
     collectAddressTaken(d.body, escaped);
+    /*
+     * A nested function reaches the enclosing frame through MEMORY and nothing else, so every name
+     * it mentions has to be in a slot rather than a JS variable. Collected before the body is
+     * walked, because the decision is made when each declaration is emitted.
+     */
+    for (const it of nestedDefs(d.body)) collectNestedRefs(it.body, escaped);
 
     const pre = [];
     for (const p of d.type.params) {
@@ -320,7 +344,10 @@ export class FunctionEmitter {
     }
 
     const body = [];
-    body.push(`var _fp=M.sp-${this.frameSize}|0;`);
+    // Aligning DOWN is always safe: it only moves the frame further from the stack pointer.
+    body.push(this.frameAlign > 4
+      ? `var _fp=(M.sp-${this.frameSize})&${~(this.frameAlign - 1)}|0;`
+      : `var _fp=M.sp-${this.frameSize}|0;`);
     if (this.frameSize) body.push(`M.sp=_fp;`);
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
@@ -331,7 +358,21 @@ export class FunctionEmitter {
     // With no frame at all the restore is a no-op assignment and is dropped rather than emitted.
     const restore = this.frameSize ? `M.sp=_fp+${this.frameSize}|0;` : '';
     const text = body.join('\n').split(FRAME_RESTORE).join(restore);
-    return `function ${jsIdent(d.name)}(${params.join(',')}){\n${text}\n}`;
+    const self = `function ${jsIdent(d.name)}(${params.join(',')}){\n${text}\n}`;
+
+    /*
+     * The nested functions, now that every slot offset this frame will ever hand out is settled.
+     * They are siblings in the emitted JavaScript, not closures: a closure would capture the JS
+     * variables, and what a nested C function needs is the FRAME.
+     */
+    for (const { jsName, decl, scope } of this.nested.values()) {
+      if (this.parent) unsup('a nested function inside a nested function');
+      const child = new FunctionEmitter(this.mod, { ...decl, name: jsName },
+        { ...this.ctx, parentEmitter: this, parentScope: scope });
+      this.extra.push(child.emit());
+      for (const x of child.extra) this.extra.push(x);
+    }
+    return this.extra.length ? [self, ...this.extra].join('\n') : self;
   }
 
   /**
@@ -391,7 +432,26 @@ export class FunctionEmitter {
     switch (item.n) {
       case 'vardecl': return this.#localDecl(item, escaped);
       case 'typedef': case 'tagdecl': return;
-      case 'func': return unsup('a nested function definition');
+      case 'func': {
+        /*
+         * A GNU nested function. It becomes a top-level JS function whose first parameter is this
+         * frame, and every reference it makes to an enclosing local goes through that -- which is
+         * why those locals were forced into slots before the body was walked.
+         *
+         * Emitted AFTER this function's body, because the slot offsets it will refer to are only
+         * final once every declaration has been seen.
+         */
+        if (!item.body) return;
+        const jsName = `${this.decl.name}$${item.name}`;
+        /*
+         * The visible locals are captured HERE, at the point of declaration, because that is C's
+         * scope and not the one that will exist later: a nested function declared inside a block is
+         * emitted after the whole body, by which time #scoped has unwound that block and the names
+         * it could see are gone from the map.
+         */
+        this.nested.set(item.name, { jsName, decl: item, scope: new Map(this.locals) });
+        return;
+      }
       default: return this.#stmt(item, escaped);
     }
   }
@@ -1198,6 +1258,19 @@ export class FunctionEmitter {
           if (l.kind === 'aggparam') return { addr: `(${l.js}|0)`, type: l.type };
           return { varJs: l.js, type: l.type };
         }
+        /*
+         * Not ours: it may be the ENCLOSING function's, reached through the static link. A slot
+         * there is at the same offset in the frame `_up` points at; a JS variable there is
+         * unreachable, which is why every name a nested function mentions was pinned to a slot.
+         */
+        if (this.parent) {
+          const up = (this.ctx.parentScope ?? this.parent.locals).get(e.name);
+          if (up) {
+            if (up.kind === 'slot') return { addr: `(_up+${up.off}|0)`, type: up.type };
+            if (up.kind === 'global') return { addr: String(up.addr), type: up.type };
+            if (up.kind === 'aggparam') unsup(`the enclosing function's '${e.name}'`);
+          }
+        }
         const g = this.ctx.globals.get(e.name);
         if (g) return { addr: String(g.addr), type: g.type };
         const f = this.ctx.funcs.get(e.name);
@@ -1715,6 +1788,17 @@ export class FunctionEmitter {
     const calleeIsObject = !this.locals.has(e.fn.name) && this.ctx.globals.has(e.fn.name);
     if (e.fn.n === 'ident' && !this.locals.has(e.fn.name) && !calleeIsObject) {
       const name = e.fn.name;
+      /*
+       * A NESTED function of this one, or -- when this IS a nested function -- one of its siblings,
+       * itself included. The frame it needs is `_fp` when the caller owns it and `_up` when the
+       * caller is another nested function of the same parent.
+       */
+      const nest = this.nested.get(name) ?? this.parent?.nested.get(name);
+      if (nest) {
+        const frame = this.nested.has(name) ? '_fp' : '_up';
+        const args = this.#callArgs(e, nest.decl.type);
+        return { js: `${jsIdent(nest.jsName)}(${[frame, ...args].join(',')})`, type: nest.decl.type.ret };
+      }
       const f = this.ctx.funcs.get(name);
       /*
        * A function the PROGRAM DEFINES wins over a runtime builtin of the same name. Checking the
@@ -2169,6 +2253,37 @@ function collectGotoTargets(node, out = new Set()) {
 }
 
 /** Walk a function body and collect every name that has `&` applied to it. */
+/**
+ * Every identifier a NESTED FUNCTION mentions, because it can only reach the enclosing frame through
+ * memory. A JS `var` in one function is invisible to another; a frame slot is not, since the nested
+ * function is handed the frame pointer.
+ *
+ * Deliberately blunt: it marks names the nested function declares for itself too. Those are its own
+ * locals and pinning the outer one of the same name costs a slot and nothing else, where being wrong
+ * the other way costs a wrong answer.
+ */
+/** Every nested function definition in a body, at whatever block depth it sits. */
+function nestedDefs(node, out = []) {
+  if (!node || typeof node !== 'object') return out;
+  if (Array.isArray(node)) { for (const x of node) nestedDefs(x, out); return out; }
+  if (node.n === 'func' && node.body) out.push(node);
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'sym' || k === 'loc') continue;
+    nestedDefs(node[k], out);
+  }
+  return out;
+}
+
+export function collectNestedRefs(node, out) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const x of node) collectNestedRefs(x, out); return; }
+  if (node.n === 'ident' && node.name) out.add(node.name);
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'sym' || k === 'loc') continue;
+    collectNestedRefs(node[k], out);
+  }
+}
+
 export function collectAddressTaken(node, out) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { for (const x of node) collectAddressTaken(x, out); return; }

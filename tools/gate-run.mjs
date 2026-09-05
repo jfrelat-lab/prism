@@ -17,6 +17,48 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// GNU nested functions. They become sibling JS functions taking the enclosing FRAME as a hidden
+// first parameter -- not JavaScript closures, which would capture the emitted variables when what a
+// nested C function needs is the frame. Every name one mentions is therefore pinned to a slot.
+C('nested-functions', `
+#include <stdio.h>
+static int apply(int (*fn)(int), int x) { return fn(x); }
+static int outer(int base)
+{
+    int total = 0;
+    int add(int x) { return x + base; }        /* reads the enclosing frame */
+    void bump(int by) { total += by; }         /* WRITES it */
+    bump(add(5));
+    bump(add(1));
+    return total;
+}
+static int counted(void)
+{
+    int n = 0;
+    void tick(void) { n++; }
+    int i;
+    for (i = 0; i < 4; i++) tick();
+    return n;
+}
+static int recursive(int n)
+{
+    int depth = 0;
+    int go(int k) { depth++; return k <= 1 ? 1 : k * go(k - 1); }
+    { int r = go(n); return r * 100 + depth; }
+}
+int main(void)
+{
+    printf("%d\\n", outer(10));
+    printf("%d\\n", counted());
+    printf("%d\\n", recursive(5));
+    /* An aligned local, whose address the nested function also takes. */
+    { typedef int aligned __attribute__((aligned));
+      aligned jj; void set(void) { jj = 7; } set();
+      printf("%d %d\\n", jj, (int)(((long)&jj) & 15)); }
+    return 0;
+}
+`);
+
 // An inline asm whose TEMPLATE IS EMPTY emits no instructions, so everything it does is in its
 // constraints. A digit constraint on an input names the output it shares a register with, and with
 // nothing in between the output ends up holding the input. gcc has twenty of these; they exist to
