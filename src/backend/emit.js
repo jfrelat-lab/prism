@@ -657,6 +657,25 @@ export class FunctionEmitter {
       for (let i = 0; i < init.items.length; i++) {
         const it = init.items[i];
         if (it.designators) idx = it.designators[0].index ?? idx;
+        /*
+         * A GNU RANGE designator, `[1 ... 5] = v`. The initialiser is evaluated ONCE -- gcc's
+         * `[0 ... 3] = next()` calls next once and stores its result four times -- so the first
+         * element is written the ordinary way and the rest are COPIES of it. That is also what makes
+         * a braced list in a range cost one initialisation instead of one per element.
+         */
+        const hi = it.designators?.[0]?.indexHi;
+        if (hi !== undefined) {
+          if (hi - idx > 65536) unsup('an array range designator wider than 65536 elements');
+          const first = `(${addr}+${idx * type.of.size}|0)`;
+          if (it.value.n === 'initlist') this.#initList(first, type.of, it.value);
+          else if (type.of.k === 'array' || T.isRecord(type.of)) this.#initDynamic(first, type.of, it.value);
+          else this.out.push(storeExpr(first, type.of, this.#rvalCoerced(it.value.expr, type.of)) + ';');
+          for (let k = idx + 1; k <= hi; k++) {
+            this.out.push(`M.copy((${addr}+${k * type.of.size}|0),${first},${type.of.size});`);
+          }
+          idx = hi + 1;
+          continue;
+        }
         const off = `(${addr}+${idx * type.of.size}|0)`;
         if (it.value.n === 'initlist') this.#initList(off, type.of, it.value);
         // An element that takes items from THIS list with no braces of its own: `struct pt a[2] =
@@ -1032,6 +1051,20 @@ export class FunctionEmitter {
       for (let i = 0; i < init.items.length; i++) {
         const it = init.items[i];
         if (it.designators) idx = it.designators[0].index ?? idx;
+        const hi = it.designators?.[0]?.indexHi;
+        if (hi !== undefined) {                                   // `[1 ... 5] = v`
+          if (hi - idx > 65536) unsup('an array range designator wider than 65536 elements');
+          for (let k = idx; k <= hi; k++) {
+            const at = addr + k * type.of.size;
+            if (it.value.n === 'initlist') this.#staticList(at, type.of, it.value);
+            else if (!this.#staticScalar(at, type.of, it.value.expr)) {
+              unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
+                `into element ${k} of type ${T.typeName(type.of)}`);
+            }
+          }
+          idx = hi + 1;
+          continue;
+        }
         if (it.value.n === 'initlist') {
           this.#staticList(addr + idx * type.of.size, type.of, it.value);
         } else if (this.#elidable(type.of, it)) {

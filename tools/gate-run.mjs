@@ -297,6 +297,30 @@ int main(void)
 }
 `);
 
+// GNU array RANGE designators, `[1 ... 5] = v`, static and local, overlapping and with a
+// non-constant value -- each element gets the VALUE, not the expression.
+C('range-designator', `
+#include <stdio.h>
+int a[12] = { [1 ... 5] = 9, [6 ... 10] = 4, [4 ... 7] = 3 };
+struct P { int x, y; };
+struct P ps[4] = { [0 ... 2] = { 1, 2 } };
+char s[6] = { [0 ... 4] = 'x' };
+static int calls;
+static int next(void) { return ++calls; }
+int main(void)
+{
+    int i, e = 7;
+    int b[8] = { [2 ... 5] = e + 1 };
+    int c[6] = { [0 ... 3] = next() };
+    for (i = 0; i < 12; i++) printf("%d", a[i]); printf("\\n");
+    for (i = 0; i < 8; i++) printf("%d", b[i]); printf("\\n");
+    for (i = 0; i < 4; i++) printf("%d%d ", ps[i].x, ps[i].y); printf("\\n");
+    for (i = 0; i < 6; i++) printf("%d,", c[i]); printf(" calls=%d\\n", calls);
+    printf("%s|\\n", s);
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

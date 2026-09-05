@@ -863,7 +863,14 @@ export class Parser {
       while (this.isP('.') || this.isP('[')) {
         designators ??= [];
         if (this.eatP('.')) designators.push({ field: this.expectId() });
-        else { this.expectP('['); designators.push({ index: Number(this.#constExpr()) }); this.expectP(']'); }
+        else {
+          this.expectP('[');
+          const lo = Number(this.#constExpr());
+          // A GNU array RANGE designator: `[1 ... 5] = 9` fills every element between.
+          const hi = this.eatP('...') ? Number(this.#constExpr()) : null;
+          designators.push(hi === null ? { index: lo } : { index: lo, indexHi: hi });
+          this.expectP(']');
+        }
       }
       if (designators) this.expectP('=');
       items.push({ designators, value: this.#initializer(type) });
@@ -1147,6 +1154,9 @@ export class Parser {
     const t = this.peek(1);
     if (t.k !== ID) return false;
     if (QUALS.has(t.v)) return true;
+    // A type name may START with an attribute: `(__attribute__((stdcall)) int (*)(void)) p` is a
+    // cast, and without this the `(` read as an ordinary parenthesised expression.
+    if (t.v === '__attribute__' || t.v === '__attribute') return true;
     if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     if (!this.scope.isTypedef(t.v)) return false;
     // `(T)` or `(T*)` or `(T[...])` is a cast; `(T + 1)` would be an expression using T as a value,
@@ -1424,7 +1434,7 @@ export function initListExtent(init, elemType = null) {
   let idx = 0, max = 0;
   for (let i = 0; i < init.items.length;) {
     const it = init.items[i];
-    if (it.designators?.[0]?.index !== undefined) idx = it.designators[0].index;
+    if (it.designators?.[0]?.index !== undefined) idx = it.designators[0].indexHi ?? it.designators[0].index;
     if (elemType && !it.designators && it.value.n !== 'initlist' && elidesInto(elemType, it)) {
       const next = consumeElided(elemType, init.items, i);
       i = next > i ? next : i + 1;
