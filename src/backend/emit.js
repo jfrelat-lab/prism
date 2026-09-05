@@ -513,7 +513,20 @@ export class FunctionEmitter {
       if (d.init) unsup('an initialiser on a variable-length array');
       const count = this.#rval(d.type.vla);
       const js = `_vla${this.tmp++}`;
-      this.out.push(`var ${js}=M.rt.alloca(Math.imul((${count.js})|0,${d.type.of.size})|0);`);
+      /*
+       * Re-executing the declaration ends the PREVIOUS object's lifetime -- that is what a loop or
+       * a backward `goto` does -- so the previous instance is popped, but only when it is still the
+       * topmost thing on the shadow stack. Then nothing else can be living below it, and the pop
+       * cannot free storage some other declaration is still using.
+       *
+       * Without it a VLA in a `goto` loop allocates a million times and overflows the shadow stack
+       * (gcc's 20040811-1.c). The two variables are function-scoped, so a recursive call gets its
+       * own pair and sees no previous instance of its own.
+       */
+      this.out.unshift(`var ${js}_a=0,${js}_e=0;`);
+      this.out.push(`if(${js}_a===M.sp)M.sp=${js}_e;`);
+      this.out.push(`${js}_e=M.sp;`);
+      this.out.push(`var ${js}=${js}_a=M.rt.alloca(Math.imul((${count.js})|0,${d.type.of.size})|0);`);
       this.locals.set(d.name, { kind: 'aggparam', js, type: d.type });
       return;
     }
@@ -1056,9 +1069,18 @@ export class FunctionEmitter {
     switch (s.n) {
       case 'empty': return;
       case 'block': {
-        this.out.push('{');
+        /*
+         * A block that declares a VLA gives its storage back when it ENDS -- C's rule, and the one
+         * that keeps two sibling VLA blocks inside a `goto` loop from allocating for ever (gcc's
+         * pr43220.c). Only the fall-through exit restores; a `break` or `goto` out of the block
+         * leaves the storage until the function returns, which leaks but never frees too early.
+         */
+        const vla = s.items.some(it => it.n === 'vardecl' && it.type?.vla)
+          || s.items.some(it => it.n === 'decls' && it.decls?.some(d => d.type?.vla));
+        const mark = vla ? `_bsp${this.tmp++}` : null;
+        this.out.push(mark ? `{var ${mark}=M.sp;` : '{');
         this.#scoped(() => this.#block(s, escaped));
-        this.out.push('}');
+        this.out.push(mark ? `M.sp=${mark};}` : '}');
         return;
       }
       case 'exprstmt': this.out.push(this.#rval(s.expr).js + ';'); return;

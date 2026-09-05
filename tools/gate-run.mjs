@@ -219,6 +219,22 @@ int main(void)
       printf("%s\\n", buf); }
     printf("%d\\n", nested(4));
     { int *p; int a[n]; p = a; p[2] = 7; printf("%d\\n", a[2]); }
+    /*
+     * DEALLOCATION. A VLA whose declaration runs again -- around a loop, or back to a label -- gives
+     * its storage back, so a hundred thousand of them occupy the room of one. What is comparable
+     * with the reference build is not the address but whether it MOVES.
+     */
+    { int moved = 0, k; void *first = 0;
+      for (k = 0; k < 100000; k++) { int a[k % 500 + 1]; a[0] = k;
+        if (!first) first = a; else if ((void *)a != first) moved = 1; }
+      printf("loop moved=%d\\n", moved); }
+    { int moved = 0, k = 0; void *first = 0;
+     again:
+      { int a[k % 500 + 1]; a[0] = k;
+        if (!first) first = a; else if ((void *)a != first) moved = 1; }
+      { int b[7]; b[0] = k; if (b[0] != k) moved = 1; }
+      if (++k < 100000) goto again;
+      printf("goto moved=%d\\n", moved); }
     return 0;
 }
 `);
