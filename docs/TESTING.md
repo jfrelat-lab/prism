@@ -2319,3 +2319,68 @@ to a separate reader until close, and PRISM's writes reach the store immediately
 **And a third time in one sitting, a gate case of mine read a value at an unspecified moment.**
 `printf("%d %d %d", fgetc(r), fgetc(r), fgetc(r))` comes out backwards under gcc. Reads go one per
 statement now; so do the overflow builtins and the shadowed-locals case, for the same reason.
+
+## P0.5b, continued: 1294 → 1435, and the two near-misses that cost the most
+
+One long pass over `gcc.c-torture/execute`, ten features, **zero wrong answers at the end of every
+one of them**. What follows is not the feature list -- the roadmap has that -- but the two places
+where the score went UP and the correctness went DOWN, because those are the ones that say something
+about how to work on this.
+
+### Brace elision: four programs gained, two turned into wrong answers
+
+`struct s a = { 1, 2, 3, 4 };` where the member is `int f[4]` hands all four scalars to the array.
+The static path had done that for a long time; the dynamic one had not, so the local form refused.
+
+Adding it broke two programs that had been passing. Elision means "this member takes items from the
+enclosing list", and the test for it is *an aggregate given a bare expression* -- which is also
+exactly what `struct A a = { 2, b };` looks like when `b` is a struct VARIABLE. Spreading `b` across
+the member's fields put its address in the first `int` and zero in the rest.
+
+The static path had never met the case, because a struct variable is not a constant initialiser. So
+the rule that was missing had never been needed: **a value that is already an aggregate is a copy,
+never a source of items.** Torture said 1410 with 2 wrong; it says 1412 with 0 now, and the second
+number is the one that counts.
+
+### A 64-bit `switch` was quietly truncating, and only a case RANGE made it visible
+
+`switch (aLL)` was emitted as `switch(disc|0)` with `Number(case)` labels. Both sides truncate to 32
+bits, so the two truncations agreed with each other and nothing looked wrong -- until a case value
+differed only ABOVE the low 32 bits, where `case 0x100000000ULL` became unreachable and the
+discriminant fell to `default`.
+
+What surfaced it was not a test for 64-bit switches. It was gcc's `pr34154.c`, a GNU case range
+spanning nine quintillion values, which the emitter expanded one JavaScript `case` at a time until
+node ran out of memory. Lowering the range to a single comparison put the discriminant back in a
+temporary that keeps its own type, and the truncation went with it.
+
+Two lessons, both already in this file in another form: **a compiler that runs out of memory is a
+correctness report**, and a bug that makes two halves of a computation wrong in the same direction
+stays invisible until something separates them.
+
+### What complex types cost, and why they were cheap
+
+`_Complex double` was the largest actionable gap after long double -- 20 programs -- and it took one
+decision rather than a subsystem: **a complex type IS a two-member record here.** Storage, copies,
+by-value arguments, `sret` returns, initialisers, `sizeof` and `offsetof` then come from the paths
+records already have, and the layout is right by construction.
+
+What had to be written is the arithmetic. Two parts of it are worth naming:
+
+- **division follows libgcc's Smith method**, not the textbook formula. Dividing by the larger
+  denominator half keeps the intermediate products in range; the naive version overflows to infinity
+  for perfectly ordinary values, and the reference build would have disagreed.
+- **`float` complex is computed in `float`**, so every step is rounded with `Math.fround`. Without
+  it the halves are double-precision and the printed result differs in the last digits.
+
+Contrast with `long double`, still refused: it is not representable in 8 bytes, so implementing it
+"approximately" would turn refusals into wrong answers, which is the trade this project does not
+make.
+
+### The gaps that remain are mostly deliberate
+
+Of 120 refusals left, the two largest are recorded non-goals -- `long double` (21) and arithmetic on
+a bitfield wider than 32 bits (9) -- and a third, vector types (9), is refused because the attribute
+CHANGES THE TYPE and ignoring it miscompiles silently. `__attribute__((mode))` came out of that same
+family and went the other way: its widths are exact and knowable, so it is implemented, and a mode
+the mapping does not know is still refused rather than guessed.
