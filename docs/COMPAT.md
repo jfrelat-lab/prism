@@ -1115,3 +1115,53 @@ families rather than a list of names: window styles (`WS_*`, `WS_EX_*`), dialog 
 (`BN_*`, `CB_*`, `LB_*`), the registry (`HKEY_*`, `RegOpenKeyEx` and friends), code pages (`CP_ACP`,
 `CP_UTF8`), and GDI's handles and structs (`HFONT`, `LOGFONT`, `TEXTMETRIC`). Bounded, and boring in
 a way that Quake's platform layer was not.
+
+### End to end: PuTTY's own test passes, 92/92
+
+```
+PuTTY split_into_argv (self-checking) — 136 translation units, 15,122 lines, 14421 functions in 3.3 s
+running: putty/test-argv
+passed 92 failed 0 (mod 2 mode)
+```
+
+`test_split_into_argv` is PuTTY's test for the Windows command-line splitter: it re-implements the
+quoting rules and asserts against a table of 92 cases. So this is not "it compiled" — it is 136
+translation units of somebody else's application exercising the whole chain, checking its own answers.
+
+**The first run said 41 passed, 51 failed, and the failure was not PRISM's.** `split_into_argv.c:158`
+picks its behaviour with `#if _MSC_VER < 1400`, so any compiler that is not MSVC at all reads as
+older than Visual Studio 7 and gets the historical mod-3 quirk — while the test file, which cannot
+see a macro defined inside a `.c`, always expects the modern behaviour. The two halves of PuTTY
+disagree with each other, and MinGW would hit the same thing. Saying `_MSC_VER=1400` for that one
+unit says "this compiler is not Visual Studio 7", which is true, and the two halves then agree
+exactly. It is recorded in the target as a configuration with its reason, not as a patch.
+
+Three further defects were found by building it, and two of them were in code the corpus had been
+exercising for months:
+
+**`TEST` belongs to one file.** `target_compile_definitions(... PRIVATE TEST)` puts it on
+`test_split_into_argv.c` alone, and half a dozen units in `utils/` carry their own `#ifdef TEST`
+`main()`. Defining it program-wide produced eleven duplicate external definitions including six
+`main`s — which the build reported rather than silently resolving. `unitDefines` is how PRISM says
+"this file compiles differently", and that is how real builds work.
+
+**Nested designators were ignored past the first.** `.default_value.ival = x` names a field of a
+field (C99 6.7.8p6 allows any chain, and lets it mix `.a[2].b`). PRISM read only `designators[0]`, so
+the value was written at the right offset with the *outer* member's type — a union, for PuTTY's
+`ConfKeyInfo`, which is what stopped the build. Fixed in both the static and the dynamic
+initialiser paths.
+
+**`printf` lost zero fill on half the hex values.** `%04X` of `0x6C` printed `"  6C"`. The inf/nan
+check — `no padding, no point, no prefix` — tested *every* conversion for a letter, and hex digits
+are letters. Comparing the fix against the host `printf` then turned up a second, independent bug in
+the same block: `%#010x` of 255 gave `0000000xff` where C gives `0x000000ff`, because the zeros went
+before the `0x` rather than after it. Both are in `gate-run.mjs` now, diffed against gcc.
+
+That printf bug had been latent since the conversion rewrite and nothing in the corpus printed a
+`%0Nx` with an a-f digit. It surfaced because adding `wchar_t` moved c-testsuite 00220 from *refused*
+to *running* — and a refusal that becomes a wrong answer is the one transition worth watching for,
+which is why the suite counts them separately. c-testsuite is now 205/219 with 0 wrong answers.
+
+Also fixed on the way: `__thread` is accepted as a storage class (PRISM's target has one thread, so
+GCC's thread-local storage means an ordinary static object), and a static-initialiser refusal now
+names the object and the unit instead of only the shape it could not emit.

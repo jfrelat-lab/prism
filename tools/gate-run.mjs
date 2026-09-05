@@ -17,6 +17,22 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// Zero fill on the integer conversions. Both halves of this were wrong and neither was visible in
+// anything the corpus prints: `%04X` of a value with an a-f digit lost its fill because the inf/nan
+// check tested EVERY conversion for a letter, and `#` put the zeros before the 0x instead of after.
+C('printf-zero-fill', `
+#include <stdio.h>
+int main(void)
+{
+    unsigned v[] = { 0x68, 0x6C, 0xA2, 0x24, 0x72, 0xABCDEF, 0 };
+    int i;
+    for (i = 0; i < 7; i++) printf("%04X|%04x|%#010x|%#012o|%08d\\n", v[i], v[i], v[i], v[i], v[i]);
+    printf("%08.2f|%08f|%+#014.0f|%-8.3f|\\n", 1.0/0.0, -1.0/0.0, 100.0, 2.5);
+    printf("%.u|%.0d|%#o|%#x|\\n", 0u, 0, 0, 0);
+    return 0;
+}
+`);
+
 C('hello', `
 #include <stdio.h>
 int main(void) { printf("hello, world\\n"); return 0; }

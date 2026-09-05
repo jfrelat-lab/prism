@@ -40,6 +40,34 @@ typedef unsigned int wint_t;
 #endif
 `;
 
+const WCHAR_H = `
+#ifndef _PRISM_WCHAR_H
+#define _PRISM_WCHAR_H
+#include <stddef.h>
+/*
+ * The conversion state for the multibyte functions. It has to be a complete type because callers
+ * declare one as a struct member -- PuTTY's stripctrl.c holds two -- but nothing here inspects it:
+ * the C locale converts one byte at a time and carries no state between calls.
+ */
+typedef struct { int __count; unsigned int __value; } mbstate_t;
+#define WEOF ((wint_t)-1)
+size_t wcslen(const wchar_t *s);
+wchar_t *wcscpy(wchar_t *d, const wchar_t *s);
+wchar_t *wcsncpy(wchar_t *d, const wchar_t *s, size_t n);
+int wcscmp(const wchar_t *a, const wchar_t *b);
+size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
+size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
+#endif
+`;
+
+const WCTYPE_H = `
+#ifndef _PRISM_WCTYPE_H
+#define _PRISM_WCTYPE_H
+#include <stddef.h>
+int iswprint(wint_t c);
+#endif
+`;
+
 const STDIO = `
 #ifndef _PRISM_STDIO_H
 #define _PRISM_STDIO_H
@@ -133,6 +161,7 @@ int putenv(char *s);
 long atol(const char *s);
 int abs(int v);
 long labs(long v);
+#define MB_CUR_MAX ((size_t)1)
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 #endif
@@ -230,6 +259,12 @@ const LIMITS = `
 #ifndef _PRISM_LIMITS_H
 #define _PRISM_LIMITS_H
 #define CHAR_BIT 8
+/*
+ * The BIGGEST multibyte character in ANY locale, which is why it is a limits.h constant and not a
+ * locale one: callers size a stack buffer with it. MB_CUR_MAX, in stdlib.h, is the current locale's
+ * value, and PRISM's only locale is "C" -- one byte.
+ */
+#define MB_LEN_MAX 16
 #define SCHAR_MIN (-128)
 #define SCHAR_MAX 127
 #define UCHAR_MAX 255
@@ -1389,6 +1424,8 @@ int sigaddset(sigset_t *set, int sig);
   'unistd.h': UNISTD,
   'dirent.h': DIRENT,
   'locale.h': LOCALE_H,
+  'wchar.h': WCHAR_H,
+  'wctype.h': WCTYPE_H,
   'dlfcn.h': DLFCN,
   'mntent.h': MNTENT,
   'sys/dirent.h': DIRENT,

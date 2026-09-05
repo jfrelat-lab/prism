@@ -937,7 +937,12 @@ export function format(M, fmtPtr, args) {
     if (isInt || isFloat) {
       let neg = body.startsWith('-');
       if (neg) body = body.slice(1);
-      const special = /[a-z]/i.test(body);          // inf, nan: no padding, no point, no prefix
+      /*
+       * inf and nan take no padding, no point and no prefix -- and ONLY a float conversion can
+       * produce them. Testing every conversion for a letter made `%04X` of 0x6C print "  6C": the
+       * hex digits ARE letters, so every value with an a-f digit silently lost its zero fill.
+       */
+      const special = isFloat && /[a-z]/i.test(body);
       if (isInt) {
         // Precision 0 with a value of 0 converts to NO characters at all (C99 7.19.6.1p8) -- which is
         // why the precision has to be distinguishable from absent, and why `%.u` of 0 is "".
@@ -958,9 +963,15 @@ export function format(M, fmtPtr, args) {
       if (width && body.length < +width) {
         if (flags.includes('-')) body = body.padEnd(+width);
         else if (flags.includes('0') && !special && (isFloat || prec === null)) {
-          const sign = /^[-+ ]/.test(body) ? body[0] : '';
-          const rest = sign ? body.slice(1) : body;
-          body = sign + '0'.repeat(+width - body.length) + rest;
+          /*
+           * The zeros go after ANYTHING that has to stay leftmost -- the sign, and also the `0x`
+           * that `#` prefixes. Treating only the sign that way printed `%#010x` of 255 as
+           * "0000000xff" where C gives "0x000000ff". Octal's `#` needs no such care: the 0 it
+           * prepends is an ordinary digit and belongs with the rest.
+           */
+          const head = (/^([-+ ]?)(0[xX])?/.exec(body) ?? ['', '', ''])[0];
+          const rest = body.slice(head.length);
+          body = head + '0'.repeat(+width - body.length) + rest;
         } else body = body.padStart(+width);
       }
     } else if (width) {

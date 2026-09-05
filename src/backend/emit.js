@@ -517,15 +517,19 @@ export class FunctionEmitter {
         let f = named[k];
         if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
         if (!f) break;
+        const t = it.designators && it.designators.length > 1
+          ? descendDesignators({ off: f.offset, type: f.type, bits: f.bits,
+                                 flexible: f.flexible, name: f.name }, it.designators.slice(1))
+          : { off: f.offset, type: f.type, bits: f.bits, flexible: f.flexible, name: f.name };
         // Initialising a FLEXIBLE array member writes past the struct's nominal size; it is a GNU
         // extension and tier-0 refuses it rather than producing a plausible wrong object.
-        if (f.flexible) unsup('initialising a flexible array member');
-        if (f.bits !== undefined) {
-          this.#initBitfield(addr, f, this.#rvalCoerced(it.value.expr, f.type));
+        if (t.flexible) unsup('initialising a flexible array member');
+        if (t.bits !== undefined) {
+          this.#initBitfield(addr, { ...t, offset: t.off }, this.#rvalCoerced(it.value.expr, t.type));
         } else {
-          const off = `(${addr}+${f.offset}|0)`;
-          if (it.value.n === 'initlist') this.#initList(off, f.type, it.value);
-          else this.out.push(storeExpr(off, f.type, this.#rvalCoerced(it.value.expr, f.type)) + ';');
+          const off = `(${addr}+${t.off}|0)`;
+          if (it.value.n === 'initlist') this.#initList(off, t.type, it.value);
+          else this.out.push(storeExpr(off, t.type, this.#rvalCoerced(it.value.expr, t.type)) + ';');
         }
         k = named.indexOf(f) + 1;
       }
@@ -803,20 +807,24 @@ export class FunctionEmitter {
         let f = named[k];
         if (it.designators?.[0]?.field) f = findField(type, it.designators[0].field);
         if (!f) break;
+        const t = it.designators && it.designators.length > 1
+          ? descendDesignators({ off: f.offset, type: f.type, bits: f.bits,
+                                 flexible: f.flexible, name: f.name }, it.designators.slice(1))
+          : { off: f.offset, type: f.type, bits: f.bits, flexible: f.flexible, name: f.name };
         // Initialising a FLEXIBLE array member writes past the struct's nominal size; it is a GNU
         // extension and tier-0 refuses it rather than producing a plausible wrong object.
-        if (f.flexible) unsup('initialising a flexible array member');
-        if (f.bits !== undefined) {
+        if (t.flexible) unsup('initialising a flexible array member');
+        if (t.bits !== undefined) {
           let v;
           try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
-          writeStaticBitfield(this.mod, addr, f, v);
+          writeStaticBitfield(this.mod, addr, { ...t, offset: t.off }, v);
         } else if (it.value.n === 'initlist') {
-          this.#staticList(addr + f.offset, f.type, it.value);
-        } else if (this.#elidable(f.type, it)) {
-          i = this.#staticElided(addr + f.offset, f.type, init.items, i) - 1;
-        } else if (!this.#staticScalar(addr + f.offset, f.type, it.value.expr)) {
+          this.#staticList(addr + t.off, t.type, it.value);
+        } else if (this.#elidable(t.type, it)) {
+          i = this.#staticElided(addr + t.off, t.type, init.items, i) - 1;
+        } else if (!this.#staticScalar(addr + t.off, t.type, it.value.expr)) {
           unsup(`a non-constant static initialiser (${describeExpr(it.value.expr)}) ` +
-            `into field '${f.name}' of type ${T.typeName(f.type)}`);
+            `into field '${t.name}' of type ${T.typeName(t.type)}`);
         }
         k = named.indexOf(f) + 1;
       }
@@ -2059,6 +2067,33 @@ function castConst(v, t) {
     case 'unsigned int': case 'unsigned long': return v >>> 0;
     default: return v | 0;
   }
+}
+
+/**
+ * Walk a designator chain PAST its first element.
+ *
+ * `.default_value.ival = 1` names a field of a field, and only the first designator was ever read --
+ * so the value was written at the right offset with the OUTER member's type, which for PuTTY's
+ * `ConfKeyInfo` is a union and stopped the build. C99 6.7.8p6 makes the chain arbitrarily long and
+ * lets it mix the two forms, `.a[2].b`, so this walks whatever is there and returns where it lands.
+ *
+ * The caller keeps the FIRST-level field for its own bookkeeping: an item after a designated one
+ * continues from the member following that outermost one, not from wherever the chain ended.
+ */
+function descendDesignators(start, rest) {
+  let { off, type, bits, flexible, name } = start;
+  for (const d of rest) {
+    if (d.field !== undefined && d.field !== null) {
+      if (!T.isRecord(type)) unsup(`a field designator '.${d.field}' on ${T.typeName(type)}`);
+      const g = findField(type, d.field);
+      if (!g) unsup(`no field '${d.field}' in ${T.typeName(type)}`);
+      off += g.offset; type = g.type; bits = g.bits; flexible = g.flexible; name = g.name;
+    } else if (d.index !== undefined && d.index !== null) {
+      if (type.k !== 'array') unsup(`an array designator on ${T.typeName(type)}`);
+      off += d.index * type.of.size; type = type.of; bits = undefined; flexible = false;
+    }
+  }
+  return { off, type, bits, flexible, name };
 }
 
 function writeConst(mod, addr, type, v) {

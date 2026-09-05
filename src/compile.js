@@ -860,7 +860,18 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
       if (d.n === 'vardecl') {
         if (!d.init) continue;
         const g = ctx.globals.get(d.name);
-        if (g) staticInit(mod, g.addr, d.type, d.init, ctx);
+        /*
+         * Name the object and the unit. A refusal here used to say only what SHAPE it could not
+         * emit -- "a static union <anon>" -- which is the one thing you cannot grep for, and finding
+         * the declaration meant bisecting a 135-unit build by hand.
+         */
+        if (g) {
+          try { staticInit(mod, g.addr, d.type, d.init, ctx); }
+          catch (err) {
+            if (!(err instanceof EmitError)) throw err;
+            throw new EmitError(`${basename(p.file)}: initialising '${d.name}': ${err.message}`);
+          }
+        }
         continue;
       }
       if (d.n !== 'func') continue;

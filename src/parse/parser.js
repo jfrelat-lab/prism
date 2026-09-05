@@ -346,6 +346,13 @@ export class Parser {
       if (QUALS.has(v)) { this.i++; cv[v.replace(/^__|__$/g, '')] = true; continue; }
       if (FUNCSPEC.has(v)) { this.i++; inlineFn = true; continue; }
       if (v === '__extension__') { this.i++; continue; }
+      /*
+       * GCC's thread-local storage class. PRISM's target has exactly one thread, and the meaning of
+       * `__thread` on a single-threaded program is "an ordinary static object" -- so accepting and
+       * ignoring it is the correct translation here, not a workaround. PuTTY's shinydialogbox.c
+       * declares its one piece of dialogue state this way.
+       */
+      if (v === '__thread' || v === '_Thread_local') { this.i++; continue; }
       if (v === '__attribute__') { const a = this.#skipAttributeLike(); if (a.aligned) alignAttr = Math.max(alignAttr, a.aligned); continue; }
 
       if (v === 'signed' || v === '__signed' || v === '__signed__') { this.i++; signed++; sawTypeSpec = true; continue; }

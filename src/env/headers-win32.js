@@ -14,9 +14,121 @@
 // simplification, it is the form the program was written against.
 
 export const WIN32_HEADERS = {
+  /*
+   * advapi32's ACL and token types. PuTTY uses these to build the security descriptor for its named
+   * pipes, and reaches most of the entry points through GetProcAddress -- so what it needs from here
+   * are the TYPES and the constants. The few it calls directly are declared and left undefined, the
+   * same arrangement Quake has with MGL: an undefined symbol the linker reports, not a parse error.
+   *
+   * The struct layouts are the SDK's, field for field. Nothing here implements them, so nothing would
+   * currently notice if they were wrong -- which is exactly why they should not be invented.
+   */
+  'aclapi.h': `
+#ifndef _PRISM_ACLAPI_H
+#define _PRISM_ACLAPI_H
+#include <windows.h>
+
+typedef PVOID PSID;
+typedef PVOID PSECURITY_DESCRIPTOR;
+typedef DWORD SECURITY_INFORMATION;
+typedef struct _ACL { BYTE AclRevision, Sbz1; WORD AclSize; WORD AceCount, Sbz2; } ACL, *PACL;
+typedef struct _SID_IDENTIFIER_AUTHORITY { BYTE Value[6]; } SID_IDENTIFIER_AUTHORITY;
+typedef struct _SID_AND_ATTRIBUTES { PSID Sid; DWORD Attributes; } SID_AND_ATTRIBUTES;
+typedef struct _TOKEN_USER { SID_AND_ATTRIBUTES User; } TOKEN_USER;
+
+typedef enum { SE_UNKNOWN_OBJECT_TYPE = 0, SE_FILE_OBJECT, SE_SERVICE, SE_PRINTER,
+               SE_REGISTRY_KEY, SE_LMSHARE, SE_KERNEL_OBJECT, SE_WINDOW_OBJECT,
+               SE_DS_OBJECT, SE_DS_OBJECT_ALL, SE_PROVIDER_DEFINED_OBJECT,
+               SE_WMIGUID_OBJECT, SE_REGISTRY_WOW64_32KEY } SE_OBJECT_TYPE;
+
+typedef enum { TokenUser = 1, TokenGroups, TokenPrivileges, TokenOwner, TokenPrimaryGroup,
+               TokenDefaultDacl, TokenSource, TokenType, TokenImpersonationLevel,
+               TokenStatistics, TokenRestrictedSids, TokenSessionId } TOKEN_INFORMATION_CLASS;
+
+typedef enum { NOT_USED_ACCESS = 0, GRANT_ACCESS, SET_ACCESS, DENY_ACCESS, REVOKE_ACCESS,
+               SET_AUDIT_SUCCESS, SET_AUDIT_FAILURE } ACCESS_MODE;
+typedef enum { TRUSTEE_IS_SID = 0, TRUSTEE_IS_NAME, TRUSTEE_BAD_FORM,
+               TRUSTEE_IS_OBJECTS_AND_SID, TRUSTEE_IS_OBJECTS_AND_NAME } TRUSTEE_FORM;
+typedef enum { TRUSTEE_IS_UNKNOWN = 0, TRUSTEE_IS_USER, TRUSTEE_IS_GROUP, TRUSTEE_IS_DOMAIN,
+               TRUSTEE_IS_ALIAS, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_IS_DELETED,
+               TRUSTEE_IS_INVALID, TRUSTEE_IS_COMPUTER } TRUSTEE_TYPE;
+typedef enum { NO_MULTIPLE_TRUSTEE = 0, TRUSTEE_IS_IMPERSONATE } MULTIPLE_TRUSTEE_OPERATION;
+
+typedef struct _TRUSTEE_A {
+    struct _TRUSTEE_A *pMultipleTrustee;
+    MULTIPLE_TRUSTEE_OPERATION MultipleTrusteeOperation;
+    TRUSTEE_FORM TrusteeForm;
+    TRUSTEE_TYPE TrusteeType;
+    LPSTR ptstrName;
+} TRUSTEE_A, TRUSTEE;
+typedef struct _EXPLICIT_ACCESS_A {
+    DWORD grfAccessPermissions;
+    ACCESS_MODE grfAccessMode;
+    DWORD grfInheritance;
+    TRUSTEE_A Trustee;
+} EXPLICIT_ACCESS_A, EXPLICIT_ACCESS, *PEXPLICIT_ACCESS;
+
+#define SECURITY_DESCRIPTOR_REVISION   1
+#define SECURITY_DESCRIPTOR_MIN_LENGTH 20
+#define OWNER_SECURITY_INFORMATION     0x00000001
+#define DACL_SECURITY_INFORMATION      0x00000004
+#define NO_INHERITANCE                 0x0
+#define SUB_CONTAINERS_AND_OBJECTS_INHERIT 0x3
+#define TOKEN_QUERY                    0x0008
+#define MAXIMUM_ALLOWED                0x02000000
+#define WRITE_DAC                      0x00040000
+#define WRITE_OWNER                    0x00080000
+#define PROCESS_CREATE_PROCESS         0x0080
+#define PROCESS_CREATE_THREAD          0x0002
+#define PROCESS_DUP_HANDLE             0x0040
+#define PROCESS_SET_INFORMATION        0x0200
+#define PROCESS_SET_QUOTA              0x0100
+#define PROCESS_SUSPEND_RESUME         0x0800
+#define PROCESS_VM_OPERATION           0x0008
+#define PROCESS_VM_READ                0x0010
+#define PROCESS_VM_WRITE               0x0020
+#define SECURITY_NT_AUTHORITY          { 0, 0, 0, 0, 0, 5 }
+#define SECURITY_WORLD_SID_AUTHORITY   { 0, 0, 0, 0, 0, 1 }
+#define SECURITY_WORLD_RID             0x00000000
+#define SECURITY_NETWORK_RID           0x00000002
+#define ERROR_INSUFFICIENT_BUFFER      122
+#define LPTR                           0x0040
+
+/* Called directly rather than through GetProcAddress; undefined until something implements them. */
+HANDLE WINAPI LocalAlloc(UINT uFlags, SIZE_T uBytes);
+HANDLE WINAPI LocalFree(HANDLE hMem);
+HANDLE WINAPI OpenProcess(DWORD access, BOOL inherit, DWORD pid);
+DWORD WINAPI GetCurrentProcessId(void);
+BOOL WINAPI SetSecurityDescriptorDacl(PSECURITY_DESCRIPTOR sd, BOOL present, PACL dacl, BOOL def);
+BOOL WINAPI AllocateAndInitializeSid(SID_IDENTIFIER_AUTHORITY *auth, BYTE count,
+                                     DWORD s0, DWORD s1, DWORD s2, DWORD s3,
+                                     DWORD s4, DWORD s5, DWORD s6, DWORD s7, PSID *sid);
+BOOL WINAPI CopySid(DWORD len, PSID dst, PSID src);
+DWORD WINAPI GetLengthSid(PSID sid);
+#endif
+`,
+
+  /*
+   * secur32's name lookups. PuTTY reaches GetUserNameExA through GetProcAddress, so what it needs
+   * from this header is the ENUM -- the entry point itself is resolved at run time and never linked.
+   */
+  'security.h': `
+#ifndef _PRISM_SECURITY_H
+#define _PRISM_SECURITY_H
+#include <windows.h>
+typedef enum {
+    NameUnknown = 0, NameFullyQualifiedDN = 1, NameSamCompatible = 2, NameDisplay = 3,
+    NameUniqueId = 6, NameCanonical = 7, NameUserPrincipal = 8, NameCanonicalEx = 9,
+    NameServicePrincipal = 10, NameDnsDomain = 12
+} EXTENDED_NAME_FORMAT;
+#endif
+`,
+
   'windows.h': `
 #ifndef _PRISM_WINDOWS_H
 #define _PRISM_WINDOWS_H
+/* For wchar_t, which LPWSTR is made of. A program that includes only <windows.h> must still get it. */
+#include <stddef.h>
 
 /* ---- calling conventions. On a flat 32-bit target these are all the same call. */
 #define WINAPI
@@ -56,6 +168,9 @@ typedef float FLOAT;
 typedef char TCHAR, *LPTSTR, *PTSTR, *LPSTR, *PSTR;
 typedef unsigned short WCHAR, *LPWSTR;
 typedef const char *LPCSTR, *PCSTR, *LPCTSTR;
+/* The wide pair. wchar_t is 2 bytes here because _WIN32 is defined; see src/env/headers.js. */
+typedef wchar_t *LPWSTR;
+typedef const wchar_t *LPCWSTR;
 typedef void *LPVOID, *PVOID, *LPCVOID;
 typedef void *HANDLE, *PHANDLE;
 typedef long LRESULT, LPARAM;
@@ -68,6 +183,7 @@ typedef long LONG_PTR;
 typedef unsigned long ULONG_PTR, DWORD_PTR;
 /* The signed/unsigned pointer-width pair. Win32 dialog procedures return INT_PTR. */
 typedef int INT_PTR;
+typedef unsigned char BOOLEAN;
 typedef const unsigned short *PCWSTR;
 /* Empty on purpose: an import declaration is a linkage hint, and PRISM has one linkage. */
 #define DECLSPEC_IMPORT
@@ -505,6 +621,171 @@ BOOL WINAPI SetConsoleWindowInfo(HANDLE, BOOL, const SMALL_RECT *);
 #define WAIT_FAILED         0xFFFFFFFF
 #define INFINITE            0xFFFFFFFF
 typedef void *WSAEVENT;
+
+typedef struct _FILETIME { DWORD dwLowDateTime, dwHighDateTime; } FILETIME, *LPFILETIME;
+
+/* ---- file attributes, as GetFileAttributesEx reports them. */
+typedef enum { GetFileExInfoStandard = 0, GetFileExMaxInfoLevel } GET_FILEEX_INFO_LEVELS;
+typedef struct _WIN32_FILE_ATTRIBUTE_DATA {
+    DWORD dwFileAttributes;
+    FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+    DWORD nFileSizeHigh, nFileSizeLow;
+} WIN32_FILE_ATTRIBUTE_DATA;
+BOOL WINAPI GetFileAttributesEx(LPCTSTR name, GET_FILEEX_INFO_LEVELS level, void *info);
+#define FILE_ATTRIBUTE_READONLY   0x00000001
+#define FILE_ATTRIBUTE_DIRECTORY  0x00000010
+#define FILE_ATTRIBUTE_NORMAL     0x00000080
+#define INVALID_FILE_ATTRIBUTES   0xFFFFFFFF
+#define MAX_PATH 260
+typedef struct _WIN32_FIND_DATAW {
+    DWORD dwFileAttributes;
+    FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+    DWORD nFileSizeHigh, nFileSizeLow;
+    DWORD dwReserved0, dwReserved1;
+    wchar_t cFileName[MAX_PATH];
+    wchar_t cAlternateFileName[14];
+} WIN32_FIND_DATAW;
+typedef struct _WIN32_FIND_DATAA {
+    DWORD dwFileAttributes;
+    FILETIME ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+    DWORD nFileSizeHigh, nFileSizeLow;
+    DWORD dwReserved0, dwReserved1;
+    char cFileName[MAX_PATH];
+    char cAlternateFileName[14];
+} WIN32_FIND_DATAA, WIN32_FIND_DATA;
+HANDLE WINAPI FindFirstFileW(LPCWSTR name, WIN32_FIND_DATAW *out);
+HANDLE WINAPI FindFirstFileA(LPCSTR name, WIN32_FIND_DATAA *out);
+BOOL WINAPI FindClose(HANDLE h);
+
+/* ---- commdlg's file dialogue, in both encodings: PuTTY uses each explicitly. */
+#define OFN_ALLOWMULTISELECT 0x00000200
+#define OFN_EXPLORER         0x00080000
+#define OFN_HIDEREADONLY     0x00000004
+#define OFN_OVERWRITEPROMPT  0x00000002
+#define OFN_PATHMUSTEXIST    0x00000800
+#define OFN_FILEMUSTEXIST    0x00001000
+#define OFN_NOCHANGEDIR      0x00000008
+#define PRISM_OFN_STRUCT(CH, NAME) \
+    struct NAME { \
+        DWORD lStructSize; HWND hwndOwner; HINSTANCE hInstance; \
+        const CH *lpstrFilter; CH *lpstrCustomFilter; DWORD nMaxCustFilter; \
+        DWORD nFilterIndex; CH *lpstrFile; DWORD nMaxFile; \
+        CH *lpstrFileTitle; DWORD nMaxFileTitle; const CH *lpstrInitialDir; \
+        const CH *lpstrTitle; DWORD Flags; WORD nFileOffset, nFileExtension; \
+        const CH *lpstrDefExt; LPARAM lCustData; void *lpfnHook; \
+        const CH *lpTemplateName; void *pvReserved; DWORD dwReserved, FlagsEx; \
+    }
+typedef PRISM_OFN_STRUCT(char, tagOFNA) OPENFILENAMEA, OPENFILENAME;
+typedef PRISM_OFN_STRUCT(wchar_t, tagOFNW) OPENFILENAMEW;
+#undef PRISM_OFN_STRUCT
+BOOL WINAPI GetOpenFileNameA(OPENFILENAMEA *of);
+BOOL WINAPI GetSaveFileNameA(OPENFILENAMEA *of);
+BOOL WINAPI GetOpenFileNameW(OPENFILENAMEW *of);
+BOOL WINAPI GetSaveFileNameW(OPENFILENAMEW *of);
+
+/* ---- the message box's help hook, and MessageBoxIndirect's parameter block. */
+typedef struct tagHELPINFO {
+    UINT cbSize;
+    int iContextType;
+    int iCtrlId;
+    HANDLE hItemHandle;
+    DWORD_PTR dwContextId;
+    POINT MousePos;
+} HELPINFO, *LPHELPINFO;
+typedef void (CALLBACK *MSGBOXCALLBACK)(LPHELPINFO);
+/*
+ * The A and W pair, spelled out rather than aliased, because PuTTY picks the WIDE one explicitly
+ * (message_box.c:35) so that it can pass UTF-8 text it has converted itself.
+ */
+typedef struct tagMSGBOXPARAMSW {
+    UINT cbSize;
+    HWND hwndOwner;
+    HINSTANCE hInstance;
+    LPCWSTR lpszText;
+    LPCWSTR lpszCaption;
+    DWORD dwStyle;
+    LPCWSTR lpszIcon;
+    DWORD_PTR dwContextHelpId;
+    MSGBOXCALLBACK lpfnMsgBoxCallback;
+    DWORD dwLanguageId;
+} MSGBOXPARAMSW, *LPMSGBOXPARAMSW;
+int WINAPI MessageBoxIndirectW(const MSGBOXPARAMSW *p);
+typedef struct tagMSGBOXPARAMS {
+    UINT cbSize;
+    HWND hwndOwner;
+    HINSTANCE hInstance;
+    LPCSTR lpszText;
+    LPCSTR lpszCaption;
+    DWORD dwStyle;
+    LPCSTR lpszIcon;
+    DWORD_PTR dwContextHelpId;
+    MSGBOXCALLBACK lpfnMsgBoxCallback;
+    DWORD dwLanguageId;
+} MSGBOXPARAMS, *LPMSGBOXPARAMS;
+int WINAPI MessageBoxIndirect(const MSGBOXPARAMS *p);
+#define MB_USERICON     0x00000080
+#define MB_HELP         0x00004000
+#define VOID void
+
+/* ---- time, code pages and the registry.
+ *
+ * Declared, not implemented. PRISM reports an undefined symbol at link time and the survey of what
+ * a target actually calls is worth more than a guess at what it might: PuTTY's utils/ touches a wide
+ * slice of these headers and calls a narrow one.
+ */
+typedef struct _SYSTEMTIME {
+    WORD wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds;
+} SYSTEMTIME, *LPSYSTEMTIME;
+void WINAPI GetLocalTime(LPSYSTEMTIME t);
+void WINAPI GetSystemTime(LPSYSTEMTIME t);
+BOOL WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME ft);
+BOOL WINAPI IsProcessorFeaturePresent(DWORD feature);
+
+#define MAX_DEFAULTCHAR 2
+#define MAX_LEADBYTES   12
+typedef struct _cpinfo {
+    UINT MaxCharSize;
+    BYTE DefaultChar[MAX_DEFAULTCHAR];
+    BYTE LeadByte[MAX_LEADBYTES];
+} CPINFO, *LPCPINFO;
+UINT WINAPI GetACP(void);
+UINT WINAPI GetOEMCP(void);
+BOOL WINAPI GetCPInfo(UINT cp, LPCPINFO info);
+BOOL WINAPI IsDBCSLeadByteEx(UINT cp, BYTE b);
+#define CP_OEMCP      1
+#define MB_ERR_INVALID_CHARS 0x00000008
+#define MB_USEGLYPHCHARS     0x00000004
+#define ERROR_INVALID_PARAMETER 87
+#define CP_ACP        0
+#define CP_UTF8       65001
+int WINAPI MultiByteToWideChar(UINT cp, DWORD flags, const char *mb, int mblen,
+                               wchar_t *wc, int wclen);
+int WINAPI WideCharToMultiByte(UINT cp, DWORD flags, const wchar_t *wc, int wclen,
+                               char *mb, int mblen, const char *dflt, BOOL *useddflt);
+
+typedef HKEY *PHKEY;
+#define HKEY_CLASSES_ROOT   ((HKEY)0x80000000)
+#define HKEY_CURRENT_USER   ((HKEY)0x80000001)
+#define HKEY_LOCAL_MACHINE  ((HKEY)0x80000002)
+#define KEY_READ            0x20019
+#define KEY_WRITE           0x20006
+#define KEY_ALL_ACCESS      0xF003F
+#define REG_SZ              1
+#define REG_BINARY          3
+#define REG_DWORD           4
+#define ERROR_SUCCESS       0
+#define ERROR_MORE_DATA     234
+LONG WINAPI RegOpenKeyEx(HKEY key, LPCTSTR sub, DWORD opt, DWORD sam, PHKEY out);
+LONG WINAPI RegCreateKeyEx(HKEY key, LPCTSTR sub, DWORD res, LPTSTR cls, DWORD opt,
+                           DWORD sam, void *sa, PHKEY out, DWORD *disp);
+LONG WINAPI RegQueryValueEx(HKEY key, LPCTSTR name, DWORD *res, DWORD *type,
+                            BYTE *data, DWORD *len);
+LONG WINAPI RegSetValueEx(HKEY key, LPCTSTR name, DWORD res, DWORD type,
+                          const BYTE *data, DWORD len);
+LONG WINAPI RegDeleteValue(HKEY key, LPCTSTR name);
+LONG WINAPI RegDeleteKey(HKEY key, LPCTSTR sub);
+LONG WINAPI RegEnumKey(HKEY key, DWORD i, LPTSTR name, DWORD len);
+LONG WINAPI RegCloseKey(HKEY key);
 
 #define FIELD_OFFSET(type, field) ((LONG)(LONG_PTR)&(((type *)0)->field))
 
