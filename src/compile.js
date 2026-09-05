@@ -57,6 +57,14 @@ export const TARGET_DEFINES = {
   __SIZEOF_POINTER__: '4', __SIZEOF_SIZE_T__: '4', __SIZEOF_PTRDIFF_T__: '4',
   __SIZEOF_WCHAR_T__: '4',
 
+  /*
+   * gcc's own name for the variadic type, which programs typedef rather than including stdarg.h:
+   * `typedef __builtin_va_list va_list;`. On i386 System V the variadic arguments sit contiguously
+   * and a va_list is a pointer, which is what src/env/headers.js already says -- so this is that
+   * same statement, spelled the way the compiler is expected to spell it.
+   */
+  __builtin_va_list: 'char *',
+
   __SIZE_TYPE__: 'unsigned int',
   __PTRDIFF_TYPE__: 'int',
   __WCHAR_TYPE__: 'int',

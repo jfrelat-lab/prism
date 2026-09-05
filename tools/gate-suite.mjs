@@ -158,6 +158,7 @@ function bucket(msg) {
 const UB_TESTS = {
   '20031003-1.c': 'float->int out of range is undefined; the test pins gcc\'s saturation',
   '20021127-1.c': 'defines `llabs`, a reserved library name (C 7.1.3); the test pins gcc\'s builtin folding',
+  '20101011-1.c': 'integer division by zero is undefined; the test pins the i386 TRAP and needs SIGFPE',
 };
 
 let pass = 0, skipped = 0, wrong = 0, errored = 0, badRef = 0;

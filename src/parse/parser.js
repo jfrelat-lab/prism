@@ -27,7 +27,9 @@ const KEYWORDS = new Set(['auto', 'break', 'case', 'char', 'const', 'continue', 
   // C99 + GNU
   'inline', 'restrict', '_Bool', '__inline', '__inline__', '__const', '__const__', '__volatile',
   '__volatile__', '__restrict', '__restrict__', '__signed', '__signed__', '__attribute__',
-  '__extension__', '__typeof__', 'typeof', '__asm__', 'asm', '__alignof__', '__alignof',
+  // gcc accepts the un-suffixed spelling too, and torture programs use it.
+  '__attribute',
+  '__extension__', '__typeof__', 'typeof', '__asm__', '__asm', 'asm', '__alignof__', '__alignof',
   '__builtin_offsetof', '__label__', '__complex__',
   /*
    * Watcom's memory-model and calling-convention keywords, which Raven's Heretic and Hexen use.
@@ -106,7 +108,7 @@ export class Parser {
     while (!this.done) {
       if (this.eatP(';')) continue;                       // stray semicolon, GNU-tolerated
       if (this.eatKw('__extension__')) continue;
-      if (this.isKw('asm') || this.isKw('__asm__')) { decls.push(this.#topLevelAsm()); continue; }
+      if (this.isKw('asm') || this.isKw('__asm__') || this.isKw('__asm')) { decls.push(this.#topLevelAsm()); continue; }
       if (this.isP('#')) { this.#pragma(); continue; }
       decls.push(...this.#declarationOrFunction());
     }
@@ -353,7 +355,7 @@ export class Parser {
        * declares its one piece of dialogue state this way.
        */
       if (v === '__thread' || v === '_Thread_local') { this.i++; continue; }
-      if (v === '__attribute__') { const a = this.#skipAttributeLike(); if (a.aligned) alignAttr = Math.max(alignAttr, a.aligned); continue; }
+      if (v === '__attribute__' || v === '__attribute') { const a = this.#skipAttributeLike(); if (a.aligned) alignAttr = Math.max(alignAttr, a.aligned); continue; }
 
       if (v === 'signed' || v === '__signed' || v === '__signed__') { this.i++; signed++; sawTypeSpec = true; continue; }
       if (v === 'unsigned') { this.i++; unsigned++; sawTypeSpec = true; continue; }
@@ -575,7 +577,7 @@ export class Parser {
         }
         continue;
       }
-      if ((this.isKw('__asm__') || this.isKw('asm')) && this.isP('(', 1)) {
+      if ((this.isKw('__asm__') || this.isKw('__asm') || this.isKw('asm')) && this.isP('(', 1)) {
         this.i++;
         let depth = 0;
         do {
@@ -690,6 +692,12 @@ export class Parser {
       if (this.isP('...')) { this.i++; variadic = true; break; }
       const s = this.#declSpecifiers();
       const d = this.#declarator(s.type, { abstract: true });
+      /*
+       * `int main(int argc __attribute__((unused)), char **argv __attribute__((unused)))`. An
+       * attribute may follow a PARAMETER's declarator as well as a declaration's, and nothing here
+       * looked for one -- so a perfectly ordinary main() stopped the parse at the attribute.
+       */
+      while (this.isKw('__attribute__') || this.isKw('__attribute')) this.#skipAttributeLike();
       // A parameter of array or function type decays immediately, and that is observable through
       // sizeof inside the function body.
       params.push({ name: d.name, type: T.decay(d.type) });
@@ -761,7 +769,20 @@ export class Parser {
     this.i++;
     const items = [];
     while (!this.isP('}') && !this.done) {
+      /*
+       * The pre-C99 GNU spelling: `{ b: 0, a: 0 }` instead of `{ .b = 0, .a = 0 }`. gcc still
+       * accepts it and its own compndlit-1.c and struct-ini-4.c are written that way. Recognised by
+       * lookahead so an ordinary identifier expression is untouched: only `name :` at the start of
+       * an initialiser item can be one, and a `?:` cannot appear there without parentheses.
+       */
       let designators = null;
+      if (this.peek().k === ID && this.isP(':', 1) && !this.scope.isTypedef(this.peek().v)) {
+        designators = [{ field: this.next().v }];
+        this.expectP(':');
+        items.push({ designators, value: this.#initializer(type) });
+        if (this.eatP(',')) continue;
+        break;
+      }
       // C99 designated initializers, plus the obsolete GNU `field:` form.
       while (this.isP('.') || this.isP('[')) {
         designators ??= [];
@@ -886,7 +907,7 @@ export class Parser {
           const label = this.expectId(); this.expectP(';');
           return { n: 'goto', label };
         }
-        case 'asm': case '__asm__': return this.#topLevelAsm();
+        case 'asm': case '__asm__': case '__asm': return this.#topLevelAsm();
       }
       // A label: an identifier followed by ':'.
       if (!KEYWORDS.has(t.v) && this.isP(':', 1)) {

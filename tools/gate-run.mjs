@@ -17,6 +17,29 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// Three GNU spellings gcc accepts and the corpus uses: an attribute on a PARAMETER, `__asm` and
+// `__attribute` without the trailing underscores, and the pre-C99 designator `field: value`.
+C('gnu-spellings', `
+#include <stdio.h>
+struct S { int a, b, c; };
+static struct S g = { b: 2, a: 1, c: 3 };
+int __attribute ((unused)) unused_marker;
+static int f(int x __attribute__((unused)), int y __attribute((unused)), int z)
+{
+    __asm ("");            /* an empty template is a barrier and emits nothing */
+    return z;
+}
+int main(void)
+{
+    struct S l = { c: 30, a: 10 };
+    printf("%d %d %d\\n", g.a, g.b, g.c);
+    printf("%d %d %d\\n", l.a, l.b, l.c);
+    printf("%d\\n", f(1, 2, 3));
+    { typedef __builtin_va_list my_va; my_va *p = 0; printf("%d\\n", (int)(p == 0)); }
+    return 0;
+}
+`);
+
 // Bitfields whose declared type is 64-bit. The width is what decides the PROMOTION -- int if int
 // can hold every value, else unsigned int -- and the declared type is what decides the storage. Six
 // torture programs failed on the first with "Cannot mix BigInt and other types", which is what a
