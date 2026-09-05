@@ -364,3 +364,41 @@ LONG WINAPI RegEnumValue(HKEY key, DWORD i, LPSTR name, DWORD *namelen, DWORD *r
                          DWORD *type, BYTE *data, DWORD *datalen)
 { (void)key; (void)i; (void)name; (void)namelen; (void)res; (void)type; (void)data; (void)datalen; return 259; }
 LONG WINAPI RegCloseKey(HKEY key) { (void)key; return 0; }
+
+/*
+ * Time. PuTTY stamps its log and its scrollback with the local clock and schedules its timers off
+ * the tick count, so both have to move -- a frozen clock would make every timer fire at once or
+ * never. These read the host's, which is what a program on a machine with a clock gets.
+ */
+#include <time.h>
+
+void WINAPI GetLocalTime(LPSYSTEMTIME t)
+{
+    time_t now = time(NULL);
+    struct tm *tm = localtime(&now);
+    if (!t) return;
+    t->wYear = (WORD)(tm->tm_year + 1900);
+    t->wMonth = (WORD)(tm->tm_mon + 1);
+    t->wDayOfWeek = (WORD)tm->tm_wday;
+    t->wDay = (WORD)tm->tm_mday;
+    t->wHour = (WORD)tm->tm_hour;
+    t->wMinute = (WORD)tm->tm_min;
+    t->wSecond = (WORD)tm->tm_sec;
+    t->wMilliseconds = 0;
+}
+void WINAPI GetSystemTime(LPSYSTEMTIME t)
+{
+    time_t now = time(NULL);
+    struct tm *tm = gmtime(&now);
+    if (!t) return;
+    t->wYear = (WORD)(tm->tm_year + 1900);
+    t->wMonth = (WORD)(tm->tm_mon + 1);
+    t->wDayOfWeek = (WORD)tm->tm_wday;
+    t->wDay = (WORD)tm->tm_mday;
+    t->wHour = (WORD)tm->tm_hour;
+    t->wMinute = (WORD)tm->tm_min;
+    t->wSecond = (WORD)tm->tm_sec;
+    t->wMilliseconds = 0;
+}
+BOOL WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME ft)
+{ (void)st; if (ft) { ft->dwLowDateTime = 0; ft->dwHighDateTime = 0; } return 1; }

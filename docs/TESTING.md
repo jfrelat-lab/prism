@@ -2201,3 +2201,34 @@ was sixteen consecutive surfaces all reporting `16x112 mip=0`. And a checksum of
 cache "diverges at world frame 0" on two runs that agree perfectly, because it includes the bytes
 nobody has written yet. Both channels answered confidently and both answers were noise; the frame-0
 comparison, where every call is a real fill, was the one that could be trusted.
+
+## find-loop.mjs: which loop is spinning
+
+`tools/find-loop.mjs <target[:variant]> [samples] [every] [-- args]` turns on the emitter's
+safepoints, gives the budget a finite value and replaces `M.sp_` with a sampler. Every loop back-edge
+decrements that budget, so when it runs out the id names the FUNCTION whose loop is running.
+
+It exists because the obvious tool is the wrong one. Wrapping `program.F` does not see a loop that
+calls nothing the rebinder reached — PRISM emits direct calls — and PuTTYtel hung with hooks on
+`GetMessage`, `DispatchMessage`, `MsgWaitForMultipleObjects` and a dozen other candidates all silent.
+A safepoint is *inside* the loop, so what the loop calls does not matter:
+
+```
+40 samples, one every 2,000,000 loop iterations:
+    40  ...corpus_putty_windows_window$update_savedsess_menu#11
+```
+
+One run, one name. `window.c:1029` is
+
+```c
+while (DeleteMenu(wgs->savedsess_menu, 0, MF_BYPOSITION)) ;
+```
+
+and the shim's `DeleteMenu` returned TRUE unconditionally. On Windows it returns FALSE once there is
+nothing at that position, and that FALSE is the loop's only exit.
+
+**The lesson is bigger than the bug: a stub that answers "success" to a QUESTION is not neutral.**
+Returning TRUE from something a caller only *performs* is harmless; returning it from something a
+caller *reads* invents an answer. Where the answer is read, the shim has to keep enough state to give
+a real one — so menus now count their items, which is four lines and the difference between a program
+that runs and one that hangs after creating its window.

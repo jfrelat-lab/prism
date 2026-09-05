@@ -173,13 +173,58 @@ BOOL WINAPI DestroyCaret(void) { return 1; }
 BOOL WINAPI ShowCaret(HWND h) { (void)h; return 1; }
 BOOL WINAPI HideCaret(HWND h) { (void)h; return 1; }
 BOOL WINAPI SetCaretPos(int x, int y) { (void)x; (void)y; return 1; }
-HMENU WINAPI CreateMenu(void) { return NEW_HANDLE(HMENU); }
-HMENU WINAPI CreatePopupMenu(void) { return NEW_HANDLE(HMENU); }
-HMENU WINAPI GetSystemMenu(HWND h, BOOL rev) { (void)h; (void)rev; return NEW_HANDLE(HMENU); }
-BOOL WINAPI AppendMenu(HMENU m, UINT f, UINT_PTR id, LPCSTR s) { (void)m; (void)f; (void)id; (void)s; return 1; }
+/*
+ * MENUS COUNT THEIR ITEMS, and that is not decoration.
+ *
+ * window.c:1029 empties a submenu by draining it:
+ *
+ *     while (DeleteMenu(wgs->savedsess_menu, 0, MF_BYPOSITION)) ;
+ *
+ * On Windows DeleteMenu returns FALSE once there is nothing at that position, and that FALSE is the
+ * loop's only exit. A stub returning TRUE unconditionally hangs PuTTYtel forever, right after it has
+ * created its window -- which is what it did, and what the safepoint sampler found in one run after
+ * hooks on GetMessage and a dozen other candidates had found nothing.
+ *
+ * The lesson generalises: a stub that answers "success" to a QUESTION is not neutral. Where a
+ * caller reads the answer, the shim has to keep enough state to answer it.
+ */
+#define PRISM_MAX_MENUS 64
+static int prism_menu_items[PRISM_MAX_MENUS];
+static int prism_menu_count;
+
+static int prism_menu_slot(HMENU m)
+{
+    int i = (int)(ULONG_PTR)m - 1;
+    return (i >= 0 && i < prism_menu_count) ? i : -1;
+}
+static HMENU prism_new_menu(void)
+{
+    if (prism_menu_count >= PRISM_MAX_MENUS) return (HMENU)0;
+    prism_menu_items[prism_menu_count] = 0;
+    return (HMENU)(ULONG_PTR)(++prism_menu_count);
+}
+
+HMENU WINAPI CreateMenu(void) { return prism_new_menu(); }
+HMENU WINAPI CreatePopupMenu(void) { return prism_new_menu(); }
+HMENU WINAPI GetSystemMenu(HWND h, BOOL rev) { (void)h; (void)rev; return prism_new_menu(); }
+BOOL WINAPI AppendMenu(HMENU m, UINT f, UINT_PTR id, LPCSTR s)
+{
+    int i = prism_menu_slot(m);
+    (void)f; (void)id; (void)s;
+    if (i < 0) return 0;
+    prism_menu_items[i]++;
+    return 1;
+}
 BOOL WINAPI InsertMenu(HMENU m, UINT p, UINT f, UINT_PTR id, LPCSTR s)
-{ (void)m; (void)p; (void)f; (void)id; (void)s; return 1; }
-BOOL WINAPI DeleteMenu(HMENU m, UINT p, UINT f) { (void)m; (void)p; (void)f; return 1; }
+{ (void)p; return AppendMenu(m, f, id, s); }
+BOOL WINAPI DeleteMenu(HMENU m, UINT p, UINT f)
+{
+    int i = prism_menu_slot(m);
+    (void)p; (void)f;
+    if (i < 0 || prism_menu_items[i] <= 0) return 0;   /* the FALSE that ends the drain loop */
+    prism_menu_items[i]--;
+    return 1;
+}
 DWORD WINAPI CheckMenuItem(HMENU m, UINT id, UINT c) { (void)m; (void)id; (void)c; return 0; }
 BOOL WINAPI EnableMenuItem(HMENU m, UINT id, UINT e) { (void)m; (void)id; (void)e; return 1; }
 BOOL WINAPI TrackPopupMenu(HMENU m, UINT f, int x, int y, int r, HWND h, const RECT *rc)

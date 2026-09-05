@@ -593,7 +593,10 @@
           "SERIAL": "1",
           "OTHERBACKENDS": "1"
         }
-      }
+      },
+      "args": "-telnet localhost",
+      "_args": "A session named on the COMMAND LINE, which is the program's own way past a configuration box PRISM cannot show: no .rc resources are compiled, so CreateDialog has no template. With this the run goes all the way through -- window created, connection attempted, \"Host does not exist\" reported, which is the right answer on a machine with no network.",
+      "_state": "RUNS. WinMain, the command line, RegisterClassW, CreateWindowExW, and then PuTTY's own error box. The window comes out 642x386, which is 80x24 cells of the 8x16 font win32-gui.c reports plus a border -- the font metric propagates all the way to the window size. Nothing is DRAWN yet: the GDI layer accepts text and returns success with no raster behind it."
     }
   },
   "_state": "IN PROGRESS -- this target does not build yet, and the file records where it stops rather than pretending otherwise. It now gets through defs.h, putty.h, windows/platform.h and most of terminal.c, and stops in the Win32 GUI headers (HFONT, LOGFONT, the WS_/HKEY_/CP_/BN_ constant families). That surface is MEASURED, not guessed: see docs/COMPAT.md.",
