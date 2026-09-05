@@ -6,7 +6,7 @@ import { Preprocessor } from './cpp/cpp.js';
 import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
-import { makeMachine, finalizeHeap, ExitCalled, Trap } from './runtime/runtime.js';
+import { makeMachine, finalizeHeap, ExitCalled, Trap, vaReader } from './runtime/runtime.js';
 import { FunctionEmitter, EmitError , jsIdent, flexibleExtra } from './backend/emit.js';
 import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
@@ -570,6 +570,31 @@ for (const [k, v] of Object.entries(sdl2Builtins(T))) BUILTINS.set(k, v);
 export class CompileError extends Error {}
 
 /**
+ * Fill the function-table slot of a library function whose ADDRESS a program took, so a call through
+ * the pointer lands where a direct call would.
+ *
+ * A VARIADIC builtin needs an adapter. The runtime takes its extras as one array -- `printf(fmt,
+ * [args])` -- because that is the convention the emitter uses at a direct call, and an indirect call
+ * site has no idea it is calling a variadic function, so it passes them flat. The adapter puts them
+ * back together. c-testsuite's 00189 exists for exactly this: it calls fprintf ONLY through a
+ * pointer, so nothing else would notice.
+ */
+function bindBuiltinAddr(mod, M, name) {
+  const b = BUILTINS.get(name);
+  const impl = M.rt[b?.impl ?? name];
+  if (typeof impl !== 'function') return;
+  if (!b?.variadic) { mod.bindFunc(name, impl); return; }
+  /*
+   * Through a POINTER the tail does not arrive flat: an indirect call packs it into the caller-owned
+   * va buffer and passes its address, because that is what every variadic callee here expects. So
+   * the adapter reads the buffer -- `vaReader` is the same thing vfprintf uses -- and hands the
+   * runtime the list it wants.
+   */
+  const fixed = b.params?.length ?? 0;
+  mod.bindFunc(name, (...args) => impl(...args.slice(0, fixed), vaReader(M, args[fixed])));
+}
+
+/**
  * Compile one translation unit.
  * @returns {{M, F, src, run: (argv?: string[]) => {code: number, stdout: string}}}
  */
@@ -690,10 +715,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   wireRebind(F, mod, emitted, rebind);
   // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,
   // so a call through the pointer lands where a direct call would.
-  for (const name of ctx.builtinRefs ?? []) {
-    const impl = M.rt[BUILTINS.get(name)?.impl ?? name];
-    if (typeof impl === 'function') mod.bindFunc(name, impl);
-  }
+  for (const name of ctx.builtinRefs ?? []) bindBuiltinAddr(mod, M, name);
 
   installStdio(M);
   installPIT(installPorts(M), M);
@@ -1061,10 +1083,7 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   wireRebind(F, mod, emitted, rebind);
   // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,
   // so a call through the pointer lands where a direct call would.
-  for (const name of builtinRefs) {
-    const impl = M.rt[BUILTINS.get(name)?.impl ?? name];
-    if (typeof impl === 'function') mod.bindFunc(name, impl);
-  }
+  for (const name of builtinRefs) bindBuiltinAddr(mod, M, name);
 
   // After emission, because it fills in the program's own `stdin`/`stdout`/`stderr` globals and those
   // addresses do not exist until the units have been linked.

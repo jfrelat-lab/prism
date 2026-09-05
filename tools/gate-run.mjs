@@ -321,6 +321,31 @@ int main(void)
 }
 `);
 
+// The ADDRESS of a library function, called only through the pointer. The variadic case needs an
+// adapter: an indirect call packs the tail into the va buffer, where a direct call would have handed
+// the runtime a plain list.
+C('library-function-address', `
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+static int (*gp)(const char *) = &puts;
+static int (*gfp)(FILE *, const char *, ...) = &fprintf;
+static void *(*gmem)(void *, const void *, size_t) = &memcpy;
+int main(void)
+{
+    char buf[8];
+    int (*local)(const char *, ...) = printf;
+    size_t (*len)(const char *) = strlen;
+    gp("through a pointer");
+    gfp(stdout, "%d %s\\n", 42, "args");
+    local("%s %d\\n", "direct", 7);
+    gmem(buf, "abcdef", 7);
+    printf("%s %d\\n", buf, (int)len(buf));
+    printf("%d %d\\n", gp == &puts, (int)(gfp != 0));
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

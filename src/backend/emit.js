@@ -891,7 +891,7 @@ export class FunctionEmitter {
         const g = this.ctx.globals?.get(e.name);
         if (g && g.type.k === 'array') return g.addr;
         const f = this.ctx.funcs?.get(e.name);
-        if (f) return f.addr;
+        if (f) { this.#noteBuiltinRef(e.name, f); return f.addr; }
         /*
          * The address of a LIBRARY function. PRISM's builtins are JavaScript in M.rt and have no
          * address of their own, but a program is entitled to take one: SQLite's unix layer builds a
@@ -902,13 +902,7 @@ export class FunctionEmitter {
          * runtime implementation the same way it finds a compiled one. Recorded here and bound after
          * emission, when M.rt exists.
          */
-        const b = this.ctx.builtins?.get(e.name);
-        if (b) {
-          const fn = this.mod.defineFunc(e.name, null);
-          (this.ctx.builtinRefs ??= new Set()).add(e.name);
-          return fn.addr;
-        }
-        return null;
+        return this.#builtinAddr(e.name);
       }
       /*
        * An indexed or selected ARRAY decays to its own address, and that is a constant when the
@@ -939,6 +933,35 @@ export class FunctionEmitter {
   }
 
   /** The constant address of a static lvalue: a global, a member of one, an element of one. */
+  /**
+   * The address of a LIBRARY function. PRISM's builtins are JavaScript in M.rt and have no address
+   * of their own, but a program is entitled to take one -- SQLite's unix layer builds a table of
+   * syscall pointers so it can swap them out under test. A function-table slot is all it takes;
+   * it is recorded here and bound after emission, when M.rt exists.
+   */
+  #builtinAddr(name) {
+    if (!this.#noteBuiltinRef(name, null)) return null;
+    return this.mod.defineFunc(name, null).addr;
+  }
+
+  /**
+   * Record that a library function's ADDRESS is wanted, so its table slot is filled after emission.
+   *
+   * It has to happen even when the name ALREADY has a table entry, which is the case that was
+   * missing: a prototype in <stdio.h> gives `puts` a slot the moment the header is parsed, so the
+   * lookup succeeded and handed back an address nothing had bound. `sp = &puts; sp("hi")` then
+   * reported an unbound slot, naming an index rather than the function.
+   *
+   * Returns whether the name is a builtin at all.
+   */
+  #noteBuiltinRef(name, f) {
+    if (f?.defined) return false;                     // the program's own definition wins
+    const b = this.ctx.builtins?.get(name);
+    if (!b) return false;
+    (this.ctx.builtinRefs ??= new Set()).add(name);
+    return true;
+  }
+
   #lvalAddrConst(e) {
     switch (e.n) {
       /*
@@ -959,8 +982,10 @@ export class FunctionEmitter {
         const g = this.ctx.globals?.get(e.name);
         if (g) return g.addr;
         const f = this.ctx.funcs?.get(e.name);
-        if (f) return f.addr;
-        return null;
+        if (f) { this.#noteBuiltinRef(e.name, f); return f.addr; }
+        // `&puts` -- the same rule as the bare name in #addrConst, which is reached when the array
+        // or function decays on its own.
+        return this.#builtinAddr(e.name);
       }
       case 'member': {
         /*
@@ -1460,7 +1485,13 @@ export class FunctionEmitter {
         const g = this.ctx.globals.get(e.name);
         if (g) return { addr: String(g.addr), type: g.type };
         const f = this.ctx.funcs.get(e.name);
-        if (f) return { addr: String(f.addr), type: f.type, isFunc: true };
+        if (f) { this.#noteBuiltinRef(e.name, f); return { addr: String(f.addr), type: f.type, isFunc: true }; }
+        // A library function named as a VALUE rather than called: `fp = puts`, `&puts`.
+        const b = this.ctx.builtins?.get(e.name);
+        if (b) {
+          const addr = this.#builtinAddr(e.name);
+          if (addr !== null) return { addr: String(addr), type: T.func(b.ret ?? T.INT, []), isFunc: true };
+        }
         /*
          * `__func__` is not a variable a program declares -- C99 6.4.2.2 says the compiler provides
          * it, as a static array holding the function's name. gcc's `__FUNCTION__` is the same thing
