@@ -1052,8 +1052,20 @@ export class Parser {
         this.i++;
         const type = this.#typeName();
         this.expectP(')');
-        // A compound literal is `(T){...}`, not a cast.
-        if (this.isP('{')) return { n: 'compound', type, init: this.#initializer(type) };
+        /*
+         * A compound literal is `(T){...}`, not a cast -- and the grammar makes it a POSTFIX
+         * expression, so `(int []){0,1,2}[i]` and `(struct s){...}.f` are ordinary C (gcc's
+         * pr22098-1.c). Its own suffixes are parsed here rather than left to the caller, which
+         * would have gone on to read the `[` as the start of a new statement.
+         */
+        if (this.isP('{')) {
+          const init = this.#initializer(type);
+          // `(int []){0,1,2}` states its extent by listing it, the same completion a declaration
+          // gets from its initialiser.
+          const complete = type.k === 'array' && type.n === null && init.n === 'initlist'
+            ? T.array(type.of, initListExtent(init, type.of)) : type;
+          return this.#postfix({ n: 'compound', type: complete, init });
+        }
         return { n: 'cast', type, expr: this.unary() };
       }
     }
@@ -1119,8 +1131,8 @@ export class Parser {
 
   #isTypeNameAhead() { return this.#isCastAhead(); }
 
-  #postfix() {
-    let e = this.#primary();
+  #postfix(start = null) {
+    let e = start ?? this.#primary();
     for (;;) {
       if (this.isP('[')) {
         this.i++;

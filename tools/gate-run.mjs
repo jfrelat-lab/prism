@@ -137,6 +137,29 @@ int main(void)
 }
 `);
 
+// A compound literal is a POSTFIX expression, so it can be indexed and its members read straight
+// off it -- and an array one states its extent by listing it. Next to it: an aggregate member
+// initialised from a single expression, which is a copy and not a store.
+C('compound-literal-postfix', `
+#include <stdio.h>
+typedef struct { short v; } W;
+struct node { W a; W b; int t; };
+struct pt { int x, y; };
+int main(void)
+{
+    int i = 1;
+    int *p = &(int []){10, 20, 30}[i];
+    printf("%d %d\\n", *p, (int)sizeof((int []){10, 20, 30}));
+    printf("%d %d\\n", (struct pt){4, 5}.y, (int []){7, 8, 9}[2]);
+    { struct node m = { .a = (W){5}, .b = (W){6}, .t = 7 };
+      W copy = m.a;
+      struct node n2 = { .a = copy, .b = m.b, .t = m.t + 1 };
+      printf("%d %d %d %d\\n", m.a.v, n2.a.v, n2.b.v, n2.t); }
+    { int a = 0; int *q = &(int []){0, 1, 2}[++a]; printf("%d %d\\n", a, *q); }
+    return 0;
+}
+`);
+
 // GNU statement expressions, `({ ... })`. Emitted as an arrow function called on the spot, so the
 // body runs exactly where it is written -- inside a loop condition, inside an untaken branch of a
 // `?:` -- rather than being hoisted ahead of the statement.

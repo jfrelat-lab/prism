@@ -668,7 +668,16 @@ export class FunctionEmitter {
         } else {
           const off = `(${addr}+${t.off}|0)`;
           if (it.value.n === 'initlist') this.#initList(off, t.type, it.value);
-          else this.out.push(storeExpr(off, t.type, this.#rvalCoerced(it.value.expr, t.type)) + ';');
+          /*
+           * An AGGREGATE member given a single expression is a COPY, not a store -- `.magic =
+           * (jint16_t){0x1985}` and `.pos = other.pos` alike. A record rvalue is its address in
+           * tier-0, so both are the same M.copy; going through storeExpr asked for a DataView
+           * accessor for a struct and refused (gcc's 20030224-2.c).
+           */
+          else if (T.isRecord(t.type) || t.type.k === 'array') {
+            const src = this.#lval(it.value.expr);
+            this.out.push(`M.copy(${off},${src.addr},${t.type.size});`);
+          } else this.out.push(storeExpr(off, t.type, this.#rvalCoerced(it.value.expr, t.type)) + ';');
         }
         k = named.indexOf(f) + 1;
       }
