@@ -433,6 +433,29 @@ export class FunctionEmitter {
       return;
     }
     checkWide(d.type);
+    /*
+     * A VARIABLE-LENGTH ARRAY: the extent is not known until the declaration runs, so the storage
+     * cannot be a frame slot. It is alloca'd, which puts it on the same shadow stack the frame is on
+     * and therefore releases it when the function returns -- which is exactly a VLA's lifetime.
+     *
+     * The local is then recorded as an ADDRESS IN A VARIABLE, which is the shape a by-value struct
+     * parameter already uses, so indexing, decay and `&x` all work without another case.
+     *
+     * ONLY THE OUTERMOST extent may vary. `int a[n][m]` needs a row stride that is itself a runtime
+     * value, and every index expression would have to carry it; that is a different feature and it
+     * is refused rather than half-built.
+     */
+    if (d.type.k === 'array' && d.type.vla) {
+      if (d.type.of.size == null || (d.type.of.k === 'array' && d.type.of.vla)) {
+        unsup('a variable-length array of variable-length arrays');
+      }
+      if (d.init) unsup('an initialiser on a variable-length array');
+      const count = this.#rval(d.type.vla);
+      const js = `_vla${this.tmp++}`;
+      this.out.push(`var ${js}=M.rt.alloca(Math.imul((${count.js})|0,${d.type.of.size})|0);`);
+      this.locals.set(d.name, { kind: 'aggparam', js, type: d.type });
+      return;
+    }
     const isAggregate = d.type.k === 'array' || T.isRecord(d.type);
     if (isAggregate || escaped.has(d.name)) {
       if (d.type.size == null) unsup('a local of incomplete type');

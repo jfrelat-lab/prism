@@ -17,6 +17,40 @@ const FILTER = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null;
 const cases = [];
 const C = (name, src) => cases.push({ name, src });
 
+// Variable-length arrays, for LOCALS. The storage is alloca'd, which puts it on the same shadow
+// stack as the frame and therefore releases it at return -- exactly a VLA's lifetime.
+C('vla', `
+#include <stdio.h>
+static int sum(int n, int *a) { int i, s = 0; for (i = 0; i < n; i++) s += a[i]; return s; }
+static int f(int n)
+{
+    int a[n], i;
+    for (i = 0; i < n; i++) a[i] = i * i;
+    return sum(n, a) + a[n - 1];
+}
+static int nested(int n)
+{
+    int total = 0, k;
+    for (k = 1; k <= n; k++) { int row[k]; int i;
+        for (i = 0; i < k; i++) row[i] = k;
+        total += sum(k, row); }
+    return total;
+}
+int main(void)
+{
+    int n = 5, i;
+    double x[n];
+    for (i = 0; i < n; i++) x[i] = i / 2.0;
+    printf("%d %d %d\\n", f(3), f(5), f(1));
+    printf("%.1f %.1f\\n", x[0], x[4]);
+    { char buf[n * 2]; for (i = 0; i < n * 2; i++) buf[i] = 'a' + i; buf[n * 2 - 1] = 0;
+      printf("%s\\n", buf); }
+    printf("%d\\n", nested(4));
+    { int *p; int a[n]; p = a; p[2] = 7; printf("%d\\n", a[2]); }
+    return 0;
+}
+`);
+
 // Three GNU spellings gcc accepts and the corpus uses: an attribute on a PARAMETER, `__asm` and
 // `__attribute` without the trailing underscores, and the pre-C99 designator `field: value`.
 C('gnu-spellings', `

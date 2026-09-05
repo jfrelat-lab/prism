@@ -2259,3 +2259,27 @@ than papered over: PRISM's `stderr` lands in the same buffer as its `stdout`, an
 case that reports its findings on stderr is therefore not comparable. The stdout-redirect half of
 freopen is checked by gcc's own `printf-2.c` and `user-printf.c` instead, which is the better oracle
 for it.
+
+## Variable-length arrays, and where a feature must STOP
+
+VLAs for locals took an afternoon. Keeping the suite's "zero wrong answers" while adding them took
+longer, and the reason is worth writing down: **a parser change makes a program COMPILE, and a
+program that compiles produces an answer.**
+
+Accepting `double x[n]` also accepted, at a stroke:
+
+| where | what goes wrong |
+|---|---|
+| `struct { char x[size]; }` | the struct's size becomes a run-time value, and every `sizeof`, assignment and `va_arg` of it with it. Laid out with a null extent, five programs went from refused to wrong. |
+| `typedef int c[i+2];` | `sizeof(c)` is a run-time value; the constant folder answers with whatever the extent happened to fold to. |
+| `void foo(int a, int b[a++])` | the type decays to a pointer and carries nothing, but gcc still EVALUATES the extent -- `a` ends at 2. Dropping it silently is a wrong answer. |
+
+Each is now refused by name. The score went 1342 → 1347 with six wrong answers, then 1344 with none,
+and the second number is the one that counts: **five extra passes are not worth one wrong answer**,
+because a refusal is a thing you can look up and a wrong answer is a thing you have to find.
+
+The implemented case is deliberately narrow — the outermost extent of a LOCAL — and the storage is
+`alloca`, which puts it on the same shadow stack as the frame and therefore releases it at return.
+That is exactly a VLA's lifetime, so nothing else had to know about it: the local is recorded as an
+address in a variable, which is the shape a by-value struct parameter already uses, and indexing,
+decay and `&x` all work without another case.

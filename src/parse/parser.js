@@ -267,6 +267,14 @@ export class Parser {
         return out;
       }
 
+      if (specs.storage === 'typedef' && hasVla(d.type)) {
+        /*
+         * `typedef int c[i+2];` -- a variably-modified typedef. Its sizeof is a RUN-TIME value, and
+         * the constant folder answers with whatever the extent folded to, which is a wrong number
+         * rather than a refusal (20040411-1.c, 20040423-1.c).
+         */
+        throw new ParseError('a variably-modified typedef', this.peek());
+      }
       if (specs.storage === 'typedef') {
         this.scope.declare(d.name, { kind: 'typedef', type: d.type });
         out.push({ n: 'typedef', name: d.name, type: d.type });
@@ -468,6 +476,16 @@ export class Parser {
         } else {
           const d = this.#declarator(s.type);
           name = d.name; mtype = d.type;
+          /*
+           * A VARIABLY-MODIFIED member -- `struct { char x[size]; }` -- makes the whole struct's
+           * size a run-time value, and every sizeof, every assignment and every va_arg of it with
+           * it. Refused, loudly: accepting the declarator and laying the struct out with a null
+           * extent produced five plausible WRONG ANSWERS in gcc's suite where there had been five
+           * refusals, which is the wrong direction to move.
+           */
+          if (hasVla(mtype)) {
+            throw new ParseError('a variably-modified type as a struct member', this.peek());
+          }
           if (this.eatP(':')) bits = Number(this.#constExpr());
         }
         const matt = this.#skipAttributeLike();
@@ -646,10 +664,20 @@ export class Parser {
         this.i++;
         // GNU/C99 allow qualifiers and `static` inside an array parameter's brackets.
         while (this.peek().k === ID && (QUALS.has(this.peek().v) || this.peek().v === 'static')) this.i++;
-        let n = null;
-        if (!this.isP(']')) n = Number(this.#constExpr());
+        /*
+         * A VARIABLE-LENGTH ARRAY is an array whose extent is an expression: `double x[n]`. The
+         * constant folder is asked first because almost every array is constant and the constant is
+         * what the type system wants; only when it refuses is the same text re-read as an ordinary
+         * expression, which is why the cursor is saved rather than the folder made lenient.
+         */
+        let n = null, vla = null;
+        if (!this.isP(']')) {
+          const save = this.i;
+          try { n = Number(this.#constExpr()); }
+          catch { this.i = save; vla = this.assignment(); }
+        }
         this.expectP(']');
-        suffixes.push({ kind: 'array', n });
+        suffixes.push({ kind: 'array', n, vla });
         continue;
       }
       if (this.isP('(')) {
@@ -665,7 +693,12 @@ export class Parser {
     let t = base;
     for (let k = suffixes.length - 1; k >= 0; k--) {
       const s = suffixes[k];
-      t = s.kind === 'array' ? T.array(t, s.n) : T.func(t, s.params, { variadic: s.variadic, oldStyle: s.oldStyle });
+      if (s.kind === 'array') {
+        t = T.array(t, s.n);
+        if (s.vla) t = { ...t, vla: s.vla };
+      } else {
+        t = T.func(t, s.params, { variadic: s.variadic, oldStyle: s.oldStyle });
+      }
     }
     return t;
   }
@@ -692,6 +725,15 @@ export class Parser {
       if (this.isP('...')) { this.i++; variadic = true; break; }
       const s = this.#declSpecifiers();
       const d = this.#declarator(s.type, { abstract: true });
+      /*
+       * A VLA PARAMETER decays to a pointer, so its type carries nothing -- but its extent is still
+       * an expression that gcc evaluates: `void foo(int a, int b[a++])` leaves a at 2. Dropping it
+       * silently turned pr77767.c from a refusal into a wrong answer, so it is refused until the
+       * evaluation is real.
+       */
+      if (hasVla(d.type)) {
+        throw new ParseError('a variable-length array parameter', this.peek());
+      }
       /*
        * `int main(int argc __attribute__((unused)), char **argv __attribute__((unused)))`. An
        * attribute may follow a PARAMETER's declarator as well as a declaration's, and nothing here
@@ -1510,6 +1552,14 @@ function ce(e) {
 }
 
 /** Parse a whole translation unit from preprocessed tokens. */
+/** Does this type contain a variable extent anywhere? A VLA of, or a pointer to, still counts. */
+function hasVla(t) {
+  for (let x = t; x; x = x.k === 'array' ? x.of : x.k === 'ptr' ? x.to : null) {
+    if (x.k === 'array' && x.vla) return true;
+  }
+  return false;
+}
+
 export function parse(tokens, opts = {}) {
   const p = new Parser(tokens, opts);
   const unit = p.parseTranslationUnit();
