@@ -194,6 +194,10 @@ function switchAway(what) {
 /** Forget the screen, so nothing from the last program is mistaken for the next one. */
 function clearScreen() {
   imageData = null; lut = null; palGen = -1;
+  // The title too: it belongs to the program that set it, and a stale one on the next program's
+  // window is exactly the confusion this whole frame caused when it was hard-coded.
+  $('wincaption').textContent = '';
+  $('winframe').classList.remove('windowed');
   cx.fillStyle = '#000';
   cx.fillRect(0, 0, canvas.width, canvas.height);
 }
@@ -354,9 +358,11 @@ let dragging = null, dragGen = 0;
 
 function paintWindow() {
   const frame = $('winframe');
-  if (!views) { frame.hidden = true; return; }
+  // A CLASS, not the `hidden` attribute: the canvas lives inside this element, so switching the
+  // whole frame off would switch the picture off with it. Only the chrome comes and goes.
+  if (!views) { frame.classList.remove('windowed'); return; }
   const has = Atomics.load(views.ctrl, SLOT.WIN_HAS) === 1;
-  frame.hidden = !has;
+  frame.classList.toggle('windowed', has);
   if (!has || dragging) return;
   // Position is the guest's to give; while a drag is in flight the page owns it for that moment.
   const x = Atomics.load(views.ctrl, SLOT.WIN_X), y = Atomics.load(views.ctrl, SLOT.WIN_Y);
@@ -566,6 +572,12 @@ const STATE_NAME = ['starting', 'fetching sources', 'compiling', 'running', 'exi
 
 function paint() {
   if (!views) return;
+  /*
+   * The CHROME first, and unconditionally. It used to be painted after the picture, which meant
+   * every early return in the pixel path took the window with it -- a program whose palette was not
+   * ready yet had a window the page never drew, and the two failures look identical from outside.
+   */
+  paintWindow();
   const { ctrl, pal } = views;
   const pixels = Atomics.load(ctrl, SLOT.PIXELS);
   const w = Atomics.load(ctrl, SLOT.WIDTH), h = Atomics.load(ctrl, SLOT.HEIGHT);
@@ -614,7 +626,6 @@ function paint() {
         dst[i] = (255 << 24) | (guest[p] << 16) | (guest[p + 1] << 8) | guest[p + 2];
       }
       cx.putImageData(imageData, 0, 0);
-      paintWindow();
       return requestAnimationFrame(paint);
     }
     if (!lut) return requestAnimationFrame(paint);
@@ -625,7 +636,6 @@ function paint() {
   } else {
     paintText();
   }
-  paintWindow();
   requestAnimationFrame(paint);
 }
 

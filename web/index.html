@@ -105,13 +105,27 @@
    * rather than moving a div and telling nobody. Without a window the frame is hidden and the canvas
    * fills the stage as before -- an X11 or DOS program has no window to draw.
    */
-  /* Absolute FROM THE START, and inside a positioned stage. Switching it from the grid's centred
-     flow to absolute at the first paint made the window jump to the corner the moment it was
-     positioned -- which looked like a drag bug and was a layout one. */
-  #winframe { position: absolute; left: 0; top: 0; border: 2px outset #b8b8b8; background: #b8b8b8; box-shadow: 2px 2px 6px #0008;
-              display: flex; flex-direction: column; max-width: 100%; max-height: 100%; }
-  #wintitle { display: flex; align-items: center; gap: 6px; padding: 2px 3px; cursor: move;
-              background: linear-gradient(90deg, #000080, #1084d0); color: #fff;
+  /*
+   * The frame is ALWAYS the canvas's parent and only sometimes a window.
+   *
+   * It used to carry the chrome unconditionally and be switched off with the `hidden` attribute --
+   * which does nothing here, because `#winframe { display: flex }` outranks the user agent's
+   * `[hidden] { display: none }`. So a title bar reading "WinQuake" sat over every program, whatever
+   * was selected. Hiding it properly would have been worse: the canvas is INSIDE the frame, so a
+   * program with no window would have drawn nothing at all.
+   *
+   * `.windowed` is therefore the switch, and without it this is a plain wrapper that lets the stage
+   * centre the picture as it did before there were windows.
+   */
+  #winframe { display: flex; flex-direction: column; max-width: 100%; max-height: 100%; }
+  /* Absolute FROM THE START of being a window, and inside a positioned stage. Switching it from the
+     grid's centred flow to absolute at the first paint made the window jump to the corner the moment
+     it was positioned -- which looked like a drag bug and was a layout one. */
+  #winframe.windowed { position: absolute; left: 0; top: 0; border: 2px outset #b8b8b8;
+                       background: #b8b8b8; box-shadow: 2px 2px 6px #0008; }
+  #wintitle { display: none; }
+  #winframe.windowed #wintitle { display: flex; align-items: center; gap: 6px; padding: 2px 3px;
+              cursor: move; background: linear-gradient(90deg, #000080, #1084d0); color: #fff;
               font: bold 12px/1.4 system-ui, sans-serif; user-select: none; }
   #wincaption { flex: 1; padding-left: 3px; }
   #winclose { border: 1px outset #d4d0c8; background: #d4d0c8; color: #000; cursor: pointer;
@@ -172,8 +186,11 @@
 
 <main>
   <div id="stage">
-    <div id="winframe" hidden>
-      <div id="wintitle"><span id="wincaption">WinQuake</span><button id="winclose" title="close">&#10005;</button></div>
+    <div id="winframe">
+      <!-- The caption is the PROGRAM's: CreateWindowEx gives it, and until one does there is no
+           window and no title. It said "WinQuake" here, which is how one game's title came to sit
+           over every other program in the picker. -->
+      <div id="wintitle"><span id="wincaption"></span><button id="winclose" title="close">&#10005;</button></div>
       <canvas id="screen" width="720" height="400"></canvas>
     </div>
   </div>
