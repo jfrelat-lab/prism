@@ -773,9 +773,33 @@ function paintWindow() {
   const frame = $('winframe');
   // A CLASS, not the `hidden` attribute: the canvas lives inside this element, so switching the
   // whole frame off would switch the picture off with it. Only the chrome comes and goes.
-  if (!views) { frame.classList.remove('windowed'); return; }
+  if (!views) {
+    frame.classList.remove('windowed');
+    // ...and the size the last window asked for. Leaving it behind meant the machine's own terminal
+    // was afterwards drawn at whatever resolution WinQuake had been resized to.
+    if (canvas.style.width) canvas.style.width = canvas.style.height = '';
+    return;
+  }
   const has = Atomics.load(views.ctrl, SLOT.WIN_HAS) === 1;
   frame.classList.toggle('windowed', has);
+  /*
+   * The SIZE is the guest's too, and the page used to ignore it.
+   *
+   * Pick 640x480 from WinQuake's video menu and it really does resize its window -- prism_win32_w
+   * and _h say 640x480 afterwards -- but it goes on RENDERING 320x240 and asks MGL to double it on
+   * the way to the screen (that is what MGL_stretchBltCoord is). The page reads the source buffer,
+   * so the canvas stays 320x240, which is right; what was wrong is that the canvas was also DRAWN
+   * 320 pixels wide, so the window never grew and choosing a bigger mode appeared to do nothing.
+   *
+   * Sizing the element from the guest's window and leaving the buffer alone is the same division of
+   * labour as everywhere else here: the program owns the pixels, the page owns the presentation.
+   */
+  if (has) {
+    const w = Atomics.load(views.ctrl, SLOT.WIN_W), h = Atomics.load(views.ctrl, SLOT.WIN_H);
+    if (w > 0 && h > 0) { canvas.style.width = `${w}px`; canvas.style.height = `${h}px`; }
+  } else if (canvas.style.width) {
+    canvas.style.width = canvas.style.height = '';
+  }
   if (!has || dragging) return;
   // Position is the guest's to give; while a drag is in flight the page owns it for that moment.
   const x = Atomics.load(views.ctrl, SLOT.WIN_X), y = Atomics.load(views.ctrl, SLOT.WIN_Y);
@@ -1041,7 +1065,12 @@ const STATE_NAME = ['starting', 'fetching sources', 'compiling', 'running', 'exi
  * now, and its cursor blinks whether or not anything is running.
  */
 function frame() {
-  if (views) paint(); else paintTextFrom(shellVram, 0, shellCol, shellRow);
+  if (views) { paint(); } else {
+    // The chrome first even with nothing running: that is where a window's leftover size is cleared,
+    // and paint() is not called at all in this state.
+    paintWindow();
+    paintTextFrom(shellVram, 0, shellCol, shellRow);
+  }
   requestAnimationFrame(frame);
 }
 
