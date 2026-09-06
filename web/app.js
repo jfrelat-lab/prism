@@ -500,6 +500,18 @@ function termKey(e) {
   if (e.key === 'Backspace') { cmdline = cmdline.slice(0, -1); termRedrawLine(); return true; }
   if (e.key === 'Tab') { termComplete(); return true; }
   if (e.key === 'Escape') { cmdline = ''; termRedrawLine(); return true; }
+  /*
+   * Ctrl+C at a prompt abandons the line and gives you a new one -- it does not clear the screen and
+   * it does not run anything. That is what every shell does with it, and it is the reason a half-typed
+   * command is never something you have to delete character by character.
+   */
+  if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) {
+    cmdline = '';
+    termWrite('^C', A_DIM);
+    termChar(10);
+    termPrompt();
+    return true;
+  }
   if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     historyAt = Math.min(cmdHistory.length, Math.max(0, historyAt + (e.key === 'ArrowUp' ? -1 : 1)));
     cmdline = cmdHistory[historyAt] ?? '';
@@ -719,6 +731,27 @@ addEventListener('keydown', (e) => {
    * before the guard below rather than after it.
    */
   if (termKey(e)) { e.preventDefault(); return; }
+  /*
+   * Ctrl+C INTERRUPTS a program that is still on the text screen, and only that one.
+   *
+   * The test is the display, not the descriptor, because that is the honest distinction: a program
+   * showing a text screen is a console program, and on any of these machines Ctrl+C ended it. A
+   * program that has taken the display is a game, and there Ctrl is the FIRE BUTTON -- Quake's
+   * default binding, MAME's too -- so intercepting it would make the page eat the one key you press
+   * most.
+   *
+   * The mechanism is the one Stop already uses: SLOT.STOP makes the guest's next read of the
+   * keyboard return -1, which a C program reads as EOF on stdin and handles itself. Lua's REPL exits
+   * cleanly, prints nothing, and the shell takes its screen back.
+   */
+  if (views && worker && e.ctrlKey && (e.key === 'c' || e.key === 'C') &&
+      Atomics.load(views.ctrl, SLOT.TEXTMODE)) {
+    e.preventDefault();
+    Atomics.store(views.ctrl, SLOT.STOP, 1);
+    wake(views.ctrl);
+    log('^C — interrupt sent; the program sees end-of-file on stdin');
+    return;
+  }
   // A desktop launches what is selected on Enter, as double-clicking its icon does.
   if (!worker && machine?.kind === 'desktop' && e.key === 'Enter') {
     e.preventDefault(); startRun(); return;
@@ -1025,6 +1058,9 @@ function stop(quiet) {
   clearInterval(statTimer); statTimer = 0;
   stopAudio();
   if (!quiet) log('stopped');
+  // The status line described the frame that was on screen when the program went away, and went on
+  // describing it -- `running · 224x288 · 60 fps` over a machine sitting at its prompt.
+  $('stats').textContent = 'idle';
   $('run').disabled = !entry()?.present; $('stopBtn').disabled = true;
   $('stage').classList.remove('running');
   $('vmState').textContent = 'powered on'; $('vmState').className = 'pill';
@@ -1175,14 +1211,27 @@ function stats() {
     (frame ? ` · frame ${frame} · ${fps.toFixed(1)} fps` : '') +
     (frame && $('speed').value !== '100' ? ` · ${$('speed').value === '0' ? 'unlimited' : $('speed').value + '%'}` : '');
   lastFrame = frame; lastStatAt = now;
-  if (state === STATE.EXITED || state === STATE.ERROR) {
-    $('run').disabled = false; $('stopBtn').disabled = true;
-    // The last frame stays on the screen -- it is the result -- but the machine is no longer running
-    // anything, and a pill that still said RUNNING over a finished program was the shell's own lie.
-    $('vmState').textContent = state === STATE.ERROR ? 'faulted' : 'exited';
-    $('vmState').className = 'pill';
-    clearInterval(statTimer); statTimer = 0;
-  }
+  if (state === STATE.EXITED || state === STATE.ERROR) finish(state);
+}
+
+/**
+ * A program ENDED BY ITSELF, which is not the same as being stopped and was not being handled.
+ *
+ * `exit` came back, the pill said so, Run went live again -- and the machine never got its screen
+ * back. On a terminal that left Lua's last page with no prompt under it and a keyboard that went
+ * nowhere, because the keys still belonged to a program that had finished; on the Windows desktop it
+ * left the dead program's window sitting over the icons.
+ *
+ * The teardown is the same one Stop performs, so it is the same code: hand the terminal back with a
+ * prompt under whatever the program printed, release the control block, close the window. Only the
+ * label differs, because "it finished" and "I stopped it" are different facts and the pill is where
+ * you read which.
+ */
+function finish(state) {
+  const faulted = state === STATE.ERROR;
+  stop(true);
+  $('vmState').textContent = faulted ? 'faulted' : 'exited';
+  $('stats').textContent = faulted ? 'faulted' : 'exited';
 }
 
 /**
