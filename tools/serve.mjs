@@ -199,10 +199,26 @@ const server = createServer(async (req, res) => {
     if (path.startsWith('/__data/')) {
       if (!dataDirs.length) { res.writeHead(404).end('no --data directory'); return; }
       if (path === '/__data/') {
-        const files = [];
-        for (const d of dataDirs) files.push(...await listTree(d).catch(() => []));
+        /*
+         * WHICH ROOT a file came from, and only the one asked for.
+         *
+         * The page used to load every data file the server could see before running anything --
+         * ~150 MB for this corpus, most of it another game's. A program's data belongs to a root
+         * (Quake's `id1/`, MAME's per-driver directories), the descriptor names that root, and the
+         * shell fetches that one when it starts the program. `?root=` is what makes that possible;
+         * without it the listing is flat and a file's origin is unrecoverable.
+         */
+        const want = url.searchParams.get('root');
+        const out = [];
+        for (const d of dataDirs) {
+          const root = d.replace(/\/+$/, '').split('/').pop();
+          if (want && root !== want) continue;
+          for (const f of await listTree(d).catch(() => [])) out.push({ root, file: f });
+        }
         headers(res, TYPES['.json']);
-        res.end(JSON.stringify({ files }));
+        // `files` stays a flat list of names, because that is what the older page reads.
+        res.end(JSON.stringify({ files: out.map(x => x.file), entries: out,
+                                 roots: [...new Set(dataDirs.map(d => d.replace(/\/+$/, '').split('/').pop()))] }));
         return;
       }
       // Whichever data directory actually holds it. First match wins, which is why they must not

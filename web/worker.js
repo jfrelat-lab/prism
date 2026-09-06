@@ -18,6 +18,7 @@ import { installX11 } from '../src/env/x11.js';
 import { installDsp } from '../src/env/dsp.js';
 import { installPopen } from '../src/env/popen.js';
 import { installConsole } from '../src/env/console.js';
+import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 import { installPorts as installPortMachine } from '../src/env/ports.js';
 import { installCrtStatus } from '../src/env/crtstatus.js';
 import { installVgaDac } from '../src/env/vgadac.js';
@@ -58,7 +59,7 @@ self.onmessage = async (e) => {
   }
 };
 
-async function start({ program, control, data, argv, pipeSab = null }) {
+async function start({ program, control, data, argv, pipeSab = null, screen = null }) {
   /*
    * A descriptor may carry the BUILD or merely name a target that does.
    *
@@ -779,6 +780,21 @@ async function start({ program, control, data, argv, pipeSab = null }) {
    * existed, getchar returned EOF and the program asked a question it then ignored.
    */
   installConsole(prog.M, { readChar: () => keyboard.read() });
+
+  /*
+   * THE TERMINAL THE PROGRAM WAS STARTED FROM, carried into its own screen.
+   *
+   * installConsole clears the text page, so without this every program began on a blank screen and
+   * its first printf appeared with nothing above it -- the command you had just typed, and the
+   * listing you typed it from, were gone. That is not what a terminal does: output continues under
+   * the command line. The shell hands over the 80x25 page it had drawn and the cursor it left, and
+   * the program's first line lands on the next row.
+   */
+  if (screen) {
+    prog.M.u8.set(new Uint8Array(screen.vram), VRAM_TEXT);
+    prog.M.u8[0x450] = screen.col | 0;
+    prog.M.u8[0x451] = screen.row | 0;
+  }
 
   /*
    * A REAL clock, so the program's own frame throttle does the pacing at the rate the program itself

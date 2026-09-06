@@ -8,19 +8,48 @@
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the program paces itself from drv->frames_per_second through the real clock.",
   "needsData": {
-    "hint": "each driver's own ROMs, in a directory named after it (wow/, pacman/, dkong/, ...)"
+    "hint": "each driver's own ROMs, in a directory named after it (wow/, pacman/, dkong/, ...)",
+    "dir": "roms"
   },
   "controls": [
-    ["3", "insert coin"],
-    ["1", "start 1P"],
-    ["2", "start 2P"],
-    ["arrows", "move"],
-    ["Ctrl", "fire"],
-    ["P", "pause"],
-    ["Tab", "dip switches"],
-    ["F3", "reset"],
-    ["Esc", "quit"]
+    [
+      "3",
+      "insert coin"
+    ],
+    [
+      "1",
+      "start 1P"
+    ],
+    [
+      "2",
+      "start 2P"
+    ],
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "P",
+      "pause"
+    ],
+    [
+      "Tab",
+      "dip switches"
+    ],
+    [
+      "F3",
+      "reset"
+    ],
+    [
+      "Esc",
+      "quit"
+    ]
   ],
   "safepoints": true,
-  "safepointsNote": "MAME waits for a key to be RELEASED with `while (osd_key_pressed(k));`, and osd_key_pressed is the game's own C reading Allegro's key[] out of memory -- no call, so nothing outside the loop can see it or break it. The safepoint is where key[] gets refreshed, which is also what a real Allegro does from a keyboard interrupt."
+  "safepointsNote": "MAME waits for a key to be RELEASED with `while (osd_key_pressed(k));`, and osd_key_pressed is the game's own C reading Allegro's key[] out of memory -- no call, so nothing outside the loop can see it or break it. The safepoint is where key[] gets refreshed, which is also what a real Allegro does from a keyboard interrupt.",
+  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data."
 }

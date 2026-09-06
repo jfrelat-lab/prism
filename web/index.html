@@ -94,8 +94,13 @@
   }
 
   /* ---------------------------------------------------------------- the VM window */
-  #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; min-height: 0;
-        padding: 10px; }
+  /*
+   * Two rows: the VM's title strip and its screen. There used to be two more under it -- a caption
+   * naming the selected program and a row of data-file controls -- and both were the shell talking
+   * over the machine. The machine says what it has in its own listing, and a program's data now
+   * arrives with the program.
+   */
+  #vm { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; padding: 10px; }
   .vmtop { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto;
            background: var(--panel); border: 1px solid var(--edge); border-bottom: none;
            border-radius: 8px 8px 0 0; padding: 7px 10px; }
@@ -107,7 +112,8 @@
   .vmspec { color: var(--dim); font-size: 11px; }
 
   #stage { display: grid; place-items: center; min-height: 0; overflow: hidden;
-           background: #000; position: relative; border: 1px solid var(--edge); }
+           background: #000; position: relative; border: 1px solid var(--edge);
+           border-radius: 0 0 8px 8px; }
   /*
    * `object-fit: contain` rather than `height: 100%; width: auto`: the old rule scaled to the
    * stage's HEIGHT and let the width follow, which needs the stage to have a definite height -- and
@@ -117,13 +123,18 @@
   #screen { image-rendering: pixelated; width: 100%; height: 100%; object-fit: contain;
             background: #000; }
   /*
-   * The stage holds two things and shows one, and which one is not "is something running" -- it is
-   * WHAT KIND OF MACHINE this is. A terminal machine is the canvas the whole time: its prompt is
-   * drawn in the same 80x25 text mode the program will use, so nothing moves or rescales when the
-   * program starts. Only a DESKTOP puts DOM over the canvas, and only until something runs.
+   * The stage holds two things, and which of them shows is not "is something running" -- it is WHAT
+   * KIND OF MACHINE this is. A terminal machine is the canvas the whole time: its prompt is drawn in
+   * the same 80x25 text mode the program will use, so nothing moves or rescales when the program
+   * starts. A DESKTOP is the other way round: the desktop stays, and a program that runs on it opens
+   * a WINDOW over the icons -- which is what the icons are for. Hiding the desktop the moment
+   * something ran made the machine disappear at exactly the moment it became a machine.
    */
-  #stage.desktop #winframe { display: none; }
   #stage:not(.desktop) #chooser { display: none; }
+  #stage.desktop #winframe { z-index: 2; }
+  /* On a desktop the canvas is only ever a window; without one there is nothing to show yet. */
+  #stage.desktop #winframe:not(.windowed) { display: none; }
+  #stage.desktop #winframe:not(.windowed) { width: auto; height: auto; }
 
   /*
    * A window, when the program has one. Win32 Quake owns this rectangle: it sizes it when the
@@ -205,12 +216,6 @@
                    font-variant-numeric: tabular-nums; }
 
   /* ---------------------------------------------------------------- under the screen */
-  .vmbar { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; overflow-x: auto;
-           background: var(--panel); border: 1px solid var(--edge); border-top: none;
-           padding: 7px 10px; color: var(--dim); }
-  .vmbar > * { flex: none; }
-  .vmbar:last-child { border-radius: 0 0 8px 8px; }
-  #selected { color: var(--fg); }
 
   aside { border-left: 1px solid var(--edge); display: grid; grid-template-rows: auto auto 1fr;
           min-height: 0; background: var(--panel); }
@@ -269,15 +274,6 @@
       </div>
     </div>
 
-    <div class="vmbar">
-      <span id="selected">&mdash;</span><span class="sep"></span><span id="subtitle"></span>
-    </div>
-    <div class="vmbar" id="dataRow">
-      <span>data files</span>
-      <input type="file" id="data" multiple>
-      <button id="loadServer" title="load the directory passed to serve.mjs --data=">from --data</button>
-      <span id="dataNote"></span>
-    </div>
   </div>
 
   <aside>

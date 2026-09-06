@@ -310,8 +310,8 @@ function pick(m, i) {
 function renderChooser() {
   const box = $('chooser');
   if (!machine) { box.innerHTML = ''; return; }
-  // The desktop's DOM covers the canvas only while nothing is running.
-  $('stage').classList.toggle('desktop', machine.kind === 'desktop' && !worker);
+  // A desktop machine IS its desktop, running or not: a program opens a window over the icons.
+  $('stage').classList.toggle('desktop', machine.kind === 'desktop');
   if (machine.kind === 'desktop') {
     box.hidden = false;
     box.innerHTML = desktopScreen(machine);
@@ -396,6 +396,32 @@ function termRedrawLine() {
     shellVram[at] = 32; shellVram[at + 1] = A_DIM;
     if (++col >= TEXT_COLS) { col = 0; row++; }
   }
+}
+
+/** A line from the SHELL rather than from a program: loading progress, an error, a refusal. */
+function termNote(text, attr = A_DIM) {
+  if (!machine || machine.kind === 'desktop') return;
+  if (shellCol) termChar(10);
+  termLine(text, attr);
+}
+const termPromptIfTerminal = () => { if (machine && machine.kind !== 'desktop') termPrompt(); };
+
+/**
+ * The program's screen becomes the shell's again, with the prompt under whatever it printed.
+ *
+ * This is the other half of handing the terminal over: the program inherited the page the shell had
+ * drawn, so when it ends the shell takes back the page the PROGRAM left. Redrawing the banner and
+ * the listing instead would wipe out the very output you stopped it to read.
+ */
+function termResume() {
+  if (!machine || machine.kind === 'desktop') { renderChooser(); return; }
+  if (guest) {
+    shellVram.set(guest.subarray(VRAM_TEXT, VRAM_TEXT + shellVram.length));
+    shellCol = guest[0x450]; shellRow = guest[0x451];
+    if (shellRow >= TEXT_ROWS) { shellRow = TEXT_ROWS - 1; }
+  }
+  shellAttr = A_DIM;
+  termPrompt();
 }
 
 /*
@@ -526,7 +552,7 @@ function mergeArgs(variantArgs, programArgs) {
 function describe() {
   const x = entry(), p = current();
   if (!p) return;
-  $('subtitle').textContent = p.subtitle || '';
+
   /*
    * The arguments a BUILD requires, from the variant, under the ones the program suggests. Quake's
    * DOS build will not start without `-nosound` and its SUN build will not start without
@@ -536,11 +562,6 @@ function describe() {
    */
   $('args').value = mergeArgs(x.variantArgs, p.args);
   $('args').placeholder = p.argsHint || 'arguments passed to main()';
-  $('selected').textContent = `${x.name}` +
-    (x.units ? ` · ${x.units} units` : '') +
-    (x.target ? ` · ${x.target}` : '') +
-    (x.present ? '' : ' · sources not cloned');
-  $('dataRow').style.display = p.needsData ? '' : 'none';
   $('controls').innerHTML = (p.controls || [])
     .map(([k, what]) => `<kbd>${esc(k)}</kbd> ${esc(what)}`).join(' · ');
   $('controls').style.display = (p.controls || []).length ? '' : 'none';
@@ -586,34 +607,43 @@ function log(line, kind = 'info') {
 }
 
 // ---------------------------------------------------------------- data files
+//
+// A PROGRAM'S DATA ARRIVES WITH THE PROGRAM, and it is the program's own.
+//
+// The page used to make you load data before running anything: a file picker, or one button that
+// fetched every file the server could see -- roughly 150 MB of it, most of it another game's. That
+// was wrong twice over. It made "did you remember to press the button?" part of starting a program,
+// and it put five games' files in front of each of them, which is how Quake's DOS build came to ask
+// for pak0.pak and be told, correctly, that there were two files by that name and neither could be
+// meant.
+//
+// So each descriptor names its data ROOT (`needsData.dir`) -- a directory under the one given to
+// `serve.mjs --games=` -- and starting the program fetches that root and nothing else. Cached, so a
+// second run of the same game starts at once.
 let dataFiles = {};
-$('data').onchange = async (e) => {
-  dataFiles = {};
-  for (const f of e.target.files) dataFiles[f.name] = new Uint8Array(await f.arrayBuffer());
-  $('dataNote').textContent = `${Object.keys(dataFiles).length} files chosen`;
-};
+const dataCache = new Map();               // root -> { name: Uint8Array }
 
 /**
- * The opt-in server-side data directory (serve.mjs --data=<dir>): the same constraint as the file
- * picker — a directory the user named — but it survives a reload, which the picker does not.
+ * One data root, fetched once. Progress goes to the machine's own screen, because that is where you
+ * are looking: a 50 MB pak takes a moment and a page that simply sits there looks broken.
  */
-$('loadServer').onclick = async () => {
-  try {
-    const r = await fetch('/__data/');
-    if (!r.ok) throw new Error(await r.text());
-    const { files } = await r.json();
-    dataFiles = {};
-    await Promise.all(files.map(async (f) => {
-      // Keep the relative path as the key. MAME asks for "pacman/pacman.6e", and flattening it to
-      // "pacman.6e" left only a case-insensitive basename match to save it — which also lets one
-      // game's file answer for another's when two ROM sets share a filename.
-      dataFiles[f] = new Uint8Array(await (await fetch(`/__data/${f}`)).arrayBuffer());
-    }));
-    $('dataNote').textContent = `${files.length} files from --data`;
-  } catch (e) {
-    log(`no server data directory: ${e.message} (start serve.mjs with --data=<dir>)`, 'warn');
-  }
-};
+async function loadData(root, say) {
+  if (dataCache.has(root)) return dataCache.get(root);
+  const r = await fetch(`/__data/?root=${encodeURIComponent(root)}`);
+  if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
+  const { files } = await r.json();
+  if (!files.length) throw new Error(`the data directory '${root}' is empty`);
+  say?.(`loading ${files.length} data file${files.length === 1 ? '' : 's'} from ${root}/…`);
+  const out = {};
+  await Promise.all(files.map(async (f) => {
+    // The relative path IS the key. MAME asks for "pacman/pacman.6e", and flattening that to
+    // "pacman.6e" leaves only a basename match to save it -- which also lets one game's file answer
+    // for another's when two ROM sets share a filename.
+    out[f] = new Uint8Array(await (await fetch(`/__data/${f}`)).arrayBuffer());
+  }));
+  dataCache.set(root, out);
+  return out;
+}
 
 // ---------------------------------------------------------------- keyboard
 //
@@ -787,7 +817,7 @@ $('run').onclick = () => startRun();
  * becomes argv[0] -- a program is entitled to see the name it was invoked by, and some read it
  * (Quake takes its basedir from argv[0]'s directory).
  */
-function startRun(typedAs = null) {
+async function startRun(typedAs = null) {
   const program = current();
   if (!program || !entry()?.present || worker) return;
   if (typeof SharedArrayBuffer === 'undefined') {
@@ -797,13 +827,32 @@ function startRun(typedAs = null) {
   }
   stop(true);
   $('log').innerHTML = '';
+
+  /*
+   * THE PROGRAM'S OWN DATA, fetched now and not before. See loadData: the descriptor names one root
+   * and this fetches that one. A program with no data root gets an empty filesystem, which is the
+   * truthful answer for Lua.
+   */
+  dataFiles = {};
+  if (program.needsData?.dir) {
+    const busy = worker;                              // nothing may have started in the meantime
+    try {
+      dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); });
+    } catch (e) {
+      termNote(e.message, A_ERR);
+      termPromptIfTerminal();
+      log(`${e.message} — ${program.needsData.hint}`, 'error');
+      return;
+    }
+    if (busy !== worker) return;                      // stopped or restarted while we were fetching
+    const n = Object.keys(dataFiles).length;
+    termNote(`${n} file${n === 1 ? '' : 's'} ready`);
+    log(`${n} data files from ${program.needsData.dir}/`);
+  }
   // Only "you loaded nothing at all". WHICH files are needed depends on the arguments — MAME asks
   // for a different ROM set per driver — so a fixed list in the descriptor was wrong for four of the
   // five games and warned about Pac-Man's files while Lady Bug was starting. The program names the
   // file it cannot open, precisely, and that is the better message.
-  if (program.needsData && !Object.keys(dataFiles).length) {
-    log(`no data files loaded — ${program.needsData.hint}`, 'warn');
-  }
 
   const control = makeControl();
   views = controlViews(control);
@@ -855,7 +904,11 @@ function startRun(typedAs = null) {
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
   worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
-                       control, data: dataFiles, argv, pipeSab });
+                       control, data: dataFiles, argv, pipeSab,
+                       /* The machine's own screen, so the program's output continues under the
+                          command line instead of starting on a blank page. */
+                       screen: machine.kind === 'desktop' ? null
+                         : { vram: shellVram.slice(), col: shellCol, row: shellRow } });
   /*
    * The keys are the program's from now on. Without this the whole keyboard depended on which
    * control the user had touched last: type an argument and the focus stays in the field, and every
@@ -941,17 +994,18 @@ function stop(quiet) {
   $('run').disabled = !entry()?.present; $('stopBtn').disabled = true;
   $('stage').classList.remove('running');
   $('vmState').textContent = 'powered on'; $('vmState').className = 'pill';
-  guest = null;
   /*
-   * And the control block goes with it. The paint loop chooses between the guest's screen and the
+   * The machine gets its screen back, and on a terminal that means the page the PROGRAM left, with a
+   * fresh prompt under it. Done BEFORE `guest` is dropped, because that page is in guest memory.
+   */
+  termResume();
+  /*
+   * And then the control block goes too. The paint loop chooses between the guest's screen and the
    * machine's by asking whether `views` exists, so leaving it behind after a Stop meant the loop
    * kept painting a guest that was gone -- a black rectangle where the prompt should have come back,
    * which reads as the shell having crashed.
    */
-  views = null; keyboard = null;
-  // The machine gets its screen back -- the prompt where there is one, the desktop where there is
-  // not. Redrawn AFTER views is dropped, or the loop would still be painting the guest's memory.
-  renderChooser();
+  views = null; keyboard = null; guest = null;
 }
 
 $('pause').onclick = () => {

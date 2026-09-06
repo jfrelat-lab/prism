@@ -53,6 +53,19 @@ export function installStdio(M, {
   function norm(name) {
     let p = String(name).replace(/\\/g, '/').toLowerCase();
     while (p.startsWith('./')) p = p.slice(2);
+    /*
+     * ...and a leading SLASH, for the same reason. This store is one flat relative namespace -- the
+     * host hands over files keyed by their path under the directory they came from -- so a program
+     * that names its file from an empty base directory asks for `/id1/pak0.pak`, which is the same
+     * file as `id1/pak0.pak` and nothing else.
+     *
+     * Quake's DOS build is the one that does it: it derives basedir from argv[0], gets "", and every
+     * path it builds starts with a slash. With one game's data loaded nothing showed, because the
+     * basename fallback answered; with the whole shelf loaded the fallback found TWO files called
+     * pak0.pak, correctly refused to guess, and the game reported that it could not load gfx.wad --
+     * a file that was right there inside a pak it had failed to open.
+     */
+    while (p.startsWith('/')) p = p.slice(1);
     return p.replace(/\/\.\//g, '/');
   }
 

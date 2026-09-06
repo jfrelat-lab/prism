@@ -5,7 +5,8 @@
   "fps": 60,
   "subtitle": "A reimplementation of Dune II, built with the project's own Makefile.wc — Watcom, DOS4GW",
   "needsData": {
-    "hint": "Dune II v1.07's own DATA/ directory"
+    "hint": "Dune II v1.07's own DATA/ directory",
+    "dir": "dune2"
   },
   "controls": [
     [
@@ -19,5 +20,6 @@
   ],
   "safepoints": true,
   "safepointsNote": "These games get their TIME from an interrupt and wait for it inside a loop of their own C -- Heretic's TryRunTics spins on `ticcount`, which only the ISR writes. A safepoint is the only place this runtime can reach into such a loop, so without them the game waits for ever and looks exactly like a hang.",
-  "ticHz": 60
+  "ticHz": 60,
+  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data."
 }

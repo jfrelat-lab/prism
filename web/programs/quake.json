@@ -1,6 +1,6 @@
 {
   "title": "Quake",
-  "subtitle": "id Software, 1996 \u00b7 44,570 lines of C, built id386=0 \u2014 the portable path",
+  "subtitle": "id Software, 1996 · 44,570 lines of C, built id386=0 — the portable path",
   "_target": "The TARGET, not a unit list: targets/quake.json describes four platform layers over one engine, and naming it here makes all four appear in the picker beside the program. The descriptor's job is the GAME -- what it is, what it needs, what its keys do.",
   "target": "quake",
   "args": "+host_framerate 0.0138",
@@ -8,7 +8,8 @@
   "fps": 72,
   "memory": 536870912,
   "needsData": {
-    "hint": "Quake's own data: id1/pak0.pak (the shareware pak is enough)"
+    "hint": "Quake's own data: id1/pak0.pak (the shareware pak is enough)",
+    "dir": "quake"
   },
   "controls": [
     [
@@ -35,5 +36,6 @@
       "~",
       "console"
     ]
-  ]
+  ],
+  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data."
 }
