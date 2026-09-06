@@ -33,6 +33,61 @@ export const SCALARS = {
   'enum':                 { size: 4,  align: 4, signed: true },
 };
 
+/**
+ * The 16-bit DOS model, small memory model, as Open Watcom lays it out (`wcc -bt=dos -0 -ms`).
+ * Every number here was OBSERVED, not read from a manual -- `tools/probe-abi16.mjs` asks the
+ * compiler and reads the answers out of the object file, because nothing on this machine can run a
+ * DOS executable.
+ *
+ * Two of them are the reason a 16-bit axis cannot be a search-and-replace of the widths:
+ *
+ *   - ALIGNMENT STOPS AT 2. A `double` after a `char` sits at offset 2, not 8: on an 8086 there is
+ *     no wider bus to align to. So `struct { char a; double b; }` is 10 bytes where i386 makes it 12.
+ *   - AN ENUM IS ONE BYTE when its constants fit, where i386 gives every enum 4. That is a
+ *     different rule, not a narrower one, and it changes the size of any struct holding an enum.
+ *
+ * A pointer is 2 bytes in the small model only; the compact, large and huge models make it 4, which
+ * is the segmentation this project's plan puts out of scope.
+ */
+export const SCALARS_DOS16 = {
+  'void':                 { size: 1,  align: 1 },
+  '_Bool':                { size: 1,  align: 1 },
+  'char':                 { size: 1,  align: 1, signed: true },
+  'signed char':          { size: 1,  align: 1, signed: true },
+  'unsigned char':        { size: 1,  align: 1 },
+  'short':                { size: 2,  align: 2, signed: true },
+  'unsigned short':       { size: 2,  align: 2 },
+  'int':                  { size: 2,  align: 2, signed: true },
+  'unsigned int':         { size: 2,  align: 2 },
+  'long':                 { size: 4,  align: 2, signed: true },
+  'unsigned long':        { size: 4,  align: 2 },
+  'float':                { size: 4,  align: 2 },
+  'double':               { size: 8,  align: 2 },
+  'long double':          { size: 8,  align: 2 },   // Watcom's long double IS a double
+  'pointer':              { size: 2,  align: 2 },
+  'enum':                 { size: 1,  align: 1, signed: true },
+};
+
+/** The type tables, by target. `i386` is what the compiler emits for; `dos16` is measured only. */
+export const MODELS = { i386: SCALARS, dos16: SCALARS_DOS16 };
+
+/** Scalar/pointer/array constructors bound to one model, for a gate that checks another target. */
+export function modelTypes(name) {
+  const table = MODELS[name];
+  if (!table) throw new Error(`abi: unknown model '${name}'`);
+  const sc = (n) => {
+    const s = table[n];
+    if (!s) throw new Error(`abi: unknown scalar '${n}' in model '${name}'`);
+    return { k: 'scalar', name: n, ...s };
+  };
+  return {
+    scalar: sc,
+    ptr: (to = null) => ({ k: 'ptr', to, ...table.pointer }),
+    array: (of, n) => ({ k: 'array', of, n, size: of.size * n, align: of.align }),
+    enumType: () => ({ k: 'scalar', name: 'enum', ...table.enum }),
+  };
+}
+
 /** `char` is signed on i386 Linux/DJGPP — observed: (int)(char)-1 == -1. */
 export const CHAR_SIGNED = true;
 
@@ -46,6 +101,9 @@ export const array = (of, n) => ({ k: 'array', of, n, size: of.size * n, align: 
 
 const roundUp = (v, a) => (a <= 1 ? v : Math.ceil(v / a) * a);
 
+/** A declared type without its signedness: what Watcom's bitfield units are keyed on. */
+const family = (name) => name.replace(/^(unsigned|signed) /, '');
+
 /**
  * Lay out a struct.
  * @param fields [{name, type, bits?}] — `bits` present (including 0) makes it a bitfield.
@@ -55,11 +113,24 @@ const roundUp = (v, a) => (a <= 1 ? v : Math.ceil(v / a) * a);
  *                 then exactly `packed`, but pack(2) and pack(4) are not expressible any other way.
  * @returns {k:'struct', size, align, fields:[{...,offset,bitOffset?}], byName}
  */
-export function layoutStruct(fields, { packed = false, maxAlign = null } = {}) {
+export function layoutStruct(fields, { packed = false, maxAlign = null, bitfields = 'gcc' } = {}) {
   const clamp = (a) => (maxAlign ? Math.min(a, maxAlign) : a);
   let bitPos = 0;          // current position, in BITS from the start of the struct
   let align = 1;
   const out = [];
+  /*
+   * WATCOM PLACES BITFIELDS IN WHOLE UNITS, and that is not a variation on the SysV rule -- it is a
+   * different rule. A bitfield of type T takes a unit of sizeof(T) at the next alignof(T) boundary;
+   * consecutive bitfields share that unit while they fit, and anything else -- a wider bitfield, a
+   * plain member -- starts after the WHOLE unit rather than at the next free bit.
+   *
+   *   struct { unsigned int f:3; unsigned char c; }   gcc: c at 1    Watcom: c at 2
+   *   struct { char a:5; unsigned long b:23; }        gcc: 4 bytes   Watcom: 6
+   *
+   * Measured, not read: 28 of gate-abi16's 518 checks disagreed until this existed, and every one of
+   * them held a bitfield.
+   */
+  let unitAt = -1, unitSize = 0, unitUsed = 0, unitType = null;   // the open Watcom unit
 
   for (const f of fields) {
     const t = f.type;
@@ -67,6 +138,7 @@ export function layoutStruct(fields, { packed = false, maxAlign = null } = {}) {
 
     if (f.bits === undefined) {
       // Plain member: advance to the next byte, then to its alignment.
+      if (bitfields === 'watcom') unitAt = -1;
       const off = roundUp(Math.ceil(bitPos / 8), ta);
       // A FLEXIBLE array member (`char a[];`) takes the next aligned offset but contributes nothing
       // to the size: `struct { char c; char a[]; }` is one byte with `a` at offset 1. Its size is
@@ -82,6 +154,42 @@ export function layoutStruct(fields, { packed = false, maxAlign = null } = {}) {
     // `int a:3` into a 4-byte unit — which is why struct BF2 {char a:3; char b:6} is 2 bytes
     // while BF1 {int a:1; int b:1} is 4.
     const unit = t.size * 8;
+
+    if (bitfields === 'watcom' && f.bits === 0) {
+      // `int :0;` CLOSES the open unit, so the next bitfield starts a fresh one -- which is the
+      // whole of its meaning under a whole-unit rule, and is why BF5 is 4 bytes and not 2.
+      if (unitAt >= 0) bitPos = (unitAt + unitSize) * 8;
+      bitPos = roundUp(bitPos, ta * 8);
+      unitAt = -1;
+      out.push({ ...f, offset: bitPos >> 3, bitOffset: bitPos, width: 0 });
+      continue;
+    }
+
+    if (bitfields === 'watcom' && f.bits > 0) {
+      const bytes = t.size;
+      /*
+       * The unit is shared by bitfields of the same type FAMILY -- the declared type with its
+       * signedness stripped. Two measurements pin it, and neither was guessable:
+       *
+       *   unsigned int f2:3; unsigned short f3:11;   two bytes each, 14 bits together -- and Watcom
+       *                                              still opens a second unit (seed 777)
+       *   unsigned int f0:1; int f1:8;               different signedness, SAME unit (seed 90210)
+       *
+       * So it is not the width and it is not the spelling: it is short/int/long/char.
+       */
+      const fits = unitAt >= 0 && unitType === family(t.name) && unitUsed + f.bits <= bytes * 8;
+      if (!fits) {
+        unitAt = roundUp(Math.ceil(bitPos / 8), ta);
+        unitSize = bytes;
+        unitUsed = 0;
+        unitType = family(t.name);
+      }
+      out.push({ ...f, offset: unitAt, bitOffset: unitAt * 8 + unitUsed, width: f.bits });
+      unitUsed += f.bits;
+      bitPos = (unitAt + bytes) * 8;
+      align = Math.max(align, ta);
+      continue;
+    }
 
     if (f.bits === 0) {
       // `int :0;` — no storage; it only forces the NEXT field to a boundary. Three observed rules,

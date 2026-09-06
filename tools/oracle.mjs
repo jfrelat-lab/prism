@@ -60,6 +60,67 @@ export function watcom(cmd, { target = 'linux' } = {}) {
   return sh(`export INCLUDE=${inc}; ${cmd}`);
 }
 
+/**
+ * The DATA of an OMF object, with the record framing removed.
+ *
+ * Scanning the file as-is loses answers, and silently: OMF splits data into LEDATA records and puts
+ * other records between them, so a probe string that straddles a boundary appears as `INFO:0` in one
+ * place and `011=0002;` in another. Three of thirty-eight queries went missing that way, which is
+ * exactly the kind of gap that reads as "the compiler did not answer" rather than "the reader is
+ * wrong".
+ *
+ * Each record is [type:1][length:2 LE][payload: length-1][checksum:1]. LEDATA (0xA0, or 0xA1 for
+ * 32-bit) begins with a segment index -- one byte, or two when the high bit is set -- and a data
+ * offset, 2 bytes in 16-bit records and 4 in 32-bit ones.
+ */
+function omfData(buf) {
+  const parts = [];
+  let p = 0;
+  while (p + 3 <= buf.length) {
+    const type = buf[p];
+    const len = buf[p + 1] | (buf[p + 2] << 8);
+    const payload = buf.subarray(p + 3, p + 3 + len - 1);
+    p += 3 + len;
+    if (type !== 0xA0 && type !== 0xA1) continue;
+    let q = 0;
+    if (payload[q++] & 0x80) q++;
+    q += type === 0xA1 ? 4 : 2;
+    parts.push(payload.subarray(q));
+  }
+  return Buffer.concat(parts).toString('latin1');
+}
+
+/**
+ * Ask the 16-BIT compiler for a list of integer constants, without running anything.
+ *
+ * There is no way to run a DOS executable here, so the answers have to come out of the OBJECT FILE.
+ * Each query becomes a `char` array initialised with the DIGITS of its value -- the initialisers are
+ * constant expressions, so the compiler itself computes the number and writes it into the data
+ * segment, where a plain byte scan finds it. This is how CMake sizes types when it cross-compiles,
+ * and it needs neither a linker, an emulator, nor a DOS.
+ *
+ * The index is written beside the value because the linker is not involved and nothing guarantees
+ * the order records appear in; matching on the index makes the scan order-independent.
+ *
+ * `prelude` is C pasted above the probes -- the struct definitions the queries ask about.
+ * `queries` are constant expressions. Returns an array of numbers, in the order given.
+ */
+export function watcom16(prelude, queries, { model = 'ms' } = {}) {
+  const D = "#define D(v) ('0'+(((v)/1000)%10)), ('0'+(((v)/100)%10)), ('0'+(((v)/10)%10)), ('0'+((v)%10))\n" +
+    "#define PROBE(i, v) char info_##i[] = { 'I','N','F','O',':', D(i), '=', D(v), ';', 0 };\n";
+  const body = queries.map((q, i) => `PROBE(${i}, (int)(${q}))`).join('\n');
+  put('probe16.c', `${D}\n${prelude}\n${body}\n`);
+  const r = watcom(`cd /work && rm -f probe16.o && wcc -bt=dos -0 -${model} -q probe16.c`,
+    { target: 'dos16' });
+  if (r.code !== 0) throw new Error(`watcom16: ${r.stderr || r.stdout}`);
+  const bytes = omfData(readFileSync(join(SCRATCH, 'probe16.o')));
+  const out = new Array(queries.length).fill(null);
+  for (const m of bytes.matchAll(/INFO:(\d{4})=(\d{4});/g)) out[+m[1]] = +m[2];
+  const missing = out.findIndex((v) => v === null);
+  if (missing >= 0) throw new Error(`watcom16: no answer for query ${missing}: ${queries[missing]}`);
+  return out;
+}
+
 /** Run a shell command inside the oracle. Returns {code, stdout, stderr} — never throws on a
  *  non-zero exit, because a compile failure is data a gate wants to see, not an accident. */
 export function sh(cmd, { timeout = 120000 } = {}) {
