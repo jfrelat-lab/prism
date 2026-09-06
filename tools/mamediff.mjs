@@ -5,7 +5,12 @@
 // backend (tools/mamediff/osdnull.c) and print a hash of the display bitmap every frame, so the
 // first differing line names the frame where the two builds part company.
 //
-//   node tools/mamediff.mjs --roms=<dir> [--frames=400] [--game=pacman]
+//   node tools/mamediff.mjs --roms=<dir> [--frames=400] [--game=pacman] [--release=01|04]
+//                            [--play=coin,start,fireFrom,fireTo]
+//
+// --play makes both sides PLAY: the same coin, start and fire schedule is compiled into the backend,
+// so the comparison covers the parts of a driver an attract mode never reaches. Without it the two
+// builds only ever agree about a demo loop.
 //
 // No ROM data enters the repository: the harness copies whatever directory it is pointed at into the
 // gitignored .oracle/ so the container can read the same bytes.
@@ -19,7 +24,8 @@ import { installStdio } from '../src/env/stdio.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const MAME = join(ROOT, 'corpus', 'mame01');
+const RELEASE = process.argv.find(a => a.startsWith('--release='))?.slice(10) ?? '01';
+const MAME = join(ROOT, 'corpus', `mame${RELEASE}`);
 
 const romDir = process.argv.find(a => a.startsWith('--roms='))?.slice(7);
 const FRAMES = +(process.argv.find(a => a.startsWith('--frames='))?.slice(9) ?? 400);
@@ -29,25 +35,35 @@ if (!romDir || !existsSync(romDir)) {
   process.exit(2);
 }
 
-const UNITS = [
-  'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
-  'src/Z80/Z80.c',
-  'src/pacman/machine.c', 'src/pacman/driver.c',
-  'src/crush/machine.c', 'src/crush/driver.c',
-  'src/pengo/machine.c', 'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
-  'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
-];
+/*
+ * The unit list, per release, read from the TARGET rather than repeated here.
+ *
+ * targets/mame0N.json already carries the makefile's object list, minus the platform backend PRISM
+ * replaces -- and it is the list `node tools/build.mjs` compiles, so the differential and the build
+ * cannot drift apart. Only src/msdos/msdos.c is dropped: osdnull.c is the backend here.
+ */
+const target = JSON.parse(readFileSync(join(ROOT, 'targets', `mame${RELEASE}.json`), 'utf8'));
+const UNITS = target.units.list.filter(u => !/msdos/.test(u));
+
 const INCLUDE_DIRS = ['src', 'src/Z80', 'src/msdos'];
 
 // --- lay the whole build out in one flat directory the container can compile in
 const work = join(SCRATCH, 'mamediff');
 mkdirSync(work, { recursive: true });
 const flat = new Map();                       // basename -> contents, for the flat build
-for (const d of ['src', 'src/Z80', 'src/pacman', 'src/crush', 'src/pengo', 'src/ladybug', 'src/msdos']) {
+/* Every directory the units live in, plus the include dirs: the headers all go in one flat pile. */
+const SRC_DIRS = [...new Set([...UNITS.map(u => u.replace(/\/[^/]+$/, '')), ...(target.include ?? [])])];
+for (const d of [...SRC_DIRS, 'src/msdos']) {
   const dir = join(MAME, d);
   if (!existsSync(dir)) continue;
   for (const f of readdirSync(dir)) {
-    if (/\.h$/i.test(f)) flat.set(f, readFileSync(join(dir, f)));
+    /*
+     * .c FILES TOO, under their own basenames. MAME's sound code #includes source: cclimber's
+     * sndhrdw.c opens with `#include "psg.c"`, which is a translation unit pulled into another one
+     * and not a unit of its own. Copying only headers left the reference build looking for a file
+     * that was right there in the corpus.
+     */
+    if (/\.(h|c)$/i.test(f)) flat.set(f, readFileSync(join(dir, f)));
   }
 }
 for (const [name, data] of flat) writeFileSync(join(work, name), data);
@@ -91,12 +107,35 @@ console.log('building all of MAME with gcc…');
 // -DUNIX is MAME's own switch for a non-DJGPP host: it maps uclock onto clock, which glibc has and
 // DJGPP's uclock it does not. Defined on BOTH sides so the two builds see identical source. It only
 // reaches the FPS counter, which needs an F11 keypress this backend never reports.
-const cmd = `cd mamediff && gcc -std=gnu89 -w -DLSB_FIRST -DUNIX -DMAX_FRAMES=${FRAMES} -I. -o mameref ` +
+const play = (process.argv.find(a => a.startsWith('--play='))?.slice(7) ?? '').split(',').map(Number);
+const PLAY_DEFS = play.length === 4 && play.every(Number.isFinite)
+  ? { PLAY_COIN: play[0], PLAY_START: play[1], PLAY_FIRE_FROM: play[2], PLAY_FIRE_TO: play[3] } : {};
+const playFlags = Object.entries(PLAY_DEFS).map(([k, v]) => `-D${k}=${v}`).join(' ');
+if (playFlags) console.log(`playing: ${playFlags}`);
+const cmd = `cd mamediff && gcc -std=gnu89 -w -DLSB_FIRST -DUNIX -DMAX_FRAMES=${FRAMES} ${playFlags} -I. -o mameref ` +
   // stdin from /dev/null: mame.c's banner calls getchar(), which blocks for ever on a terminal.
   // PRISM's getchar already returns EOF, so this makes the two sides behave the same way.
   `${cfiles.join(' ')} 2>&1 && ./mameref ${GAME} < /dev/null > ref.txt 2>&1; echo "RC $?"`;
 const r = sh(cmd, { timeout: 1800000 });
 if (!/RC 0/.test(r.stdout)) {
+  /*
+   * ONE FAILURE IS NOT A BUILD ERROR, it is a missing oracle, and it should be named as such.
+   *
+   * MAME 0.4's src/machine.c switches on `(int)mra->handler` with `case MRA_RAM:`, where driver.h
+   * defines MRA_RAM as `((int(*)())-1)`. gcc 2.7 on DJGPP accepted a cast pointer constant as a case
+   * label; gcc 12 refuses it, and a command-line -D cannot help because driver.h defines the macro
+   * itself. Since PRISM must not modify the game's source, and neither may the reference build, this
+   * release simply HAS NO native oracle on a modern compiler -- and the honest thing is to say which
+   * construct, not to print a wall of compiler output as though the harness were broken.
+   */
+  if (/pointers are not permitted as case values/.test(r.stdout)) {
+    console.error(`no oracle for MAME ${RELEASE}: this gcc refuses 'case MRA_RAM:'. driver.h ` +
+      `defines MRA_RAM as a cast POINTER constant, which gcc 2.7 on DJGPP took as a case label and ` +
+      `a modern gcc does not; a command-line -D cannot help, because the header defines it itself. ` +
+      `Neither side may be patched, so this release needs a period compiler (gcc 2.x, or tcc) ` +
+      `before it can be diffed at all. MAME 0.1 and 0.2 do build.`);
+    process.exit(2);
+  }
   console.error(`gcc side failed:\n${r.stdout.split('\n').slice(0, 25).join('\n')}`);
   process.exit(1);
 }
@@ -118,7 +157,8 @@ const units = cfiles.map(f => ({ file: join(work, f), source: readFileSync(join(
 let prog;
 try {
   prog = compileProgram(units, {
-    defines: { LSB_FIRST: '1', UNIX: '1', MAX_FRAMES: String(FRAMES) },
+    defines: { LSB_FIRST: '1', UNIX: '1', MAX_FRAMES: String(FRAMES),
+               ...Object.fromEntries(Object.entries(PLAY_DEFS).map(([k, v]) => [k, String(v)])) },
     resolve: resolver,
     memory: 256 * 1024 * 1024,
   });

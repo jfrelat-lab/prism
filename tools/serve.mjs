@@ -14,10 +14,11 @@
 // re-picking six files by hand on every reload is not a workflow; it exposes a directory the user
 // names explicitly, and nothing else.
 //
-//   node tools/serve.mjs [--port=8080] [--data=<dir>]
+//   node tools/serve.mjs [--port=8080] [--data=<dir>] [--games=<dir>]
 
 import { createServer } from 'node:http';
 import { readFile, stat, readdir } from 'node:fs/promises';
+import { readdirSync, statSync } from 'node:fs';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, targetUnits, moduleExportsOf } from '../src/target.js';
@@ -29,6 +30,30 @@ const port = +(process.argv.find(a => a.startsWith('--port='))?.slice(7) ?? 8080
 // id1/...), and one server can then feed every program in the picker.
 const dataDirs = process.argv.filter(a => a.startsWith('--data='))
   .flatMap(a => a.slice(7).split(',')).map(s => s.trim()).filter(Boolean);
+
+/*
+ * --games=<dir>: one directory holding one directory per game, each of which becomes a data root.
+ *
+ * The distinction matters and it is not cosmetic. A data root is the directory a program believes it
+ * was STARTED IN: Quake opens `id1/pak0.pak`, Quake II opens `baseq2/pak0.pak`, MAME opens
+ * `pacman/pacman.6e`. Handing the whole games directory over as ONE root would make those
+ * `quake/id1/pak0.pak` and nothing would be found -- so each subdirectory is its own root, and the
+ * flag is a shorthand for listing them, not a new kind of thing.
+ *
+ * A name beginning with `_` is skipped, which is how two copies of one file are kept without
+ * serving both: `_spare/` holds the one that is not in use. Two roots offering the same relative
+ * path collide -- the page keys data files by that path -- so this is a real rule, not tidiness.
+ */
+for (const a of process.argv.filter(x => x.startsWith('--games='))) {
+  const root = a.slice(8).trim();
+  if (!root) continue;
+  try {
+    for (const e of readdirSyncSafe(root)) {
+      if (e.startsWith('_') || e.startsWith('.')) continue;
+      dataDirs.push(join(root, e));
+    }
+  } catch { console.error(`--games: cannot read ${root}`); }
+}
 const dataDir = dataDirs[0];
 
 const TYPES = {
@@ -67,6 +92,11 @@ async function listTree(dir, prefix = '', out = []) {
     else out.push(prefix + e.name);
   }
   return out;
+}
+
+/** Immediate subdirectories, or nothing if the path is not a directory. */
+function readdirSyncSafe(dir) {
+  return readdirSync(dir).filter(e => statSync(join(dir, e)).isDirectory());
 }
 
 const server = createServer(async (req, res) => {

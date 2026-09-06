@@ -2,14 +2,14 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "prism",
+      "name": "prism-shell",
       "runtimeExecutable": "node",
       "runtimeArgs": [
         "tools/serve.mjs",
-        "--port=8080",
-        "--data=/Users/julienfrelat/quake,/Users/julienfrelat/quake2,/Users/julienfrelat/doom-play,/Users/julienfrelat/dune2,/Users/julienfrelat/tyrian,/Users/julienfrelat/roms,/Users/julienfrelat/hexen-retail"
+        "--port=8123",
+        "--games=/Users/julienfrelat/games"
       ],
-      "port": 8080
+      "port": 8123
     }
   ]
 }

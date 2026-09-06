@@ -717,9 +717,31 @@ sources with the SAME headless C backend (`tools/mamediff/osdnull.c`) and print 
 bitmap every frame, so the first differing line names the frame.
 
 ```bash
-node tools/mamediff.mjs --roms=<dir> [--frames=200]
+node tools/mamediff.mjs --roms=<dir> [--frames=200] [--release=01|04] [--game=wow]
+node tools/mamediff.mjs --roms=<dir> --frames=1100 --play=120,200,700,1080   # coin, start, fire
 node tools/mame.mjs --run --roms=<dir> --frames=200 --png=/tmp/pacman.png
+node tools/mame.mjs --run --release=04 --game=wow --roms=<dir> --frames=1100 \
+     --keys=120:3,200:1,700-1080:ctrl --args="-log" --save=error.log:/tmp/wow.log
 ```
+
+**It plays now, and that was a gap rather than a nicety.** Every headless MAME capture until this
+point was an ATTRACT MODE: a driver's tilemap and nothing else, never its sprites, its collision code
+or the blitter modes a game uses while somebody holds the fire button. So a report of "shooting looks
+wrong in Wizard of Wor" could not be reproduced at all, let alone diffed. `--play` compiles the same
+three-number schedule into BOTH backends, so the two runs stay identical by construction — this adds
+input, not nondeterminism — and `tools/mame.mjs --keys=` is the same schedule for the PRISM-only
+harness. `--save=error.log:<path>` recovers a file the PROGRAM wrote: MAME's own `-log` option makes
+its drivers report what they are doing, so the emulator can be asked in its own words with no
+instrumentation on our side.
+
+**MAME 0.4 has no native oracle, and the reason is worth recording.** `src/machine.c` switches on
+`(int)mra->handler` with `case MRA_RAM:`, where `driver.h` defines `MRA_RAM` as `((int(*)())-1)` — a
+cast POINTER constant. gcc 2.7 on DJGPP accepted that as a case label; gcc 12 refuses it outright,
+and a command-line `-D` cannot help because the header defines the macro itself. Neither the game's
+source nor the reference build may be patched, so **0.4 and 0.3 cannot be diffed until the container
+has a period compiler** (gcc 2.x, or tcc). 0.1 and 0.2 do build, and still agree exactly. The tool
+says this in one sentence rather than printing the compiler's wall of output, because a missing
+oracle is a different fact from a broken harness.
 
 **Result: identical over 226 lines at 200 frames** — every frame hash matches gcc, including the 31
 frames from 91 onward that actually draw (26 340 lit pixels at frame 92). PRISM's output is

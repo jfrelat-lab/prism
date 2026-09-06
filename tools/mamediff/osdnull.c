@@ -6,8 +6,13 @@
  * differing line says exactly which frame the two builds stop agreeing on — the register-level
  * differential (tools/z80diff.mjs) proved the CPU, and this one covers everything above it.
  *
- * Deterministic by construction: no clock, no input, no sound. The run is bounded by reporting ESC
- * after a fixed number of frames, because MAME's main loop only ends on a keypress.
+ * Deterministic by construction: no clock, no sound, and input only from a SCHEDULE compiled into
+ * both builds -- see PLAY_COIN below. The run is bounded by reporting ESC after a fixed number of
+ * frames, because MAME's main loop only ends on a keypress.
+ *
+ * It serves every release in the corpus. 0.4 moved the joystick across the boundary -- the four
+ * `osd_joy_*` globals a driver used to read became `osd_joy_pressed(joycode)` -- so which side of
+ * that line this file is on comes from the release, not from a guess.
  */
 
 #include <stdio.h>
@@ -38,8 +43,12 @@ int stricmp(const char *a, const char *b)
 }
 
 int play_sound = 0;
+#ifdef OSD_JOY_FIRE          /* 0.4 and later: a function, and the globals are gone */
+int osd_joy_pressed(int joycode) { return 0; }
+#else
 int osd_joy_up = 0, osd_joy_down = 0, osd_joy_left = 0, osd_joy_right = 0;
 int osd_joy_b1 = 0, osd_joy_b2 = 0, osd_joy_b3 = 0, osd_joy_b4 = 0;
+#endif
 
 static struct osd_bitmap *display = 0;
 static int frames = 0;
@@ -107,10 +116,26 @@ void osd_play_streamed_sample(int channel, unsigned char *data, int len, int fre
 void osd_adjust_sample(int channel, int freq, int volume) { }
 void osd_stop_sample(int channel) { }
 
-/* Bounded run: MAME's loop exits on ESC, so report it once enough frames have gone by. */
+/*
+ * Bounded run, and -- with --play -- a PLAYED one.
+ *
+ * An attract mode exercises a driver's tilemap and nothing else: the sprites, the collision code and
+ * the blitter modes a game uses while somebody is holding the fire button are never reached, so a
+ * report of "shooting looks wrong" cannot be compared against a native build at all. The schedule is
+ * three numbers and it is compiled into BOTH sides, so the two runs are still identical by
+ * construction: this adds input, not nondeterminism.
+ *
+ * A key is held for eight frames from its moment, which is long enough for MAME's own edge detection
+ * to see it and short enough not to jam the input.
+ */
 int osd_key_pressed(int keycode)
 {
   if (keycode == OSD_KEY_ESC && frames >= MAX_FRAMES) return 1;
+#ifdef PLAY_COIN
+  if (keycode == OSD_KEY_3 && frames >= PLAY_COIN && frames < PLAY_COIN + 8) return 1;
+  if (keycode == OSD_KEY_1 && frames >= PLAY_START && frames < PLAY_START + 8) return 1;
+  if (keycode == OSD_KEY_CONTROL && frames >= PLAY_FIRE_FROM && frames < PLAY_FIRE_TO) return 1;
+#endif
   return 0;
 }
 
