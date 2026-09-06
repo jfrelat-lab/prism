@@ -25,12 +25,24 @@ import { installKbd8042 } from '../src/env/kbd8042.js';
 import { installPIT } from '../src/env/pit.js';
 import { installGo32 } from '../src/env/go32.js';
 import { installWatcom } from '../src/env/watcom.js';
+import { installVgaFont } from '../src/env/vgafont.js';
+import { installWsock } from '../src/env/wsock.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
   from '../src/env/webhost.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const log = (line, kind = 'info') => post('log', { line, kind });
+
+/** `a/b/../c` -> `a/c`. An include dir may point out of the tree and back into a sibling. */
+const normaliseRepoPath = (p) => {
+  const out = [];
+  for (const part of p.split('/')) {
+    if (part === '.' || part === '') continue;
+    if (part === '..') out.pop(); else out.push(part);
+  }
+  return out.join('/');
+};
 
 self.onmessage = async (e) => {
   if (e.data.type !== 'start') return;
@@ -76,7 +88,16 @@ async function start({ program, control, data, argv, pipeSab = null }) {
           .toLowerCase(), u.defines])),
       extraUnits: Object.fromEntries(t.units.filter(u => u.source !== undefined)
         .map(u => [u.file, u.source])),
-      includeDirs: t.include.map(d => d.slice(t.dir.length + 1)),
+      /*
+       * The include list stays as REPO paths, and the fetch below keys every file both ways. Slicing
+       * the target's directory off each one is the same mistake the units comment above describes,
+       * and it cost two things here: `corpus/putty/../putty-generated` -- an include dir that leaves
+       * the tree -- came out as `../putty-generated` and matched nothing, and the target's OWN root
+       * was never in the search at all, so PuTTY's `#include "defs.h"` from windows/platform.h found
+       * nothing and was stubbed empty. The parse then failed 488 lines later on a type that header
+       * defines, which is a long way from the cause.
+       */
+      includeDirs: [t.dir, ...t.include.map(normaliseRepoPath)],
       defines: t.defines,
       memory: (t.compile.memory ?? 64) * 1024 * 1024,
       pack: t.compile.pack ?? null,
@@ -115,16 +136,44 @@ async function start({ program, control, data, argv, pipeSab = null }) {
   const SOURCE_EXT = /\.(c|h|q1|q2|inc|def)$/i;
   const wanted = listing.files.filter(f => SOURCE_EXT.test(f));
   const tree = new Map();
+  /* Both keys: units are named relative to the root, includes are searched by repo path. */
+  const put = (relKey, text) => {
+    tree.set(relKey.toLowerCase(), text);
+    tree.set(`${program.root}/${relKey}`.toLowerCase(), text);
+  };
   await Promise.all(wanted.map(async (f) => {
     const r = await fetch(`/${program.root}/${f}`);
-    if (r.ok) tree.set(f.toLowerCase(), await r.text());
+    if (r.ok) put(f, await r.text());
   }));
+  /*
+   * Include directories that are NOT under the target's root -- PuTTY's generated tree is a sibling
+   * of the source tree -- are fetched the same way and keyed by their repo path.
+   */
+  for (const d of program.includeDirs ?? []) {
+    if (d === program.root || d.startsWith(`${program.root}/`)) continue;
+    const out = await (await fetch(`/__ls?dir=${encodeURIComponent(d)}`)).json().catch(() => ({ files: [] }));
+    await Promise.all((out.files ?? []).filter(f => SOURCE_EXT.test(f)).map(async (f) => {
+      const r = await fetch(`/${d}/${f}`);
+      if (r.ok) tree.set(`${d}/${f}`.toLowerCase(), await r.text());
+    }));
+  }
   /* The units that live outside the target's tree, each fetched from the repository root. */
   for (const f of program.outsideRoot ?? []) {
     const r = await fetch(`/${f}`);
     if (r.ok) tree.set(f.toLowerCase(), await r.text());
   }
   log(`fetched ${tree.size} source files (${(performance.now() - t0).toFixed(0)} ms)`);
+
+  /*
+   * The platform's own data, not the program's: the 8x16 ROM font a Win32 build rasterises text
+   * with. Fetched here because this worker has no filesystem, and passed to installVgaFont rather
+   * than read by it.
+   */
+  let vgaFont = null;
+  try {
+    const r = await fetch('/assets/vga-rom-8x16.bin');
+    if (r.ok) vgaFont = new Uint8Array(await r.arrayBuffer());
+  } catch { /* a build that does not draw text will never ask for it */ }
 
   /** The include search, over the fetched tree: the program's own -I list, then PRISM's headers. */
   const dirOf = (p) => p.includes('/') ? p.replace(/\/[^/]*$/, '') : '';
@@ -457,6 +506,88 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     prog.F.MGL_bitBltCoord = wrapped;
     prog.mod.bindFunc('MGL_bitBltCoord', wrapped);
 
+  } else if (platform === 'gdi' || platform === 'win32') {
+    /*
+     * A WIN32 GUI host: PuTTY. The target calls this platform `win32` and the page called it `gdi`
+     * while it was being written; both names arrive here, because a build that names its own
+     * platform should not have to know what the shell called the branch.
+     *
+     * Same platform layer as WinQuake -- src/env/win32.c is compiled in --
+     * but the picture arrives the other way. Quake owns a display and blits it; a GUI program draws
+     * through GDI whenever Windows tells it to, so there is no blit to hook and no palette at all:
+     * win32-gui.c rasterises into a 32-bit surface and the page reads that.
+     *
+     * The frame boundary is MsgWaitForMultipleObjects, which is where win32.c parks a program with
+     * nothing to do. It is the only moment in a GUI program's life that is guaranteed to come round
+     * again, which makes it the right place to publish the surface, deliver keystrokes and pace.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    /*
+     * The two libraries this platform's C is compiled against: the 8x16 ROM font it rasterises with,
+     * and Winsock. The socket layer is installed even here, where there are no sockets -- the program
+     * CALLS it, so leaving it out is not "no network", it is a missing function and a crash at the
+     * first connect. Installed, it fails the way a refused connection fails, which PuTTY handles.
+     */
+    installVgaFont(prog.M, { bytes: vgaFont });
+    installWsock(prog.M);
+    const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
+    const at = { surface: sym('prism_gdi_surface'), w: sym('prism_gdi_w'), h: sym('prism_gdi_h') };
+    const key = prog.F.prism_win32_key;
+    if (!at.surface) throw new Error('this build has no Win32 GDI layer compiled in');
+
+    const win = {
+      x: sym('prism_win32_x'), y: sym('prism_win32_y'),
+      w: sym('prism_win32_w'), h: sym('prism_win32_h'), title: sym('prism_win32_title'),
+    };
+    const move = prog.F.prism_win32_move, closeWin = prog.F.prism_win32_close;
+    let lastDrag = 0, lastTitle = '';
+    Atomics.store(ctrl, SLOT.WIN_HAS, win.x ? 1 : 0);
+
+    const dv = prog.mod.dv;
+    const publish = () => {
+      const surface = dv.getInt32(at.surface, true);
+      const w = dv.getInt32(at.w, true), h = dv.getInt32(at.h, true);
+      if (surface && w > 0 && h > 0) {
+        Atomics.store(ctrl, SLOT.WIDTH, w);
+        Atomics.store(ctrl, SLOT.HEIGHT, h);
+        Atomics.store(ctrl, SLOT.PIXELS, surface);
+        Atomics.store(ctrl, SLOT.PIXFMT, 32);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+      }
+      if (win.x) {
+        Atomics.store(ctrl, SLOT.WIN_X, dv.getInt32(win.x, true));
+        Atomics.store(ctrl, SLOT.WIN_Y, dv.getInt32(win.y, true));
+        Atomics.store(ctrl, SLOT.WIN_W, dv.getInt32(win.w, true));
+        Atomics.store(ctrl, SLOT.WIN_H, dv.getInt32(win.h, true));
+        let title = '';
+        for (let i = 0; i < 127 && prog.M.u8[win.title + i]; i++) {
+          title += String.fromCharCode(prog.M.u8[win.title + i]);
+        }
+        if (title !== lastTitle) { lastTitle = title; post('window', { title }); }
+        const gen = Atomics.load(ctrl, SLOT.DRAG_GEN);
+        if (gen !== lastDrag && move) {
+          lastDrag = gen;
+          move(Atomics.load(ctrl, SLOT.DRAG_X), Atomics.load(ctrl, SLOT.DRAG_Y));
+        }
+        if (Atomics.load(ctrl, SLOT.WIN_CLOSE) && closeWin) {
+          Atomics.store(ctrl, SLOT.WIN_CLOSE, 0);
+          closeWin();
+        }
+      }
+      if (key) for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+      reader.endFrame();
+    };
+
+    const wait = prog.F.MsgWaitForMultipleObjects;
+    if (!wait) throw new Error('this build has no message loop to pace from');
+    const wrapped = function (...a) {
+      publish();
+      pace();
+      return wait.apply(this, a);
+    };
+    prog.F.MsgWaitForMultipleObjects = wrapped;
+    prog.mod.bindFunc('MsgWaitForMultipleObjects', wrapped);
+
   } else if (platform === 'dos') {
     /*
      * A DJGPP/DOS host: Quake's own DOS build. The same three devices the Raven games need, plus
@@ -512,7 +643,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
      * from a program that was handed the wrong world.
      */
     throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
-      `it presents x11, quake, watcom and allegro. This build runs in Node: ` +
+      `it presents x11, mgl, gdi, dos, watcom and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*

@@ -1,0 +1,22 @@
+{
+  "title": "PuTTYtel",
+  "subtitle": "Simon Tatham, 1999- \u00b7 the Win32 build, drawn through PRISM's own GDI",
+  "target": "putty:tel",
+  "args": "-telnet localhost",
+  "argsHint": "PuTTY names its session on the command line; in the page there is no network, so it opens its window and reports that the host does not exist \u2014 which is the program's own path, not a stub.",
+  "fps": 30,
+  "host": "win32",
+  "_host": "The Win32 GUI host: win32.c and win32-gui.c are compiled in, the surface is 32-bit BGRA rather than a palette, and the frame boundary is MsgWaitForMultipleObjects -- the one moment a GUI program with nothing to do comes back round.",
+  "controls": [
+    [
+      "keyboard",
+      "the terminal"
+    ],
+    [
+      "drag the title bar",
+      "move the window"
+    ]
+  ],
+  "_limits": "No sockets: a browser has none to give, so a real session needs a WebSocket relay. What this shows is the window, the font and the terminal emulator.",
+  "_target": "The target AND the variant. PuTTY's own default is `test-argv` -- the cheapest thing to run in Node -- and a page that took the default got a self-checking test with no window instead of the terminal."
+}

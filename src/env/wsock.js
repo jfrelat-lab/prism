@@ -15,11 +15,47 @@
 // WHAT IT DOES NOT DO: listen, accept, or UDP. PuTTY's client opens outgoing TCP connections and
 // nothing else, and a socket layer written past what a program asks for is a surface with no oracle.
 
-import { Worker } from 'node:worker_threads';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+/*
+ * NODE ONLY, and imported as such. A browser has no `node:worker_threads` and no raw TCP at all, so
+ * a static `import` here is not merely useless there -- it is fatal: the page's worker fails to load
+ * the whole module graph, and the program never starts. PuTTY in the page died exactly that way,
+ * with a CORS error naming `node:worker_threads`, which is a long way from "this build has no
+ * sockets".
+ *
+ * So the socket thread is reached through a dynamic import at INSTALL time, and a browser gets a
+ * layer that reports "no network" through Winsock's own error path instead.
+ */
+/*
+ * The worker's location, as a URL relative to this file rather than through `node:path` -- the point
+ * of the paragraph above is that this module must load in a browser, and a node import at the top
+ * defeats it just as thoroughly as `worker_threads` did.
+ */
+const NET_WORKER = new URL('../../tools/net-worker.mjs', import.meta.url);
 
-const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+/*
+ * Resolved ONCE, at module evaluation, and awaited here rather than inside installWsock -- which is
+ * synchronous, and whose caller runs the guest immediately afterwards. Deferring it to a `.then()`
+ * made every connect happen before the thread existed: PuTTY's session went from a live terminal to
+ * "term_data called 0 times", which is a working program talking to nothing.
+ *
+ * A browser rejects this import instead of failing to load, because it is dynamic; a static one is
+ * what killed the page's whole module graph.
+ */
+let NodeWorker = null;
+/*
+ * ASKED ONLY WHERE THE ANSWER EXISTS. A browser must not even attempt the import: a specifier it
+ * cannot resolve is fetched as a URL, and inside a WORKER that request hangs rather than rejecting
+ * -- so this module's evaluation never finished, the worker never reached its message handler, and
+ * the page sat at "starting" with no error anywhere. The page-side test that seemed to prove the
+ * import was harmless was run in the DOCUMENT, where it fails fast; the worker is the case that
+ * matters and it behaved differently.
+ *
+ * A module whose top-level await never runs is not an async module in practice: evaluation
+ * completes immediately, which is what the browser needs.
+ */
+if (typeof process !== 'undefined' && process.versions?.node) {
+  ({ Worker: NodeWorker } = await import('node:worker_threads'));
+}
 
 const MAX = 8;                  // concurrent sockets; PuTTY's client uses one
 const RING = 1 << 16;           // receive bytes per socket
@@ -62,10 +98,10 @@ export function installWsock(M, { onStop = null } = {}) {
   const sab = new SharedArrayBuffer(CTRL_SLOTS * 4 + MAX * RING);
   const ctrl = new Int32Array(sab, 0, CTRL_SLOTS);
   const rings = new Uint8Array(sab, CTRL_SLOTS * 4);
-  const worker = new Worker(join(ROOT, 'tools/net-worker.mjs'), {
-    workerData: { sab, MAX, RING },
-  });
-  worker.unref();                                  // the guest's exit must not wait on it
+  // No thread where there are no sockets: a browser gets a layer whose every connect fails through
+  // Winsock's own error path, which is the path a refused connection already takes.
+  const worker = NodeWorker ? new NodeWorker(NET_WORKER, { workerData: { sab, MAX, RING } }) : null;
+  worker?.unref();                                 // the guest's exit must not wait on it
 
   const used = new Array(MAX).fill(false);
   const api = {
@@ -83,6 +119,9 @@ export function installWsock(M, { onStop = null } = {}) {
     prism_net_connect: (slot, hostPtr, port) => {
       if (slot < 0 || slot >= MAX || !used[slot]) return -1;
       Atomics.store(ctrl, STATE(slot), 1);
+      // No thread means no network: the socket goes straight to the error state a refused
+      // connection would have reached, and the program's own error path takes it from there.
+      if (!worker) { Atomics.store(ctrl, STATE(slot), 3); Atomics.store(ctrl, ERRNO(slot), 1); return -1; }
       worker.postMessage({ op: 'connect', slot, host: M.mod.cstr(hostPtr), port: port & 0xffff });
       return 0;
     },
@@ -119,6 +158,7 @@ export function installWsock(M, { onStop = null } = {}) {
 
     prism_net_send: (slot, src, len) => {
       if (slot < 0 || slot >= MAX || !used[slot]) return -1;
+      if (!worker) return -1;
       worker.postMessage({ op: 'send', slot, bytes: M.u8.slice(src, src + len) });
       return len | 0;                              // buffered by the socket thread, never short
     },
@@ -126,7 +166,7 @@ export function installWsock(M, { onStop = null } = {}) {
     prism_net_close: (slot) => {
       if (slot < 0 || slot >= MAX) return -1;
       used[slot] = false;
-      worker.postMessage({ op: 'close', slot });
+      worker?.postMessage({ op: 'close', slot });
       return 0;
     },
 
@@ -146,6 +186,6 @@ export function installWsock(M, { onStop = null } = {}) {
   };
 
   Object.assign(M.rt, api);
-  M.wsock = { stop: () => { worker.postMessage({ op: 'stop' }); onStop?.(); } };
+  M.wsock = { stop: () => { worker?.postMessage({ op: 'stop' }); onStop?.(); } };
   return M.wsock;
 }

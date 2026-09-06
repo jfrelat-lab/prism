@@ -88,6 +88,17 @@ export const SLOT = {
   DRAG_Y: 31,
   DRAG_GEN: 32,    // host → guest: bumped per drag, so the guest applies each one once
   WIN_CLOSE: 33,   // host → guest: the close button was clicked; the guest posts itself WM_CLOSE
+
+  /*
+   * The PIXEL FORMAT of what PIXELS points at. Zero -- the default, and every DOS-era program here
+   * -- is one byte per pixel through a palette. 32 is B,G,R,A in memory order, which is what a
+   * program gets when it draws through a library that never had a palette: the Win32 GDI shim's
+   * surface and an SDL2 texture are both this.
+   *
+   * It is a format, not a depth, because the page has to know the BYTE ORDER: GDI writes blue first
+   * and a canvas wants red first, so the two cannot share a copy loop.
+   */
+  PIXFMT: 34,      // guest → host: 0 = 8-bit indexed (default), 32 = BGRA
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };

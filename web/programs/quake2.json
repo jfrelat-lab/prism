@@ -1,0 +1,31 @@
+{
+  "title": "QUAKE II",
+  "subtitle": "id Software, 1997 \u00b7 3.19 with ref_soft, the software renderer \u2014 X11",
+  "target": "quake2",
+  "args": "+set vid_ref soft +map demo1",
+  "argsHint": "`+map <name>` loads a level; `+set vid_ref soft` is the software renderer, the only one PRISM has.",
+  "fps": 30,
+  "host": "x11",
+  "needsData": {
+    "hint": "baseq2/ from the shareware or retail release \u2014 pak0.pak"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "~",
+      "console"
+    ]
+  ],
+  "_target": "The TARGET, not a unit list: the variant comes from the picker beside the program, so a target that grows a second platform layer needs no change here."
+}

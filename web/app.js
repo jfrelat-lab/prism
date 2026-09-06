@@ -603,10 +603,23 @@ function paint() {
         palGen = gen;
       }
     }
+    const dst = new Uint32Array(imageData.data.buffer);
+    /*
+     * A DIRECT-COLOUR surface: the Win32 GDI shim and SDL2 both hand over B,G,R,A in memory order,
+     * and a canvas wants R first, so the two bytes are swapped here rather than anywhere the guest
+     * could see. No palette is involved, which is why this runs before the lut check below.
+     */
+    if (Atomics.load(ctrl, SLOT.PIXFMT) === 32) {
+      for (let i = 0, n = w * h, p = pixels; i < n; i++, p += 4) {
+        dst[i] = (255 << 24) | (guest[p] << 16) | (guest[p + 1] << 8) | guest[p + 2];
+      }
+      cx.putImageData(imageData, 0, 0);
+      paintWindow();
+      return requestAnimationFrame(paint);
+    }
     if (!lut) return requestAnimationFrame(paint);
     // Read WHILE the guest writes. A tear is possible and accepted: the alternative is a double
     // buffer the guest would have to swap, and the guest is synchronous C that never yields.
-    const dst = new Uint32Array(imageData.data.buffer);
     for (let i = 0, n = w * h; i < n; i++) dst[i] = lut[guest[pixels + i]];
     cx.putImageData(imageData, 0, 0);
   } else {

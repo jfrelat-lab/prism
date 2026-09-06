@@ -10,11 +10,18 @@
 // time: the font is not the program's data, it is the PLATFORM's -- a Windows box has fonts before
 // any program starts, and this is the cheapest honest stand-in for one.
 
-import { readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+/*
+ * The filesystem is asked for ONLY under Node, and asked for at all only because the default path
+ * reads the font off disk. A static `node:fs` import here is fatal in a browser WORKER -- the
+ * specifier is fetched as a URL and the request hangs rather than failing, so the module never
+ * finishes evaluating and the worker never reaches its message handler. Nothing reports an error;
+ * the page simply stops at "starting". Callers in the page pass `bytes` and never touch this.
+ */
+let readFileSync = null, FONT_PATH = null;
+if (typeof process !== 'undefined' && process.versions?.node) {
+  ({ readFileSync } = await import('node:fs'));
+  FONT_PATH = new URL('../../assets/vga-rom-8x16.bin', import.meta.url);
+}
 
 /**
  * `bytes` lets a host that has no filesystem -- the browser worker -- pass the font in instead.
@@ -22,7 +29,8 @@ const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
  * that has no use for it costs a lookup and nothing else.
  */
 export function installVgaFont(M, { bytes = null, symbol = 'prism_vga_font' } = {}) {
-  const font = bytes ?? new Uint8Array(readFileSync(join(ROOT, 'assets/vga-rom-8x16.bin')));
+  if (!bytes && !readFileSync) throw new Error('vga font: no bytes given and no filesystem to read from');
+  const font = bytes ?? new Uint8Array(readFileSync(FONT_PATH));
   if (font.length < 4096) throw new Error(`vga font: ${font.length} bytes, expected at least 4096`);
 
   const at = M.mod.intern([...font.subarray(0, 4096)]);
