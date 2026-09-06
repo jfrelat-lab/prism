@@ -88,6 +88,31 @@ function capture(variant, extraArgs, envExtra = {}) {
   program.M.write = () => {};
 
   /*
+   * A DETERMINISTIC CLOCK, on every platform.
+   *
+   * `+host_framerate 0.05` makes the SIMULATION deterministic, and that is not enough: host.c:643
+   * calls `rand()` once per iteration of the main loop, before Host_FilterTime decides whether the
+   * iteration will simulate anything at all -- with id's own comment, "keep the random time
+   * dependent". So the PRNG advances once per LOOP, and the loop spins as many times as each
+   * platform's clock says it should. DOS reads a PIT and had spun 3,061 times by world frame 90
+   * where X11's gettimeofday gave 90; from the first particle onward the two pictures differ, in
+   * 289 of 64,000 pixels by frame 200, all of them rand()-placed.
+   *
+   * That is not a defect in either platform layer -- it is Quake being clock-dependent on purpose --
+   * but it also made this gate depend on how fast the machine ran it. Sys_FloatTime advances by a
+   * fixed step per call here, so every platform takes the same number of loop iterations and the
+   * comparison is about the RENDERER again.
+   */
+  const sft = program.F.Sys_FloatTime;
+  if (sft) {
+    let ticks = 0;
+    const step = 1 / 72;                       // Host_FilterTime's own threshold: one loop, one frame
+    const fake = function () { return ++ticks * step; };
+    program.F.Sys_FloatTime = fake;
+    program.mod.bindFunc('Sys_FloatTime', fake);
+  }
+
+  /*
    * `frames` counts frames of the WORLD. The capture happens at the first present AFTER the Nth
    * R_RenderView, so every platform is stopped at the same point in the demo however many console
    * screens it drew on the way there.
@@ -206,12 +231,23 @@ function compare(a, b, allow = null) {
     return { verdict: 'size', detail: `${a.width}x${a.height} vs ${b.width}x${b.height}` };
   }
   let differing = 0, firstAt = -1, explained = 0;
+  /*
+   * WHICH indices, not just how many. A scatter of a few hundred pixels is uninterpretable until you
+   * know whether it is one colour pair repeated -- a remap, a palette slot -- or a spread, which is
+   * a renderer that took a different path. The row histogram below answers "where"; this answers
+   * "what", and the two together are usually enough to name the suspect without a second run.
+   */
+  const pairCount = new Map();
   for (let i = 0; i < a.pixels.length; i++) {
     if (a.pixels[i] === b.pixels[i]) continue;
     if (allow && allow(a.pixels[i], b.pixels[i])) { explained++; continue; }
     if (firstAt < 0) firstAt = i;
     differing++;
+    const k = (a.pixels[i] << 8) | b.pixels[i];
+    pairCount.set(k, (pairCount.get(k) ?? 0) + 1);
   }
+  const topPairs = [...pairCount.entries()].sort((p, q) => q[1] - p[1]).slice(0, 8)
+    .map(([k, n]) => `${k >> 8}->${k & 255}:${n}`);
   // Six bits, which is what a VGA DAC holds and therefore all the three have in common.
   let palDiff = 0;
   for (let i = 0; i < 768; i++) if ((a.palette[i] >> 2) !== (b.palette[i] >> 2)) palDiff++;
@@ -227,7 +263,7 @@ function compare(a, b, allow = null) {
     if (n) rows.push(`${y}:${n}`);
   }
   return { verdict: differing || palDiff ? 'differ' : 'identical', differing, explained, palDiff,
-           firstAt, total: a.pixels.length, rows };
+           firstAt, total: a.pixels.length, rows, topPairs, pairs: pairCount.size };
 }
 
 console.log(`Quake, one renderer over three platform layers — frame ${FRAMES}, ` +
@@ -305,7 +341,8 @@ for (const { a, b, assert: strict, allow, note } of pairs) {
     console.log(`  ${a} != ${b}   ${r.verdict}` +
       (r.verdict === 'differ'
         ? `: ${r.differing} of ${r.total} pixels, ${r.palDiff}/768 palette bytes\n` +
-          `                       rows: ${r.rows.slice(0, 14).join(' ')}${r.rows.length > 14 ? ` … (${r.rows.length} rows)` : ''}`
+          `                       rows: ${r.rows.slice(0, 14).join(' ')}${r.rows.length > 14 ? ` … (${r.rows.length} rows)` : ''}\n` +
+          `                       ${r.pairs} distinct index pairs, commonest: ${r.topPairs.join(' ')}`
         : `: ${r.detail}`));
   }
 }
