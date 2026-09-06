@@ -332,6 +332,14 @@ export function makeKeyboard(views) {
       if (head !== tail) {
         const v = kbd[(tail % KBD_SIZE) * 2 + which];
         Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
+        /*
+         * A RELEASE produced no character. The queue carries both -- one BIOS buffer, read either as
+         * a scan code or as a character -- and a break code's character byte is zero, so a program
+         * reading text used to get a NUL between every two keystrokes. Lua's REPL saw `p\0r\0i...`
+         * and answered with a syntax error for a line that had been typed correctly. The scan-code
+         * reader still sees them: that is what the high bit is for.
+         */
+        if (which === 1 && v === 0) continue;
         return v;
       }
       Atomics.wait(ctrl, SLOT.KBD_HEAD, head, 100);

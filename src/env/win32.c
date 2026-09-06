@@ -663,6 +663,26 @@ BOOL WINAPI PostMessage(HWND w, UINT m, WPARAM wp, LPARAM lp)
 }
 
 /*
+ * PostQuitMessage, which is how a Windows program ASKS ITS OWN LOOP TO STOP.
+ *
+ * It is the one message an application posts to itself and then waits to receive: WM_DESTROY calls
+ * it, GetMessage answers FALSE when it comes back round, the loop ends and WinMain returns. Without
+ * it PuTTY's window.c called a function that did not exist, the call threw, and the program was gone
+ * before it had painted once -- which looked from outside like a program that refuses to start.
+ *
+ * The exit code goes in wParam, where a real Windows puts it and where WinMain reads it back.
+ */
+void WINAPI PostQuitMessage(int code)
+{
+    MSG *m = &msgq[msgq_head % MSGQ];
+    memset(m, 0, sizeof(*m));
+    m->message = WM_QUIT;
+    m->wParam = (WPARAM)code;
+    m->hwnd = 0;
+    msgq_head++;
+}
+
+/*
  * The message queue: empty.
  *
  * PeekMessage returning FALSE is what an application with nothing waiting sees, and Sys_SendKeyEvents

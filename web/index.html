@@ -5,7 +5,18 @@
   A generic host: it compiles C to JavaScript in a worker, shows the running program on one surface
   (a text screen until the program creates a display, its framebuffer afterwards), and forwards
   keystrokes as PC scan codes. It contains no knowledge of any particular program — those are data,
-  in web/programs/*.json, discovered at start-up.
+  in web/programs/*.json and web/machines.json, fetched at start-up.
+
+  WHAT THE SHELL IS SHAPED LIKE, and why. A session is a MACHINE — DOS, Linux, SUN, Windows — and
+  you pick a machine before you pick a program, because that is the choice the compiler actually
+  makes: `quake:dos`, `quake:x11`, `quake:sun` and `quake:win` are four platform layers over one
+  engine, and until this page had machines in it that choice was a dropdown labelled "host" that
+  meant nothing to anybody. The chrome around the screen is a VM window; everything inside it is the
+  guest's own decade, presented the way that machine presented programs: a DIR listing, an `ls -l`,
+  an OpenWindows console, a desktop with icons.
+
+  ONE PROGRAM PER SESSION, which is a fact rather than a rule: `prog.run()` never returns, so the
+  worker holds exactly one program from the moment it starts.
 
   Serve it with `node tools/serve.mjs`: SharedArrayBuffer needs COOP/COEP headers, and the guest's
   memory being shared is what lets the page paint while the guest's own main loop never yields.
@@ -16,14 +27,12 @@
 <title>PRISM</title>
 <style>
   :root {
-    --bg: #0e1013; --panel: #171a1f; --edge: #262b33;
+    --bg: #0e1013; --panel: #171a1f; --panel-2: #1f242c; --edge: #262b33;
     --fg: #d7dae0; --dim: #8b929e; --accent: #6cb6ff;
-    --warn: #e3b341; --err: #f28b82;
+    --warn: #e3b341; --err: #f28b82; --ok: #7ee2a8;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  /* Two rows, not three: hiding the data row with display:none removed it as a grid ITEM, so
-     `main` inherited the second `auto` track and stopped filling the window. */
   body { margin: 0; background: var(--bg); color: var(--fg); font-size: 13px;
          display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; }
 
@@ -40,87 +49,99 @@
   header .name small { display: block; font-weight: 400; letter-spacing: 0;
                        color: var(--dim); font-size: 10px; }
   .sep { flex: 1; }
+  header a { color: var(--dim); text-decoration: none; border: 1px solid var(--edge);
+             border-radius: 5px; padding: 5px 9px; }
+  header a:hover { color: var(--accent); border-color: var(--accent); }
 
-  #dataRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-             padding: 7px 14px; background: #13161a; border-bottom: 1px solid var(--edge);
-             color: var(--dim); }
+  /* ---------------------------------------------------------------- the machines */
+  /*
+   * A rail of machines, and the one you are in is lit. The dot is a VM manager's state light rather
+   * than decoration: it says which machine this page IS, which matters because everything below --
+   * the program list, the icons, the arguments -- belongs to that machine and to no other.
+   */
+  #machines { display: flex; gap: 6px; }
+  .machine { display: grid; gap: 2px; text-align: left; cursor: pointer; font: inherit;
+             background: var(--panel-2); border: 1px solid var(--edge); border-radius: 7px;
+             padding: 6px 11px 7px; color: var(--fg); }
+  .machine:hover { border-color: var(--accent); }
+  .machine[aria-selected="true"] { border-color: var(--accent); background: #1d2a38; }
+  .machine .mname { display: flex; align-items: center; gap: 6px; font-weight: 600;
+                    letter-spacing: .04em; }
+  .machine .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid var(--dim);
+                  flex: none; }
+  .machine[aria-selected="true"] .dot { background: var(--accent); border-color: var(--accent); }
+  .machine .msub { font-size: 10px; color: var(--dim); }
 
   select, button, input { font: inherit; color: var(--fg);
-    background: #1f242c; border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; }
+    background: var(--panel-2); border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; }
   button { cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--accent); }
   button:disabled { opacity: .4; cursor: default; }
-  #args { width: 22ch; }
+  #args { width: 24ch; }
   #run { border-color: #2f6f4f; }
   label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
-  #subtitle { color: var(--dim); }
 
-  /*
-   * A FLOOR under the picture. The header is a flex row that wraps, so in a narrow window it grows
-   * to four or five lines and eats the height -- `grid-template-rows: auto minmax(0,1fr)` then hands
-   * the game whatever is left, which was a 40-pixel strip. The game gets 320px whatever the header
-   * does, and the page scrolls if the window truly cannot hold both.
-   */
   main { display: grid; grid-template-columns: 1fr minmax(290px, 32%); min-height: 0; }
-
   /*
-   * A narrow window must not squeeze the game into a sliver.
-   *
-   * The side panel has a 290px floor, so below roughly 700px the canvas column collapses to almost
-   * nothing and the game becomes a thumbnail beside a full-height log -- which reads as the display
-   * being broken rather than as a layout that ran out of room. Stack instead: the picture takes the
-   * width it needs and the log goes underneath.
+   * A narrow window must not squeeze the game into a sliver. The side panel has a 290px floor, so
+   * below roughly 900px the canvas column collapses to almost nothing and the game becomes a
+   * thumbnail beside a full-height log -- which reads as the display being broken rather than as a
+   * layout that ran out of room. Stack instead.
    */
   @media (max-width: 900px) {
     main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
     aside { border-left: none; border-top: 1px solid var(--edge); }
   }
 
-  #stage { display: grid; place-items: center; padding: 12px; min-height: 0; overflow: hidden;
-           background: #000; position: relative; }
-  /* The guest decides the resolution; the canvas is scaled with no smoothing, because a 224x288
-     arcade framebuffer interpolated to fit looks like a different program. */
+  /* ---------------------------------------------------------------- the VM window */
+  #vm { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; min-height: 0;
+        padding: 10px; }
+  .vmtop { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; overflow-x: auto;
+           background: var(--panel); border: 1px solid var(--edge); border-bottom: none;
+           border-radius: 8px 8px 0 0; padding: 7px 10px; }
+  .vmtop > * { flex: none; }
+  .vmtop .vmname { font-weight: 700; letter-spacing: .06em; }
+  .pill { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--dim);
+          border: 1px solid var(--edge); border-radius: 99px; padding: 3px 8px; }
+  .pill.on { color: var(--ok); border-color: #2f6f4f; }
+  .vmspec { color: var(--dim); font-size: 11px; }
+
+  #stage { display: grid; place-items: center; min-height: 0; overflow: hidden;
+           background: #000; position: relative; border: 1px solid var(--edge); }
   /*
-   * `object-fit: contain` rather than `height: 100%; width: auto`.
-   *
-   * The old rule scaled to the stage's HEIGHT and let the width follow, which needs the stage to
-   * have a definite height -- and when it does not, the canvas collapses to its intrinsic size or
-   * smaller. OpenDUNE came out at 86x54 from a 320x200 buffer. Filling the box and letting
-   * object-fit letterbox gets the same aspect ratio without depending on which axis is definite.
+   * `object-fit: contain` rather than `height: 100%; width: auto`: the old rule scaled to the
+   * stage's HEIGHT and let the width follow, which needs the stage to have a definite height -- and
+   * when it does not, the canvas collapses to its intrinsic size or smaller. OpenDUNE came out at
+   * 86x54 from a 320x200 buffer.
    */
   #screen { image-rendering: pixelated; width: 100%; height: 100%; object-fit: contain;
             background: #000; }
+  /*
+   * The stage holds two things and shows one. Before a program runs it belongs to the machine's own
+   * chooser; a black canvas stacked over that would swallow every click on it, and an empty chooser
+   * over a running game would swallow the keyboard.
+   */
+  #stage:not(.running) #winframe { display: none; }
+  #stage.running #chooser { display: none; }
 
   /*
-   * Fullscreen. The STAGE goes fullscreen rather than the canvas itself, because a fullscreened
-   * canvas is stretched to the monitor by the browser -- a 320x200 frame on a 16:9 screen then comes
-   * out wrong in both directions. A flex box with a black ground and `object-fit` semantics from
-   * max-width/max-height keeps the guest's own shape, letterboxed.
-   */
-  /*
-   * A window, when the program has one.
+   * A window, when the program has one. Win32 Quake owns this rectangle: it sizes it when the
+   * resolution changes and reads back where it sits, so the frame here is positioned FROM the guest
+   * and dragging it writes back INTO the guest rather than moving a div and telling nobody.
    *
-   * Win32 Quake owns this rectangle: it sizes it when the resolution changes and reads back where it
-   * sits, so the frame here is positioned FROM the guest and dragging it writes back INTO the guest
-   * rather than moving a div and telling nobody. Without a window the frame is hidden and the canvas
-   * fills the stage as before -- an X11 or DOS program has no window to draw.
-   */
-  /*
-   * The frame is ALWAYS the canvas's parent and only sometimes a window.
-   *
-   * It used to carry the chrome unconditionally and be switched off with the `hidden` attribute --
-   * which does nothing here, because `#winframe { display: flex }` outranks the user agent's
-   * `[hidden] { display: none }`. So a title bar reading "WinQuake" sat over every program, whatever
-   * was selected. Hiding it properly would have been worse: the canvas is INSIDE the frame, so a
-   * program with no window would have drawn nothing at all.
-   *
-   * `.windowed` is therefore the switch, and without it this is a plain wrapper that lets the stage
-   * centre the picture as it did before there were windows.
+   * The frame is ALWAYS the canvas's parent and only sometimes a window. It used to carry the chrome
+   * unconditionally and be switched off with the `hidden` attribute -- which does nothing here,
+   * because `#winframe { display: flex }` outranks the user agent's `[hidden] { display: none }`. So
+   * a title bar reading "WinQuake" sat over every program. `.windowed` is the switch.
    */
   #winframe { display: flex; flex-direction: column; max-width: 100%; max-height: 100%; }
-  /* Absolute FROM THE START of being a window, and inside a positioned stage. Switching it from the
-     grid's centred flow to absolute at the first paint made the window jump to the corner the moment
-     it was positioned -- which looked like a drag bug and was a layout one. */
+  /*
+   * A frame that is NOT a window fills the stage, so the canvas's own `object-fit: contain` has a
+   * box to letterbox inside. Without this the wrapper shrank to the canvas's intrinsic size and a
+   * 320x200 game sat as a postage stamp in the middle of a 900-pixel stage -- which reads as the
+   * scaler being broken and is really a flex item that was never told to grow.
+   */
+  #winframe:not(.windowed) { width: 100%; height: 100%; }
   #winframe.windowed { position: absolute; left: 0; top: 0; border: 2px outset #b8b8b8;
                        background: #b8b8b8; box-shadow: 2px 2px 6px #0008; }
   #wintitle { display: none; }
@@ -133,9 +154,87 @@
   #winclose:active { border-style: inset; }
   #winframe #screen { display: block; }
 
+  /*
+   * Fullscreen: the STAGE goes fullscreen rather than the canvas, because a fullscreened canvas is
+   * stretched to the monitor by the browser -- a 320x200 frame on a 16:9 screen then comes out wrong
+   * in both directions.
+   */
   #stage:fullscreen { display: flex; align-items: center; justify-content: center;
                       width: 100vw; height: 100vh; background: #000; }
   #stage:fullscreen #screen { width: 100vw; height: 100vh; object-fit: contain; }
+
+  /* ---------------------------------------------------------------- the chooser */
+  /*
+   * WHAT THE MACHINE LOOKS LIKE BEFORE ANYTHING RUNS. Not a menu wearing the machine's colours: the
+   * machine's own way of showing you what it has. A DOS box answered `dir`, a Unix box `ls -l`, a
+   * Sun sat inside an OpenWindows frame, and Windows put icons on a desktop. Same information, four
+   * idioms, and the idiom is most of what it felt like to sit there.
+   */
+  #chooser { position: absolute; inset: 0; overflow: auto; }
+  .tty { min-height: 100%; padding: 14px 18px; font: 400 13px/1.55 ui-monospace, Menlo, monospace; }
+  .tty.dos { background: #000; color: #aaa; }
+  .tty.unix { background: #12100f; color: #c9c6bf; }
+  .tty.sunos { background: #22222a; color: #c5c7ce; }
+  .tty .bright { color: #fff; }
+  .tty .faint { opacity: .55; }
+  .tty .lit { color: #d9832f; }
+  .tty table { border-collapse: collapse; margin: 2px 0 8px; }
+  .tty td { padding: 0 18px 0 0; white-space: nowrap; }
+  .tty tr { cursor: pointer; }
+  .tty tr:hover td { background: rgba(217,131,47,.16); }
+  .tty tr[aria-selected="true"] td { background: rgba(217,131,47,.32); color: #fff; }
+  .tty tr.absent, .tty tr.absent:hover td { cursor: default; background: none; }
+  .tty tr.absent td { opacity: .45; }
+  .caret { display: inline-block; width: 8px; height: 15px; background: currentColor;
+           vertical-align: -3px; margin-left: 2px; animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* A SUN console kept its window frame: OpenWindows drew one around everything. */
+  .sunframe { position: absolute; inset: 10px; border: 2px solid #a9a79e; background: #22222a;
+              display: flex; flex-direction: column; min-height: 0; }
+  .suntitle { background: #a9a79e; color: #1c1c22; padding: 3px 8px; display: flex;
+              justify-content: space-between; font: 600 11px/1.4 system-ui, sans-serif;
+              letter-spacing: .04em; }
+  .sunframe .tty { flex: 1; overflow: auto; min-height: 0; }
+
+  /* The Windows desktop: icons in a ROW, left to right, the way a desktop lays them out. */
+  .desktop { position: absolute; inset: 0; background: #3a6e6e;
+             display: flex; flex-direction: column; }
+  .icons { flex: 1; padding: 16px; display: flex; flex-direction: row; flex-wrap: wrap;
+           align-items: flex-start; align-content: flex-start; gap: 10px 6px; min-height: 0;
+           overflow: auto; }
+  .shortcut { width: 104px; padding: 8px 4px 6px; border: 1px dotted transparent; cursor: pointer;
+              background: none; color: #fff; font: 400 12px/1.35 system-ui, sans-serif;
+              display: grid; justify-items: center; gap: 6px; text-align: center; }
+  .shortcut img { width: 32px; height: 32px; image-rendering: pixelated; }
+  .shortcut span { text-shadow: 1px 1px 0 rgba(0,0,0,.65); }
+  .shortcut:hover { border-color: rgba(255,255,255,.55); }
+  .shortcut[aria-selected="true"] { border-color: #fff; background: rgba(0,0,90,.45); }
+  .shortcut.absent { opacity: .45; cursor: default; }
+  .taskbar { background: #c0c0c0; border-top: 2px solid #dfdfdf; padding: 3px 4px; display: flex;
+             gap: 6px; align-items: center; font: 400 12px/1 system-ui, sans-serif; color: #000; }
+  .taskbar .start { border: 2px solid; border-color: #fff #808080 #808080 #fff;
+                    padding: 4px 10px 4px 8px; font-weight: 700; display: flex; gap: 5px;
+                    align-items: center; }
+  .taskbar .flag { width: 12px; height: 12px;
+    background:
+      linear-gradient(135deg, #e33 0 50%, transparent 0) 0 0/7px 7px no-repeat,
+      linear-gradient(135deg, #2a2 0 50%, transparent 0) 6px 0/7px 7px no-repeat,
+      linear-gradient(135deg, #2af 0 50%, transparent 0) 0 6px/7px 7px no-repeat,
+      linear-gradient(135deg, #fc2 0 50%, transparent 0) 6px 6px/7px 7px no-repeat; }
+  .taskbar .task { border: 2px solid; border-color: #808080 #fff #fff #808080; padding: 4px 10px;
+                   flex: 0 1 240px; text-align: left; }
+  .taskbar .tray { margin-left: auto; border: 2px solid;
+                   border-color: #808080 #fff #fff #808080; padding: 4px 8px;
+                   font-variant-numeric: tabular-nums; }
+
+  /* ---------------------------------------------------------------- under the screen */
+  .vmbar { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; overflow-x: auto;
+           background: var(--panel); border: 1px solid var(--edge); border-top: none;
+           padding: 7px 10px; color: var(--dim); }
+  .vmbar > * { flex: none; }
+  .vmbar:last-child { border-radius: 0 0 8px 8px; }
+  #selected { color: var(--fg); }
 
   aside { border-left: 1px solid var(--edge); display: grid; grid-template-rows: auto auto 1fr;
           min-height: 0; background: var(--panel); }
@@ -153,47 +252,58 @@
 </head>
 <body>
 
-<div class="chrome">
 <header>
   <span class="name">PRISM<small>C &rarr; JavaScript</small></span>
-  <select id="program"></select>
-  <select id="host" title="which platform layer of this program to build" hidden></select>
-  <label>args <input id="args" type="text" spellcheck="false"></label>
-  <button id="run">Run</button>
-  <button id="stopBtn" disabled>Stop</button>
-  <button id="pause">Pause</button>
-  <button id="fullscreen" title="fill the screen — Esc or F11 to come back">Fullscreen</button>
-  <label>speed
-    <select id="speed">
-      <option value="25">25%</option>
-      <option value="50">50%</option>
-      <option value="100" selected>100%</option>
-      <option value="200">200%</option>
-      <option value="0">unlimited</option>
-    </select>
-  </label>
+  <div id="machines" role="tablist" aria-label="Machines"></div>
   <span class="sep"></span>
-  <span id="subtitle"></span>
+  <a href="./live/" title="write C and run it, with no machine and no program">Live C &rarr;</a>
 </header>
 
-<div id="dataRow">
-  <span>data files</span>
-  <input type="file" id="data" multiple>
-  <button id="loadServer" title="load the directory passed to serve.mjs --data=">from --data</button>
-  <span id="dataNote"></span>
-</div>
-</div>
-
 <main>
-  <div id="stage">
-    <div id="winframe">
-      <!-- The caption is the PROGRAM's: CreateWindowEx gives it, and until one does there is no
-           window and no title. It said "WinQuake" here, which is how one game's title came to sit
-           over every other program in the picker. -->
-      <div id="wintitle"><span id="wincaption"></span><button id="winclose" title="close">&#10005;</button></div>
-      <canvas id="screen" width="720" height="400"></canvas>
+  <div id="vm">
+    <div class="vmtop">
+      <span class="vmname" id="vmName">&mdash;</span>
+      <span class="pill" id="vmState">powered on</span>
+      <span class="vmspec" id="vmSpec"></span>
+      <span class="sep"></span>
+      <label>args <input id="args" type="text" spellcheck="false"></label>
+      <button id="run">Run</button>
+      <button id="stopBtn" disabled>Stop</button>
+      <button id="pause">Pause</button>
+      <button id="fullscreen" title="fill the screen — Esc or F11 to come back">Fullscreen</button>
+      <label>speed
+        <select id="speed">
+          <option value="25">25%</option>
+          <option value="50">50%</option>
+          <option value="100" selected>100%</option>
+          <option value="200">200%</option>
+          <option value="0">unlimited</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="stage">
+      <div id="chooser"></div>
+      <div id="winframe">
+        <!-- The caption is the PROGRAM's: CreateWindowEx gives it, and until one does there is no
+             window and no title. It said "WinQuake" here, which is how one game's title came to sit
+             over every other program in the picker. -->
+        <div id="wintitle"><span id="wincaption"></span><button id="winclose" title="close">&#10005;</button></div>
+        <canvas id="screen" width="720" height="400"></canvas>
+      </div>
+    </div>
+
+    <div class="vmbar">
+      <span id="selected">&mdash;</span><span class="sep"></span><span id="subtitle"></span>
+    </div>
+    <div class="vmbar" id="dataRow">
+      <span>data files</span>
+      <input type="file" id="data" multiple>
+      <button id="loadServer" title="load the directory passed to serve.mjs --data=">from --data</button>
+      <span id="dataNote"></span>
     </div>
   </div>
+
   <aside>
     <div class="bar"><span id="stats">idle</span></div>
     <div class="bar" id="controls"></div>

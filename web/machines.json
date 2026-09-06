@@ -1,0 +1,84 @@
+{
+  "_doc": [
+    "THE SHELF: which machine you sit at, and what is on it.",
+    "",
+    "A session is the MACHINE, not the toolchain. PRISM's worker branches on more than four hosts --",
+    "DJGPP with Allegro, DJGPP with the VGA registers, Watcom's DOS4GW, X11, MGL, Win32 -- but those",
+    "are differences between BUILDS, and nobody sitting at the machine could tell you which one they",
+    "were in. MAME and Quake are both DOS programs; Quake and Quake II are both X clients.",
+    "",
+    "So this file names four machines and says what each one runs. Every entry points at a program",
+    "descriptor in web/programs/ (the GAME: what it is, what data it needs, what its keys do) and,",
+    "where the target has several platform layers, at the VARIANT that belongs to this machine. Quake",
+    "appears four times because id wrote four platform layers for it, and each one is a different",
+    "machine's program.",
+    "",
+    "Unit counts are NOT here. The server resolves them from targets/*.json when the page asks, so a",
+    "number on the screen is one the build would produce rather than one somebody typed."
+  ],
+
+  "machines": [
+    {
+      "id": "dos",
+      "name": "DOS",
+      "sub": "386 · VGA · PC speaker",
+      "spec": "386 · 640K + 512M · VGA",
+      "kind": "dos",
+      "prompt": "C:\\>",
+      "listing": "dir",
+      "volume": "PRISM",
+      "programs": [
+        { "program": "mame-0.4", "file": "MAME", "ext": "EXE", "date": "1997-05-16" },
+        { "program": "quake", "variant": "dos", "file": "QUAKE", "ext": "EXE", "date": "1996-08-01" },
+        { "program": "heretic", "file": "HERETIC", "ext": "EXE", "date": "1994-12-23" },
+        { "program": "hexen", "file": "HEXEN", "ext": "EXE", "date": "1995-09-30" },
+        { "program": "opendune", "file": "DUNE2", "ext": "EXE", "date": "1992-12-01" }
+      ]
+    },
+    {
+      "id": "linux",
+      "name": "Linux",
+      "sub": "X11 · /dev/dsp · ELF",
+      "spec": "386 · 512 MB · X11 :0",
+      "kind": "unix",
+      "prompt": "$",
+      "listing": "ls -l",
+      "host": "prism",
+      "programs": [
+        { "program": "doom", "file": "doom", "date": "Dec 23  1997" },
+        { "program": "quake", "variant": "x11", "file": "quake", "date": "Aug  1  1996" },
+        { "program": "quake2", "file": "quake2", "date": "Dec  9  1997" },
+        { "program": "lua", "file": "lua", "date": "May  2  2023" }
+      ]
+    },
+    {
+      "id": "sun",
+      "name": "SUN",
+      "sub": "SunOS · X11 · OpenWindows",
+      "spec": "SPARC · 512 MB · X11 :0",
+      "kind": "unix",
+      "frame": "Console",
+      "prompt": "%",
+      "listing": "ls -l",
+      "host": "sparc",
+      "programs": [
+        { "program": "quake", "variant": "sun", "file": "quake", "date": "Aug  1  1996" }
+      ],
+      "_one": "One program, and it is the whole reason the machine exists: id shipped sys_sun.c and vid_sunx.c with WinQuake and nothing had ever been compiled against them. A machine with one program on it is a thin shelf; a machine with none is a promise."
+    },
+    {
+      "id": "win",
+      "name": "Windows",
+      "sub": "Win32 · GDI · Winsock",
+      "spec": "386 · 512 MB · GDI",
+      "kind": "desktop",
+      "programs": [
+        { "program": "quake", "variant": "win", "file": "quake.exe",
+          "icon": "corpus/Quake/WinQuake/quake.ico" },
+        { "program": "putty", "variant": "tel", "file": "putty.exe",
+          "icon": "corpus/putty/windows/putty.ico" }
+      ],
+      "_icons": "The icons are the PROGRAM's own files, pointed at where they sit in its source tree -- a browser decodes .ico natively, so there is no conversion step and no build artefact to keep in step. And they are here and on no other machine because an icon is a Windows idea: a DOS or X11 program never had one, and drawing something for it would be inventing evidence."
+    }
+  ]
+}

@@ -200,6 +200,8 @@
     "sun": {
       "host": "x11",
       "title": "QUAKE (SunOS/X11, id386=0)",
+      "args": "-zone 512",
+      "_args": "Not tuning. vid_sunx.c takes its framebuffer from Quake's ZONE with Z_Malloc where vid_x.c uses malloc, and the zone's default 0xc000 is 49,152 bytes against a 320x200 frame's 64,000. This build cannot start without it on any machine, so it belongs to the variant rather than to whoever types the command line.",
       "_doc": "id shipped a SUN platform layer and nobody has ever built it here: sys_sun.c, in_sun.c, snd_sun.c and TWO video drivers -- vid_sunx.c over plain Xlib and vid_sunxil.c over Sun's XIL imaging library. The XIL one needs a proprietary library that does not exist outside SunOS; the Xlib one needs exactly the Xlib PRISM already shims for Doom, which is why this variant is worth having: a FOURTH platform layer over the same renderer, and the cheapest new axis the corpus offers.",
       "addUnits": [
         "sys_sun.c",

@@ -102,86 +102,261 @@ function paintText() {
   cx.putImageData(textImage, 0, 0);
 }
 
-// ---------------------------------------------------------------- program discovery
-let programs = {};
-/*
- * Which platforms each target offers, by name. A program is a GAME; a variant is the platform layer
- * it is built against, and Quake has four of them from one engine -- DOS, X11, Win32 and the null
- * build its own source ships. Node could always pick one (`targets/quake.json:x11`); the page could
- * not, which made it the only place the choice was invisible.
- */
-let targetVariants = {};
+// ---------------------------------------------------------------- the shelf
+//
+// FOUR MACHINES, and a machine is chosen before a program is. That is not presentation: it is the
+// choice the compiler makes. `quake:dos`, `quake:x11`, `quake:sun` and `quake:win` are four platform
+// layers over one engine, and while this page had a "program" dropdown and a "host" dropdown beside
+// it, the second one was a word with no meaning attached -- you had to already know that `mgl` was
+// the Windows build to pick it.
+//
+// web/machines.json says which machine runs what; web/programs/*.json says what each program IS.
+// Everything on the screen below comes from one of those two, or from the server's own resolution of
+// targets/*.json -- so a unit count on a DIR listing is a number the build would produce, not a
+// number somebody typed into a mockup.
+let programs = {};        // id -> the descriptor in web/programs/
+let machines = [];        // web/machines.json, in order
+let targetInfo = {};      // target name -> { present, variants }
+let machine = null;       // the machine we are sitting at
+let chosen = 0;           // which of its programs is selected
+
 async function discover() {
-  const { files } = await (await fetch('/__ls?dir=web/programs')).json();
-  for (const f of files.filter(f => f.endsWith('.json'))) {
-    programs[f.replace(/\.json$/, '')] = await (await fetch(`/web/programs/${f}`)).json();
-  }
+  const cfg = await (await fetch('./machines.json')).json();
+  machines = cfg.machines.filter(m => !m.id.startsWith('_'));
+
+  // Which corpora are actually cloned. A program whose sources are absent is shown and NOT offered:
+  // "it is not here" is a different fact from "it is not supported", and a build that dies fetching
+  // an empty listing tells you neither.
   try {
     const { targets } = await (await fetch('/__targets')).json();
-    // Only the variants meant for a page: a target may keep a Node-only build (see the `web`
-    // flag in targets/*.json), and offering one here would hand somebody a compile test.
-    for (const t of targets) {
-      targetVariants[t.name] = (t.variants ?? [])
-        .filter(v => (typeof v === 'string' ? true : v.web !== false))
-        .map(v => (typeof v === 'string' ? { name: v, args: null } : v));
+    for (const t of targets) targetInfo[t.name] = t;
+  } catch { /* an older server: everything is assumed present, as it was before this existed */ }
+
+  const ids = [...new Set(machines.flatMap(m => m.programs.map(x => x.program)))];
+  await Promise.all(ids.map(async (id) => {
+    try { programs[id] = await (await fetch(`./programs/${id}.json`)).json(); }
+    catch (e) { log(`no descriptor for '${id}': ${e.message}`, 'warn'); }
+  }));
+
+  // Every entry, resolved once: the descriptor it names, the target it builds, whether that target
+  // is present, and its unit count straight from the server's own resolution.
+  for (const m of machines) {
+    m.programs = m.programs.filter(x => programs[x.program]);
+    for (const x of m.programs) {
+      const p = programs[x.program];
+      x.desc = p;
+      x.name = p.title || x.program;
+      x.target = x.variant ? `${(p.target || '').split(':')[0]}:${x.variant}` : (p.target ?? null);
+      const base = (x.target || '').split(':')[0];
+      x.present = base ? (targetInfo[base]?.present ?? true) : true;
+      // A descriptor of the older kind carries its own unit list (Doom does), and that is a real
+      // count too -- countUnits() only has a server to ask when there is a target to resolve.
+      if (Array.isArray(p.units)) x.units = p.units.length;
+      x.file = x.file || x.program;
     }
-  } catch { /* an older server: the picker simply stays hidden */ }
-  const sel = $('program');
-  sel.innerHTML = '';
-  for (const [id, p] of Object.entries(programs)) {
-    const o = document.createElement('option');
-    o.value = id; o.textContent = p.title || id;
-    sel.append(o);
   }
+  renderMachines();
+  pick(machines[0], 0);
+  countUnits();                       // asynchronous: the listing fills in as answers arrive
+}
+
+/*
+ * How many translation units each program is, asked of the SERVER rather than stated in a file.
+ *
+ * /__target applies the unit rules -- a list, a glob, or the program's own MAKEFILE -- and hands
+ * back the answer, which is the same answer `node tools/build.mjs` gets. A number in a JSON file
+ * beside it would be a second copy of a fact that changes whenever a variant does, and the two would
+ * disagree within a week. Failures are silent on purpose: an absent corpus already says so, and a
+ * missing count costs a column, not a session.
+ */
+async function countUnits() {
+  const seen = new Map();
+  await Promise.all(machines.flatMap(m => m.programs).map(async (x) => {
+    if (!x.target || !x.present) return;
+    if (!seen.has(x.target)) {
+      seen.set(x.target, fetch(`/__target?name=${encodeURIComponent(x.target)}`)
+        .then(r => (r.ok ? r.json() : null)).catch(() => null));
+    }
+    const t = await seen.get(x.target);
+    if (t) { x.units = t.units.length; x.variantArgs = t.args ?? null; }
+  }));
+  // The counts arrive after the first draw, and the line under the screen names the same program the
+  // listing does -- so both are redrawn, or the two disagree until you click something.
+  renderChooser();
   describe();
 }
 
-function current() { return programs[$('program').value]; }
+/** The selected entry, and the descriptor behind it. */
+function current() { return machine?.programs[chosen]?.desc ?? null; }
+function entry() { return machine?.programs[chosen] ?? null; }
 
-/** The target this program builds from, if it names one, without any variant suffix. */
-function baseTarget(p) { return (p?.target ?? '').split(':')[0]; }
+/** The target this program builds from, with the machine's variant already chosen for it. */
+function chosenTarget() { return entry()?.target ?? null; }
 
-/** The variant chosen in the picker, or whatever the descriptor already asked for. */
-function chosenTarget() {
-  const p = current();
-  if (!p?.target) return null;
-  const host = $('host');
-  return !host.hidden && host.value ? `${baseTarget(p)}:${host.value}` : p.target;
+function renderMachines() {
+  const rail = $('machines');
+  rail.innerHTML = '';
+  for (const m of machines) {
+    const b = document.createElement('button');
+    b.className = 'machine';
+    b.setAttribute('role', 'tab');
+    b.innerHTML = `<span class="mname"><span class="dot"></span>${m.name}</span>` +
+                  `<span class="msub">${m.sub}</span>`;
+    b.onclick = () => { switchAway('machine'); pick(m, 0); };
+    m.el = b;
+    rail.append(b);
+  }
+}
+
+/** Sit down at a machine, at one of its programs. */
+function pick(m, i) {
+  const changed = m !== machine;
+  machine = m; chosen = i;
+  if (changed) clearScreen();
+  for (const x of machines) x.el.setAttribute('aria-selected', String(x === m));
+  $('vmName').textContent = m.name;
+  $('vmSpec').textContent = m.spec || '';
+  // describe() first: it fills the argument field, and the prompt on the machine's own screen shows
+  // the command line those arguments make. Drawing the screen first left the prompt one program
+  // behind -- the SUN listing said `./quake +host_framerate` while the field already said `-zone 512`.
+  describe();
+  renderChooser();
+}
+
+/*
+ * THE MACHINE'S OWN SCREEN. Four idioms for one list: a DIR listing, an `ls -l`, the same inside an
+ * OpenWindows frame, and a desktop of icons. What differs is not decoration -- it is what these
+ * machines actually put in front of you when you wanted to know what was on them.
+ */
+function renderChooser() {
+  const box = $('chooser');
+  if (!machine) { box.innerHTML = ''; return; }
+  box.innerHTML = machine.kind === 'desktop' ? desktopScreen(machine) : ttyScreen(machine);
+  for (const el of box.querySelectorAll('[data-i]')) {
+    el.onclick = () => { switchAway('program'); pick(machine, +el.dataset.i); };
+  }
+}
+
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const line = (html, cls = '') => `<div${cls ? ` class="${cls}"` : ''}>${html}</div>`;
+
+function ttyScreen(m) {
+  const dos = m.kind === 'dos';
+  const rows = m.programs.map((x, i) => {
+    const cells = dos
+      ? `<td>${esc(x.file)}</td><td>${esc(x.ext || '')}</td>`
+      : `<td class="faint">-rwxr-xr-x</td><td>${esc(x.file)}</td>`;
+    return `<tr data-i="${x.present ? i : ''}" class="${x.present ? '' : 'absent'}" ` +
+      `aria-selected="${i === chosen}">${cells}` +
+      `<td>${x.units ? `${x.units} units` : ''}</td>` +
+      `<td class="faint">${esc(x.date || '')}</td>` +
+      `<td class="faint">${x.present ? '' : 'sources not cloned'}</td></tr>`;
+  }).join('');
+
+  const p = m.programs[chosen];
+  const prompt = `<span class="bright">${esc(m.prompt)}</span>`;
+  let out = '';
+  if (dos) {
+    out += line('<span class="bright">PRISM DOS session</span>  ·  640K conventional, 512M extended', 'faint');
+    out += line('&nbsp;') + line(`${prompt} ${esc(m.listing)}`) + line('&nbsp;');
+    out += line(` Volume in drive C is ${esc(m.volume || 'PRISM')}<br> Directory of C:\\`, 'faint');
+    out += line('&nbsp;');
+  } else {
+    out += line(`Last login: on ttyp0`, 'faint') + line('&nbsp;');
+    out += line(`${prompt} ${esc(m.listing)}`);
+  }
+  out += `<table>${rows}</table>`;
+  if (dos) {
+    out += line(`        ${m.programs.length} File(s)`, 'faint') + line('&nbsp;');
+  }
+  out += line(`${prompt} <span class="lit">${esc(commandLine())}</span><span class="caret"></span>`);
+
+  const cls = dos ? 'dos' : m.id === 'sun' ? 'sunos' : 'unix';
+  const tty = `<div class="tty ${cls}">${out}</div>`;
+  // A Sun sat inside an OpenWindows frame; nothing else did, and the frame is most of what it looked
+  // like. `frame` in machines.json is what its title bar said.
+  return m.frame
+    ? `<div class="sunframe"><div class="suntitle"><span>${esc(m.frame)}</span>` +
+      `<span>${esc(m.host || m.name)}</span></div>${tty}</div>`
+    : tty;
+}
+
+function desktopScreen(m) {
+  const icons = m.programs.map((x, i) =>
+    `<button class="shortcut ${x.present ? '' : 'absent'}" aria-selected="${i === chosen}" ` +
+    `data-i="${x.present ? i : ''}">` +
+    /* The program's OWN .ico, straight out of its source tree: a browser decodes the format
+       natively, so there is no conversion step and no build artefact to keep in step with it. */
+    (x.icon ? `<img src="/${x.icon}" alt="">` : '<img alt="">') +
+    `<span>${esc(x.name)}</span></button>`).join('');
+  const task = worker ? esc(m.programs[chosen]?.name ?? '') : '';
+  return `<div class="desktop"><div class="icons">${icons}</div>` +
+    `<div class="taskbar"><span class="start"><span class="flag"></span>Start</span>` +
+    `<span class="task">${task}</span><span class="tray">${esc(m.spec || '')}</span></div></div>`;
+}
+
+/** What the prompt shows: the command this machine would type to start what is selected. */
+function commandLine() {
+  const x = entry();
+  if (!x) return '';
+  const name = machine.kind === 'dos' ? x.file : `./${x.file}`;
+  return `${name}${$('args').value.trim() ? ` ${$('args').value.trim()}` : ''}`;
+}
+
+/**
+ * The BUILD's arguments under the PROGRAM's, without saying anything twice.
+ *
+ * Both are real and neither subsumes the other: `quake:dos` needs `-nosound` and the Quake
+ * descriptor suggests `+host_framerate 0.0138`. But `putty:tel` names `-telnet localhost` and so
+ * does its descriptor, and concatenating gave `-telnet localhost -telnet localhost` -- which PuTTY
+ * parsed, argued with, and exited over. A flag already present in the program's own arguments is
+ * dropped from the variant's, along with the value that follows it.
+ */
+function mergeArgs(variantArgs, programArgs) {
+  const mine = tokenise(programArgs || '');
+  const flags = new Set(mine.filter(t => /^[-+]/.test(t)));
+  const out = [];
+  const theirs = tokenise(variantArgs || '');
+  for (let i = 0; i < theirs.length; i++) {
+    if (!/^[-+]/.test(theirs[i])) { out.push(theirs[i]); continue; }
+    if (!flags.has(theirs[i])) { out.push(theirs[i]); continue; }
+    while (i + 1 < theirs.length && !/^[-+]/.test(theirs[i + 1])) i++;   // and its value
+  }
+  return [...out, ...mine].join(' ').trim();
 }
 
 function describe() {
-  const p = current();
+  const x = entry(), p = current();
   if (!p) return;
-  /*
-   * The platform picker, shown only when there is a choice to make. One variant is not a choice, and
-   * a program with no target at all describes its own build and has no variants to offer.
-   */
-  const host = $('host');
-  const variants = targetVariants[baseTarget(p)] ?? [];
-  host.innerHTML = '';
-  host.hidden = variants.length < 2;
-  if (!host.hidden) {
-    for (const v of variants) {
-      const o = document.createElement('option');
-      o.value = v.name; o.textContent = v.name;
-      host.append(o);
-    }
-    const asked = (p.target ?? '').split(':')[1];
-    if (asked && variants.some(v => v.name === asked)) host.value = asked;
-  }
   $('subtitle').textContent = p.subtitle || '';
-  $('args').value = p.args || '';
+  /*
+   * The arguments a BUILD requires, from the variant, under the ones the program suggests. Quake's
+   * DOS build will not start without `-nosound` and its SUN build will not start without
+   * `-zone 512` -- vid_sunx.c takes its framebuffer out of the zone, which is 49,152 bytes by
+   * default against a 64,000-byte frame. Neither is a preference, so neither should be something
+   * you have to know to type.
+   */
+  $('args').value = mergeArgs(x.variantArgs, p.args);
   $('args').placeholder = p.argsHint || 'arguments passed to main()';
+  $('selected').textContent = `${x.name}` +
+    (x.units ? ` · ${x.units} units` : '') +
+    (x.target ? ` · ${x.target}` : '') +
+    (x.present ? '' : ' · sources not cloned');
   $('dataRow').style.display = p.needsData ? '' : 'none';
   $('controls').innerHTML = (p.controls || [])
-    .map(([k, what]) => `<kbd>${k}</kbd> ${what}`).join(' · ');
+    .map(([k, what]) => `<kbd>${esc(k)}</kbd> ${esc(what)}`).join(' · ');
   $('controls').style.display = (p.controls || []).length ? '' : 'none';
+  $('run').disabled = !!worker || !x.present;
 }
+
+/* Retyping the command line as the arguments change: the prompt is the one place both are visible. */
+$('args').oninput = () => { if (!worker) renderChooser(); };
+
 /*
- * Changing the program or the platform STOPS what is running.
+ * Changing the machine or the program STOPS what is running.
  *
- * Otherwise the picker stops describing what is on screen: pick `x11` while the `null` build is
- * still going and the selector says one thing, the canvas shows another, and the next Run competes
+ * Otherwise the shelf stops describing what is on screen: pick the X11 build while the DOS one is
+ * still going and the listing says one thing, the canvas shows another, and the next Run competes
  * with a worker that never went away. The last frame is cleared too -- a stale picture from the
  * previous platform is exactly the kind of evidence that gets read as a result.
  */
@@ -198,22 +373,10 @@ function clearScreen() {
   // window is exactly the confusion this whole frame caused when it was hard-coded.
   $('wincaption').textContent = '';
   $('winframe').classList.remove('windowed');
+  $('stage').classList.remove('running');
   cx.fillStyle = '#000';
   cx.fillRect(0, 0, canvas.width, canvas.height);
 }
-
-$('program').onchange = () => { switchAway('program'); clearScreen(); describe(); };
-$('host').onchange = () => {
-  switchAway('platform'); clearScreen();
-  /*
-   * A platform may need arguments of its own -- Quake's DOS build will not start without `-mem 16`,
-   * because it asks DPMI how much memory there is and does not like the answer. The variant says so
-   * in targets/*.json, and the field is filled in so the person can see and change it.
-   */
-  const v = (targetVariants[baseTarget(current())] ?? []).find(x => x.name === $('host').value);
-  if (v?.args) $('args').value = v.args;
-  log(`platform: ${$('host').value}${v?.args ? ` (args: ${v.args})` : ''}`);
-};
 
 // ---------------------------------------------------------------- the shell's own log
 function log(line, kind = 'info') {
@@ -431,8 +594,10 @@ $('run').onclick = () => {
   Atomics.store(views.ctrl, SLOT.SPEED, +$('speed').value);
   Atomics.store(views.ctrl, SLOT.TEXTMODE, 1);
 
-  // argv[0] is the program's own name, as a C program is entitled to expect.
-  const argv = [$('program').value, ...tokenise($('args').value)];
+  // argv[0] is the program's own name, as a C program is entitled to expect -- and the name is the
+  // one the MACHINE would have used: QUAKE.EXE on DOS, ./quake on a Unix box. Some programs read it
+  // (Quake takes its basedir from argv[0]'s directory), so it is not decoration.
+  const argv = [entry().file, ...tokenise($('args').value)];
   publishQuery();
 
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -490,6 +655,11 @@ $('run').onclick = () => {
                    get data() { return dataFiles; } };
 
   $('run').disabled = true; $('stopBtn').disabled = false;
+  // The screen belongs to the program from here: the machine's own chooser gives way to the canvas,
+  // and the taskbar (on a machine that has one) gets a task in it.
+  $('stage').classList.add('running');
+  $('vmState').textContent = 'running'; $('vmState').className = 'pill on';
+  renderChooser();
   lastFrame = 0; lastStatAt = performance.now(); palGen = -1;
   requestAnimationFrame(paint);
   clearInterval(statTimer);
@@ -552,7 +722,10 @@ function stop(quiet) {
   clearInterval(statTimer); statTimer = 0;
   stopAudio();
   if (!quiet) log('stopped');
-  $('run').disabled = false; $('stopBtn').disabled = true;
+  $('run').disabled = !entry()?.present; $('stopBtn').disabled = true;
+  $('stage').classList.remove('running');
+  $('vmState').textContent = 'powered on'; $('vmState').className = 'pill';
+  renderChooser();
   guest = null;
 }
 
@@ -677,20 +850,31 @@ function stats() {
   lastFrame = frame; lastStatAt = now;
   if (state === STATE.EXITED || state === STATE.ERROR) {
     $('run').disabled = false; $('stopBtn').disabled = true;
+    // The last frame stays on the screen -- it is the result -- but the machine is no longer running
+    // anything, and a pill that still said RUNNING over a finished program was the shell's own lie.
+    $('vmState').textContent = state === STATE.ERROR ? 'faulted' : 'exited';
+    $('vmState').className = 'pill';
     clearInterval(statTimer); statTimer = 0;
   }
 }
 
 /**
- * Query parameters, the way MIRAGE takes them: ?program=…&args=…&speed=…&run=1
+ * Query parameters, the way MIRAGE takes them: ?machine=…&program=…&args=…&speed=…&run=1
  *
  * The point is not convenience, it is that a run becomes a LINK — reproducible, and reportable. "It
- * is too fast" and "?program=mame-0.1&args=pengo&speed=50" are not the same bug report.
+ * is too fast" and "?machine=dos&program=mame-0.4&args=pengo&speed=50" are not the same bug report.
+ * The MACHINE is in it because the same program on two machines is two different builds.
  */
 function applyQuery() {
   const q = new URLSearchParams(location.search);
   const want = q.get('program') || q.get('p');
-  if (want && programs[want]) { $('program').value = want; describe(); }
+  const wantMachine = q.get('machine') || q.get('m');
+  const m = machines.find(x => x.id === wantMachine)
+    ?? (want ? machines.find(x => x.programs.some(e => e.program === want)) : null);
+  if (m) {
+    const i = Math.max(0, m.programs.findIndex(e => e.program === want));
+    pick(m, i);
+  }
   const args = q.get('args');
   if (args !== null) $('args').value = args;
   const speed = q.get('speed');
@@ -701,7 +885,8 @@ function applyQuery() {
 /** Keep the address bar describing what is actually running, so a reload repeats it. */
 function publishQuery() {
   const q = new URLSearchParams();
-  q.set('program', $('program').value);
+  q.set('machine', machine.id);
+  q.set('program', entry().program);
   if ($('args').value.trim()) q.set('args', $('args').value.trim());
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
   history.replaceState(null, '', `${location.pathname}?${q}`);
@@ -709,4 +894,4 @@ function publishQuery() {
 
 discover()
   .then(applyQuery)
-  .catch(e => log(`could not list web/programs: ${e.message}`, 'error'));
+  .catch(e => log(`could not read the shelf (web/machines.json): ${e.message}`, 'error'));

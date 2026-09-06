@@ -198,7 +198,14 @@ async function start({ program, control, data, argv, pipeSab = null }) {
   const missing = new Set();
   function resolve(name, angled, fromFile) {
     const tryPath = (p) => {
-      const key = p.replace(/^\.\//, '').replace(/[^/]+\/\.\.\//g, '').toLowerCase();
+      /*
+       * `./x`, `a/./x` and `a/b/../x` are all names for one file, and the tree is keyed by the name
+       * the server listed. The embedded `/./` was NOT collapsed here, only a leading one, so
+       * `#include "./env.h"` from a unit in a subdirectory looked for `libbenly/src/./env.h`, found
+       * nothing, and was stubbed empty -- the parse then died on a type that header declares.
+       */
+      const key = p.replace(/^\.\//, '').replace(/\/\.\//g, '/')
+        .replace(/[^/]+\/\.\.\//g, '').toLowerCase();
       return tree.has(key) ? { path: key, text: tree.get(key) } : null;
     };
     if (!angled && fromFile) {
@@ -663,6 +670,36 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     prog.F.VID_Update = w;
     prog.mod.bindFunc('VID_Update', w);
 
+  } else if (platform === 'console') {
+    /*
+     * NO PLATFORM AT ALL: libc, a text screen, and the keyboard as stdin.
+     *
+     * Lua and clangsay ask for nothing else -- no display, no devices, no clock -- and that is
+     * exactly why they are on the shelf: they are the case where PRISM's claim is only about C. The
+     * text console and the real clock are installed for every program further down, so this branch
+     * has one line in it, and the fact that it does is the point.
+     */
+    /*
+     * ECHO, which is the TERMINAL's job and not the program's. Lua prints a prompt and reads a line;
+     * it never prints what you type, because on a real machine the tty driver did. The text screen
+     * here is that terminal, so this is the layer that owes you the character back -- and without it
+     * you type into a black rectangle and only find out what you wrote when the answer comes.
+     */
+    installStdio(prog.M, {
+      files,
+      readChar: () => {
+        const c = keyboard.read();
+        if (c > 0) prog.M.write(c === 13 ? '\r\n' : String.fromCharCode(c));
+        /*
+         * And Enter is a NEWLINE on this side of the wire. The keyboard reports 13, because that is
+         * what a PC's BIOS buffer holds and what every DOS program in the shelf expects; a Unix
+         * program reads a tty in canonical mode and gets 10. fgets looks for 10 and nothing else, so
+         * without this Lua's REPL reads a line that never ends and answers nothing at all.
+         */
+        return c === 13 ? 10 : c;
+      },
+    });
+
   } else if (platform !== 'allegro') {
     /*
      * An unknown platform, said out loud.
@@ -674,7 +711,7 @@ async function start({ program, control, data, argv, pipeSab = null }) {
      * from a program that was handed the wrong world.
      */
     throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
-      `it presents x11, mgl, gdi, dos, watcom and allegro. This build runs in Node: ` +
+      `it presents x11, mgl, gdi, dos, watcom, console and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*

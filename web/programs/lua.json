@@ -1,0 +1,15 @@
+{
+  "title": "Lua 5.4",
+  "subtitle": "PUC-Rio, 2023 · the reference interpreter, ANSI C and nothing else",
+  "target": "lua",
+  "host": "console",
+  "args": "",
+  "argsHint": "no arguments starts the REPL and the keyboard is its stdin: type `print(_VERSION)` and press Enter. A script name runs that file instead — but only if you loaded it as a data file first.",
+  "fps": 30,
+  "needsData": null,
+  "controls": [
+    ["keyboard", "stdin"],
+    ["Enter", "run the line"]
+  ],
+  "_host": "console: libc and a text screen, no display and no devices. Lua asks for nothing else -- which is the point of having it here, as the one program in the shelf that is pure C89 portability rather than a platform layer."
+}

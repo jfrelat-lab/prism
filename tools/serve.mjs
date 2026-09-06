@@ -39,6 +39,10 @@ const TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.c': 'text/plain; charset=utf-8',
   '.h': 'text/plain; charset=utf-8',
+  /* A program's own icon, from its own source tree: the Windows shelf points an <img> straight at
+     it, and a browser decodes ICO natively. Without the type it arrives as application/octet-stream
+     and Chrome will not decode it -- the desktop then draws four empty labels and looks broken. */
+  '.ico': 'image/x-icon',
 };
 
 /** Cross-origin isolation, plus no-store: a cached module during development is a debugging trap. */
