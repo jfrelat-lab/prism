@@ -43,6 +43,23 @@ export function up() {
   ready = true;
 }
 
+/**
+ * Compile and run something with OPEN WATCOM inside the oracle.
+ *
+ * A second compiler, and the only one that answers for the toolchain three of the corpus programs
+ * were actually built with -- Heretic, Hexen and OpenDUNE are Watcom/DOS4GW programs. `target` is
+ * 'linux' (32-bit, hosted, so the result RUNS here) or 'dos16' / 'dos32' (cross-compiled; the
+ * result needs an emulator to run, but its LAYOUT can be read without one).
+ *
+ * Watcom's headers live in two trees and picking the wrong one is a confusing failure: `lh` is the
+ * Linux set, `h` is everything else. E1091 "unknown platform" is what a 16-bit compile does when it
+ * finds `lh`.
+ */
+export function watcom(cmd, { target = 'linux' } = {}) {
+  const inc = target === 'linux' ? '/opt/watcom/lh' : '/opt/watcom/h';
+  return sh(`export INCLUDE=${inc}; ${cmd}`);
+}
+
 /** Run a shell command inside the oracle. Returns {code, stdout, stderr} — never throws on a
  *  non-zero exit, because a compile failure is data a gate wants to see, not an accident. */
 export function sh(cmd, { timeout = 120000 } = {}) {
