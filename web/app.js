@@ -195,6 +195,7 @@ let machines = [];        // web/machines.json, in order
 let targetInfo = {};      // target name -> { present, variants }
 let machine = null;       // the machine we are sitting at
 let chosen = 0;           // which of its programs is selected
+let argsFor = null;       // the entry the argument field's contents belong to
 
 async function discover() {
   const cfg = await (await fetch('./machines.json')).json();
@@ -560,7 +561,16 @@ function describe() {
    * default against a 64,000-byte frame. Neither is a preference, so neither should be something
    * you have to know to type.
    */
-  $('args').value = mergeArgs(x.variantArgs, p.args);
+  /*
+   * The arguments field belongs to whoever last set it FOR THIS PROGRAM. describe() runs again when
+   * the unit counts arrive from the server -- asynchronously, a beat after the page loads -- and it
+   * used to refill the field unconditionally, which quietly threw away what `?args=` had put there
+   * and what somebody had typed in the meantime.
+   */
+  if (argsFor !== x) {
+    argsFor = x;
+    $('args').value = mergeArgs(x.variantArgs, p.args);
+  }
   $('args').placeholder = p.argsHint || 'arguments passed to main()';
   $('controls').innerHTML = (p.controls || [])
     .map(([k, what]) => `<kbd>${esc(k)}</kbd> ${esc(what)}`).join(' · ');

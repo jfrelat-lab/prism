@@ -465,6 +465,16 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     if (!at.surface || !key) throw new Error('this build has no MGL/Win32 layer compiled in');
 
     /*
+     * The program's OWN frame counter, so the status line can answer "is it running?".
+     *
+     * mgl.c increments prism_mgl_frames on every blit. Without this the page had no counter for this
+     * host at all and printed `running · 320x240` for a program that was flying and for one that had
+     * stopped alike -- which is precisely the question somebody asks when a mode change goes wrong.
+     */
+    const framesAt = sym('prism_mgl_frames');
+    if (framesAt) Atomics.store(ctrl, SLOT.FRAME_ADDR, framesAt);
+
+    /*
      * The window, published from the program and driven back into it. src/env/win32.c keeps the
      * rectangle because the PROGRAM moves and resizes it; the page draws a frame around the picture
      * and, when somebody drags that frame, writes the new position here for the guest to apply.
@@ -519,9 +529,22 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     };
 
     const dv = prog.mod.dv;
-    const blt = prog.F.MGL_bitBltCoord;
-    const wrapped = function (...a) {
-      const r = blt.apply(this, a);
+    /*
+     * THE FRAME BOUNDARY IS BOTH BLITS, and missing the second one looked exactly like a freeze.
+     *
+     * FlipScreen (vid_win.c) presents through `MGL_bitBltCoord` normally and through
+     * `MGL_stretchBltCoord` when `vid_stretched` is set -- which is what Quake's 2x windowed modes
+     * are. Wrapping only the first meant that the moment somebody chose one of those modes from the
+     * video menu, this host stopped publishing the surface, stopped delivering keystrokes and
+     * stopped pacing, while the game went on rendering at full speed into a buffer nobody read. The
+     * picture stood still and the keyboard died: a frozen program by every visible sign, and a
+     * perfectly healthy one underneath.
+     *
+     * The page still reads the SOURCE surface, so a stretched mode arrives as the 320x240 the game
+     * actually drew and the canvas scales it -- which is better than the doubled copy, not worse.
+     */
+    const wrapped = function (inner, ...a) {
+      const r = inner.apply(this, a);
       const surface = dv.getInt32(at.surface, true);
       if (surface) {
         Atomics.store(ctrl, SLOT.WIDTH, dv.getInt32(at.width, true));
@@ -542,8 +565,13 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       pace();
       return r;
     };
-    prog.F.MGL_bitBltCoord = wrapped;
-    prog.mod.bindFunc('MGL_bitBltCoord', wrapped);
+    for (const name of ['MGL_bitBltCoord', 'MGL_stretchBltCoord']) {
+      const inner = prog.F[name];
+      if (!inner) continue;
+      const w = function (...a) { return wrapped.call(this, inner, ...a); };
+      prog.F[name] = w;
+      prog.mod.bindFunc(name, w);
+    }
 
   } else if (platform === 'gdi' || platform === 'win32') {
     /*

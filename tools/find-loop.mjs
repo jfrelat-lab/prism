@@ -6,7 +6,12 @@
 // back-edge decrements M.spBudget and calls M.sp_(id) when it runs out, and mod.safepoints[id] names
 // the FUNCTION the loop is in. That works no matter what the loop calls, because it is inside it.
 //
-//   node tools/find-loop.mjs <target[:variant]> [samples] [every] [-- program args]
+//   node tools/find-loop.mjs <target[:variant]> [samples] [every] [--data=<dir>] [program args...]
+//
+// --data matters more than it looks: a game that cannot find its own files never reaches the loop
+// you are trying to name. Quake stops at "couldn't load gfx.wad" and every sample lands in its
+// error path, which is a true answer to the wrong question.
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
@@ -15,12 +20,30 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const spec = process.argv[2];
 if (!spec) { console.error('need a target, e.g. targets/putty.json:tel'); process.exit(2); }
 const [file, variant = null] = spec.split(':');
-const SAMPLES = +(process.argv[3] ?? 40);
-const EVERY = +(process.argv[4] ?? 2000000);
+const rest = process.argv.slice(3).filter(a => !a.startsWith('--data='));
+const SAMPLES = +(rest[0] ?? 40);
+const EVERY = +(rest[1] ?? 2000000);
+const args = rest.slice(2).filter(a => a !== '--');
+
+const dataArg = process.argv.find(a => a.startsWith('--data='))?.slice(7);
+const files = {};
+if (dataArg) {
+  const walk = (d, prefix = '') => {
+    for (const e of readdirSync(d)) {
+      const full = join(d, e);
+      if (statSync(full).isDirectory()) walk(full, `${prefix}${e}/`);
+      else files[`${prefix}${e}`] = new Uint8Array(readFileSync(full));
+    }
+  };
+  walk(dataArg);
+}
 
 const target = loadTarget(join(ROOT, file), variant);
 target.compile = { ...(target.compile ?? {}), safepoints: true };
-const { program } = buildTarget(target, { root: ROOT });
+const { program } = buildTarget(target, {
+  root: ROOT,
+  envExtra: { stdio: { files }, pit: { micros: () => performance.now() * 1000 } },
+});
 
 const M = program.M;
 const names = program.mod.safepoints;
@@ -34,7 +57,7 @@ M.sp_ = (id) => {
 };
 
 let err = null;
-try { program.run([target.name, ...process.argv.slice(5)]); }
+try { program.run([target.name, ...args]); }
 catch (e) { if (e.message !== '__sampled') err = e; }
 
 const by = new Map();

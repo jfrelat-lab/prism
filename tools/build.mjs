@@ -267,16 +267,25 @@ const tapKeys = () => {
 };
 
 if ((frameCap || pngPath || keyScript.length) && mgl) {
-  const inner = program.F.MGL_bitBltCoord;
-  const wrapped = function (...a) {
-    const r = inner.apply(this, a);
-    frames++;
-    tapKeys();
-    if (frameCap && frames >= frameCap) throw new Error('__frames_done');
-    return r;
-  };
-  program.F.MGL_bitBltCoord = wrapped;
-  program.mod.bindFunc('MGL_bitBltCoord', wrapped);
+  /*
+   * BOTH blits, because FlipScreen (vid_win.c) presents through MGL_stretchBltCoord in Quake's 2x
+   * windowed modes and through MGL_bitBltCoord in every other one. Counting only the first made a
+   * stretched mode look like a hang: the frame counter stopped, --frames never arrived, and the
+   * program was rendering the whole time.
+   */
+  for (const name of ['MGL_bitBltCoord', 'MGL_stretchBltCoord']) {
+    const inner = program.F[name];
+    if (!inner) continue;
+    const wrapped = function (...a) {
+      const r = inner.apply(this, a);
+      frames++;
+      tapKeys();
+      if (frameCap && frames >= frameCap) throw new Error('__frames_done');
+      return r;
+    };
+    program.F[name] = wrapped;
+    program.mod.bindFunc(name, wrapped);
+  }
 }
 
 try {
