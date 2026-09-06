@@ -249,8 +249,48 @@ installStdio(program.M, {
   files: roms,
   readChar: () => (stdinAt < cannedStdin.length ? cannedStdin.charCodeAt(stdinAt++) : -1),
 });
+/*
+ * --save=<name>:<path>: write a file the PROGRAM wrote back out to the host.
+ *
+ * MAME's own `-log` option opens error.log and its drivers write to it -- the Bally blitter in
+ * src/wow/vidhrdw.c logs every blit with its mode -- so the emulator can be asked what it is doing
+ * in its own words, with no instrumentation on our side at all. Without this the file existed only
+ * in the guest's filesystem and could not be read.
+ */
+const saves = process.argv.filter(a => a.startsWith('--save='))
+  .map(a => a.slice(7).split(':'));
 installPorts(program.M);
-const allegro = installAllegro(program.M, { stopAfterFrames: frames });
+/*
+ * --keys=<script>: hold keys at chosen frames, so a game can be PLAYED headlessly.
+ *
+ * Every other harness here has one -- Quake's, Doom's -- and MAME's did not, which meant every
+ * headless capture of every driver was its attract mode. An attract mode exercises the tilemap and
+ * nothing else: a report that "shooting looks wrong" cannot be reproduced, let alone compared
+ * against a native build, without a way to press the fire button.
+ *
+ * The script is frames and OSD key names: `--keys=240:3,300:1,400-460:ctrl,400-460:right`.
+ * A single frame number means "hold for 8 frames from there", which is long enough for MAME's own
+ * edge detection to see it and short enough not to jam the input.
+ */
+const KEY_SCAN = {                       // OSD_KEY_* values, from mame's src/msdos/osdepend.h order
+  '1': 2, '2': 3, '3': 4, '4': 5, '5': 6, esc: 1, tab: 15, enter: 28, space: 57,
+  ctrl: 29, alt: 56, up: 72, down: 80, left: 75, right: 77, p: 25, f3: 61,
+};
+const keyScript = [];
+for (const part of (process.argv.find(a => a.startsWith('--keys='))?.slice(7) ?? '')
+    .split(',').filter(Boolean)) {
+  const [when, name] = part.split(':');
+  const [a, b] = when.split('-').map(Number);
+  const scan = KEY_SCAN[String(name).toLowerCase()];
+  if (scan === undefined) { console.error(`unknown key '${name}'`); process.exit(2); }
+  keyScript.push({ from: a, to: Number.isFinite(b) ? b : a + 8, scan });
+}
+const allegro = installAllegro(program.M, {
+  stopAfterFrames: frames,
+  keys: (k) => (keyScript.some(s => s.scan === k && osdFrames() >= s.from && osdFrames() <= s.to) ? 1 : 0),
+});
+/* The frame counter lives in the state the call above returns, so it is read through a function. */
+function osdFrames() { return allegro?.state?.frames ?? 0; }
 const osd = allegro.state;
 // The library's data lives in the linked image; its addresses are only known now.
 allegro.bindGlobals(program);
@@ -293,6 +333,12 @@ function writeWav(path, samples, rate) {
 }
 
 function report() {
+    for (const [name, path] of saves) {
+      const bytes = program.M.files?.find?.(name)?.bytes ?? program.M.files?.store?.get?.(name.toLowerCase());
+      if (!bytes) { console.log(`--save: the program never wrote ${name}`); continue; }
+      writeFileSync(path, Buffer.from(bytes));
+      console.log(`wrote ${path} (${bytes.length.toLocaleString('en')} bytes from the guest's ${name})`);
+    }
     console.log(`display ${osd.width}x${osd.height} · pens ${osd.pens} · ` +
       `frames ${osd.frames} · samples ${osd.samples.length}`);
     const au = program.M.audio;

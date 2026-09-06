@@ -61,7 +61,15 @@ fetch('/assets/vga-rom-8x16.bin')
   .then(b => { font = new Uint8Array(b); })
   .catch(() => log('could not load assets/vga-rom-8x16.bin — text mode will be blank', 'error'));
 
-function paintText() {
+/**
+ * An 80x25 character+attribute buffer, drawn with the ROM font.
+ *
+ * TWO callers, and that is the whole point of the parameter: the GUEST's screen at 0xB8000 while a
+ * program is running, and the SHELL's own screen before one is. A DOS box did not have a picker
+ * drawn over its terminal -- it had the terminal, and you typed at it -- so the machine's prompt and
+ * the program that replaces it are the same 640x400 surface, scaled the same way, in the same place.
+ */
+function paintTextFrom(mem, base, curCol, curRow) {
   const W = TEXT_COLS * CELL_W, H = TEXT_ROWS * CELL_H;
   if (canvas.width !== W || canvas.height !== H) {
     canvas.width = W; canvas.height = H;
@@ -71,13 +79,13 @@ function paintText() {
     textImage = cx.createImageData(W, H);
     textU32 = new Uint32Array(textImage.data.buffer);
   }
-  if (!font || !guest) { cx.fillStyle = '#000'; cx.fillRect(0, 0, W, H); return; }
+  if (!font) { cx.fillStyle = '#000'; cx.fillRect(0, 0, W, H); return; }
 
   blink++;
   for (let row = 0; row < TEXT_ROWS; row++) {
     for (let col = 0; col < TEXT_COLS; col++) {
-      const at = VRAM_TEXT + (row * TEXT_COLS + col) * 2;
-      const ch = guest[at], attr = guest[at + 1];
+      const at = base + (row * TEXT_COLS + col) * 2;
+      const ch = mem[at], attr = mem[at + 1];
       const bg = TEXT_PALETTE[(attr >> 4) & 0x07];
       // Bit 7 of the attribute is blink in text mode, which is what DOS programs use for emphasis.
       const hidden = (attr & 0x80) && !((blink >> 4) & 1);
@@ -90,17 +98,85 @@ function paintText() {
       }
     }
   }
-  // The cursor, from the BIOS data area the console maintains: an underline on the bottom two rows.
-  const ccol = guest[0x450], crow = guest[0x451];
-  if ((blink >> 4) & 1 && crow < TEXT_ROWS && ccol < TEXT_COLS) {
-    const fg = TEXT_PALETTE[guest[VRAM_TEXT + (crow * TEXT_COLS + ccol) * 2 + 1] & 0x0f];
+  // The cursor: an underline on the bottom two rows, blinking, as a VGA text cursor does.
+  if ((blink >> 4) & 1 && curRow < TEXT_ROWS && curCol < TEXT_COLS) {
+    const fg = TEXT_PALETTE[mem[base + (curRow * TEXT_COLS + curCol) * 2 + 1] & 0x0f];
     for (let y = CELL_H - 3; y < CELL_H - 1; y++) {
-      let o = (crow * CELL_H + y) * W + ccol * CELL_W;
+      let o = (curRow * CELL_H + y) * W + curCol * CELL_W;
       for (let x = 0; x < CELL_W; x++) textU32[o++] = fg;
     }
   }
   cx.putImageData(textImage, 0, 0);
 }
+
+/** The guest's text screen, and the BIOS data area's cursor, which src/env/console.js maintains. */
+function paintGuestText() {
+  if (!guest) { cx.fillStyle = '#000'; cx.fillRect(0, 0, canvas.width, canvas.height); return; }
+  paintTextFrom(guest, VRAM_TEXT, guest[0x450], guest[0x451]);
+}
+
+// ---------------------------------------------------------------- the shell's own terminal
+//
+// A REAL prompt, not a picture of one. The listing is printed, the cursor blinks after it, and what
+// you type is what runs -- `HEXEN -devparm`, `./quake -width 640`, `dir`, `cls`. It exists because
+// the alternative was a menu wearing a terminal's colours: you clicked a row and then reached for a
+// Run button somewhere else on the page, which is not how any of these machines worked and not how
+// anybody expects a prompt to behave.
+//
+// Same buffer shape as the guest's, so the same renderer draws both and the picture never jumps.
+const shellVram = new Uint8Array(TEXT_COLS * TEXT_ROWS * 2);
+let shellCol = 0, shellRow = 0, shellAttr = 0x07;
+let cmdline = '';                 // what has been typed at the prompt, not yet entered
+let promptCol = 0, promptRow = 0; // where the typed text begins, so editing can redraw just that
+// NOT `history`: that is the browser's, and shadowing it made publishQuery's replaceState throw
+// the moment a program was started from the prompt -- the run died before it began, silently.
+let cmdHistory = [], historyAt = 0;
+
+/*
+ * A TOP MARGIN, for a machine whose console lived inside a window. OpenWindows drew a frame around
+ * everything on a Sun, and it is most of what that screen looked like -- so row 0 is its title bar,
+ * in reverse video, and the terminal starts underneath and scrolls underneath.
+ */
+let termTop = 0;
+
+function termClear() {
+  for (let i = 0; i < shellVram.length; i += 2) { shellVram[i] = 32; shellVram[i + 1] = shellAttr; }
+  shellCol = 0; shellRow = termTop;
+  if (machine?.frame) {
+    const title = ` ${machine.frame}`;
+    const host = `${machine.host || machine.name} `;
+    const bar = (title + ' '.repeat(Math.max(1, TEXT_COLS - title.length - host.length)) + host)
+      .slice(0, TEXT_COLS);
+    for (let c = 0; c < TEXT_COLS; c++) {
+      shellVram[c * 2] = bar.charCodeAt(c) & 0xff;
+      shellVram[c * 2 + 1] = 0x70;              // black on light grey: a title bar with focus
+    }
+  }
+}
+
+function termScroll() {
+  const from = termTop * TEXT_COLS * 2;
+  shellVram.copyWithin(from, from + TEXT_COLS * 2);
+  const last = (TEXT_ROWS - 1) * TEXT_COLS * 2;
+  for (let i = last; i < shellVram.length; i += 2) { shellVram[i] = 32; shellVram[i + 1] = shellAttr; }
+  shellRow = TEXT_ROWS - 1;
+}
+
+function termChar(code, attr = shellAttr) {
+  if (code === 10) { shellCol = 0; shellRow++; }
+  else {
+    const at = (shellRow * TEXT_COLS + shellCol) * 2;
+    shellVram[at] = code; shellVram[at + 1] = attr;
+    if (++shellCol >= TEXT_COLS) { shellCol = 0; shellRow++; }
+  }
+  if (shellRow >= TEXT_ROWS) termScroll();
+}
+
+/** CP437 is what the font holds, so a character outside it is written as the glyph it is not. */
+function termWrite(text, attr = shellAttr) {
+  for (const ch of String(text)) termChar(ch === '\n' ? 10 : (ch.charCodeAt(0) & 0xff), attr);
+}
+const termLine = (text = '', attr = shellAttr) => { termWrite(text, attr); termChar(10); };
 
 // ---------------------------------------------------------------- the shelf
 //
@@ -224,67 +300,197 @@ function pick(m, i) {
 }
 
 /*
- * THE MACHINE'S OWN SCREEN. Four idioms for one list: a DIR listing, an `ls -l`, the same inside an
- * OpenWindows frame, and a desktop of icons. What differs is not decoration -- it is what these
- * machines actually put in front of you when you wanted to know what was on them.
+ * THE MACHINE'S OWN SCREEN. Two idioms, because there were two: a terminal you TYPE AT (DOS's
+ * prompt, a Unix shell, the same shell inside an OpenWindows frame) and a desktop you point at.
+ *
+ * The terminal is drawn on the canvas, in the same 80x25 text mode the running program will use, so
+ * the surface never changes underneath you. The desktop is DOM, because it is a GUI and drawing
+ * one glyph at a time would be pretending a Windows desktop was a text screen.
  */
 function renderChooser() {
   const box = $('chooser');
   if (!machine) { box.innerHTML = ''; return; }
-  box.innerHTML = machine.kind === 'desktop' ? desktopScreen(machine) : ttyScreen(machine);
-  for (const el of box.querySelectorAll('[data-i]')) {
-    el.onclick = () => { switchAway('program'); pick(machine, +el.dataset.i); };
+  // The desktop's DOM covers the canvas only while nothing is running.
+  $('stage').classList.toggle('desktop', machine.kind === 'desktop' && !worker);
+  if (machine.kind === 'desktop') {
+    box.hidden = false;
+    box.innerHTML = desktopScreen(machine);
+    for (const el of box.querySelectorAll('[data-i]')) {
+      const i = +el.dataset.i;
+      el.onclick = () => { switchAway('program'); pick(machine, i); };
+      // A desktop LAUNCHES on a double-click. Selecting and launching are two different acts there,
+      // which is exactly why Windows made them two different gestures.
+      el.ondblclick = () => { pick(machine, i); startRun(); };
+    }
+    return;
   }
+  box.hidden = true;
+  box.innerHTML = '';
+  termBanner();
+  termListing();
+  termPrompt();
 }
 
 const esc = (s) => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-const line = (html, cls = '') => `<div${cls ? ` class="${cls}"` : ''}>${html}</div>`;
 
-function ttyScreen(m) {
-  const dos = m.kind === 'dos';
-  const rows = m.programs.map((x, i) => {
-    const cells = dos
-      ? `<td>${esc(x.file)}</td><td>${esc(x.ext || '')}</td>`
-      : `<td class="faint">-rwxr-xr-x</td><td>${esc(x.file)}</td>`;
-    return `<tr data-i="${x.present ? i : ''}" class="${x.present ? '' : 'absent'}" ` +
-      `aria-selected="${i === chosen}">${cells}` +
-      `<td>${x.units ? `${x.units} units` : ''}</td>` +
-      `<td class="faint">${esc(x.date || '')}</td>` +
-      `<td class="faint">${x.present ? '' : 'sources not cloned'}</td></tr>`;
-  }).join('');
+/** Attributes, in the VGA text sense: bright white for what a machine emphasised, grey for the rest. */
+const A_DIM = 0x07, A_BRIGHT = 0x0f, A_LIT = 0x0e, A_ERR = 0x0c;
 
-  const p = m.programs[chosen];
-  const prompt = `<span class="bright">${esc(m.prompt)}</span>`;
-  let out = '';
-  if (dos) {
-    out += line('<span class="bright">PRISM DOS session</span>  ·  640K conventional, 512M extended', 'faint');
-    out += line('&nbsp;') + line(`${prompt} ${esc(m.listing)}`) + line('&nbsp;');
-    out += line(` Volume in drive C is ${esc(m.volume || 'PRISM')}<br> Directory of C:\\`, 'faint');
-    out += line('&nbsp;');
+function termBanner() {
+  shellAttr = A_DIM;
+  termTop = machine.frame ? 1 : 0;
+  termClear();
+  if (machine.kind === 'dos') {
+    termLine('PRISM DOS session   640K conventional, 512M extended', A_BRIGHT);
+    termLine('Type a program name and press Enter.  DIR lists, CLS clears.');
   } else {
-    out += line(`Last login: on ttyp0`, 'faint') + line('&nbsp;');
-    out += line(`${prompt} ${esc(m.listing)}`);
+    termLine(`Last login: on ttyp0`, A_DIM);
+    termLine(`${machine.host || 'prism'}% type a program name and press Enter.  ` +
+             `ls lists, clear clears.`, A_DIM);
   }
-  out += `<table>${rows}</table>`;
-  if (dos) {
-    out += line(`        ${m.programs.length} File(s)`, 'faint') + line('&nbsp;');
-  }
-  out += line(`${prompt} <span class="lit">${esc(commandLine())}</span><span class="caret"></span>`);
+  termChar(10);
+}
 
-  const cls = dos ? 'dos' : m.id === 'sun' ? 'sunos' : 'unix';
-  const tty = `<div class="tty ${cls}">${out}</div>`;
-  // A Sun sat inside an OpenWindows frame; nothing else did, and the frame is most of what it looked
-  // like. `frame` in machines.json is what its title bar said.
-  return m.frame
-    ? `<div class="sunframe"><div class="suntitle"><span>${esc(m.frame)}</span>` +
-      `<span>${esc(m.host || m.name)}</span></div>${tty}</div>`
-    : tty;
+/** What `dir` or `ls -l` answered. The unit counts are the server's, from targets/*.json. */
+function termListing() {
+  const dos = machine.kind === 'dos';
+  termLine(`${machine.prompt} ${machine.listing}`, A_BRIGHT);
+  termChar(10);
+  if (dos) {
+    termLine(` Volume in drive C is ${machine.volume || 'PRISM'}`);
+    termLine(' Directory of C:\\');
+    termChar(10);
+  }
+  machine.programs.forEach((x, i) => {
+    const name = dos ? `${x.file.padEnd(8)} ${(x.ext || '').padEnd(3)}`
+      : `-rwxr-xr-x  ${x.file.padEnd(12)}`;
+    const units = x.units ? `${String(x.units).padStart(3)} units` : '         ';
+    const state = x.present ? '' : '  (sources not cloned)';
+    // The SELECTED row is bright, because the argument field and the line under the screen describe
+    // that one -- and if the screen did not say which, they would look like they described any of them.
+    termLine(`${dos ? '' : ' '}${name}  ${units}  ${(x.date || '').padEnd(12)}${state}`,
+      x.present ? (i === chosen ? A_BRIGHT : A_DIM) : A_DIM);
+  });
+  termChar(10);
+  if (dos) { termLine(`        ${machine.programs.length} File(s)`); termChar(10); }
+}
+
+/** The prompt, and everything typed after it. */
+function termPrompt() {
+  shellAttr = A_DIM;
+  if (shellCol) termChar(10);
+  termWrite(`${machine.prompt} `, A_BRIGHT);
+  promptCol = shellCol; promptRow = shellRow;
+  termWrite(cmdline, A_LIT);
+}
+
+/** Redraw the typed text in place -- one line, no scrolling, so editing does not repaint the screen. */
+function termRedrawLine() {
+  shellCol = promptCol; shellRow = promptRow;
+  termWrite(cmdline, A_LIT);
+  // and blank whatever the previous, longer line left behind
+  let col = shellCol, row = shellRow;
+  while (row < TEXT_ROWS && (row * TEXT_COLS + col) < TEXT_ROWS * TEXT_COLS) {
+    const at = (row * TEXT_COLS + col) * 2;
+    if (shellVram[at] === 32) break;
+    shellVram[at] = 32; shellVram[at + 1] = A_DIM;
+    if (++col >= TEXT_COLS) { col = 0; row++; }
+  }
+}
+
+/*
+ * WHAT A TYPED LINE MEANS.
+ *
+ * A program name runs it; the rest of the line is its arguments, and they replace whatever the
+ * variant filled in -- if you typed them, you meant them. `dir`/`ls` reprint the listing and
+ * `cls`/`clear` clear, because a prompt that answers nothing but program names is still a menu.
+ */
+function termEnter() {
+  const text = cmdline.trim();
+  cmdline = '';
+  termRedrawLine();
+  termChar(10);
+  if (text) { cmdHistory.push(text); historyAt = cmdHistory.length; }
+  const [word, ...rest] = tokenise(text);
+  const cmd = (word || '').toLowerCase();
+
+  if (!word) { termPrompt(); return; }
+  if (cmd === 'dir' || cmd === 'ls') { termListing(); termPrompt(); return; }
+  if (cmd === 'cls' || cmd === 'clear') { termClear(); termPrompt(); return; }
+  if (cmd === 'help' || cmd === '?') {
+    termLine('Type the name of one of the programs above, with any arguments after it.');
+    termLine('DIR / ls reprints the listing.  CLS / clear clears the screen.');
+    termPrompt();
+    return;
+  }
+
+  // A program, by the name this machine calls it: HEXEN, HEXEN.EXE, ./quake or quake all match.
+  const want = cmd.replace(/^\.\//, '');
+  const i = machine.programs.findIndex((x) => {
+    const f = x.file.toLowerCase();
+    return want === f || want === `${f}.${(x.ext || '').toLowerCase()}` ||
+           want === f.replace(/\.exe$/, '');
+  });
+  if (i < 0) {
+    termLine(machine.kind === 'dos' ? 'Bad command or file name' : `${word}: command not found`, A_ERR);
+    termPrompt();
+    return;
+  }
+  if (!machine.programs[i].present) {
+    termLine(`${word}: its sources are not cloned into corpus/`, A_ERR);
+    termPrompt();
+    return;
+  }
+  pick(machine, i);
+  // What was typed wins over what the variant filled in -- but a build REQUIREMENT is not a
+  // preference, so a variant's own flags survive unless the same flag was typed.
+  if (rest.length) $('args').value = mergeArgs(machine.programs[i].variantArgs, rest.join(' '));
+  startRun(word);
+}
+
+/** Tab completes a program name, which is the one thing a prompt with a fixed list can always do. */
+function termComplete() {
+  const typed = cmdline.trim().toLowerCase();
+  if (!typed || /\s/.test(cmdline.trim())) return;
+  const hits = machine.programs
+    .map(x => (machine.kind === 'dos' ? x.file : `./${x.file}`))
+    .filter(n => n.toLowerCase().replace(/^\.\//, '').startsWith(typed.replace(/^\.\//, '')));
+  if (hits.length === 1) { cmdline = `${hits[0]} `; termRedrawLine(); }
+  else if (hits.length > 1) {
+    termChar(10);
+    termLine(hits.join('   '));
+    termPrompt();
+  }
+}
+
+/**
+ * A keystroke at the prompt. Returns true when it was the terminal's, so the caller knows not to
+ * hand it to a program as well.
+ */
+function termKey(e) {
+  if (!machine || machine.kind === 'desktop' || worker) return false;
+  if (e.key === 'Enter') { termEnter(); return true; }
+  if (e.key === 'Backspace') { cmdline = cmdline.slice(0, -1); termRedrawLine(); return true; }
+  if (e.key === 'Tab') { termComplete(); return true; }
+  if (e.key === 'Escape') { cmdline = ''; termRedrawLine(); return true; }
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    historyAt = Math.min(cmdHistory.length, Math.max(0, historyAt + (e.key === 'ArrowUp' ? -1 : 1)));
+    cmdline = cmdHistory[historyAt] ?? '';
+    termRedrawLine();
+    return true;
+  }
+  if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    cmdline += e.key;
+    termRedrawLine();
+    return true;
+  }
+  return false;
 }
 
 function desktopScreen(m) {
   const icons = m.programs.map((x, i) =>
     `<button class="shortcut ${x.present ? '' : 'absent'}" aria-selected="${i === chosen}" ` +
-    `data-i="${x.present ? i : ''}">` +
+    `data-i="${x.present ? i : ''}" title="double-click to run">` +
     /* The program's OWN .ico, straight out of its source tree: a browser decodes the format
        natively, so there is no conversion step and no build artefact to keep in step with it. */
     (x.icon ? `<img src="/${x.icon}" alt="">` : '<img alt="">') +
@@ -293,14 +499,6 @@ function desktopScreen(m) {
   return `<div class="desktop"><div class="icons">${icons}</div>` +
     `<div class="taskbar"><span class="start"><span class="flag"></span>Start</span>` +
     `<span class="task">${task}</span><span class="tray">${esc(m.spec || '')}</span></div></div>`;
-}
-
-/** What the prompt shows: the command this machine would type to start what is selected. */
-function commandLine() {
-  const x = entry();
-  if (!x) return '';
-  const name = machine.kind === 'dos' ? x.file : `./${x.file}`;
-  return `${name}${$('args').value.trim() ? ` ${$('args').value.trim()}` : ''}`;
 }
 
 /**
@@ -473,7 +671,19 @@ function releaseAll() {
 }
 
 addEventListener('keydown', (e) => {
-  if (!views || typing()) return;
+  if (typing()) return;
+  /*
+   * THE PROMPT FIRST. With nothing running, a keystroke is being typed at the machine's own
+   * terminal -- that is what a terminal is -- and only a running program takes the keyboard away
+   * from it. Tab and Enter are the ones that would otherwise be the browser's, so this has to come
+   * before the guard below rather than after it.
+   */
+  if (termKey(e)) { e.preventDefault(); return; }
+  // A desktop launches what is selected on Enter, as double-clicking its icon does.
+  if (!worker && machine?.kind === 'desktop' && e.key === 'Enter') {
+    e.preventDefault(); startRun(); return;
+  }
+  if (!views) return;
   const sc = scancodeForEvent(e);
   if (!sc) return;
   views.keys[sc] = 1;
@@ -493,7 +703,7 @@ addEventListener('keydown', (e) => {
   e.preventDefault();
 });
 addEventListener('keyup', (e) => {
-  if (!views || typing()) return;
+  if (!views || typing() || !worker) return;
   const sc = scancodeForEvent(e);
   if (!sc) return;
   views.keys[sc] = 0;
@@ -570,9 +780,16 @@ function tokenise(s) {
   return (s.match(/"[^"]*"|'[^']*'|\S+/g) || []).map(t => t.replace(/^["']|["']$/g, ''));
 }
 
-$('run').onclick = () => {
+$('run').onclick = () => startRun();
+
+/**
+ * Start what is selected. `typedAs` is the name the person actually used at the prompt, and it
+ * becomes argv[0] -- a program is entitled to see the name it was invoked by, and some read it
+ * (Quake takes its basedir from argv[0]'s directory).
+ */
+function startRun(typedAs = null) {
   const program = current();
-  if (!program) return;
+  if (!program || !entry()?.present || worker) return;
   if (typeof SharedArrayBuffer === 'undefined') {
     log('SharedArrayBuffer is unavailable — serve this page with tools/serve.mjs, which sends the ' +
       'COOP/COEP headers the browser requires.', 'error');
@@ -597,7 +814,7 @@ $('run').onclick = () => {
   // argv[0] is the program's own name, as a C program is entitled to expect -- and the name is the
   // one the MACHINE would have used: QUAKE.EXE on DOS, ./quake on a Unix box. Some programs read it
   // (Quake takes its basedir from argv[0]'s directory), so it is not decoration.
-  const argv = [entry().file, ...tokenise($('args').value)];
+  const argv = [typedAs || entry().file, ...tokenise($('args').value)];
   publishQuery();
 
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
@@ -661,13 +878,12 @@ $('run').onclick = () => {
   $('vmState').textContent = 'running'; $('vmState').className = 'pill on';
   renderChooser();
   lastFrame = 0; lastStatAt = performance.now(); palGen = -1;
-  requestAnimationFrame(paint);
   clearInterval(statTimer);
   // On a timer as well as on rAF, because rAF does not fire in a hidden tab and a status line that
   // goes silent reads as a crash. The PROGRAM is no longer paced by any of this: it keeps its own
   // time, so a hidden tab no longer stalls it.
   statTimer = setInterval(stats, 250);
-};
+}
 
 /*
  * Sound. Started here rather than lazily when the guest first publishes a rate, because a browser
@@ -725,8 +941,17 @@ function stop(quiet) {
   $('run').disabled = !entry()?.present; $('stopBtn').disabled = true;
   $('stage').classList.remove('running');
   $('vmState').textContent = 'powered on'; $('vmState').className = 'pill';
-  renderChooser();
   guest = null;
+  /*
+   * And the control block goes with it. The paint loop chooses between the guest's screen and the
+   * machine's by asking whether `views` exists, so leaving it behind after a Stop meant the loop
+   * kept painting a guest that was gone -- a black rectangle where the prompt should have come back,
+   * which reads as the shell having crashed.
+   */
+  views = null; keyboard = null;
+  // The machine gets its screen back -- the prompt where there is one, the desktop where there is
+  // not. Redrawn AFTER views is dropped, or the loop would still be painting the guest's memory.
+  renderChooser();
 }
 
 $('pause').onclick = () => {
@@ -745,6 +970,16 @@ $('speed').onchange = () => {
 
 // ---------------------------------------------------------------- painting
 const STATE_NAME = ['starting', 'fetching sources', 'compiling', 'running', 'exited', 'error'];
+
+/*
+ * ONE LOOP, always running. It used to start on Run and stop when the program did, which was fine
+ * while the screen belonged to a program -- but the machine's own terminal is on that same canvas
+ * now, and its cursor blinks whether or not anything is running.
+ */
+function frame() {
+  if (views) paint(); else paintTextFrom(shellVram, 0, shellCol, shellRow);
+  requestAnimationFrame(frame);
+}
 
 function paint() {
   if (!views) return;
@@ -802,17 +1037,16 @@ function paint() {
         dst[i] = (255 << 24) | (guest[p] << 16) | (guest[p + 1] << 8) | guest[p + 2];
       }
       cx.putImageData(imageData, 0, 0);
-      return requestAnimationFrame(paint);
+      return;
     }
-    if (!lut) return requestAnimationFrame(paint);
+    if (!lut) return;
     // Read WHILE the guest writes. A tear is possible and accepted: the alternative is a double
     // buffer the guest would have to swap, and the guest is synchronous C that never yields.
     for (let i = 0, n = w * h; i < n; i++) dst[i] = lut[guest[pixels + i]];
     cx.putImageData(imageData, 0, 0);
   } else {
-    paintText();
+    paintGuestText();
   }
-  requestAnimationFrame(paint);
 }
 
 /** The guest's frame number: its own counter where it keeps one, ours where it does not. */
@@ -891,6 +1125,8 @@ function publishQuery() {
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
+
+requestAnimationFrame(frame);
 
 discover()
   .then(applyQuery)

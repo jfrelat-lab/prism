@@ -117,12 +117,13 @@
   #screen { image-rendering: pixelated; width: 100%; height: 100%; object-fit: contain;
             background: #000; }
   /*
-   * The stage holds two things and shows one. Before a program runs it belongs to the machine's own
-   * chooser; a black canvas stacked over that would swallow every click on it, and an empty chooser
-   * over a running game would swallow the keyboard.
+   * The stage holds two things and shows one, and which one is not "is something running" -- it is
+   * WHAT KIND OF MACHINE this is. A terminal machine is the canvas the whole time: its prompt is
+   * drawn in the same 80x25 text mode the program will use, so nothing moves or rescales when the
+   * program starts. Only a DESKTOP puts DOM over the canvas, and only until something runs.
    */
-  #stage:not(.running) #winframe { display: none; }
-  #stage.running #chooser { display: none; }
+  #stage.desktop #winframe { display: none; }
+  #stage:not(.desktop) #chooser { display: none; }
 
   /*
    * A window, when the program has one. Win32 Quake owns this rectangle: it sizes it when the
@@ -166,36 +167,11 @@
   /* ---------------------------------------------------------------- the chooser */
   /*
    * WHAT THE MACHINE LOOKS LIKE BEFORE ANYTHING RUNS. Not a menu wearing the machine's colours: the
-   * machine's own way of showing you what it has. A DOS box answered `dir`, a Unix box `ls -l`, a
-   * Sun sat inside an OpenWindows frame, and Windows put icons on a desktop. Same information, four
-   * idioms, and the idiom is most of what it felt like to sit there.
+   * machine itself. A terminal machine draws its prompt ON THE CANVAS, in the same 80x25 text mode
+   * the program will use -- see web/app.js -- so there is no CSS for it here at all, and nothing
+   * moves or rescales when a program starts. Only a desktop needs DOM, because it is a GUI.
    */
   #chooser { position: absolute; inset: 0; overflow: auto; }
-  .tty { min-height: 100%; padding: 14px 18px; font: 400 13px/1.55 ui-monospace, Menlo, monospace; }
-  .tty.dos { background: #000; color: #aaa; }
-  .tty.unix { background: #12100f; color: #c9c6bf; }
-  .tty.sunos { background: #22222a; color: #c5c7ce; }
-  .tty .bright { color: #fff; }
-  .tty .faint { opacity: .55; }
-  .tty .lit { color: #d9832f; }
-  .tty table { border-collapse: collapse; margin: 2px 0 8px; }
-  .tty td { padding: 0 18px 0 0; white-space: nowrap; }
-  .tty tr { cursor: pointer; }
-  .tty tr:hover td { background: rgba(217,131,47,.16); }
-  .tty tr[aria-selected="true"] td { background: rgba(217,131,47,.32); color: #fff; }
-  .tty tr.absent, .tty tr.absent:hover td { cursor: default; background: none; }
-  .tty tr.absent td { opacity: .45; }
-  .caret { display: inline-block; width: 8px; height: 15px; background: currentColor;
-           vertical-align: -3px; margin-left: 2px; animation: blink 1.05s steps(1) infinite; }
-  @keyframes blink { 50% { opacity: 0; } }
-
-  /* A SUN console kept its window frame: OpenWindows drew one around everything. */
-  .sunframe { position: absolute; inset: 10px; border: 2px solid #a9a79e; background: #22222a;
-              display: flex; flex-direction: column; min-height: 0; }
-  .suntitle { background: #a9a79e; color: #1c1c22; padding: 3px 8px; display: flex;
-              justify-content: space-between; font: 600 11px/1.4 system-ui, sans-serif;
-              letter-spacing: .04em; }
-  .sunframe .tty { flex: 1; overflow: auto; min-height: 0; }
 
   /* The Windows desktop: icons in a ROW, left to right, the way a desktop lays them out. */
   .desktop { position: absolute; inset: 0; background: #3a6e6e;
