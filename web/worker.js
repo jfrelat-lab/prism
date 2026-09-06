@@ -27,12 +27,16 @@ import { installGo32 } from '../src/env/go32.js';
 import { installWatcom } from '../src/env/watcom.js';
 import { installVgaFont } from '../src/env/vgafont.js';
 import { installWsock } from '../src/env/wsock.js';
+import { installDl } from '../src/env/dl.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
   from '../src/env/webhost.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const log = (line, kind = 'info') => post('log', { line, kind });
+
+/** How many lines of the PROGRAM's own output reach the page log before only its screen has them. */
+const GUEST_LOG_LINES = 400;
 
 /** `a/b/../c` -> `a/c`. An include dir may point out of the tree and back into a sibling. */
 const normaliseRepoPath = (p) => {
@@ -81,6 +85,20 @@ async function start({ program, control, data, argv, pipeSab = null }) {
        */
       units: t.units.filter(u => u.source === undefined)
         .map(u => (u.file.startsWith(`${t.dir}/`) ? u.file.slice(t.dir.length + 1) : u.file)),
+      /*
+       * WHICH MODULE each unit belongs to. A program of this era is often several shared objects
+       * that do not see each other's globals -- Quake II is an engine, a renderer and a game
+       * library -- and the tag is what keeps their namespaces apart. The server has always sent it;
+       * this side dropped it, so the renderer compiled into the engine's namespace, `dlsym` found
+       * nothing, and the first call through the returned pointer was a call through zero.
+       */
+      unitModules: Object.fromEntries(t.units.filter(u => u.source === undefined && u.module)
+        .map(u => [(u.file.startsWith(`${t.dir}/`) ? u.file.slice(t.dir.length + 1) : u.file)
+          .toLowerCase(), u.module])),
+      moduleExports: t.moduleExports ?? {},
+      /* soname -> module, for dlopen: sys_linux.c asks for the string its own makefile built. */
+      sonames: Object.fromEntries(Object.entries(t.modules ?? {})
+        .filter(([, m]) => m.soname).map(([k, m]) => [m.soname, k])),
       outsideRoot: t.units.filter(u => u.source === undefined)
         .map(u => u.file).filter(f => !f.startsWith(`${t.dir}/`)),
       unitDefines: Object.fromEntries(t.units.filter(u => u.defines)
@@ -206,7 +224,8 @@ async function start({ program, control, data, argv, pipeSab = null }) {
     const text = tree.get(u.toLowerCase());
     if (text === undefined) throw new Error(`missing translation unit ${u}`);
     const over = (program.unitDefines || {})[u.toLowerCase()];
-    units.push({ file: u, source: text, ...(over ? { defines: over } : {}) });
+    const mod = (program.unitModules || {})[u.toLowerCase()];
+    units.push({ file: u, source: text, ...(over ? { defines: over } : {}), ...(mod ? { module: mod } : {}) });
   }
   for (const [name, source] of Object.entries(program.extraUnits || {})) {
     units.push({ file: name, source });
@@ -227,6 +246,8 @@ async function start({ program, control, data, argv, pipeSab = null }) {
   try {
     prog = compileProgram(units, {
       defines: program.defines || {},
+      /* What each module makes visible to the main program, read from its own .def by the server. */
+      exports: program.moduleExports || {},
       resolve,
       pack: program.pack ?? null,
     memory: program.memory,
@@ -259,10 +280,14 @@ async function start({ program, control, data, argv, pipeSab = null }) {
   log(`compiled in ${compileMs.toFixed(0)} ms: ${Object.keys(prog.F).length} functions, ` +
     `${(prog.src.length / 1024 / 1024).toFixed(2)} MB of JavaScript`);
 
+
+
   // --- 3. the platform layer.
   const files = {};
   for (const [name, bytes] of Object.entries(data || {})) files[name] = new Uint8Array(bytes);
-  log(`${Object.keys(files).length} data files visible to the program`);
+  const biggest = Object.entries(files).sort((a, b) => b[1].length - a[1].length)[0];
+  log(`${Object.keys(files).length} data files visible to the program` +
+    (biggest ? ` (largest: ${biggest[0]}, ${biggest[1].length.toLocaleString('en')} bytes)` : ''));
   log(`argv: ${(argv || []).join(' ')}`);
 
   /*
@@ -282,6 +307,12 @@ async function start({ program, control, data, argv, pipeSab = null }) {
      * the same "publish what the program already writes" move as Quake's vid_buffer.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    /*
+     * dlopen, for a program that is several shared objects. Nothing is LOADED -- every module is
+     * already linked into the same image -- so this answers dlopen/dlsym out of PRISM's own symbol
+     * table, keyed by the soname the program's makefile built and its source asks for.
+     */
+    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     /*
      * A second PROGRAM, when the descriptor names one.
      *
@@ -749,6 +780,32 @@ async function start({ program, control, data, argv, pipeSab = null }) {
      */
     services: { uclock: 64, clock: 64, osd_key_pressed: 256 },
   });
+
+  /*
+   * WHAT THE PROGRAM PRINTS, in the log as well as on its screen -- installed HERE, after the
+   * platform layer, because installConsole and installStdio each claim M.write and the last one to
+   * do so wins. Wrapped before the compile it was simply overwritten.
+   *
+   * The text console is 80x25 and it scrolls, so a program that fails after a page of output leaves
+   * only the last screenful -- and the useful line is the FIRST one. Quake II's "recursive shutdown"
+   * is exactly that shape: the error you can see is the second one. Capped, because a game that
+   * prints per frame would otherwise fill the page.
+   */
+  let mirrored = 0, partial = '';
+  const guestWrite = prog.M.write;
+  prog.M.write = (text) => {
+    if (mirrored < GUEST_LOG_LINES) {
+      partial += String(text);
+      let nl;
+      while ((nl = partial.indexOf('\n')) >= 0 && mirrored < GUEST_LOG_LINES) {
+        const line = partial.slice(0, nl).replace(/[\r\x00-\x08\x0b-\x1f]/g, '');
+        partial = partial.slice(nl + 1);
+        if (line.trim()) log(line, 'guest');
+        if (++mirrored === GUEST_LOG_LINES) log('  … further output only on the program\'s screen', 'warn');
+      }
+    }
+    return guestWrite(text);
+  };
 
   post('ready', { image: prog.mod.buffer });
 

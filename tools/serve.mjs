@@ -20,7 +20,7 @@ import { createServer } from 'node:http';
 import { readFile, stat, readdir } from 'node:fs/promises';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadTarget, targetUnits } from '../src/target.js';
+import { loadTarget, targetUnits, moduleExportsOf } from '../src/target.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const port = +(process.argv.find(a => a.startsWith('--port='))?.slice(7) ?? 8080);
@@ -111,6 +111,13 @@ const server = createServer(async (req, res) => {
           modules: Object.fromEntries(Object.entries(resolved.modules ?? {})
             .filter(([k]) => !k.startsWith('_'))
             .map(([k, m]) => [k, { soname: m.soname ?? null }])),
+          /*
+           * What each module EXPORTS, resolved here. The list comes from the program's own .def
+           * file -- Quake II ships ref_soft.def -- and a browser has no way to read one, so the
+           * server answers with the same function Node's build uses rather than the page growing a
+           * second reader of the format.
+           */
+          moduleExports: moduleExportsOf(resolved, dir),
           asm,
         }));
       } catch (e) {

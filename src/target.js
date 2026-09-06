@@ -84,6 +84,21 @@ function unitNames(target, dir) {
  * the same shape. Reading it beats writing the list here for the same reason reading a MAKEFILE
  * beats listing units here.
  */
+/**
+ * What each module makes visible to the main program, from the program's own statement of it.
+ *
+ * Exported because the page needs the same answer and cannot read a .def file: the shell's server
+ * computes it here and sends it, rather than the browser growing a second reader of the same format.
+ */
+export function moduleExportsOf(target, dir) {
+  const out = {};
+  for (const [name, m] of Object.entries(target.modules ?? {})) {
+    if (name.startsWith('_')) continue;
+    out[name] = m.exportsFrom ? exportsFromDef(resolvePath(dir, m.exportsFrom)) : (m.exports ?? []);
+  }
+  return out;
+}
+
 function exportsFromDef(path) {
   const text = readFileSync(path, 'latin1');
   const out = [];
@@ -280,13 +295,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const missing = new Set();
   const c = { ...(target.compile ?? {}), ...overrides };
   // What each extra module makes visible to the main one, from the program's own .def file.
-  const moduleExports = {};
-  for (const [name, m] of Object.entries(target.modules ?? {})) {
-    if (name.startsWith('_')) continue;
-    moduleExports[name] = m.exportsFrom
-      ? exportsFromDef(resolvePath(dir, m.exportsFrom))
-      : (m.exports ?? []);
-  }
+  const moduleExports = moduleExportsOf(target, dir);
   const program = compileProgram(units, {
     exports: moduleExports,
     defines: target.defines ?? {},

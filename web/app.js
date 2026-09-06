@@ -484,7 +484,10 @@ $('run').onclick = () => {
 
   // A debug seam: everything the shell knows, reachable from the console. A display bug and a guest
   // bug look identical from the outside, and this is what tells them apart.
-  window.PRISM = { views, program, argv, get guest() { return guest; }, paint, keyboard, SLOT, STATE };
+  // `data` is here because "the program cannot find its file" and "the page never loaded it" look
+  // identical from the outside, and that is exactly the question this seam exists to answer.
+  window.PRISM = { views, program, argv, get guest() { return guest; }, paint, keyboard, SLOT, STATE,
+                   get data() { return dataFiles; } };
 
   $('run').disabled = true; $('stopBtn').disabled = false;
   lastFrame = 0; lastStatAt = performance.now(); palGen = -1;

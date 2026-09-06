@@ -44,7 +44,17 @@ export function installStdio(M, {
     store.set(norm(name), bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
   }
 
-  function norm(name) { return String(name).replace(/\\/g, '/').toLowerCase(); }
+  /*
+   * A path's identity, not its spelling. Backslashes become slashes, case is dropped -- and a
+   * leading `./` is removed, because it is not part of the name: Quake II opens `./baseq2/pak0.pak`
+   * and a store keyed `baseq2/pak0.pak` must recognise it, or the exact match is missed and the
+   * basename fallback below answers with whatever else is called pak0.pak.
+   */
+  function norm(name) {
+    let p = String(name).replace(/\\/g, '/').toLowerCase();
+    while (p.startsWith('./')) p = p.slice(2);
+    return p.replace(/\/\.\//g, '/');
+  }
 
   // Open directories. The base keeps a DIR handle clear of a file descriptor's range.
   // Installed signal actions, remembered because a caller reads back what it stored.
@@ -62,9 +72,24 @@ export function installStdio(M, {
   function find(name) {
     const want = norm(name);
     if (store.has(want)) return want;
+    // A key that ends with the whole requested path: a store keyed one directory deeper still
+    // identifies the file, and the directory is what tells two files of the same name apart.
+    for (const k of store.keys()) if (k.endsWith(`/${want}`)) return k;
     const base = want.replace(/^.*\//, '');
-    for (const k of store.keys()) if (k === base || k.replace(/^.*\//, '') === base) return k;
-    return null;
+    /*
+     * The BASENAME fallback, and only when it is UNAMBIGUOUS. `pacman/pacman.6e` finding a file
+     * supplied as `pacman.6e` is what a person who unzipped one ROM set expects; `./baseq2/pak0.pak`
+     * finding Quake ONE's `ID1/PAK0.PAK` because both end in pak0.pak is not, and that is what
+     * happened the moment the page was given several games' data at once -- Quake II loaded a pack
+     * of 339 files instead of 1106 and died on a texture.
+     */
+    let hit = null;
+    for (const k of store.keys()) {
+      if (k !== base && k.replace(/^.*\//, '') !== base) continue;
+      if (hit) return null;                     // two files answer to this name; neither is meant
+      hit = k;
+    }
+    return hit;
   }
 
   // PATH is here because Lua's files.lua opens with `assert(type(os.getenv"PATH") == "string")`:
