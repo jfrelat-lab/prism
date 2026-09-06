@@ -25,17 +25,51 @@ import { HEADERS } from '../src/env/headers.js';
 import { writeIndexedPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SRC = join(ROOT, 'corpus', 'mame01');
+/*
+ * WHICH RELEASE. Three of them are in the corpus and they are the same program five months apart --
+ * running one and calling it "MAME" hid the other two, and 0.3 is the one that adds a driver with
+ * video hardware of its own (Donkey Kong) rather than another Pac-Man derivative.
+ *
+ * The unit list comes from each makefile's own OBJS, so it is transcribed once per release rather
+ * than guessed: 0.1 and 0.2 have a `machine.c` per driver that 0.3 mostly dropped.
+ */
+const RELEASE = process.argv.find(a => a.startsWith('--release='))?.slice(10) ?? '01';
+const SRC = join(ROOT, 'corpus', `mame${RELEASE}`);
 
 if (!existsSync(join(SRC, 'src'))) {
   console.error(`corpus missing: ${SRC}\nFetch it with:\n` +
-    `  curl -sL https://downloads.sourceforge.net/project/mame/mame/0.1/mame01.zip -o /tmp/mame01.zip\n` +
-    `  mkdir -p corpus/mame01 && (cd corpus/mame01 && unzip -qo /tmp/mame01.zip)`);
+    `  curl -sL https://downloads.sourceforge.net/mame/mame${RELEASE}.zip -o /tmp/mame${RELEASE}.zip\n` +
+    `  mkdir -p corpus/mame${RELEASE} && (cd corpus/mame${RELEASE} && unzip -qo /tmp/mame${RELEASE}.zip)`);
   process.exit(2);
 }
 
 // The makefile's own object list, minus the platform backend PRISM replaces.
-const UNITS = [
+const UNITS_BY_RELEASE = {
+  '02': [
+    'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
+    'src/pacman/machine.c', 'src/pacman/vidhrdw.c', 'src/pacman/driver.c',
+    'src/crush/machine.c', 'src/crush/driver.c',
+    'src/pengo/machine.c', 'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
+    'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
+    'src/mrdo/machine.c', 'src/mrdo/vidhrdw.c', 'src/mrdo/driver.c',
+    'src/cclimber/vidhrdw.c', 'src/cclimber/sndhrdw.c', 'src/cclimber/driver.c',
+    'src/z80/z80.c', 'src/msdos/msdos.c',
+  ],
+  '03': [
+    'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
+    'src/pacman/machine.c', 'src/pacman/vidhrdw.c', 'src/pacman/driver.c',
+    'src/crush/driver.c',
+    'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
+    'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
+    'src/mrdo/machine.c', 'src/mrdo/vidhrdw.c', 'src/mrdo/driver.c',
+    'src/cclimber/vidhrdw.c', 'src/cclimber/sndhrdw.c', 'src/cclimber/driver.c',
+    'src/ckong/vidhrdw.c', 'src/ckong/driver.c',
+    'src/dkong/vidhrdw.c', 'src/dkong/driver.c',
+    'src/z80/z80.c', 'src/msdos/msdos.c',
+  ],
+};
+
+const UNITS = UNITS_BY_RELEASE[RELEASE] ?? [
   'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
   'src/Z80/Z80.c',
   'src/pacman/machine.c', 'src/pacman/driver.c',
@@ -129,7 +163,7 @@ const units = UNITS.map(f => {
 // objects with external linkage because msdos.c takes their address and indexes them.
 units.push({ file: 'prism-allegro-vars.c', source: ALLEGRO_VARS });
 
-console.log(`MAME 0.1 — ${units.length} translation units, ` +
+console.log(`MAME 0.${RELEASE.replace(/^0/, '')} — ${units.length} translation units, ` +
   `${units.reduce((n, u) => n + u.source.split('\n').length, 0)} lines`);
 
 let program;

@@ -1,0 +1,58 @@
+{
+  "name": "mame03",
+  "title": "MAME 0.3 (DJGPP + Allegro, 1997)",
+  "dir": "corpus/mame03",
+  "fetch": "curl -Lo /tmp/mame03.zip https://downloads.sourceforge.net/mame/mame03.zip && mkdir -p corpus/mame03 && (cd corpus/mame03 && unzip -qo /tmp/mame03.zip)",
+  "_doc": "0.2's successor, and the release that adds DONKEY KONG -- a driver with its own video hardware rather than another Pac-Man derivative. Three releases of one program in five months is a compiler test no single snapshot gives, and each one is checked against the SAME native build of itself.",
+  "_units": "The makefile's OBJS list, in its order. obj/osdepend.o has its own rule pointing at src/msdos/msdos.c -- MAME's own DOS backend, compiled rather than replaced.",
+  "units": {
+    "list": [
+      "src/mame.c",
+      "src/common.c",
+      "src/machine.c",
+      "src/driver.c",
+      "src/pacman/machine.c",
+      "src/pacman/vidhrdw.c",
+      "src/pacman/driver.c",
+      "src/crush/driver.c",
+      "src/pengo/vidhrdw.c",
+      "src/pengo/sndhrdw.c",
+      "src/pengo/driver.c",
+      "src/ladybug/machine.c",
+      "src/ladybug/vidhrdw.c",
+      "src/ladybug/sndhrdw.c",
+      "src/ladybug/driver.c",
+      "src/mrdo/machine.c",
+      "src/mrdo/vidhrdw.c",
+      "src/mrdo/driver.c",
+      "src/cclimber/vidhrdw.c",
+      "src/cclimber/sndhrdw.c",
+      "src/cclimber/driver.c",
+      "src/ckong/vidhrdw.c",
+      "src/ckong/driver.c",
+      "src/dkong/vidhrdw.c",
+      "src/dkong/driver.c",
+      "src/z80/z80.c",
+      "src/msdos/msdos.c"
+    ]
+  },
+  "_include": "The makefile's -Isrc -Isrc/z80, plus src/msdos for the osdepend rule.",
+  "include": [
+    "src",
+    "src/z80",
+    "src/msdos"
+  ],
+  "_defines": "The makefile passes -DX86_ASM -DLSB_FIRST. X86_ASM is NOT set here: it selects the x86 assembly path, the same choice as Quake's id386=0 and Heretic's #ifndef __WATCOMC__.",
+  "defines": {
+    "LSB_FIRST": "1"
+  },
+  "compile": {
+    "memory": 256,
+    "collect": true
+  },
+  "env": [
+    "stdio",
+    "ports",
+    "allegro"
+  ]
+}
