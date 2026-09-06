@@ -61,6 +61,47 @@ export function watcom(cmd, { target = 'linux' } = {}) {
 }
 
 /**
+ * Compile a 16-bit DOS program and RUN it, returning what it printed.
+ *
+ * The layout oracle above never runs anything, which is enough for sizeof and offsetof and nothing
+ * else. This is the other half: Open Watcom builds a real DOS executable in the container, and
+ * DOSBox-X -- on the host, because that is where it is installed -- executes it and leaves stdout in
+ * a file on the mounted drive.
+ *
+ * `-silent -fastlaunch -nogui -nomenu` is what makes it headless and `-time-limit` is not optional:
+ * a DOS program that waits for a key would otherwise hold the session open for ever, and the first
+ * attempt at this hung exactly that way.
+ *
+ * Returns { code, stdout } where code is DOSBox-X's, not the program's -- DOS's errorlevel does not
+ * survive the trip, so a program that must report failure should print it.
+ */
+export function watcomRun16(source, { model = 'ms', timeout = 30 } = {}) {
+  up();
+  put('run16.c', source);
+  const build = watcom('cd /work && rm -f run16.o RUN16.EXE && ' +
+    `wcc -bt=dos -0 -${model} -q run16.c && wlink system dos file run16.o name RUN16.EXE`,
+    { target: 'dos16' });
+  if (build.code !== 0) throw new Error(`watcomRun16: ${build.stderr || build.stdout}`);
+
+  const dir = join(SCRATCH, 'dosrun');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'RUN16.EXE'), readFileSync(join(SCRATCH, 'RUN16.EXE')));
+  try { rmSync(join(dir, 'OUT.TXT')); } catch { /* first run */ }
+  const r = spawnSync('dosbox-x', ['-silent', '-fastlaunch', '-nogui', '-nomenu',
+    '-time-limit', String(timeout),
+    '-c', `mount c ${dir}`, '-c', 'c:', '-c', 'RUN16.EXE > OUT.TXT', '-c', 'exit'], {
+    encoding: 'utf8',
+    // SDL still wants a video driver even with -nogui; the dummy one is what makes this runnable
+    // from a script with no display.
+    env: { ...process.env, SDL_VIDEODRIVER: 'dummy' },
+    timeout: (timeout + 15) * 1000,
+  });
+  let stdout = '';
+  try { stdout = readFileSync(join(dir, 'OUT.TXT'), 'latin1'); } catch { /* the program printed nothing */ }
+  return { code: r.status, stdout };
+}
+
+/**
  * The DATA of an OMF object, with the record framing removed.
  *
  * Scanning the file as-is loses answers, and silently: OMF splits data into LEDATA records and puts
