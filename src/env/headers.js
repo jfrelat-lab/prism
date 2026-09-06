@@ -167,6 +167,9 @@ int feof(FILE *stream);
 int ferror(FILE *stream);
 void clearerr(FILE *stream);
 int fflush(FILE *stream);
+/* POSIX, and it lives HERE because its argument is a FILE * -- declaring it in <sys/stat.h>
+   broke every program that includes that header without <stdio.h>, Doom among them. */
+int fileno(FILE *stream);
 void perror(const char *s);
 void setbuf(FILE *stream, char *buf);
 int setvbuf(FILE *stream, char *buf, int mode, size_t size);
@@ -1047,6 +1050,23 @@ typedef struct {
     Bool override_redirect;
 } XConfigureEvent;
 
+/*
+ * A CLIENT MESSAGE, which is how a window manager tells a client to close itself: the client interns
+ * WM_DELETE_WINDOW, asks for it with XSetWMProtocols, and the manager sends it here. Quake's SUN
+ * driver answers it with Host_Quit_f -- its Linux driver never asks, so this arrived with the SUN
+ * platform layer.
+ */
+typedef struct {
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    Window window;
+    Atom message_type;
+    int format;
+    union { char b[20]; short s[10]; long l[5]; } data;
+} XClientMessageEvent;
+
 typedef union _XEvent {
     int type;
     XKeyEvent xkey;
@@ -1054,6 +1074,7 @@ typedef union _XEvent {
     XMotionEvent xmotion;
     XExposeEvent xexpose;
     XConfigureEvent xconfigure;
+    XClientMessageEvent xclient;
     long pad[24];
 } XEvent;
 
@@ -1098,6 +1119,8 @@ typedef union _XEvent {
 #define MapRequest 20
 #define ReparentNotify 21
 #define ConfigureNotify 22
+#define ClientMessage 33
+#define MappingNotify 34
 #define ConfigureRequest 23
 #define GravityNotify 24
 #define ResizeRequest 25
@@ -1121,12 +1144,52 @@ typedef union _XEvent {
 #define PointerMotionMask (1L<<6)
 #define ExposureMask (1L<<15)
 #define StructureNotifyMask (1L<<17)
+/* The rest of the mask, from X.h. A driver that asks for the whole desktop's worth of events --
+   Quake's SUN one does -- names all of them, and a missing macro reads as an undeclared identifier
+   inside a constant expression, which is a confusing way to say "this header is short". */
+#define EnterWindowMask (1L<<4)
+#define LeaveWindowMask (1L<<5)
+#define PointerMotionHintMask (1L<<7)
+#define Button1MotionMask (1L<<8)
+#define Button2MotionMask (1L<<9)
+#define Button3MotionMask (1L<<10)
+#define Button4MotionMask (1L<<11)
+#define Button5MotionMask (1L<<12)
+#define ButtonMotionMask (1L<<13)
+#define KeymapStateMask (1L<<14)
+#define VisibilityChangeMask (1L<<16)
+#define ResizeRedirectMask (1L<<18)
+#define SubstructureNotifyMask (1L<<19)
+#define SubstructureRedirectMask (1L<<20)
+#define FocusChangeMask (1L<<21)
+#define PropertyChangeMask (1L<<22)
+#define ColormapChangeMask (1L<<23)
+#define OwnerGrabButtonMask (1L<<24)
 #define AllocNone 0
 #define AllocAll 1
 #define DefaultScreen(d) XDefaultScreen(d)
 #define RootWindow(d,s) XRootWindow(d,s)
 #define DisplayWidth(d,s) 640
 #define DisplayHeight(d,s) 480
+
+/*
+ * The SCREEN, asked for the same numbers by the other spelling: Quake's Linux driver writes
+ * DisplayWidth(dpy, screen) and its SUN driver writes WidthOfScreen(ScreenOfDisplay(dpy, screen)).
+ * Both must answer the same thing, so the macros above and these agree on 640x480 -- one fixed
+ * display, chosen once, rather than two.
+ */
+typedef struct _XScreen Screen;
+Screen *ScreenOfDisplay(Display *d, int screen);
+int WidthOfScreen(Screen *s);
+int HeightOfScreen(Screen *s);
+#define DefaultScreenOfDisplay(d) ScreenOfDisplay(d, XDefaultScreen(d))
+
+/* XConfigureWindow's stack_mode, from X.h. */
+#define Above     0
+#define Below     1
+#define TopIf     2
+#define BottomIf  3
+#define Opposite  4
 
 Display *XOpenDisplay(const char *name);
 int XCloseDisplay(Display *d);
@@ -1179,6 +1242,80 @@ int XPending(Display *d);
 int XNextEvent(Display *d, XEvent *ev);
 KeySym XKeycodeToKeysym(Display *d, unsigned int keycode, int index);
 int XLookupString(XKeyEvent *ev, char *buf, int n, KeySym *ks, void *status);
+
+/*
+ * ICCCM: the properties a client sets so that a WINDOW MANAGER knows what to do with it -- a name,
+ * an icon name, a size hint, the WM_DELETE_WINDOW protocol. Quake's SUN driver sets all of them
+ * where its X11 driver sets none, which is the difference between a program written for a
+ * workstation desktop and one written for a Linux box in 1996.
+ *
+ * There is no window manager here; the PAGE is one, as it already is for Win32. So these carry the
+ * window's NAME to the same place XStoreName does and are otherwise no-ops -- see src/env/x11.js.
+ */
+typedef struct {
+    unsigned char *value;
+    Atom encoding;
+    int format;
+    unsigned long nitems;
+} XTextProperty;
+
+typedef struct {
+    long flags;
+    int input;
+    int initial_state;
+    Pixmap icon_pixmap;
+    Window icon_window;
+    int icon_x, icon_y;
+    Pixmap icon_mask;
+    unsigned long window_group;   /* an XID; the header names no such type here */
+} XWMHints;
+
+typedef struct {
+    char *res_name;
+    char *res_class;
+} XClassHint;
+
+typedef struct {
+    long flags;
+    int x, y;
+    int width, height;
+    int min_width, min_height;
+    int max_width, max_height;
+    int width_inc, height_inc;
+    struct { int x; int y; } min_aspect, max_aspect;
+    int base_width, base_height;
+    int win_gravity;
+} XSizeHints;
+
+typedef struct {
+    int x, y;
+    int width, height;
+    int border_width;
+    Window sibling;
+    int stack_mode;
+} XWindowChanges;
+
+#define InputHint       (1L << 0)
+#define StateHint       (1L << 1)
+#define NormalState     1
+#define PropModeReplace 0
+#define CWX             (1<<0)
+#define CWY             (1<<1)
+#define CWWidth         (1<<2)
+#define CWHeight        (1<<3)
+
+Atom XInternAtom(Display *d, const char *name, Bool only_if_exists);
+int XChangeProperty(Display *d, Window w, Atom prop, Atom type, int format, int mode,
+                    const unsigned char *data, int nelements);
+XWMHints *XAllocWMHints(void);
+XSizeHints *XAllocSizeHints(void);
+XClassHint *XAllocClassHint(void);
+void XSetWMProperties(Display *d, Window w, XTextProperty *name, XTextProperty *icon,
+                      char **argv, int argc, XSizeHints *normal, XWMHints *wm, XClassHint *cls);
+Status XSetWMProtocols(Display *d, Window w, Atom *protocols, int count);
+int XConfigureWindow(Display *d, Window w, unsigned int mask, XWindowChanges *changes);
+int XUndefineCursor(Display *d, Window w);
+int XFree(void *data);
 #endif
 `;
 
@@ -1186,6 +1323,47 @@ const XUTIL = `
 #ifndef _PRISM_XUTIL_H
 #define _PRISM_XUTIL_H
 #include <X11/Xlib.h>
+#endif
+`;
+
+/*
+ * The PREDEFINED ATOMS. X interns most atom names at run time, but the first sixty-eight are fixed
+ * by the protocol and a client may use them without asking -- XA_STRING is what an ICCCM text
+ * property says its encoding is. This header was stubbed empty, which turned Quake's
+ * VID_SetWindowTitle into a function that could not be emitted.
+ */
+const XATOM = `
+#ifndef _PRISM_XATOM_H
+#define _PRISM_XATOM_H
+#include <X11/Xlib.h>
+#define XA_PRIMARY        ((Atom) 1)
+#define XA_SECONDARY      ((Atom) 2)
+#define XA_ARC            ((Atom) 3)
+#define XA_ATOM           ((Atom) 4)
+#define XA_BITMAP         ((Atom) 5)
+#define XA_CARDINAL       ((Atom) 6)
+#define XA_COLORMAP       ((Atom) 7)
+#define XA_CURSOR         ((Atom) 8)
+#define XA_DRAWABLE       ((Atom) 17)
+#define XA_FONT           ((Atom) 18)
+#define XA_INTEGER        ((Atom) 19)
+#define XA_PIXMAP         ((Atom) 20)
+#define XA_POINT          ((Atom) 21)
+#define XA_RECTANGLE      ((Atom) 22)
+#define XA_STRING         ((Atom) 31)
+#define XA_VISUALID       ((Atom) 32)
+#define XA_WINDOW         ((Atom) 33)
+#define XA_WM_COMMAND     ((Atom) 34)
+#define XA_WM_HINTS       ((Atom) 35)
+#define XA_WM_CLIENT_MACHINE ((Atom) 36)
+#define XA_WM_ICON_NAME   ((Atom) 37)
+#define XA_WM_ICON_SIZE   ((Atom) 38)
+#define XA_WM_NAME        ((Atom) 39)
+#define XA_WM_NORMAL_HINTS ((Atom) 40)
+#define XA_WM_SIZE_HINTS  ((Atom) 41)
+#define XA_WM_ZOOM_HINTS  ((Atom) 42)
+#define XA_WM_CLASS       ((Atom) 67)
+#define XA_WM_TRANSIENT_FOR ((Atom) 68)
 #endif
 `;
 
@@ -1237,6 +1415,36 @@ const KEYSYMDEF = `
 #define XK_F10 0xffc7
 #define XK_F11 0xffc8
 #define XK_F12 0xffc9
+/*
+ * F13 to F35, which look like an excess until you see a SUN KEYBOARD: it had no separate
+ * navigation cluster, so its Home, Page Up and the rest arrive as these. Quake's Sun driver reads
+ * "case XK_F27: key = K_HOME" and "XK_F29: K_PGUP" -- the keys are on the keypad, and the keysyms
+ * are what the server sends for them. Values from X11's own keysymdef.h, which numbers them
+ * consecutively from F1.
+ */
+#define XK_F13 0xffca
+#define XK_F14 0xffcb
+#define XK_F15 0xffcc
+#define XK_F16 0xffcd
+#define XK_F17 0xffce
+#define XK_F18 0xffcf
+#define XK_F19 0xffd0
+#define XK_F20 0xffd1
+#define XK_F21 0xffd2
+#define XK_F22 0xffd3
+#define XK_F23 0xffd4
+#define XK_F24 0xffd5
+#define XK_F25 0xffd6
+#define XK_F26 0xffd7
+#define XK_F27 0xffd8
+#define XK_F28 0xffd9
+#define XK_F29 0xffda
+#define XK_F30 0xffdb
+#define XK_F31 0xffdc
+#define XK_F32 0xffdd
+#define XK_F33 0xffde
+#define XK_F34 0xffdf
+#define XK_F35 0xffe0
 #define XK_Shift_L 0xffe1
 #define XK_Shift_R 0xffe2
 #define XK_Control_L 0xffe3
@@ -1283,6 +1491,7 @@ export const HEADERS = {
   ...WIN32_HEADERS,
   'X11/Xlib.h': XLIB,
   'X11/Xutil.h': XUTIL,
+  'X11/Xatom.h': XATOM,
   'X11/keysym.h': KEYSYMDEF,
   'X11/extensions/XShm.h': XSHM,
   'values.h': `

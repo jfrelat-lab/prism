@@ -32,6 +32,8 @@ const ARGS = {
   win: ['-window', '+vid_stretch_by_2', '0', '+vid_config_x', '320', '+vid_config_y', '200', '+vid_mode', '2'],
   x11: ['-width', '320', '-height', '200'],
   dos: [],
+  /* -zone, because vid_sunx.c takes its framebuffer out of Quake's zone; see gate-pixels. */
+  sun: ['-zone', '512', '-width', '320', '-height', '200'],
 };
 const WATCH = ['SCR_UpdateScreen', 'Draw_TileClear', 'V_RenderView', 'R_RenderView', 'R_EdgeDrawing',
   'R_RenderWorld', 'R_ScanEdges', 'D_DrawSurfaces', 'D_DrawSpans8', 'D_DrawZSpans',

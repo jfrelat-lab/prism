@@ -147,7 +147,9 @@ function capture(variant, extraArgs, envExtra = {}) {
   };
 
   let read;
-  if (variant === 'x11') {
+  // The SUN driver draws through the same Xlib the Linux one does -- a different platform layer over
+  // one shim -- so the capture is the same. What differs is the C, which is the point of comparing.
+  if (variant === 'x11' || variant === 'sun') {
     wrap('XPutImage', () => {});
     read = () => {
       const x = program.M.x11;
@@ -273,6 +275,13 @@ const SETTABLE = ['+vid_stretch_by_2', '0', '+vid_config_x', '320', '+vid_config
                   '+vid_mode', '2'];
 const runs = {
   x11: () => capture('x11', ['-width', '320', '-height', '200']),
+  /*
+   * `-zone 512` is not a tuning knob: vid_sunx.c allocates its framebuffer with Z_Malloc, out of
+   * Quake's own zone, where vid_x.c uses malloc. The zone is 0xc000 by default -- 49,152 bytes --
+   * and a 320x200 frame is 64,000, so the SUN build cannot start without it on any machine. -zone is
+   * Quake's own switch for exactly this.
+   */
+  sun: () => capture('sun', ['-zone', '512', '-width', '320', '-height', '200']),
   dos: () => capture('dos', []),
   win: () => capture('win', ['-window', ...SETTABLE]),
 };
@@ -324,6 +333,18 @@ for (const [name, run] of Object.entries(runs)) {
 const remap = got.x11.error ? 0 : winBlackRemap(got.x11.palette);
 const pairs = [
   { a: 'x11', b: 'dos', assert: true },
+  /*
+   * REPORTED, NOT ASSERTED -- yet. The SUN driver renders the same scene from the same demo tick and
+   * differs by about one COLORMAP ROW over part of the picture, from the very first frame:
+   * bracket-pixel names D_DrawSpans8 writing 17 where X11 writes 16. The two drivers do not set the
+   * renderer up the same way -- vid_sunx.c hands D_InitCaches a static `byte surfcache[1024*1024]`
+   * and takes d_pzbuffer from the high hunk, where vid_x.c sizes the cache with
+   * D_SurfaceCacheForRes and carves both out of one allocation -- so a lighting input differs before
+   * anything has had time to go stale. Until that is named, asserting this pair would only record
+   * that it is red.
+   */
+  { a: 'x11', b: 'sun', assert: false,
+    note: 'SUN and X11 set the renderer up differently; see the comment above' },
   { a: 'x11', b: 'win', assert: true,
     allow: (l, r) => l === 0 && r === remap,
     note: `allowing X11's index 0 to be Win32's black remap, index ${remap}` },

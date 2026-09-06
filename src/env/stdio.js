@@ -625,6 +625,13 @@ export function installStdio(M, {
     },
     lstat: (namePtr, st) => api.stat(namePtr, st),
     fstat: (fd, st) => { const h = fileOf(fd); return h ? fillStat(st, h.bytes) : -1; },
+    /*
+     * A FILE * already IS its descriptor here -- the handle table is keyed by the same number -- so
+     * fileno is the identity for anything open and -1 for anything else. Quake's SUN build needs it
+     * to try mmap on its pak files; that mapping is refused, and sys_sun.c's own Sys_FileRead falls
+     * back to fread when the map is null, which is the program handling its own answer.
+     */
+    fileno: (fp) => (fileOf(fp) ? (fp | 0) : -1),
 
     ftruncate: (fd, len) => {
       const h = fileOf(fd);

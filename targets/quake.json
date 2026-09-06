@@ -196,6 +196,25 @@
         "pit",
         "go32"
       ]
+    },
+    "sun": {
+      "host": "x11",
+      "title": "QUAKE (SunOS/X11, id386=0)",
+      "_doc": "id shipped a SUN platform layer and nobody has ever built it here: sys_sun.c, in_sun.c, snd_sun.c and TWO video drivers -- vid_sunx.c over plain Xlib and vid_sunxil.c over Sun's XIL imaging library. The XIL one needs a proprietary library that does not exist outside SunOS; the Xlib one needs exactly the Xlib PRISM already shims for Doom, which is why this variant is worth having: a FOURTH platform layer over the same renderer, and the cheapest new axis the corpus offers.",
+      "addUnits": [
+        "sys_sun.c",
+        "vid_sunx.c",
+        "snd_null.c",
+        "cd_null.c",
+        "net_none.c"
+      ],
+      "_snd": "snd_null.c rather than the shipped snd_sun.c: that file opens /dev/audio and drives Sun's own audio ioctls, which is a device surface of its own and not what this variant is for. The same substitution the DOS variant makes for its Gravis card.",
+      "_net": "net_none.c, as x11 and dos already do.",
+      "env": [
+        "stdio",
+        "x11"
+      ],
+      "_in": "in_sun.c is NOT built, and that is a selection id's own tree offers: vid_sunx.c defines IN_Init, IN_Shutdown, IN_Commands and IN_Move itself -- exactly as vid_x.c does for the Linux build -- while in_sun.c is the fuller alternative, reaching for gethrtime and XChangePointerControl. Building both defines each of the four twice."
     }
   }
 }

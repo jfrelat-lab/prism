@@ -49,7 +49,9 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
         IMG_BYTE_ORDER = 20, IMG_BITMAP_UNIT = 24, IMG_BITMAP_BIT_ORDER = 28, IMG_BITMAP_PAD = 32,
         IMG_DEPTH = 36, IMG_BYTES_PER_LINE = 40, IMG_BITS_PER_PIXEL = 44, IMG_SIZE = 64;
 
-  const state = { width: 0, height: 0, imageData: 0, palette: new Uint8Array(768) };
+  const state = { width: 0, height: 0, imageData: 0, palette: new Uint8Array(768),
+                  // Interned atom names, and the window's own title when it sets one through ICCCM.
+                  atoms: new Map(), windowName: '' };
 
   /*
    * An event queue, because a real X server sends events a client waits for. Doom maps its window and
@@ -86,6 +88,47 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
     XWarpPointer: () => 0,
     XSelectInput: () => 0,
     XStoreName: () => 0,
+
+    /*
+     * ICCCM: what a client tells a WINDOW MANAGER about itself. Quake's SUN driver sets every one of
+     * them where its Linux driver sets none -- a program written for a workstation desktop against
+     * one written for a Linux box in 1996.
+     *
+     * There is no window manager here, so these record what a page could use and otherwise answer
+     * the way a server with nothing to argue about would. They are not stubs in the bad sense: an
+     * atom really is an interned string, XAllocWMHints really does return storage the caller frees,
+     * and getting THAT wrong is what makes a program crash rather than merely look plain.
+     */
+    XInternAtom: (_d, namePtr) => {
+      const name = M.mod.cstr(namePtr);
+      if (!state.atoms.has(name)) state.atoms.set(name, state.atoms.size + 1);
+      return state.atoms.get(name);
+    },
+    XChangeProperty: () => 0,
+    /* One fixed display, and the same one the DisplayWidth macro reports: 640x480. */
+    ScreenOfDisplay: () => 1,
+    WidthOfScreen: () => 640,
+    HeightOfScreen: () => 480,
+    XSetWMProtocols: () => 1,
+    XConfigureWindow: () => 0,
+    XUndefineCursor: () => 0,
+    // Zeroed storage the caller owns, which is the whole contract. Quake writes flags into it and
+    // frees it; handing back 0 would be a null dereference two lines later.
+    XAllocWMHints: () => M.rt.calloc(1, 40),
+    XAllocSizeHints: () => M.rt.calloc(1, 80),
+    XAllocClassHint: () => M.rt.calloc(1, 8),
+    XFree: (p) => { if (p) M.rt.free(p); return 1; },
+    /*
+     * The window's NAME, which is the one part of this a page can act on: XTextProperty's first
+     * field is the string. It goes where XStoreName's would, so a shell that shows a title shows
+     * this one too.
+     */
+    XSetWMProperties: (_d, _w, namePtr) => {
+      if (!namePtr) return 0;
+      const str = M.mod.dv.getInt32(namePtr, true);
+      if (str) state.windowName = M.mod.cstr(str);
+      return 0;
+    },
     XSetWindowColormap: () => 0,
     XAutoRepeatOn: () => 0,
     XAutoRepeatOff: () => 0,
