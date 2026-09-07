@@ -72,6 +72,10 @@ if (dataArg) {
   };
   walk(dataArg);
 }
+/* Files the INSTALLATION provides -- see targets/*.json's `files`. The player's data wins on a clash. */
+for (const [name, text] of Object.entries(target.files ?? {})) {
+  if (!(name in files)) files[name] = new TextEncoder().encode(`${text}\n`);
+}
 
 const t0 = performance.now();
 let built;

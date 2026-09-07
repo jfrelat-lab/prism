@@ -24,6 +24,7 @@ const flag = (n) => argv.includes(`--${n}`);
 
 const DATA = opt('data');
 const FRAMES = +(opt('frames') ?? 200);
+const probes = [];
 
 /* Data from a directory the user names, never fetched here and never in the repository. */
 const files = {};
@@ -42,6 +43,10 @@ if (DATA) {
 }
 
 const target = loadTarget(join(ROOT, 'targets/quake2.json'));
+/* Files the INSTALLATION provides -- targets/*.json's `files`; vid_so.c reads /etc/quake2.conf. */
+for (const [name, text] of Object.entries(target.files ?? {})) {
+  if (!(name in files)) files[name] = new TextEncoder().encode(`${text}\n`);
+}
 const t0 = performance.now();
 const { program, env, units } = buildTarget(target, { root: ROOT, envExtra: { stdio: { files } } });
 const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
@@ -68,6 +73,40 @@ if (!flag('quiet')) {
  * The frame cap. Qcommon_Frame is the frame -- sys_linux.c's main calls it in an unbounded loop --
  * so it is both the right place to count and the only place to stop.
  */
+/*
+ * --probe-input: how many times the input path is actually reached.
+ *
+ * "The game runs and ignores the keyboard" has two very different causes -- the events never arrive,
+ * or the client never asks for them -- and they look identical from a screenshot. Counting the calls
+ * separates them in one run.
+ */
+if (flag('probe-input')) {
+  /*
+   * BY LINKAGE NAME, not by the name in the source. A function that belongs to a module is placed as
+   * `ref_soft$KBD_Update` -- that is the whole point of the per-module namespaces -- so looking it up
+   * unqualified finds nothing and reports "not in this build" about a function that is right there.
+   * And the Xlib entry points are not the program's at all: they are PRISM's shim, on M.rt.
+   */
+  for (const name of ['KBD_Update', 'Do_Key_Event', 'RW_IN_Frame', 'RW_IN_Commands', 'XLateKey']) {
+    const key = program.F[name] ? name
+      : program.F[`ref_soft$${name}`] ? `ref_soft$${name}` : null;
+    if (!key) { console.log(`  [probe] ${name}: in neither namespace`); continue; }
+    const f = program.F[key];
+    let n = 0;
+    const w = function (...a) { n++; return f.apply(this, a); };
+    program.F[key] = w;
+    program.mod.bindFunc(key, w);
+    probes.push([key, () => n]);
+  }
+  for (const name of ['XPending', 'XNextEvent', 'XLookupString', 'XKeycodeToKeysym']) {
+    const f = program.M.rt[name];
+    if (!f) { console.log(`  [probe] ${name}: not in the shim`); continue; }
+    let n = 0;
+    program.M.rt[name] = function (...a) { n++; return f.apply(this, a); };
+    probes.push([`rt.${name}`, () => n]);
+  }
+}
+
 let frames = 0;
 const inner = program.F.Qcommon_Frame;
 program.F.Qcommon_Frame = function (...a) {
@@ -87,6 +126,7 @@ try {
 }
 const secs = (performance.now() - t1) / 1000;
 console.log(`\n${frames} frames in ${secs.toFixed(1)} s (${(frames / secs).toFixed(1)}/s)`);
+for (const [name, count] of probes) console.log(`  [probe] ${name}: ${count().toLocaleString('en')} calls`);
 
 /*
  * What ref_soft drew.

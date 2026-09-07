@@ -584,11 +584,19 @@ function describe() {
     $('args').value = mergeArgs(x.variantArgs, p.args);
   }
   $('args').placeholder = p.argsHint || 'arguments passed to main()';
-  $('controls').innerHTML = (p.controls || [])
-    .map(([k, what]) => `<kbd>${esc(k)}</kbd> ${esc(what)}`).join(' · ');
-  $('controls').style.display = (p.controls || []).length ? '' : 'none';
   $('run').disabled = !!worker || !x.present;
 }
+
+/*
+ * The panel is closed by default in a page whose whole point is the machine's own screen, and the
+ * choice is remembered. An error opens it whatever you chose, because a build that failed behind a
+ * closed panel is a page that simply did nothing.
+ */
+function showPanel(on) {
+  $('main-panel-host').classList.toggle('nopanel', !on);
+  try { localStorage.setItem('prism.panel', on ? '1' : '0'); } catch {}
+}
+$('panel').onclick = () => showPanel($('main-panel-host').classList.contains('nopanel'));
 
 /* Retyping the command line as the arguments change: the prompt is the one place both are visible. */
 $('args').oninput = () => { if (!worker) renderChooser(); };
@@ -630,7 +638,16 @@ function clearScreen() {
  * line, printed four hundred times, buries everything else the run had to say.
  */
 let lastLine = null, lastEl = null, lastCount = 0;
+
+/*
+ * WHOSE MESSAGE IS IT. The program's output is the program's: it is already on the machine's own
+ * screen, under the command that started it, and it goes to the browser's console as well -- which
+ * is where you can filter it, keep it across a reload, and copy it out. What stays in PRISM's panel
+ * is what PRISM has to say about itself.
+ */
 function log(line, kind = 'info') {
+  if (kind === 'guest') { console.log('%c[guest]', 'color:#8b929e', line); return; }
+  if (kind === 'error') showPanel(true);      // a build failure must never be behind a closed panel
   if (line === lastLine && lastEl) {
     lastEl.textContent = `${line}   ×${++lastCount}`;
     $('log').scrollTop = $('log').scrollHeight;
@@ -1297,6 +1314,9 @@ function publishQuery() {
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
+
+/* Whatever was chosen last time; closed the first time, because the machine's screen is the point. */
+try { showPanel(localStorage.getItem('prism.panel') === '1'); } catch { showPanel(false); }
 
 requestAnimationFrame(frame);
 

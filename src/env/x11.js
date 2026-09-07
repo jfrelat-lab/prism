@@ -278,7 +278,32 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
       return 0;
     },
     XKeycodeToKeysym: (_dpy, code) => keysymFor(code | 0),
-    XLookupString: () => 0,
+
+    /*
+     * XLookupString, which is the OTHER way an X client asks what a key was -- and it was a stub
+     * returning 0, so every client that uses it saw every key as nothing.
+     *
+     * Doom asks with XKeycodeToKeysym and worked from the first day; Quake II's XLateKey
+     * (linux/rw_x11.c:447) asks with this one, and `keysym` is an OUT parameter it never wrote. Every
+     * key therefore translated to 0, Quake II ignored all of them, and the game looked perfectly
+     * healthy while being completely deaf: it rendered, it ran its server, it stood still.
+     *
+     * The real function fills in the keysym AND writes the composed characters into the caller's
+     * buffer, returning how many. The printable range is the keysym itself, which is how X defines
+     * the Latin-1 keysyms; anything else composes to no characters, and saying 0 there is not a
+     * shortcut -- it is what a real Xlib answers for a function key.
+     */
+    XLookupString: (ev, buf, n, ksOut, _status) => {
+      const scan = ev ? dv().getInt32(ev + XKEY_KEYCODE, true) : 0;
+      const ks = keysymFor(scan);
+      if (ksOut) dv().setInt32(ksOut, ks, true);
+      if (!buf || (n | 0) <= 0) return 0;
+      const printable = ks >= 0x20 && ks <= 0x7e;
+      if (!printable) { M.u8[buf] = 0; return 0; }
+      M.u8[buf] = ks;
+      if ((n | 0) > 1) M.u8[buf + 1] = 0;
+      return 1;
+    },
   };
 
   function publishGeometry() {

@@ -49,8 +49,7 @@
       "server/sv_user.c",
       "server/sv_world.c",
       "game/q_shared.c",
-      "null/vid_null.c",
-      "null/in_null.c",
+      "linux/vid_so.c",
       "null/snddma_null.c",
       "null/cd_null.c",
       "linux/sys_linux.c",
@@ -59,6 +58,11 @@
       "linux/net_udp.c"
     ]
   },
+  "files": {
+    "/etc/quake2.conf": "."
+  },
+  "_files": "What the INSTALLATION provides, as against what the player provides. vid_so.c reads one line from /etc/quake2.conf and treats it as the directory holding the ref libraries; on a real Linux box the package put it there. A dot means the current directory, which is where dlopen looks anyway -- it matches on the last component. This is not game data and does not belong in the data directory, and it is not a source change: it is the file the program has always read.",
+  "_input": "linux/vid_so.c, NOT null/vid_null.c + null/in_null.c. The direct-link glue got the renderer running and cost the KEYBOARD: null/in_null.c is empty stubs, and it is vid_so.c that dlsyms KBD_Init/KBD_Update/KBD_Close and the six RW_IN_* out of the refresh and assigns KBD_Update_fp. Without it Sys_SendKeyEvents (linux/sys_linux.c:256) finds a null pointer every frame, so the game renders, runs its server and plays its demo while being completely deaf -- measured: KBD_Update called 0 times in 60 frames. vid_so.c dlopens `ref_soft.so` (the name sprintf'd at vid_so.c:357 from the vid_ref cvar), which is why the module needs a soname.",
   "_null": "null/ is not a stub set here, it is the DIRECT LINK: null/vid_null.c is titled 'DIRECT LINK GLUE' and calls GetRefAPI in-process, where linux/vid_so.c and win32/vid_dll.c dlopen ref_soft.so for it. So this build needs no dlopen. What null/ does NOT give is the game: null/sys_null.c:37 has Sys_GetGameAPI return NULL, so game/ compiles but the server cannot reach it.",
   "_inline": "What every real platform's in_*.c defines and id's own null platform does not -- linux/in_linux.c:6 and win32/in_win.c:55 both have exactly this line. cvar_t is left incomplete on purpose: only the pointer is needed here. It stays NULL, because a platform's IN_Init is what registers it and null/in_null.c's is empty -- so opening the Options menu would dereference NULL, in id's own null build just as much as in this one. Faithful, and stated rather than papered over.",
   "inline": {
@@ -96,6 +100,7 @@
         "ref_soft/r_surf.c",
         "linux/rw_x11.c"
       ],
+      "soname": "ref_softx.so",
       "exportsFrom": "ref_soft/ref_soft.def",
       "_rw": "linux/rw_x11.c is REF_SOFT_OBJS too -- the makefile builds ref_softx.so from the same renderer plus this one file. It is what ALLOCATES the surface: null/swimp_null.c is empty bodies and its SWimp_SetMode returns nothing, so vid.buffer stayed 0. rw_x11.c does it with XCreateImage, over the Xlib PRISM already had for Doom."
     },

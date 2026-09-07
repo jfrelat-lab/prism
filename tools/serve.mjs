@@ -139,6 +139,12 @@ const server = createServer(async (req, res) => {
           caseInsensitive: !!resolved.caseInsensitive,
           compile: resolved.compile ?? {},
           env: resolved.env ?? ['stdio'],
+          /*
+           * Files the INSTALLATION provides, as against the ones the player does. Quake II's
+           * linux/vid_so.c reads /etc/quake2.conf to find its ref libraries; on a real box the
+           * package put it there, and it is neither game data nor a source change.
+           */
+          files: resolved.files ?? {},
           // Which shell branch presents it; a variant may set its own.
           host: resolved.host ?? null,
           args: resolved.args ?? null,

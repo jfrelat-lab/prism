@@ -127,6 +127,8 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       // ...and which devices it asked for, so the branch below installs what the build wants
       // rather than what its host usually implies.
       env: t.env ?? [],
+      /* Files the INSTALLATION provides -- see targets/*.json's `files`. */
+      installFiles: t.files ?? {},
     };
   }
 
@@ -288,10 +290,35 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
   log(`compiled in ${compileMs.toFixed(0)} ms: ${Object.keys(prog.F).length} functions, ` +
     `${(prog.src.length / 1024 / 1024).toFixed(2)} MB of JavaScript`);
 
+  /*
+   * SYMBOLS THE BUILD NEVER RESOLVED, said at the start rather than discovered by crashing.
+   *
+   * Node's build report has always printed these; the page did not, so the first sign of one was the
+   * program throwing in the middle of something. Quake's DOS build is the case that matters:
+   * VGA_UpdatePlanarScreen is defined only in d_copy.s, and it is the ONE routine in that build with
+   * no C equivalent behind `id386=0`. Nothing calls it until somebody picks a mode-X resolution from
+   * the video menu -- and then the game dies naming a function whose absence was knowable before it
+   * started.
+   */
+  if (prog.undefined?.length) {
+    const names = prog.undefined.map(u => u.name.split('$').pop());
+    log(`${names.length} symbol${names.length === 1 ? '' : 's'} the build never resolved; anything ` +
+      `that calls one throws: ${names.slice(0, 12).join(' ')}` +
+      (names.length > 12 ? ` … and ${names.length - 12} more` : ''), 'warn');
+  }
+
 
 
   // --- 3. the platform layer.
   const files = {};
+  /*
+   * The installation's files first, the player's data over them: a real machine has both, and if the
+   * two ever named the same path the one the person supplied is the one they meant.
+   */
+  const enc = new TextEncoder();
+  for (const [name, text] of Object.entries(program.installFiles || {})) {
+    files[name] = enc.encode(`${text}\n`);
+  }
   for (const [name, bytes] of Object.entries(data || {})) files[name] = new Uint8Array(bytes);
   const biggest = Object.entries(files).sort((a, b) => b[1].length - a[1].length)[0];
   log(`${Object.keys(files).length} data files visible to the program` +

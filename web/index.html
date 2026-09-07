@@ -217,13 +217,24 @@
 
   /* ---------------------------------------------------------------- under the screen */
 
-  aside { border-left: 1px solid var(--edge); display: grid; grid-template-rows: auto auto 1fr;
+  /*
+   * PRISM'S OWN PANEL, and nothing else's.
+   *
+   * It used to carry three things: a status line, a legend of the game's keys, and the program's
+   * stdout. The legend belonged to a shell where you picked a program from a dropdown and had no
+   * idea what it was; the machine's own screen tells you that now. And the program's output belongs
+   * to the program: it is on the machine's terminal, where the person typing can see it, and in the
+   * browser's console for anyone who wants to grep it. What is left here is what PRISM has to say
+   * about ITSELF -- what it fetched, what it compiled, what it could not emit -- which is a different
+   * kind of thing and is why the panel can be closed.
+   */
+  aside { border-left: 1px solid var(--edge); display: grid; grid-template-rows: auto 1fr;
           min-height: 0; background: var(--panel); }
+  main.nopanel { grid-template-columns: 1fr; }
+  main.nopanel aside { display: none; }
   .bar { padding: 8px 12px; border-bottom: 1px solid var(--edge); color: var(--dim);
          display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   #stats { color: var(--fg); }
-  kbd { background: #222831; border: 1px solid var(--edge); border-bottom-width: 2px;
-        border-radius: 4px; padding: 0 5px; color: var(--fg); }
 
   #log { overflow-y: auto; padding: 8px 12px; min-height: 0; }
   .line { white-space: pre-wrap; word-break: break-word; margin: 1px 0; color: var(--dim); }
@@ -240,7 +251,7 @@
   <a href="./live/" title="write C and run it, with no machine and no program">Live C &rarr;</a>
 </header>
 
-<main>
+<main id="main-panel-host">
   <div id="vm">
     <div class="vmtop">
       <span class="vmname" id="vmName">&mdash;</span>
@@ -252,6 +263,7 @@
       <button id="stopBtn" disabled>Stop</button>
       <button id="pause">Pause</button>
       <button id="fullscreen" title="fill the screen — Esc or F11 to come back">Fullscreen</button>
+      <button id="panel" title="PRISM's own messages — the program's output is on its screen and in the browser console">Log</button>
       <label>speed
         <select id="speed">
           <option value="25">25%</option>
@@ -278,7 +290,6 @@
 
   <aside>
     <div class="bar"><span id="stats">idle</span></div>
-    <div class="bar" id="controls"></div>
     <div id="log"></div>
   </aside>
 </main>

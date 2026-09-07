@@ -2,8 +2,8 @@
   "title": "QUAKE II",
   "subtitle": "id Software, 1997 · 3.19 with ref_soft, the software renderer — X11",
   "target": "quake2",
-  "args": "+set vid_ref soft +map demo1",
-  "argsHint": "`+map <name>` loads a level; `+set vid_ref soft` is the software renderer, the only one PRISM has.",
+  "args": "+set vid_ref softx +map demo1",
+  "argsHint": "`+map <name>` loads a level; `+set vid_ref softx` is the X11 software renderer -- softX, not soft: vid_so.c skips its is-this-owned-by-root check only for a library whose name contains \"softx\", and the svgalib one it would otherwise want needs root.",
   "fps": 30,
   "host": "x11",
   "needsData": {
