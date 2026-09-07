@@ -123,6 +123,20 @@
   #screen { image-rendering: pixelated; width: 100%; height: 100%; object-fit: contain;
             background: #000; }
   /*
+   * A FLEX ITEM WILL NOT SHRINK BELOW ITS CONTENT, and a canvas's content has an aspect ratio.
+   *
+   * The frame is a flex column; `height: 100%` on the canvas resolved against it, but the default
+   * `min-height: auto` then refused to go below the height its own 320x200 ratio implies at that
+   * width. In a wide, short window that is bigger than the stage: measured 581px of canvas inside a
+   * 371px stage, and `overflow: hidden` cut the top and bottom off the picture. The letterboxing was
+   * never wrong -- there was simply nothing left of the box to letterbox inside.
+   *
+   * `flex: 1 1 0` with the minimums released makes the canvas exactly the space that is left, and
+   * `object-fit: contain` then fits the guest's resolution into it and centres it, at any window
+   * size, on every resize, with black where the shape does not match.
+   */
+  #winframe:not(.windowed) > #screen { flex: 1 1 0; min-width: 0; min-height: 0; }
+  /*
    * The stage holds two things, and which of them shows is not "is something running" -- it is WHAT
    * KIND OF MACHINE this is. A terminal machine is the canvas the whole time: its prompt is drawn in
    * the same 80x25 text mode the program will use, so nothing moves or rescales when the program
