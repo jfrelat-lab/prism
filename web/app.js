@@ -620,12 +620,28 @@ function clearScreen() {
 }
 
 // ---------------------------------------------------------------- the shell's own log
+/*
+ * A REPEATED LINE IS COUNTED, not repeated.
+ *
+ * Doom prints "S_StartSoundAtVolume: 16bit and not pre-cached - wtf?" on every single sound, and
+ * that is its own source doing it: doomdef.h defines SNDSERV, s_sound.c guards the warning on
+ * SNDSRV -- a name that appears once in the whole tree and is defined nowhere. A real linuxdoom
+ * prints it too, so it is not ours to fix and not ours to hide. What IS ours is a pane where one
+ * line, printed four hundred times, buries everything else the run had to say.
+ */
+let lastLine = null, lastEl = null, lastCount = 0;
 function log(line, kind = 'info') {
+  if (line === lastLine && lastEl) {
+    lastEl.textContent = `${line}   ×${++lastCount}`;
+    $('log').scrollTop = $('log').scrollHeight;
+    return;
+  }
   const el = document.createElement('div');
   el.className = `line ${kind}`;
   el.textContent = line;
   $('log').append(el);
   $('log').scrollTop = $('log').scrollHeight;
+  lastLine = line; lastEl = el; lastCount = 1;
 }
 
 // ---------------------------------------------------------------- data files
@@ -894,6 +910,7 @@ async function startRun(typedAs = null) {
   }
   stop(true);
   $('log').innerHTML = '';
+  lastLine = null; lastEl = null; lastCount = 0;
 
   /*
    * THE PROGRAM'S OWN DATA, fetched now and not before. See loadData: the descriptor names one root
@@ -1125,7 +1142,20 @@ function paint() {
   // One surface, two modes, exactly as the program sees it: text until it creates a display, its
   // framebuffer while it has one, and back to text if it closes it.
   if (guest && pixels && w > 0 && h > 0 && !Atomics.load(ctrl, SLOT.TEXTMODE)) {
-    if (!imageData || imageData.width !== w || imageData.height !== h) {
+    /*
+     * THE CANVAS, not just the ImageData. These two went out of sync and the result was the picture
+     * drawn 1:1 into the top-left corner of a screen four times too big, with the program's previous
+     * screen still visible around it.
+     *
+     * Every DOS game bounces between text and graphics at startup -- it prints, goes graphical,
+     * prints again -- and the text path resizes the canvas to 720x400 on its own. Coming back to
+     * graphics, `imageData` still matched 320x200, so this test said there was nothing to do and
+     * putImageData wrote 320x200 into a canvas that was still 720x400. Whatever the canvas held
+     * outside that rectangle stayed on screen, which is why Heretic's title sat in the corner of its
+     * own loading screen and Pac-Man showed a fraction of itself.
+     */
+    if (!imageData || imageData.width !== w || imageData.height !== h ||
+        canvas.width !== w || canvas.height !== h) {
       canvas.width = w; canvas.height = h;
       imageData = cx.createImageData(w, h);
       textImage = null;                      // so a return to text mode reallocates its own image
