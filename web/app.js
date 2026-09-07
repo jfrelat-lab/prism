@@ -196,6 +196,7 @@ let targetInfo = {};      // target name -> { present, variants }
 let machine = null;       // the machine we are sitting at
 let chosen = 0;           // which of its programs is selected
 let argsFor = null;       // the entry the argument field's contents belong to
+let lastArgsWritten = ''; // ...and exactly what was written, so typing is told apart from a refill
 
 async function discover() {
   const cfg = await (await fetch('./machines.json')).json();
@@ -579,9 +580,18 @@ function describe() {
    * used to refill the field unconditionally, which quietly threw away what `?args=` had put there
    * and what somebody had typed in the meantime.
    */
-  if (argsFor !== x) {
+  /*
+   * Refill when the field is still exactly what this function last wrote -- not merely when the
+   * program changed. `variantArgs` arrives from the server a beat AFTER the first draw, and guarding
+   * on the entry alone meant the second describe() declined to add it: `quake:dos` lost its
+   * mandatory `-nosound` and threw on GUS_Init before drawing a pixel. Anything you typed is still
+   * safe, because then the field no longer matches what was written.
+   */
+  const want = mergeArgs(x.variantArgs, p.args);
+  if (argsFor !== x || $('args').value === lastArgsWritten) {
     argsFor = x;
-    $('args').value = mergeArgs(x.variantArgs, p.args);
+    lastArgsWritten = want;
+    $('args').value = want;
   }
   $('args').placeholder = p.argsHint || 'arguments passed to main()';
   $('run').disabled = !!worker || !x.present;
