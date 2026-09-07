@@ -710,6 +710,30 @@ differ from a native build.)
 State: **identical over 20006 steps including interrupts.** The Z80 core is compiled correctly, so
 Pac-Man's remaining failure is in the machine layer, not the CPU.
 
+## When a program runs but its command buffer does not
+
+A discriminator worth keeping, because the two states look identical from outside: a program whose
+main loop is alive, and one whose main loop never reached the place where typed commands are
+executed. Both draw, both echo what you type, both return you a prompt.
+
+**Type a command that has no guards of its own and see whether it answers.** In Quake, `echo hello`:
+`Cmd_Echo_f` takes no arguments it can reject and belongs to no subsystem that can be uninitialised,
+so its silence has exactly one meaning -- `Cbuf_Execute()` was never reached. There is a single
+`Cbuf_Execute()` in `host.c` (line 657, inside `_Host_Frame`, three lines after `Sys_SendKeyEvents`),
+so the fault is upstream of it.
+
+The trap this catches is that the echo proves less than it looks like it proves. Quake has FIVE key
+pumps: the main one in `_Host_Frame`, plus `Con_NotifyBox`, `SCR_ModalMessage` and the two in
+`WaitJoyButton`. The modal ones set `key_count` negative first -- and `keys.c:609` writes
+`key_lastpress = key` BEFORE the `if (key_count <= 0) return`, and `key_count = -1` swallows only the
+FIRST event of that drain. So a modal pump echoes everything after the first keystroke and redraws
+it on the next line. A live console is therefore not evidence that the main loop is running.
+
+The MIRAGE session found its Quake stuck this way: `Host_Init` had never returned, because
+`IN_ReadJoystick` mistook a game port answering 0xF0 for a centred joystick and `WaitJoyButton` was
+waiting for a button that could not arrive. Everything downstream -- no demo, no game frame, an empty
+`cls.demos[]` reported as `No demos listed with startdemos` -- followed from that one port value.
+
 ## The whole-build differential (`tools/mamediff.mjs`) and the first perf number
 
 `z80diff` proved the CPU. `mamediff` covers everything above it: both sides compile the SAME MAME
