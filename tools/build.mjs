@@ -77,6 +77,35 @@ for (const [name, text] of Object.entries(target.files ?? {})) {
   if (!(name in files)) files[name] = new TextEncoder().encode(`${text}\n`);
 }
 
+/*
+ * --date=now: stamp the REAL build time into __DATE__ and __TIME__.
+ *
+ * They are frozen at "Jan  1 1996 00:00:00" by default (src/compile.js), and that is deliberate: a
+ * compiler that stamps the wall clock makes every build different, and this project's test strategy
+ * rests on the same input producing the same output -- gcc has -Wdate-time and SOURCE_DATE_EPOCH for
+ * the same reason. But Quake PRINTS them in its banner (`host.c:871`, "Exe: ..."), so the frozen
+ * value is visible on screen and reads as a bug rather than as a policy. This is the opt-out: the
+ * default stays reproducible, and a real date is one flag away.
+ *
+ * SOURCE_DATE_EPOCH is honoured too, with the same meaning it has everywhere else.
+ */
+const dateArg = opt('date') ?? (process.env.SOURCE_DATE_EPOCH ? 'epoch' : null);
+const dateDefines = {};
+if (dateArg) {
+  const when = dateArg === 'now' ? new Date()
+    : new Date(1000 * Number(dateArg === 'epoch' ? process.env.SOURCE_DATE_EPOCH : dateArg));
+  if (Number.isNaN(when.getTime())) { console.error(`--date: not a time: ${dateArg}`); process.exit(2); }
+  const M = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // C's format exactly: "Mmm dd yyyy" with the day SPACE-padded, and "hh:mm:ss".
+  const d = String(when.getDate()).padStart(2, ' ');
+  const p2 = (n) => String(n).padStart(2, '0');
+  dateDefines.__DATE__ = `"${M[when.getMonth()]} ${d} ${when.getFullYear()}"`;
+  dateDefines.__TIME__ = `"${p2(when.getHours())}:${p2(when.getMinutes())}:${p2(when.getSeconds())}"`;
+}
+
+/* Applied to the TARGET, because buildTarget reads its defines from there. */
+if (Object.keys(dateDefines).length) target.defines = { ...(target.defines ?? {}), ...dateDefines };
+
 const t0 = performance.now();
 let built;
 try {
