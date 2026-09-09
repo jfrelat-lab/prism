@@ -2430,3 +2430,58 @@ a bitfield wider than 32 bits (9) -- and a third, vector types (9), is refused b
 CHANGES THE TYPE and ignoring it miscompiles silently. `__attribute__((mode))` came out of that same
 family and went the other way: its widths are exact and knowable, so it is implemented, and a mode
 the mapping does not know is still refused rather than guessed.
+
+## The 16-bit BYTE IMAGE (`tools/gate-bits16.mjs`) — the half `gate-abi16` cannot reach
+
+```
+node tools/gate-bits16.mjs [count] [seed]
+
+gate-bits16: 210 cases (10 hand, 200 generated, seed 20250909) — Open Watcom 8086 small model,
+             run under DOSBox-X
+210/210 cases byte-identical, 14760 bits compared
+16-bit DOS bitfield ALLOCATION ORDER, byte order and padding match Open Watcom exactly.
+```
+
+`gate-abi16` asks the object file for `sizeof` and for the offset of every plain member, and it says
+in its own comment why that is not everything:
+
+> offsetof is illegal on a bitfield, so only plain members are asked — the bitfield PLACEMENT is
+> pinned by the size of the struct and by the offsets of the plain members around it.
+
+Pinned by the size tells you **which unit** a bitfield lands in and nothing about **where in it**.
+Flip the allocation order inside every unit — first field into the high bits instead of the low —
+and all ~4,970 of that gate's checks still pass. `layoutStruct` commits to an order anyway:
+`bitOffset = unitAt * 8 + unitUsed`, `unitUsed` growing from zero. That was an assumption wearing a
+measurement's clothes, and it is the exact shape of a check that cannot fail.
+
+**The question that can fail** is to hand the compiler an INITIALISED object and read its bytes
+back. Nothing infers a byte. `oracle.watcomRun16` builds a real DOS executable in the container and
+runs it under headless DOSBox-X; one session covers every case, because the session costs seconds and
+a struct costs nothing. PRISM's side writes the same values into a byte image using only what
+`layoutStruct` returned — `offset`/`size` for a plain member, `bitOffset`/`width` for a bitfield —
+and the two images are compared bit for bit.
+
+The answer arrived in one line before the gate existed: `struct B { int a:3; int b:5; }` with
+`{5, 9}` is the single byte **`4D`**, which is `01001_101`. Field `a` in bits 0–2, `b` above it.
+**LSB-first, measured.**
+
+Three things beyond the order come with it, none of them checkable from an object file's offsets:
+
+* **A negative bitfield's sign bit** lands in the field's own top bit, not the unit's.
+* **Watcom's DOS `double` is IEEE 754 little-endian** — asserted now rather than assumed, along with
+  `float` and the byte order of every plain member.
+* **Padding is zero** in a static object's emitted image. Covered and uncovered bits are tracked
+  separately, so a disagreement in padding is reported as padding and never as a misplaced field.
+
+### The positive control, because a green gate proves nothing on its own
+
+Two deliberate mutations of PRISM's side, each run against the same 22-case corpus:
+
+| mutation | result |
+|---|---|
+| bitfields allocated MSB-first within the unit | **18 of 22 cases red** |
+| plain members written big-endian | **8 of 22 cases red** |
+
+The survivors are the cases the mutation cannot touch — a struct with no bitfields, a 1-bit field, a
+struct of nothing but `char`. That is what makes the green run mean something: the gate was shown to
+fail on exactly the two facts it claims to pin, before it was believed for passing.
