@@ -312,6 +312,55 @@ Two shapes of wait, handled differently:
   frame counter moves; inside a release-wait it is asked thousands of times and nothing moves. That
   distinction needs no knowledge of the loop.
 
+### Safepoints: making a loop observable when it calls nothing
+
+Spin damping counts calls, so it only works on a loop that makes them. `while (osd_key_pressed(k));`
+makes none: `osd_key_pressed` is the game's own C reading Allegro's `key[]` array straight out of
+memory. Nothing crosses a boundary, no profiler can see it, and — the part that matters — **no host
+code runs at all while it spins**, so the byte it waits for can never change. The loop is not slow,
+it is unreachable.
+
+A safepoint is two operations emitted on a loop's **back edge**
+([`emit.js`](../src/backend/emit.js), `#safepoint`):
+
+```js
+if(--M.spBudget<0)M.sp_(id);
+```
+
+* **A budget, not a call.** The common case is a decrement and a compare that never leaves the loop.
+  The default handler only refills — `sp_(_id) { M.spBudget = 1<<30; }` — so a build that instruments
+  and installs no handler pays the two operations and nothing else.
+* **Every safepoint is named.** `mod.safepoints[id]` is `functionName#n`, so the id that fired says
+  which loop fired it.
+* **Off by default, and chosen per program.** It is a compile option (`--safepoints` in the tools,
+  `"safepoints": true` in a `web/programs/*.json` descriptor, next to a `safepointsNote` saying why
+  that program needs it). Six programs ask for it today: MAME 0.1, 0.2 and 0.4, Heretic, Hexen and
+  OpenDUNE. Doom and both Quakes do not, and their descriptors say so by omission.
+
+**What the handler is for — three uses, each one measured before it was written:**
+
+| use | where | what it does |
+|---|---|---|
+| deliver an asynchronous event | Heretic, Hexen, OpenDUNE | these games take their time from a **timer interrupt** and then wait for it in a loop of their own. `tools/raven.mjs --safepoints` drives the interrupt from the safepoint, because that is the only place an asynchronous event can reach a program sitting inside its own C |
+| refresh state the program reads directly | MAME | `key[]` is written here, which is **what a real Allegro does** — from a keyboard interrupt. The faithful answer, not a workaround |
+| name the loop that is spinning | `tools/find-loop.mjs` | samples the id and reports the loop. It is what found the MGL stretched-blit freeze, which looked like a hang while the renderer was running |
+
+**The budget is not a sampling rate.** In the page it is 200,000 iterations, and the worker says why
+in those terms: it is *how many loop iterations a program may run before the outside world is allowed
+to change under it*. A millisecond of iterations is far below any latency a person can feel.
+`raven.mjs` uses 20,000 (`--budget`) because it is also counting.
+
+**What it costs, and what is not built.** A decrement and a compare on **every iteration of every
+loop** — precisely the cost MIRAGE measured on emitted-code speed, which is why this is opt-in rather
+than always on. And the general form is still only a form: the same mechanism with a different
+handler would let Stop interrupt a `while (1);`, and that handler is not written. Today the recourse
+for a program with no safepoints is terminating the worker.
+
+> **Against Asyncify, since the comparison is made above.** Asyncify's yield point needs a **call** —
+> an import declared async — so it cannot yield on a loop back edge either. A safepoint *manufactures*
+> the hook where the program offers none, which is strictly more general. The two honest caveats are
+> that it is off by default, and that it is not free.
+
 ### The clock is real, and the program paces itself
 
 `installRealClock` replaces the deterministic counter in the browser only. The program's own throttle
@@ -368,10 +417,10 @@ sub-millisecond timeout — asking for 0.25 ms still costs about one — so park
 deadline overshoots it, and the mechanism instead **learns how long the wait lasted last time** and
 spins only the final millisecond. Chasing the last 2% is not worth more machinery than that.
 
-What this deliberately does not catch: a loop that never calls the runtime, `while (1);` being the
-honest example. Nothing here can see it because nothing here is called. The recourse is terminating
-the worker; the general fix is a safepoint on loop back-edges in emitted code, which MIRAGE measured
-as a real cost on emitted-code speed, so it waits until something needs it.
+What spin damping deliberately does not catch: a loop that never calls the runtime at all. Nothing
+above can see it, because nothing above is called. **That case has its own mechanism — *Safepoints*,
+earlier in this section — and it is built and in use**; this paragraph used to say it was waiting for something to
+need it, which stopped being true once Heretic did.
 
 Known limitation, stated rather than discovered later: a timing-**calibration** loop — one that counts
 iterations per tick to measure the machine — gets cut short by damping and reads the machine as slower
