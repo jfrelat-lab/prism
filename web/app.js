@@ -912,6 +912,13 @@ stage.addEventListener('contextmenu', (e) => { if (document.pointerLockElement =
 
 // A lost focus must release everything, or the program keeps walking left for ever.
 addEventListener('blur', releaseAll);
+/*
+ * ...and the program is told, because a Win32 game reads it: WinQuake's IN_Move does nothing while
+ * `ActiveApp` is false, which is what makes alt-tabbing away release the mouse on a real machine.
+ */
+for (const [type, on] of [['focus', 1], ['blur', 0]]) {
+  addEventListener(type, () => { if (views) Atomics.store(views.ctrl, SLOT.FOCUS, on); });
+}
 // And so must clicking into the command line: from here on its keys are the page's, so the ones
 // still down would never get their break code.
 addEventListener('focusin', () => { if (typing()) releaseAll(); });
@@ -1060,6 +1067,7 @@ async function startRun(typedAs = null) {
   mouse.present(true);
   Atomics.store(views.ctrl, SLOT.SPEED, +$('speed').value);
   Atomics.store(views.ctrl, SLOT.TEXTMODE, 1);
+  Atomics.store(views.ctrl, SLOT.FOCUS, document.hasFocus() ? 1 : 0);
 
   // argv[0] is the program's own name, as a C program is entitled to expect -- and the name is the
   // one the MACHINE would have used: QUAKE.EXE on DOS, ./quake on a Unix box. Some programs read it

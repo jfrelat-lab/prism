@@ -2093,6 +2093,7 @@ BOOL WINAPI DestroyWindow(HWND);
 ATOM WINAPI RegisterClass(const WNDCLASS *);
 LRESULT WINAPI DefWindowProc(HWND, UINT, WPARAM, LPARAM);
 BOOL WINAPI ShowWindow(HWND, int);
+void prism_win32_activate(int);
 BOOL WINAPI UpdateWindow(HWND);
 BOOL WINAPI SetForegroundWindow(HWND);
 HWND WINAPI SetFocus(HWND);

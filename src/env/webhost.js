@@ -118,6 +118,15 @@ export const SLOT = {
   MOUSE_DY: 36,
   MOUSE_BUTTONS: 37, // host → guest: bit 0 left, bit 1 right, bit 2 middle -- the INT 33h order
   MOUSE_HAS: 38,   // host → guest: 1 once the page is capturing, so a probe can be answered honestly
+
+  /*
+   * WHETHER THE PAGE HAS THE FOCUS, which a Win32 program needs and cannot infer.
+   *
+   * WinQuake's IN_Move is `if (ActiveApp && !Minimized)` (in_win.c:741), and ActiveApp comes from
+   * WM_ACTIVATE and nothing else. Alt-tab away from a real Quake and it lets go of the mouse; the
+   * page is the desktop here, so it is the page's focus that says so.
+   */
+  FOCUS: 39,       // host → guest: 1 while the page has the focus
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };

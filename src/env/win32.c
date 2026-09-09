@@ -490,6 +490,23 @@ LRESULT WINAPI DefWindowProc(HWND w, UINT m, WPARAM wp, LPARAM lp)
     }
     return 0;
 }
+/*
+ * WHETHER THIS IS THE ACTIVE APPLICATION, and it is not a formality.
+ *
+ * WinQuake's IN_Move is `if (ActiveApp && !Minimized) { IN_MouseMove(cmd); ... }` -- in_win.c:741 --
+ * and `ActiveApp` comes from one place only: WM_ACTIVATE. With no window manager to send it, it
+ * stayed false, so the mouse deltas arrived, were accumulated by IN_Accumulate (measured: mx_accum
+ * reached 11,760) and were never once read. Everything below the boundary worked and nothing moved.
+ *
+ * The page is the desktop here, so a window that has been SHOWN is the active one, and the host says
+ * so when the page gains or loses focus -- which is also what makes alt-tabbing away release the
+ * mouse, as it should.
+ */
+void prism_win32_activate(int active)
+{
+    post(WM_ACTIVATE, active ? WA_ACTIVE : 0, 0);
+}
+
 BOOL WINAPI ShowWindow(HWND w, int cmd)
 {
     (void)w;
@@ -500,6 +517,8 @@ BOOL WINAPI ShowWindow(HWND w, int cmd)
     case SW_SHOWMINNOACTIVE: prism_win32_minimized = 1; prism_win32_visible = 1; break;
     default:                 prism_win32_minimized = 0; prism_win32_visible = 1; break;
     }
+    /* Shown means activated: there is no other window here to take the focus away. */
+    if (prism_win32_visible && !prism_win32_minimized) prism_win32_activate(1);
     return TRUE;
 }
 int WINAPI SetWindowText(HWND w, LPCSTR text)
@@ -672,6 +691,57 @@ BOOL WINAPI PostMessage(HWND w, UINT m, WPARAM wp, LPARAM lp)
  *
  * The exit code goes in wParam, where a real Windows puts it and where WinMain reads it back.
  */
+/*
+ * THE MOUSE, and Win32 is the third answer to the same question.
+ *
+ * WinQuake's non-DirectInput path (in_win.c:673) is the warp-to-centre idiom again, one layer up:
+ *
+ *     GetCursorPos (&current_pos);
+ *     mx = current_pos.x - window_center_x + mx_accum;
+ *     ...
+ *     if (mx || my) SetCursorPos (window_center_x, window_center_y);
+ *
+ * So the cursor needs a real POSITION that the program can move -- and both of those were stubs, one
+ * returning the screen centre for ever and the other doing nothing, which meant `mx` was always
+ * exactly zero. Keeping the position here and letting SetCursorPos set it is the whole of it.
+ *
+ * Buttons are messages, not state: MainWndProc (vid_win.c:2942) takes six of them and rebuilds the
+ * button mask from wParam's MK_* bits each time -- with id's own comment that Win32 packs several
+ * mouse events into one update, so it never trusts the message type. That is why the mask is sent
+ * on every button message and why a plain WM_MOUSEMOVE carries it too.
+ */
+static int cursor_x = 0, cursor_y = 0;
+
+/**
+ * The host's way in for the pointer: how far it moved, and which buttons are down.
+ *
+ * `buttons` is bit 0 left, bit 1 right, bit 2 middle -- the order INT 33h uses, so the three hosts
+ * share one convention and the page has one mask to maintain.
+ */
+void prism_win32_mouse(int dx, int dy, int buttons)
+{
+    static int was = 0;
+    WPARAM mk = 0;
+
+    cursor_x += dx;
+    cursor_y += dy;
+
+    if (buttons & 1) mk |= MK_LBUTTON;
+    if (buttons & 2) mk |= MK_RBUTTON;
+    if (buttons & 4) mk |= MK_MBUTTON;
+
+    if (dx || dy) post(WM_MOUSEMOVE, mk, ((LPARAM)(cursor_y & 0xffff) << 16) | (cursor_x & 0xffff));
+
+    /*
+     * One message per button that CHANGED, because that is what Windows sends -- and the program
+     * reads the whole mask out of wParam anyway, so the message type only has to be plausible.
+     */
+    if ((buttons ^ was) & 1) post((buttons & 1) ? WM_LBUTTONDOWN : WM_LBUTTONUP, mk, 0);
+    if ((buttons ^ was) & 2) post((buttons & 2) ? WM_RBUTTONDOWN : WM_RBUTTONUP, mk, 0);
+    if ((buttons ^ was) & 4) post((buttons & 4) ? WM_MBUTTONDOWN : WM_MBUTTONUP, mk, 0);
+    was = buttons;
+}
+
 void WINAPI PostQuitMessage(int code)
 {
     MSG *m = &msgq[msgq_head % MSGQ];
@@ -782,8 +852,9 @@ BOOL WINAPI GetWindowRect(HWND w, LPRECT r)
 /* ---------------------------------------------------------------- mouse and cursor */
 
 BOOL WINAPI ShowCursor(BOOL show) { (void)show; return TRUE; }
-BOOL WINAPI SetCursorPos(int x, int y) { (void)x; (void)y; return TRUE; }
-BOOL WINAPI GetCursorPos(LPPOINT p) { if (p) { p->x = screen_w / 2; p->y = screen_h / 2; } return TRUE; }
+/* The cursor has a position now -- see prism_win32_mouse. A program that centres it gets centred. */
+BOOL WINAPI SetCursorPos(int x, int y) { cursor_x = x; cursor_y = y; return TRUE; }
+BOOL WINAPI GetCursorPos(LPPOINT p) { if (p) { p->x = cursor_x; p->y = cursor_y; } return TRUE; }
 BOOL WINAPI ClipCursor(const RECT *r) { (void)r; return TRUE; }
 HWND WINAPI SetCapture(HWND w) { (void)w; return NULL; }
 BOOL WINAPI ReleaseCapture(void) { return TRUE; }

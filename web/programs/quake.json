@@ -4,7 +4,7 @@
   "_target": "The TARGET, not a unit list: targets/quake.json describes four platform layers over one engine, and naming it here makes all four appear in the picker beside the program. The descriptor's job is the GAME -- what it is, what it needs, what its keys do.",
   "target": "quake",
   "args": "+host_framerate 0.0138",
-  "argsHint": "+host_framerate 0.0138 keeps the world at real speed; try +map e1m1",
+  "argsHint": "+host_framerate 0.0138 keeps the world at real speed; try +map e1m1. **On the Windows machine add `+_windowed_mouse 1`**: vid_win.c:1610 activates the mouse in a WINDOWED mode only if that cvar is set, because on a real desktop a windowed game leaves the pointer to the desktop. On DOS and X11 the mouse needs nothing.",
   "fps": 72,
   "memory": 536870912,
   "needsData": {
@@ -37,5 +37,6 @@
       "console"
     ]
   ],
-  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data."
+  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data.",
+  "_mouse": "Three hosts, three of id's own gates, none of them ours. DOS: nothing, it just works (INT 33h). X11: works by default -- vid_x.c differences successive positions itself unless _windowed_mouse is set, in which case it warps to the centre instead. Win32: needs +_windowed_mouse 1, and needed WM_ACTIVATE from the host before IN_Move would run at all (in_win.c:741 is `if (ActiveApp && !Minimized)`)."
 }

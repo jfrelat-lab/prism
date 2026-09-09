@@ -493,6 +493,13 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     };
     const key = prog.F.prism_win32_key;
     if (!at.surface || !key) throw new Error('this build has no MGL/Win32 layer compiled in');
+    /*
+     * The mouse, through the shim's own entry point. WinQuake reads it with GetCursorPos and centres
+     * it with SetCursorPos (in_win.c:673), so the position lives in src/env/win32.c and this only
+     * has to say how far it moved and which buttons are down.
+     */
+    const mouseIn = prog.F.prism_win32_mouse;
+    const activate = prog.F.prism_win32_activate;
 
     /*
      * The program's OWN frame counter, so the status line can answer "is it running?".
@@ -517,7 +524,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       title: sym('prism_win32_title'),
     };
     const move = prog.F.prism_win32_move, closeWin = prog.F.prism_win32_close;
-    let lastDrag = 0, lastTitle = '';
+    let lastDrag = 0, lastTitle = '', lastButtons = 0, lastFocus = 1;
     Atomics.store(ctrl, SLOT.WIN_HAS, win.x ? 1 : 0);
 
     const pumpWindow = () => {
@@ -590,6 +597,20 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
        * shorter and would have tested nothing.
        */
       for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+      /*
+       * Focus, forwarded as WM_ACTIVATE. A game that has lost the focus must let go of the mouse --
+       * that is what the program does with it, and it is why alt-tab works on a real machine.
+       */
+      if (activate) {
+        const f = Atomics.load(ctrl, SLOT.FOCUS);
+        if (f !== lastFocus) { activate(f); lastFocus = f; }
+      }
+      if (mouseIn) {
+        const { dx, dy } = mouse.take();
+        const b = mouse.state();
+        // Sent when there is anything to say, and when a button changed with no movement.
+        if (dx || dy || b !== lastButtons) { mouseIn(dx, dy, b); lastButtons = b; }
+      }
       pumpWindow();
       reader.endFrame();
       pace();
