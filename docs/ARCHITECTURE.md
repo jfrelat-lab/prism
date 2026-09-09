@@ -25,10 +25,39 @@ shipped. Nothing in the game's tree is edited; build-time switches the tree alre
 Heretic's `#ifndef __WATCOMC__`) are configuration, not modification.
 
 **Do not overstate this against Emscripten.** "You would have to port the game" is the weak form of
-the argument and it is partly false: Emscripten ports SDL and X11, and **Asyncify** unwinds and
-rewinds the stack so a synchronous main loop keeps working without `emscripten_set_main_loop`. An
-earlier version of this file rested its whole case on that call, which was a fair description of
-2015 and is not a fair description of today. The honest differences are narrower and they are these:
+the argument and it is partly false: Emscripten ports SDL and X11, and it has two answers to the
+synchronous main loop that are not `emscripten_set_main_loop`. An earlier version of this file rested
+its whole case on that call, which was a fair description of 2015 and is not one of today.
+
+> ⚠️ **Everything in this comparison is from knowledge, not from measurement.** There is no
+> Emscripten on this machine and this project has never built anything with it. Every other number
+> in these docs has an oracle behind it; this section has none, and a claim about a toolchain we have
+> not run is exactly the kind of thing that should be labelled rather than asserted. Treat it as a
+> statement of what would have to be tested, not as a result.
+
+**Asyncify** instruments the compiled code to unwind and rewind the call stack, saving locals to a
+side stack — so the loop keeps its shape and is not turned into a callback. But the *instrumentation*
+is what is automatic; the **yield point is not**, and where it lands decides whether the game's source
+is touched:
+
+* if the loop already calls something the host implements — a blit, an event read, a clock — that
+  import can be declared async and the yield lives in the **shim**, leaving the game's source alone.
+  That is the same place PRISM yields;
+* if it does not, `emscripten_sleep(0)` goes **into the loop**, and that is a source edit.
+
+It also costs: instrumenting every function on a path that might unwind grows the code and slows it,
+which is managed by hand-listing functions (`ASYNCIFY_ONLY`) — i.e. by knowing the call graph.
+
+**And the answer that is closer to ours than Asyncify is:** `-pthread` with `PROXY_TO_PTHREAD` runs
+the program on a worker, where its loop may block, leaving the main thread free. No source change at
+all, and structurally what PRISM does. Any honest comparison has to start there rather than at
+`set_main_loop`.
+
+**The symmetric admission, because it is the same dependency:** PRISM also needs a call to hook. A
+loop that never re-enters the runtime is invisible to it — see *Waiting* below, where this is stated
+in its own right, and note that MAME needed an explicit `--safepoints` for exactly this reason.
+
+So the honest differences are narrower than "no porting", and they are these:
 
 * **The platform layer itself is compiled, not replaced.** PRISM builds id's own `sys_dos.c` +
   `vid_vga.c`, `vid_x.c`, `vid_svgalib.c`, `vid_sunx.c` and `vid_win.c` + MGL — five platform layers
