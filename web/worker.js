@@ -770,6 +770,13 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * here is that terminal, so this is the layer that owes you the character back -- and without it
      * you type into a black rectangle and only find out what you wrote when the answer comes.
      */
+    /*
+     * ...plus whatever the BUILD asked for. A console program is not always only libc: Quake II's
+     * Solaris port is a dedicated server, and its server dlopens the game library exactly as the
+     * client's does. Reading the target's own env list is what keeps this from being a guess about
+     * what a text program usually wants.
+     */
+    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     installStdio(prog.M, {
       files,
       readChar: () => {

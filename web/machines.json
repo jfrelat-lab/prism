@@ -62,7 +62,8 @@
       "listing": "ls -l",
       "host": "sparc",
       "programs": [
-        { "program": "quake", "variant": "sun", "file": "quake", "date": "Aug  1  1996" }
+        { "program": "quake", "variant": "sun", "file": "quake", "date": "Aug  1  1996" },
+        { "program": "quake2-solaris", "file": "q2ded", "date": "Dec  9  1997" }
       ],
       "_one": "One program, and it is the whole reason the machine exists: id shipped sys_sun.c and vid_sunx.c with WinQuake and nothing had ever been compiled against them. A machine with one program on it is a thin shelf; a machine with none is a promise."
     },

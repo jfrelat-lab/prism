@@ -1,0 +1,16 @@
+{
+  "title": "QUAKE II q2ded",
+  "subtitle": "id Software, 1997 · the Solaris port, and id's Solaris port is a dedicated SERVER",
+  "target": "quake2:solaris",
+  "host": "console",
+  "args": "+set dedicated 1 +map demo1",
+  "argsHint": "`+map <name>` is the level the server runs. `+set dedicated 1` is what its own makefile builds for: solaris/Makefile.Solaris links cl_null.c and cd_null.c and produces q2ded, so there is no client here and nothing to look at but what the server says.",
+  "fps": 30,
+  "needsData": {
+    "dir": "quake2",
+    "hint": "baseq2/pak0.pak — the same data the client uses"
+  },
+  "controls": [],
+  "_why": "The half of Quake II no other target here exercises alone. It loads the pak, dlopens gamei386.so, spawns the world and runs its own frame loop, printing what it does -- with no renderer in the build at all.",
+  "_network": "UDP_OpenSocket fails, twice, and says so: a browser has no socket to give and this target's env is stdio+dl. A dedicated server with no network still runs its world, which is what makes it worth having; a real one would take clients."
+}

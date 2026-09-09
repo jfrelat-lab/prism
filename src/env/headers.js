@@ -852,6 +852,30 @@ const SYS_TYPES = `
  * define _FILE_OFFSET_BITS and get a different type from a real libc, which is a decision to make
  * when a program actually asks for it.
  */
+/*
+ * fd_set lives HERE, not in <sys/time.h>, because that is where the platforms being emulated put it:
+ * Solaris and Linux both reach it through <sys/types.h> (by way of <sys/select.h>), and a program
+ * that includes only <sys/socket.h> still expects the type. Quake II's Solaris net_udp.c is the one
+ * that found this -- a plain 'fd_set fdset;' inside NET_Sleep, with no include that this set connected to
+ * the definition, so the parse failed on the declaration and named the variable rather than the type.
+ */
+#define FD_SETSIZE 1024
+typedef struct { unsigned long fds_bits[FD_SETSIZE / 32]; } fd_set;
+/*
+ * ...and 'struct timeval' with it, guarded, because <sys/time.h> defines it too and a program may
+ * include both. A real libc does exactly this with __timeval_defined. POSIX puts the type in
+ * <sys/select.h>, which is what <sys/types.h> pulls in on Solaris -- and Quake II's
+ * solaris/net_udp.c declares a plain 'struct timeval timeout;' in NET_Sleep having included neither.
+ */
+#ifndef _PRISM_TIMEVAL_DEFINED
+#define _PRISM_TIMEVAL_DEFINED
+struct timeval { long tv_sec; long tv_usec; };
+#endif
+#define FD_ZERO(s)    do { int __i; for (__i = 0; __i < FD_SETSIZE / 32; __i++) (s)->fds_bits[__i] = 0; } while (0)
+#define FD_SET(f, s)   ((s)->fds_bits[(f) / 32] |= (1UL << ((f) % 32)))
+#define FD_CLR(f, s)   ((s)->fds_bits[(f) / 32] &= ~(1UL << ((f) % 32)))
+#define FD_ISSET(f, s) (((s)->fds_bits[(f) / 32] & (1UL << ((f) % 32))) != 0)
+
 typedef int pid_t;
 typedef long off_t;
 typedef long ssize_t;
@@ -1608,20 +1632,12 @@ struct count_info { int bytes; int blocks; int ptr; };
   'malloc.h': '#include <stdlib.h>\n',
   'sys/time.h': `
 #include <sys/types.h>
+#ifndef _PRISM_TIMEVAL_DEFINED
+#define _PRISM_TIMEVAL_DEFINED
 struct timeval { long tv_sec; long tv_usec; };
+#endif
 struct timezone { int tz_minuteswest; int tz_dsttime; };
 struct itimerval { struct timeval it_interval; struct timeval it_value; };
-/*
- * select(), for a program that polls its own stdin. Doom's sound server does exactly that -- a
- * zero-timeout select on fd 0 -- and it is the one call that makes its loop cooperative rather than
- * blocking. fd_set is a bitmap of FD_SETSIZE bits, and the macros are the usual ones.
- */
-#define FD_SETSIZE 1024
-typedef struct { unsigned long fds_bits[FD_SETSIZE / 32]; } fd_set;
-#define FD_ZERO(s)    do { int __i; for (__i = 0; __i < FD_SETSIZE / 32; __i++) (s)->fds_bits[__i] = 0; } while (0)
-#define FD_SET(f, s)   ((s)->fds_bits[(f) / 32] |= (1UL << ((f) % 32)))
-#define FD_CLR(f, s)   ((s)->fds_bits[(f) / 32] &= ~(1UL << ((f) % 32)))
-#define FD_ISSET(f, s) (((s)->fds_bits[(f) / 32] & (1UL << ((f) % 32))) != 0)
 int select(int n, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout);
 int gettimeofday(struct timeval *tv, struct timezone *tz);
 int setitimer(int which, const struct itimerval *val, struct itimerval *old);
