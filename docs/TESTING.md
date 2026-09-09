@@ -3,6 +3,42 @@
 The safety net. Nothing in PRISM validates its own answers: every layer is checked against an
 **external** oracle, and the bar for a commit is a green run of the gates that touch what changed.
 
+## The gates, and what each one asks
+
+Thirteen now, so here is the index. The rule that shapes the list: **no gate answers its own
+question.** Each column names something outside PRISM that could contradict it.
+
+| gate | external authority | asserts |
+|---|---|---|
+| `gate-cpp.mjs` | `gcc -E` | token-identical preprocessing, 42 hand + 250 generated cases x 7 seeds |
+| `gate-cpp-files.mjs` | `gcc -E` | the same over **287 whole translation units** from five programs |
+| `gate-decl.mjs` | gcc 12, i386 | sizeof / align / offsets / enum values of every tag PRISM parses |
+| `gate-abi.mjs` | gcc 12, i386 | i386 SysV layout, ~105k checks over 13 seeds |
+| `gate-abi16.mjs` | Open Watcom, from the OBJECT FILE | 16-bit DOS layout, ~4,970 checks over six seeds |
+| `gate-bits16.mjs` | Open Watcom, run under **DOSBox-X** | the BYTE IMAGE — bitfield allocation order, byte order, padding |
+| `gate-run.mjs` | a native i386 gcc build | 60 programs behave identically |
+| `gate-suite.mjs` | c-testsuite, gcc torture | 213 / 219 and 1,438 of the torture corpus |
+| `csmith-diff.mjs` | Csmith + gcc `-O0`/`-O2` | unlimited random programs, zero divergence |
+| `gate-pixels.mjs` | PRISM against ITSELF on four platform layers | `x11 == dos == win == svgalib`, pixel for pixel |
+| `gate-lua.mjs` | Lua 5.4's own test suite | 27 files of `assert()`s written by someone else |
+| `gate-sound.mjs`, `gate-ports.mjs`, `gate-vgafont.mjs` | device contracts, MIRAGE's font | the host seams |
+| `mamediff.mjs` | a native **gcc or tcc** build of the same MAME | frame-hash equality, whole build |
+| `bench.mjs` | clang -O2, native on this host | the speed ratio, published and never justified without it |
+
+Two of these are asserted differentials with **no external compiler at all** and are called out
+because that is unusual: `gate-pixels` compares PRISM to PRISM — four builds of one engine, whose
+pictures must match because it is the same C. **The fifth, SunOS, is reported and NOT asserted**: it
+differs from X11 by about one colormap row, because the two drivers set the renderer up differently
+(a static `surfcache[1024*1024]` against `D_SurfaceCacheForRes`), so a lighting input differs before
+anything can go stale. Reported without being asserted is the honest state for a difference that is
+understood but not resolved. And `gate-ports` says in its own output that there is
+no PC I/O space on a Linux host, so it checks a contract rather than an oracle.
+
+⚠️ **A green gate proves nothing until it has been shown able to fail.** `gate-bits16` ships with its
+two positive controls recorded (MSB-first allocation → 18 of 22 cases red; big-endian plain members →
+8 red), and the reason is at the bottom of this file: a check bounded by its own assumption cannot
+fail, and `gate-abi16` was one for months without anyone noticing.
+
 ## The oracle (`tools/oracle.mjs`, `tools/oracle/Dockerfile`)
 
 This host is **arm64 macOS**. Measured before anything was built:

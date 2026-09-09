@@ -336,11 +336,39 @@ if ((frameCap || pngPath || keyScript.length) && mgl) {
   }
 }
 
+/*
+ * THE RUN IS TIMED SEPARATELY FROM THE COMPILE, because they are different claims and mixing them
+ * makes both useless. The compile number says how fast PRISM turns C into JavaScript; this one says
+ * how fast the resulting JavaScript runs the program, and only the second can be called fps.
+ *
+ * What it measures is the guest's own frame boundary -- VID_Update, XPutImage, the MGL blit -- so it
+ * is the rate at which the PROGRAM finished pictures, not the rate at which a host presented them.
+ *
+ * ⚠️ IT IS THROUGHPUT, NOT A FRAME RATE, and the difference is not pedantry. This tool leaves the
+ * runtime's DETERMINISTIC clock in place: `gettimeofday` advances a fixed 1/35 s per CALL, so the
+ * guest's notion of time races ahead of the wall and `Host_FilterTime` never makes Quake wait. The
+ * engine therefore renders on every iteration of its main loop, and what is printed is how much
+ * engine work the emitted JavaScript gets through per second. The browser is the other case:
+ * `web/worker.js` calls installRealClock, so there the program paces itself against real time and
+ * the number you would read off the screen is a frame rate. Quoting this one as fps would compare
+ * an unthrottled run against a throttled one.
+ */
+const runT0 = performance.now();
 try {
   program.run([target.name, ...args]);
 } catch (e) {
   if (e.message !== '__frames_done') console.log(`exited: ${e.message}`);
 }
+const runSecs = (performance.now() - runT0) / 1000;
+/**
+ * ` · 1.2 s, 257 rendered frames/s (deterministic clock, unthrottled)` — and it says which, because
+ * a bare "fps" here would be read as the rate a player sees. Omitted when nothing counted frames:
+ * zero is not a measurement.
+ */
+const fpsNote = () => (frames > 0
+  ? ` · ${runSecs.toFixed(1)} s, ${(frames / runSecs).toFixed(0)} rendered frames/s ` +
+    `(deterministic clock, unthrottled)`
+  : ` · ${runSecs.toFixed(1)} s`);
 
 if (wavPath && program.M.dsp?.wav) {
   const w = program.M.dsp.wav, ch = program.M.dsp.channels || 2, rate = program.M.dsp.rate || 11025;
@@ -366,7 +394,7 @@ if (mgl) {
   const surface = dv.getInt32(mgl.surface, true);
   const width = dv.getInt32(mgl.width, true), height = dv.getInt32(mgl.height, true);
   const pitch = dv.getInt32(mgl.pitch, true);
-  console.log(`\nframes ${frames} · display ${width}x${height}`);
+  console.log(`\nframes ${frames} · display ${width}x${height}` + fpsNote());
   if (surface && width && pngPath) {
     const pixels = new Uint8Array(width * height);
     for (let y = 0; y < height; y++) {
@@ -392,7 +420,7 @@ if (mgl) {
 } else if (program.M.svgalib?.mem) {
   /* svgalib: the framebuffer IS the console's memory, and the palette came through vga_setpalvec. */
   const g = program.M.svgalib;
-  console.log(`\nframes ${frames} · display ${g.width}x${g.height}`);
+  console.log(`\nframes ${frames} · display ${g.width}x${g.height}` + fpsNote());
   if (pngPath) {
     const px = program.M.u8.subarray(g.mem, g.mem + g.width * g.height);
     let nz = 0;
@@ -402,7 +430,7 @@ if (mgl) {
   }
 } else if (program.M.x11?.imageData) {
   const x = program.M.x11;
-  console.log(`\nframes ${frames} · display ${x.width}x${x.height}`);
+  console.log(`\nframes ${frames} · display ${x.width}x${x.height}` + fpsNote());
   if (pngPath) {
     const px = program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height);
     let nz = 0;

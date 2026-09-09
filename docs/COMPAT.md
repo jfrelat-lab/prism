@@ -9,7 +9,12 @@ written": a row here means a gate observed it, not that the code looks capable o
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. Now compiled with **MAME's own DOS platform backend**, `src/msdos/msdos.c`: nothing of MAME is written in JavaScript any more, and what PRISM shims is one level down — Allegro, SEAL and DJGPP's memory helpers. Both of msdos.c's display paths render, 224x288 through the tweaked VGA mode and 640x480 with `-vesa`. | Sound works: SEAL is a real four-voice mixer into a shared ring the page reads (only pengo and ladybug have sound in 0.1).
-| **Quake** (`WinQuake/`, `id386=0`) | ✅ **RENDERS** — 69 units, 44,570 lines, **every function emits**, 1.72 MB of JavaScript. Loads `id1/pak0.pak`, runs its demos, and draws the game at 320x200 in the browser at ~26 fps. Game data is supplied by the user, never fetched. Sound and networking are Quake's own null drivers. |
+| **Quake** (`WinQuake/`, `id386=0`) | ✅ **RENDERS** — 69 units, 44,570 lines, **every function emits**, 1.72 MB of JavaScript. Loads `id1/pak0.pak`, runs its demos, and draws the game at 320x200 in the browser at **72.0 fps — which is Quake's own ceiling** (`Host_FilterTime`, 1/72 s), not PRISM's: with the shell's speed selector set to *unlimited* the same build reaches **1,725 fps**. (This line read "~26 fps" from 24 August to 9 September, unmeasured in between.) Game data is supplied by the user, never fetched. Sound and networking are Quake's own null drivers. |
+| **Quake, four platform layers** | ✅ **DOS · Linux/X11 · SunOS · Win32**, plus **svgalib** as a second Linux display path — five builds of one engine from one tree, each using id's own platform files. `tools/gate-pixels.mjs` asserts `x11 == dos == svgalib == win` on the same demo frame: 64,000 pixels and 768 palette bytes identical, modulo the palette-index-0 remap `vid_win.c:2117` performs on itself. The SunOS build (68 units, 45,820 lines) had never been compiled by anyone. | one engine, five hosts |
+| **Quake II** (`id-Software/Quake-2`) | ✅ **RENDERS** — 109 units, 87,098 lines, **2,120 functions**, nothing unemitted. `====== Quake2 Initialized ======`, a client over the loopback, `Player\\male/grunt` spawned, `demos/q2demo1.dm2` playing on Installation. Three modules with separate symbol namespaces; `dlopen`/`dlsym` answered from PRISM's own symbol table. | **Linux/X11 + `ref_soft`** |
+| **Quake II, Solaris** | ✅ **RUNS** — and it is not a client: `solaris/Makefile.Solaris` builds **`q2ded`**, a dedicated SERVER. No renderer in the object list, `cl_null.c` and `cd_null.c` in it. 71 units, 52,579 lines, 1,432 functions; pak loaded, `gamei386.so` dlopened, world spawned, 49 entities inhibited, its own frame loop running. UDP fails and says so — a browser has no socket. | **SunOS/Solaris** |
+| **MAME 0.4** | ✅ **BIT-IDENTICAL TO A NATIVE BUILD** through attract mode — 135 of 135 lines against a tcc build of the same sources (`tools/mamediff.mjs --release=04`). gcc 12 cannot build this release at all: four `case` labels in `src/machine.c` use a cast pointer constant. Playing diverges and that is open — see ROADMAP P1.10. | **DOS / DJGPP + Allegro** |
+| **PuTTY** (`puttytel`) | 🟢 **CONNECTS AND DRAWS** — a real telnet session over the host's sockets, text on a 642x386 black terminal in the VGA ROM font. Win32: a window class, a message queue, GDI, Winsock. 18 functions still unemitted. | **Win32** |
 | **Quake, DOS platform** | 77 units / 51,391 lines with `sys_dos.c vid_dos.c vid_vga.c vid_ext.c vregset.c snd_dos.c snd_dma.c snd_mem.c snd_mix.c cd_audio.c in_dos.c dos_v2.c` | **DOS / DJGPP** | 🟢 **PLAYS.** Console, menu, and a started game at 320x200 in mode 13h — 3D renderer, start map, status bar. Zero functions unemitted. Three devices (0x3DA retrace, the DAC, the keyboard controller), the PIT for the clock, and `src/env/go32.js` for DJGPP's DPMI floor; `dos_v2.c` builds all of dosisms.h on top of that. The default video mode programs no VGA registers at all. |
 | **SQLite 3.53.4** (amalgamation) | ✅ **RUNS, AND AGREES WITH gcc** — 269,650 lines in ONE translation unit, 2542 functions, 5.8 MB of emitted JavaScript in **1.5 s** (~180,000 lines/second). Creates a table, inserts 200 rows and answers eight queries — aggregates, an index, ORDER BY, a self join — **byte-identical to an i386 gcc build of the same sources** (`tools/sqlite.mjs --diff`). No platform layer and no data files: where MAME and Quake test whether PRISM can HOST a program, this tests whether it can COMPILE one. |
 | **DOOM** (`linuxdoom-1.10`) | 🟢 **PLAYS A REAL LEVEL** — 62 units, 45,152 lines, 714 of 715 functions, 1.11 MB of JavaScript in 0.8 s. Loads `DOOM1.WAD`, draws its title, credits and order screens, and with `-warp 1 1` runs E1M1: 260 frames at ~1 ms each, 320x200, 156 distinct colours on screen, status bar and all. Compiled **entirely unmodified**, X11 and all. Its shareware demos still do not play, and Doom says why itself: `Demo is from a different game version!` — the WAD's demos predate this source. **Sound is the one thing missing, and not for an audio reason:** doomdef.h defines `SNDSERV`, so Doom delegates sound to a separate program. That program (`corpus/DOOM/sndserv`, 2,026 lines) compiles and mixes correctly on its own — what is missing is a process model. |
@@ -1505,3 +1510,34 @@ all 3 asserted comparisons agree
 Bit-identical over the whole surface and the whole palette — which is what two drivers over one
 renderer and one linear 8-bit buffer should give, and would have caught a palette shifted by the two
 bits `VID_SetPalette` drops on the way into `vga_setpalvec`. `gate-run` stays 60/60.
+
+## The fps number was sixteen days old and wrong by a factor of sixty-six
+
+The summary table said Quake ran "at ~26 fps in the browser". That sentence entered on **24 August**
+(`git log -S"26 fps"` → e6cabbe) and was never re-measured while direct calls, four more platform
+layers and the whole four-machine shell landed on top of it. A peer session reading the docs quoted
+it back as PRISM's performance. So it was measured, three ways, and all three are now in
+[ARCHITECTURE.md](ARCHITECTURE.md):
+
+| what | number | conditions |
+|---|---|---|
+| Quake in the browser, paced | **72.0 fps** | 320x200; this is `Host_FilterTime`'s own 1/72 s, i.e. **Quake's ceiling, not PRISM's** |
+| Quake in the browser, cap off | **1,725 fps** | the shell's speed selector on *unlimited*, ~19,000 frames in |
+| Quake headless in Node | **883 rendered frames/s** | 16,000 frames; 204 / 472 / 721 at 300 / 1,000 / 4,000 |
+
+**The discriminator was the speed selector, not an argument.** At 100% the page paces the guest to
+the rate the program asked for, so 72.0 fps could equally have meant "throttled" or "flat out". One
+change to *unlimited* settled it: 1,725. The engine has 24x the headroom it needs.
+
+Two things this exercise established that are worth more than the numbers:
+
+* **JIT warm-up dominates any short run.** The same headless run gives 204, 472, 721 and 883 rendered
+  frames/s at 300, 1,000, 4,000 and 16,000 frames. A few hundred frames measures V8 warming up.
+  `tools/bench.mjs` had already said so; a fresh measurement walked into it anyway.
+* **Headless and browser figures are not comparable**, and `build.mjs` now says so in the output it
+  prints. Headless keeps the runtime's DETERMINISTIC clock — `gettimeofday` advances a fixed 1/35 s
+  per call — so the guest's time races the wall and Quake renders on every iteration of its main
+  loop; that is **throughput**, not a frame rate. The browser calls `installRealClock`. The tool
+  prints `883 rendered frames/s (deterministic clock, unthrottled)` rather than "fps" for exactly
+  this reason. The ~2x gap between the two is **not explained here**, because nothing has measured
+  it, and explaining a gap without measuring it is how the 26 fps survived.

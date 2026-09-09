@@ -12,24 +12,53 @@ out of scope there. PRISM reaches exactly that class of program by never emulati
 > [COMPAT.md](COMPAT.md) (what runs today). Keep them updated when the design changes.
 >
 > `COMPILER.md` and `RUNTIME.md` are deliberately absent until the code they would describe exists.
+>
+> **Where this file stands.** Everything below is either measured or marked as not built. The
+> sections that describe a mechanism describe one that exists; the two places where the original
+> plan is still a plan — the IR and tier-1 — say so in those words rather than in the present tense.
 
 ## The bet
 
-Emscripten requires **porting** the game: replace the main loop, the video access, the DOS calls.
-PRISM moves the compatibility boundary from the *game* to the *library* — it supplies libc, the
-DJGPP layer, Allegro and Xlib in JavaScript, and the game compiles as it shipped. Nothing in the
-game's tree is edited; build-time switches the tree already has (`id386=0`) are configuration, not
-modification.
+PRISM moves the compatibility boundary from the *game* to the *library*: it supplies libc, the DJGPP
+layer, Allegro, Xlib, svgalib, the Win32 SDK and MGL in JavaScript, and the game compiles as it
+shipped. Nothing in the game's tree is edited; build-time switches the tree already has (`id386=0`,
+Heretic's `#ifndef __WATCOMC__`) are configuration, not modification.
+
+**Do not overstate this against Emscripten.** "You would have to port the game" is the weak form of
+the argument and it is partly false: Emscripten ports SDL and X11, and **Asyncify** unwinds and
+rewinds the stack so a synchronous main loop keeps working without `emscripten_set_main_loop`. An
+earlier version of this file rested its whole case on that call, which was a fair description of
+2015 and is not a fair description of today. The honest differences are narrower and they are these:
+
+* **The platform layer itself is compiled, not replaced.** PRISM builds id's own `sys_dos.c` +
+  `vid_vga.c`, `vid_x.c`, `vid_svgalib.c`, `vid_sunx.c` and `vid_win.c` + MGL — five platform layers
+  of one engine, as shipped, including a SunOS one nobody had ever built. The usual port swaps that
+  layer for SDL; here it is the thing under test.
+* **And the five are asserted to agree.** `tools/gate-pixels.mjs` renders the same demo frame on DOS,
+  X11, Win32 and svgalib and requires the pictures to be **identical** — 64,000 pixels and 768
+  palette bytes, modulo one documented palette remap that WinQuake performs on itself. No port
+  workflow makes or checks that claim.
+* **There is no build step.** The compiler is in the page: the browser fetches 430 `.c` files and
+  produces 1,052 functions and 1.85 MB of JavaScript in **666 ms**. No toolchain, no artefact, no
+  cache to invalidate.
+* **Every layer has an external oracle**, and the invariant is *zero wrong answers*: a construct
+  PRISM cannot compile is a named refusal, never a silent miscompile. See [TESTING.md](TESTING.md).
 
 **Emitted output is JavaScript, not WASM** — the same design bet MIRAGE makes: readable emitted
 code plus the browser's own JIT, and readability as the primary debugging lever. The IR is kept
 backend-agnostic anyway, so the decision can be revisited on a measured number rather than an
 intuition.
 
-**"Dynamic" is load-bearing**, not cosmetic. It is what an AOT compiler cannot do: compile a
-function at its first call with compact emission, re-emit it aggressively once hot, and **specialize
-on observed facts** — the real target of a function pointer, the real alignment of a pointer, a
-global written once at startup.
+**"Dynamic" is the plan's load-bearing word, and today it is a PLAN.** The intent is what an AOT
+compiler cannot do: compile a function at its first call with compact emission, re-emit it
+aggressively once hot, and specialize on observed facts — the real target of a function pointer, the
+real alignment of a pointer, a global written once at startup.
+
+⚠️ **None of that is built.** `src/ir/` and `src/opt/` are empty directories; every occurrence of
+"tier-1" in the source is a comment in tier-0 describing what tier-1 will do. What exists and is
+measured is one link-time decision, not a runtime one: **direct calls** (P2.1), worth **2–2.5×**.
+Anyone describing PRISM to an outsider should say "a C compiler that runs in the page with no build
+step", and should not say "with runtime specialisation" until P2.3 exists.
 
 ## Target ABI
 
@@ -48,9 +77,10 @@ cpp/       preprocessor — translation phases 1-4, exact
 lex/       pp-tokens -> C tokens
 parse/     C89 + C99 + GNU -> AST
 sema/      types, scopes, i386 layout (abi.js), constant folding
-ir/        CFG, SSA-lite, explicit load/store against linear memory
-opt/       escape analysis, mem2reg, GVN, alignment inference, inlining, LICM
-backend/   two-tier JS emitter (string emission + new Function, MIRAGE's style)
+ir/        EMPTY — planned: CFG, SSA-lite, explicit load/store against linear memory
+opt/       EMPTY — planned: escape analysis, mem2reg, GVN, alignment inference, inlining, LICM
+backend/   emit.js (tier-0) + flatten.js. There is no tier-1.
+asm/       pragma-aux.js — three #pragma aux routine bodies, everything else refused BY NAME
 link/      symbols, static placement of globals, the function-pointer table
 runtime/   libc, malloc, setjmp/longjmp, math, printf
 env/       djgpp/ (dpmi, pc.h, farptr, movedata) - allegro/ - posix+xlib/
@@ -80,8 +110,10 @@ or failing that from hot specialization behind a guard. Writes into `0xA0000-0xB
 MIRAGE's VGA device.
 
 **5. Bit-exact `float`.** `Math.fround` on every `float` store and operation — Quake's float bit
-tricks depend on it. `double` is native. `long long` is a pair of i32s, the accepted cost of the
-pure-JS choice.
+tricks depend on it. `double` is native. **`long long` is a `BigInt`, not a pair of i32s** — the plan
+called for pairs and tier-0 chose correctness instead: BigInt is right by construction, arbitrary
+precision plus an explicit truncation, and lowering it to i32 pairs is P0.5c, deliberately not
+started because the cost has never been quantified.
 
 **6. `setjmp`/`longjmp`.** `longjmp` throws a token; `setjmp` turns its caller into a restart loop
 with saved state. Applied only to functions that actually call `setjmp` (Quake's `host_error`,
@@ -102,6 +134,11 @@ start rather than being retrofitted:
 Every optimization pass gets a `PRISM_NO*` kill-switch, and every gate must pass with each switch
 both on and off.
 
+⚠️ **Status: tier-0 only. Tier-1 does not exist**, and neither does the IR it would work over. The
+split shaped tier-0 — it is why the cold emitter is deliberately literal, and why `long long` is a
+BigInt rather than something clever — but the promotion, the optimiser and the inline caches are
+P2.2/P2.3 and are not started. The measured consequence is in *Numbers* below.
+
 ## Determinism
 
 No `Math.random`, no `Date` in the compiler or the runtime's decision-making. The same input must
@@ -111,9 +148,13 @@ gates possible at all. Keep it that way.
 ## Running in a browser: observing a guest that never yields
 
 A C program's main loop is synchronous. MAME 0.1 spins inside `run_machine` until a key says stop;
-Quake spins in `Host_Frame`. There is no moment at which a browser could paint, and Emscripten's
-answer — `emscripten_set_main_loop`, i.e. **rewrite the loop** — is exactly the source modification
-this project exists to avoid.
+Quake spins in `Host_Frame`. There is no moment at which a browser could paint.
+
+Two answers exist and it is worth being precise about both. Emscripten's original one is
+`emscripten_set_main_loop` — rewrite the loop, which is the source modification this project exists
+to avoid — and its second one, **Asyncify**, does not require rewriting anything: it instruments the
+code to unwind and rewind the stack at a yield point. So the problem is solved there too, at the cost
+of that instrumentation on every path that might unwind.
 
 PRISM's answer inverts the direction. The guest runs in a **Web Worker** over a
 **SharedArrayBuffer**, and the page **observes the guest's memory** while it runs:
@@ -200,8 +241,12 @@ The page knows nothing about any program: it compiles C, paints an 8-bit indexed
 whatever size the guest asked for, through whatever palette the guest built, forwards scan codes, and
 passes the argument string to `main` as `argv`. Programs are **data** — `web/programs/*.json`,
 discovered at start-up, never listed in the page's code — plus a platform layer under `src/env/` if
-one is needed. Two ship: MAME 0.1, and a plain-C89 Mandelbrot with no platform layer and no data
-files, which exists precisely so that "the shell is generic" is a claim something can falsify.
+one is needed.
+
+That claim has since been stress-tested rather than asserted: the shelf now carries MAME 0.4, Quake
+on four platform layers, Quake II, Doom, Heretic, Hexen, OpenDUNE, Lua and PuTTY, and the page's code
+names none of them. A plain-C89 Mandelbrot with no platform layer and no data files is still there
+for the same reason it always was — so that "the shell is generic" is a claim something can falsify.
 
 `src/` contains no Node imports, so the browser loads the same modules the gates do — there is no
 build step to drift.
@@ -255,6 +300,30 @@ because the clock decides *when*, never *what*.
 
 ### Numbers, and what is left
 
+⚠️ **Speed: three numbers, and they measure three different things.** Confusing them is how the
+"~26 fps" that sat in COMPAT.md from 24 August until 9 September survived so long — see below.
+
+| | |
+|---|---|
+| **Quake, in the browser, paced** | **72.0 fps** at 320x200 — and that is Quake's own ceiling (`Host_FilterTime`, 1/72 s), not PRISM's |
+| **Quake, in the browser, cap removed** | **1,725 fps** at 320x200 (speed selector set to *unlimited*, after ~19,000 frames of warm-up) |
+| **Quake, headless in Node** | **883 rendered frames/s** over 16,000 frames — 204 at 300 frames, 472 at 1,000, 721 at 4,000 |
+| **against a native build** | **~9.5x slower than clang -O2** on MAME's Z80 core, ~10x on a synthetic mix (`tools/bench.mjs`) |
+
+Three things that table says out loud:
+
+* **The engine is not the bottleneck in the browser.** At 1,725 fps unthrottled, Quake at 320x200 has
+  24x the headroom it needs for its own 72 fps. Whatever "~26 fps" measured in August, it does not
+  describe this code.
+* **JIT warm-up dominates short runs**, exactly as `bench.mjs` said: 204 → 472 → 721 → 883 rendered
+  frames/s as the same run lengthens from 300 to 16,000 frames. Any perf number taken over a few
+  hundred frames is measuring V8 warming up, and this project has published one before.
+* **The headless and browser figures are NOT comparable and are not presented as one.** Headless
+  leaves the runtime's deterministic clock in place — `gettimeofday` advances a fixed 1/35 s per
+  call — so the guest's time races the wall and Quake renders every iteration; the browser installs
+  the real clock and passes `+host_framerate`. Different work per frame, and the ~2x gap between them
+  is **not explained here**, because nothing has measured it.
+
 Measured with `node tools/mame.mjs --probe-polls` and the shell's own diagnostics:
 
 | | |
@@ -280,7 +349,7 @@ iterations per tick to measure the machine — gets cut short by damping and rea
 than it is. Nothing in MAME calibrates. If something later does, the fix is a per-program exemption,
 not a cleverer heuristic.
 
-## Two platform layers, and why they look nothing alike
+## Platform layers, and why they look nothing alike
 
 `src/env/osd.js` implements eighteen functions. `src/env/quake.js` implements none — it looks three
 symbols up in the linked image and publishes their addresses.
@@ -299,6 +368,56 @@ keeps its own can use.
 
 The general lesson for the next port: look for what the program already writes down before writing a
 shim to intercept it.
+
+### Six of them now, and the shape of the boundary is the whole design
+
+| layer | shim | what the boundary actually is |
+|---|---|---|
+| MAME 0.1–0.4 | `src/env/osd.js`, Allegro, SEAL | **callbacks**: create a bitmap, obtain a pen, present a frame |
+| Quake / DOS | `src/env/go32.js`, `ports.js`, `pit.js`, `kbd8042.js` | **hardware**: the DAC, 0x3DA retrace, the 8042 |
+| Quake, Doom, Quake II / X11 | `src/env/x11.js` | **Xlib**, 41 functions, no protocol and no server |
+| Quake / SunOS | the same, plus ICCCM and the Sun keyboard's F13–F35 | a workstation client sets properties a Linux one never touches |
+| Quake / svgalib | `src/env/svgalib.js` | **the console framebuffer**: 19 calls, raw scan codes, relative mouse |
+| WinQuake, PuTTY / Win32 | `src/env/win32.c`, `mgl.c`, `headers-win32.js` | **a message queue and a window**, written in C because the contracts are public structs |
+
+Two structural facts came out of having six rather than two:
+
+* **A shim is sometimes better written in C.** `win32.c` and `mgl.c` are compiled by PRISM like any
+  other translation unit, because their contracts are `struct`s the program reads and writes; a
+  JavaScript shim would have had to reimplement the layout that `headers-win32.js` already declares.
+* **A program of this era can be several shared objects** (P7.3). Quake II defines `Com_Printf` three
+  times, once per module, and they do not see each other's globals. A target declares modules; each
+  keeps its own external namespace, sees the main module's for what it does not define — ELF's rule
+  for a `.so` against the executable — and exposes only what its own `.def` file EXPORTS.
+  `src/env/dl.js` answers `dlopen`/`dlsym` out of PRISM's own symbol table, because nothing needs
+  loading: it is all already linked.
+
+### The four machines
+
+The browser shell is not a program picker. `web/machines.json` names four **machines** — DOS, Linux,
+SUN, Windows — because `quake:dos|x11|sun|win` are four platform layers over one engine, and nobody
+sitting at the machine could tell you which build they were in. Each machine is a real terminal on
+the same canvas the game uses (DOS `C:\>` with `DIR`, a `$` shell with `ls -l`, a Windows desktop
+with the programs' own `.ico` files, double-click to launch); a program takes the screen, and when it
+ends the shell takes it back.
+
+## The 16-bit axis: measured, not implemented
+
+Wolfenstein 3D and the id titles around it are **16-bit segmented**, which is a second ABI rather
+than a narrower one. Two rules alone make it so: alignment stops at 2, so `struct { char; double; }`
+is 10 bytes and not 12; and an enum is ONE byte. Both are pinned by an external oracle — Open Watcom
+in the container — and neither is guessable.
+
+**PRISM emits for i386 and only for i386.** `modelTypes('dos16')` exists in `src/sema/abi.js` and has
+exactly two consumers, both of them gates: `gate-abi16.mjs` (~4,970 checks, from the object file) and
+`gate-bits16.mjs` (the byte image of an initialised struct, from a real DOS run under DOSBox-X).
+`src/sema/types.js` binds the i386 table at module scope and fixes a pointer at 4 bytes; threading a
+target through it *is* the 16-bit backend, and that is P11.1.
+
+And the backend is not the only cost: `_seg`/`huge` appears **91 to 96 times in each** of Wolf3D, Keen
+Dreams, Catacomb 3-D and Hovertank 3-D, so real segmentation is not optional for any of them. The
+first 16-bit target, if one is taken, is **Keen Dreams** and not Wolf3D — measured in P11.1 by
+splitting each title's inline assembly into engine and game code.
 
 ## Control-flow flattening (`src/backend/flatten.js`)
 
