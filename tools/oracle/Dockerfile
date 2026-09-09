@@ -6,8 +6,14 @@
 # compiled programs also RUN here — the differential gates need output, not just object files.
 FROM i386/debian:bookworm-slim
 
+# `tcc` is here for ONE reason, and it is a compatibility one rather than a speed one: gcc 12
+# refuses `case MRA_RAM:` -- a cast pointer constant as a case label, which gcc 2.7 on DJGPP
+# accepted -- and those four labels in MAME 0.4's src/machine.c are the ONLY thing a modern gcc
+# rejects in that whole release. Open Watcom, already below, takes the case labels and then refuses
+# `unsigned char *line[0]` in osdepend.h in every mode including -za, so it cannot stand in either.
+# tcc accepts both, links, and runs. Without it MAME 0.4 has no native oracle at all.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      gcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
+      gcc tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Debian's csmith package ships the GENERATOR but none of the runtime headers its output

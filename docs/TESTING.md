@@ -2485,3 +2485,62 @@ Two deliberate mutations of PRISM's side, each run against the same 22-case corp
 The survivors are the cases the mutation cannot touch — a struct with no bitfields, a 1-bit field, a
 struct of nothing but `char`. That is what makes the green run mean something: the gate was shown to
 fail on exactly the two facts it claims to pin, before it was believed for passing.
+
+## MAME 0.4 had an oracle all along — it just was not gcc
+
+`mamediff` used to stop on this release with a diagnostic that named the construct honestly and then
+drew the wrong conclusion:
+
+> this release needs a period compiler (gcc 2.x, or tcc) before it can be diffed at all
+
+A period compiler had been sitting in the same container since N5. Three measurements, in the order
+they were made:
+
+| compiler | `case MRA_RAM:` | `unsigned char *line[0]` | `interrupt` as an identifier |
+|---|---|---|---|
+| gcc 12 | ✗ *pointers are not permitted as case values* | ✓ | ✓ |
+| Open Watcom (any mode, `-za` included) | ✓ | ✗ *E1020: Dimension cannot be 0 or negative* | only with `-za` |
+| tcc 0.9.27 | ✓ | ✓ | ✓ |
+
+So the named blocker was never the whole story — **Watcom does take the case labels** — and Watcom is
+still not the oracle, because `osdepend.h`'s zero-length array is in all 31 units and no Watcom mode
+accepts it. That was worth measuring rather than assuming: `-za` was needed anyway (Watcom reserves
+`interrupt`, which MAME uses as a field name), and `-za` is the mode that refuses `[0]` hardest.
+
+**How much was ever at stake, counted rather than feared:** compiling every unit of the release
+separately with gcc 12 produces exactly four errors, all of them the same one, all in one file —
+`machine.c` lines 392, 393, 430, 433. Thirty-one of thirty-two units are clean. The release was one
+file away from having an oracle, and nothing said so.
+
+tcc builds the lot (`-lm` is explicit; unlike gcc it does not link libm on its own, and cclimber's
+wave table calls `cos`). `mamediff` now builds with gcc, and falls back to tcc **only** on that one
+error, printing which compiler produced the reference. gcc stays the reference wherever it can be.
+
+⚠️ **The error census was wrong the first time, and the reason is reusable.** `.oracle/mamediff` is a
+persistent flat directory, and a glob over it picked up `pengo_machine.c` — a unit of MAME 0.1 left
+behind by an earlier run, dropped from the unit list in 0.3. It produced seven confident errors about
+`osd_joy_*` and a missing `dsw` member that had nothing to do with this release. The census is only
+meaningful over the TARGET's unit list, never over what happens to be in the directory. The tool had
+already been bitten by the same directory once, over stale ROMs.
+
+### And the differential this unblocks
+
+```
+node tools/mamediff.mjs --release=04 --game=wow --roms=<dir> --frames=120
+✓ identical over 135 lines — the whole build agrees with the tcc build.
+```
+
+PRISM's MAME 0.4 running Wizard of Wor is bit-identical to a native tcc build through attract mode.
+Then, with the same harness playing:
+
+| run | result |
+|---|---|
+| attract only, 120 frames | identical, 135/135 |
+| `--play=240,9999,9999,9999` (a coin, nothing else) | **2 of 415 lines differ** — frames 267, 268 — then it re-converges |
+| `--play=240,300,700,880` (coin, start, fire) | **402 of 915 lines differ**, first 267, last 913, agreement in between |
+
+Both playing runs first diverge at the same frame, 27 after the coin, so the fire button is not what
+starts it. And the builds keep re-converging, which rules out simulation state permanently out of
+step. The report now prints the count and the span for exactly that reason: "two frames then
+agreement" and "every frame from here on" are different defects, and the old report — first differing
+line only — could not tell them apart.

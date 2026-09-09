@@ -103,7 +103,7 @@ console.log(`${version().split('\n')[0]}`);
 console.log(`${cfiles.length} units, ${Object.keys(roms).length} data files, ${FRAMES} frames, game "${GAME}"`);
 
 // --- the gcc side
-console.log('building all of MAME with gcc…');
+console.log('building all of MAME with the reference compiler…');
 // -DUNIX is MAME's own switch for a non-DJGPP host: it maps uclock onto clock, which glibc has and
 // DJGPP's uclock it does not. Defined on BOTH sides so the two builds see identical source. It only
 // reaches the FPS counter, which needs an F11 keypress this backend never reports.
@@ -112,11 +112,37 @@ const PLAY_DEFS = play.length === 4 && play.every(Number.isFinite)
   ? { PLAY_COIN: play[0], PLAY_START: play[1], PLAY_FIRE_FROM: play[2], PLAY_FIRE_TO: play[3] } : {};
 const playFlags = Object.entries(PLAY_DEFS).map(([k, v]) => `-D${k}=${v}`).join(' ');
 if (playFlags) console.log(`playing: ${playFlags}`);
-const cmd = `cd mamediff && gcc -std=gnu89 -w -DLSB_FIRST -DUNIX -DMAX_FRAMES=${FRAMES} ${playFlags} -I. -o mameref ` +
-  // stdin from /dev/null: mame.c's banner calls getchar(), which blocks for ever on a terminal.
-  // PRISM's getchar already returns EOF, so this makes the two sides behave the same way.
-  `${cfiles.join(' ')} 2>&1 && ./mameref ${GAME} < /dev/null > ref.txt 2>&1; echo "RC $?"`;
-const r = sh(cmd, { timeout: 1800000 });
+/*
+ * THE REFERENCE COMPILER, and there are two of them because one release needs the other.
+ *
+ * gcc is the reference wherever it can be: it is the compiler every other gate in this project
+ * asks, and the one whose answers the rest of the corpus is measured against. But gcc 12 refuses
+ * four `case` labels in MAME 0.4's src/machine.c -- and a census of the whole release says those
+ * four lines are the ONLY thing it refuses, in 31 units. So the fallback is not "a second opinion",
+ * it is the difference between having an oracle for this release and having none.
+ *
+ * tcc accepts them. It also accepts the two other period constructs Open Watcom (which DOES take
+ * the case labels) refuses in every mode: `unsigned char *line[0]` in osdepend.h, and `interrupt`
+ * as an ordinary identifier. Neither side of the differential may be patched, so the compiler has
+ * to bend, and tcc is the one that bends far enough. `-lm` is explicit because tcc, unlike gcc,
+ * does not link libm on its own and cclimber's wave table calls cos().
+ */
+const build = (cc) => (cc === 'tcc'
+  ? `tcc -w -DLSB_FIRST -DUNIX -DMAX_FRAMES=${FRAMES} ${playFlags} -I. -lm -o mameref `
+  : `gcc -std=gnu89 -w -DLSB_FIRST -DUNIX -DMAX_FRAMES=${FRAMES} ${playFlags} -I. -o mameref `);
+// stdin from /dev/null: mame.c's banner calls getchar(), which blocks for ever on a terminal.
+// PRISM's getchar already returns EOF, so this makes the two sides behave the same way.
+const runIt = (cc) => sh(`cd mamediff && ${build(cc)}${cfiles.join(' ')} 2>&1 && ` +
+  `./mameref ${GAME} < /dev/null > ref.txt 2>&1; echo "RC $?"`, { timeout: 1800000 });
+
+let CC = 'gcc';
+let r = runIt(CC);
+if (!/RC 0/.test(r.stdout) && /pointers are not permitted as case values/.test(r.stdout)) {
+  console.log(`gcc refuses 'case MRA_RAM:' (driver.h defines it as a cast POINTER constant, which ` +
+    `gcc 2.7 on DJGPP took as a case label). Falling back to tcc, which accepts it.`);
+  CC = 'tcc';
+  r = runIt(CC);
+}
 if (!/RC 0/.test(r.stdout)) {
   /*
    * ONE FAILURE IS NOT A BUILD ERROR, it is a missing oracle, and it should be named as such.
@@ -128,19 +154,18 @@ if (!/RC 0/.test(r.stdout)) {
    * release simply HAS NO native oracle on a modern compiler -- and the honest thing is to say which
    * construct, not to print a wall of compiler output as though the harness were broken.
    */
-  if (/pointers are not permitted as case values/.test(r.stdout)) {
-    console.error(`no oracle for MAME ${RELEASE}: this gcc refuses 'case MRA_RAM:'. driver.h ` +
-      `defines MRA_RAM as a cast POINTER constant, which gcc 2.7 on DJGPP took as a case label and ` +
-      `a modern gcc does not; a command-line -D cannot help, because the header defines it itself. ` +
-      `Neither side may be patched, so this release needs a period compiler (gcc 2.x, or tcc) ` +
-      `before it can be diffed at all. MAME 0.1 and 0.2 do build.`);
+  if (/pointers are not permitted as case values/.test(r.stdout) || /tcc: not found/.test(r.stdout)) {
+    console.error(`no oracle for MAME ${RELEASE}: the fallback compiler is missing. This release ` +
+      `needs tcc -- gcc refuses 'case MRA_RAM:' and Open Watcom refuses osdepend.h's zero-length ` +
+      `array -- and the oracle image has to carry it: rebuild with\n` +
+      `  docker build --platform linux/386 -t prism-oracle tools/oracle`);
     process.exit(2);
   }
-  console.error(`gcc side failed:\n${r.stdout.split('\n').slice(0, 25).join('\n')}`);
+  console.error(`${CC} side failed:\n${r.stdout.split('\n').slice(0, 25).join('\n')}`);
   process.exit(1);
 }
 const ref = readFileSync(join(work, 'ref.txt'), 'utf8').trim().split('\n');
-console.log(`reference: ${ref.length} lines`);
+console.log(`reference: ${ref.length} lines, built with ${CC}`);
 
 // --- the PRISM side, from the same flat directory so both see identical text
 function resolver(name) {
@@ -185,13 +210,24 @@ for (let i = 0; i < Math.max(ref.length, ours.length); i++) {
   if (ref[i] !== ours[i]) { bad = i; break; }
 }
 if (bad < 0) {
-  console.log(`\n✓ identical over ${ref.length} lines — the whole build agrees with gcc.`);
+  console.log(`\n✓ identical over ${ref.length} lines — the whole build agrees with the ${CC} build.`);
   process.exit(0);
 }
-console.log(`\n✗ first divergence at line ${bad}:`);
-for (let i = Math.max(0, bad - 3); i <= Math.min(bad + 2, Math.max(ref.length, ours.length) - 1); i++) {
+/*
+ * HOW MANY, not just WHERE. The first differing line is where to start reading; the count and the
+ * span say what KIND of defect it is. A handful of frames that differ and then agree again is a
+ * transient -- one object drawn wrongly for as long as it exists -- and every frame differing from
+ * the first divergence onward is state that has gone permanently out of step. Reporting only the
+ * first line cannot tell those apart, and they are not the same bug.
+ */
+const n = Math.max(ref.length, ours.length);
+let diff = 0, last = bad;
+for (let i = 0; i < n; i++) if (ref[i] !== ours[i]) { diff++; last = i; }
+console.log(`\n✗ ${diff} of ${n} lines differ, first at ${bad}, last at ${last}` +
+  (diff === last - bad + 1 ? ' — every line from the first onward' : ' — with agreement in between'));
+for (let i = Math.max(0, bad - 3); i <= Math.min(bad + 2, n - 1); i++) {
   const mark = i === bad ? '>>' : '  ';
-  console.log(`${mark} gcc   ${ref[i] ?? '(end)'}`);
+  console.log(`${mark} ${CC.padEnd(5)} ${ref[i] ?? '(end)'}`);
   console.log(`${mark} prism ${ours[i] ?? '(end)'}`);
 }
 process.exit(1);
