@@ -361,6 +361,15 @@ for a program with no safepoints is terminating the worker.
 > the hook where the program offers none, which is strictly more general. The two honest caveats are
 > that it is off by default, and that it is not free.
 
+**The alternatives are a roadmap section of their own** — [P2b](ROADMAP.md), five rows under one
+constraint worth restating here: **nothing in JavaScript can preempt.** No signals, no guard page to
+unprotect, no way to interrupt a running function; a worker can be killed, not interrupted. So every
+answer is cooperative and the only question is where the cooperation is paid. The two most promising
+are instrumenting **only the loops that contain no call** — a loop that makes one is already visible
+to spin damping, so most of today's per-iteration cost buys nothing — and writing the guest's memory
+**from the page**, which is what an interrupt actually does and needs no yield at all, for the cases
+where the ISR reduces to writing bytes.
+
 ### The clock is real, and the program paces itself
 
 `installRealClock` replaces the deterministic counter in the browser only. The program's own throttle
