@@ -30,7 +30,7 @@ import { installVgaFont } from '../src/env/vgafont.js';
 import { installWsock } from '../src/env/wsock.js';
 import { installDl } from '../src/env/dl.js';
 import { HEADERS } from '../src/env/headers.js';
-import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeParker, SLOT, STATE }
+import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeMouse, makeParker, SLOT, STATE }
   from '../src/env/webhost.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
@@ -139,6 +139,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
   // Pac-Man's is 60; a program that never presents a frame never waits.
   const pace = makePacer(ctrl, program.fps || 60);
   const keyboard = makeKeyboard(views);
+  const mouse = makeMouse(views);
   const park = makeParker(ctrl);
   const setState = (s) => Atomics.store(ctrl, SLOT.STATE, s);
 
@@ -700,7 +701,12 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     });
     prog.M.kbd = installKbd8042(machine);            // in_dos.c's handler reads port 0x60
     installPIT(machine, prog.M, { micros: () => performance.now() * 1000 });
-    const dosHost = installGo32(prog.M);
+    /*
+     * The mouse, which is what turns `No mouse found` into a game you can aim in. Quake's DOS build
+     * asks INT 33h for three services and go32.js answers them from this channel; the page fills it
+     * under Pointer Lock.
+     */
+    const dosHost = installGo32(prog.M, { mouse });
 
     Atomics.store(ctrl, SLOT.WIDTH, 320);
     Atomics.store(ctrl, SLOT.HEIGHT, 200);

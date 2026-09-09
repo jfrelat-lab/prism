@@ -114,6 +114,8 @@
   #stage { display: grid; place-items: center; min-height: 0; overflow: hidden;
            background: #000; position: relative; border: 1px solid var(--edge);
            border-radius: 0 0 8px 8px; }
+  /* The pointer is the program's while it is captured; say so, because Esc is how you get it back. */
+  #stage.captured { cursor: none; box-shadow: inset 0 0 0 1px var(--accent); }
   /*
    * `object-fit: contain` rather than `height: 100%; width: auto`: the old rule scaled to the
    * stage's HEIGHT and let the width follow, which needs the stage to have a definite height -- and

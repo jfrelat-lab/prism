@@ -99,6 +99,25 @@ export const SLOT = {
    * and a canvas wants red first, so the two cannot share a copy loop.
    */
   PIXFMT: 34,      // guest → host: 0 = 8-bit indexed (default), 32 = BGRA
+
+  /*
+   * THE MOUSE, and it is an ACCUMULATOR rather than a position.
+   *
+   * Every program here wants relative motion: Quake's DOS build reads INT 33h AX=000B, "read motion
+   * counters", which returns how far the mouse has moved SINCE THE LAST CALL and resets the counters
+   * -- and an X client asking for MotionNotify wants the same thing by a different name. A browser
+   * gives absolute coordinates inside an element, so the page differences them (Pointer Lock hands
+   * over `movementX` directly) and ADDS the result here; the guest EXCHANGES the slot for zero when
+   * it reads. Two sides, one number each, and no shared cursor position to disagree about.
+   *
+   * That is also why this cannot be a poll of some page-side variable: `Atomics.add` on one side and
+   * `Atomics.exchange` on the other is the whole protocol, and neither can lose a movement to the
+   * other's timing.
+   */
+  MOUSE_DX: 35,    // host → guest: motion accumulated since the guest last read, in mickeys
+  MOUSE_DY: 36,
+  MOUSE_BUTTONS: 37, // host → guest: bit 0 left, bit 1 right, bit 2 middle -- the INT 33h order
+  MOUSE_HAS: 38,   // host → guest: 1 once the page is capturing, so a probe can be answered honestly
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -250,6 +269,39 @@ export function makeParker(ctrl) {
     // timeout, and any notify from the page cuts the wait short.
     Atomics.wait(ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 100));
     return !Atomics.load(ctrl, SLOT.STOP);
+  };
+}
+
+/**
+ * The mouse, from both sides.
+ *
+ * `push` is the page's: it ADDS motion, because two events between two guest reads are one movement.
+ * `take` is the guest's: it EXCHANGES for zero, so a delta is delivered exactly once -- which is the
+ * contract INT 33h's "read motion counters" already has, and what an X client expects of the events
+ * it has consumed.
+ */
+export function makeMouse(views) {
+  const { ctrl } = views;
+  return {
+    /** Host side: the pointer moved by (dx, dy), and these buttons are down. */
+    move(dx, dy) {
+      if (dx) Atomics.add(ctrl, SLOT.MOUSE_DX, dx | 0);
+      if (dy) Atomics.add(ctrl, SLOT.MOUSE_DY, dy | 0);
+    },
+    buttons(mask) { Atomics.store(ctrl, SLOT.MOUSE_BUTTONS, mask & 7); },
+    /** Host side: whether the page is capturing at all. A program may ask, and must not be lied to. */
+    present(on) { Atomics.store(ctrl, SLOT.MOUSE_HAS, on ? 1 : 0); },
+
+    /** Guest side: how far since the last call, and reset -- INT 33h AX=000B, exactly. */
+    take() {
+      return {
+        dx: Atomics.exchange(ctrl, SLOT.MOUSE_DX, 0),
+        dy: Atomics.exchange(ctrl, SLOT.MOUSE_DY, 0),
+      };
+    },
+    /** Guest side: which buttons are down right now. Level, not edge -- INT 33h AX=0003. */
+    state() { return Atomics.load(ctrl, SLOT.MOUSE_BUTTONS) & 7; },
+    has() { return Atomics.load(ctrl, SLOT.MOUSE_HAS) === 1; },
   };
 }
 

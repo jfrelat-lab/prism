@@ -30,7 +30,7 @@ const D_FLAGS = 32;
 /** _go32_dpmi_seginfo: { size|size_or_mask, pm_offset, pm_selector, rm_offset, rm_segment }. */
 const S_SIZE = 0, S_PM_OFFSET = 4, S_PM_SELECTOR = 8, S_RM_OFFSET = 10, S_RM_SEGMENT = 12;
 
-export function installGo32(M, { onVideoMode = null } = {}) {
+export function installGo32(M, { onVideoMode = null, mouse = null } = {}) {
   const dv = () => M.mod.dv;
   const state = {
     mode: null,
@@ -42,6 +42,9 @@ export function installGo32(M, { onVideoMode = null } = {}) {
 
   const eax = (p) => dv().getUint32(p + D_EAX, true) >>> 0;
   const setEax = (p, v) => dv().setUint32(p + D_EAX, v >>> 0, true);
+  const setEbx = (p, v) => dv().setUint32(p + D_EBX, v >>> 0, true);
+  const setEcx = (p, v) => dv().setUint32(p + D_ECX, v >>> 0, true);
+  const setEdx = (p, v) => dv().setUint32(p + D_EDX, v >>> 0, true);
   const clearCarry = (p) => dv().setUint16(p + D_FLAGS, dv().getUint16(p + D_FLAGS, true) & ~1, true);
 
   /**
@@ -59,10 +62,46 @@ export function installGo32(M, { onVideoMode = null } = {}) {
         clearCarry(regs);
         return 0;
       }
-      case 0x33:                                     // mouse driver: absent, and it must say so
-        setEax(regs, 0);
+      /*
+       * THE MOUSE DRIVER, and Quake's DOS build asks for exactly three of its services -- measured,
+       * `in_dos.c:139`, `:203`, `:283`. Nothing else here has ever called INT 33h, so implementing
+       * the three is implementing the driver as far as this corpus is concerned; anything else falls
+       * through to the same honest silence the rest of this switch gives.
+       *
+       * With no mouse it still answers AX=0 to the probe, which is what it always did and what a
+       * machine with no driver loaded says.
+       */
+      case 0x33: {
+        if (!mouse || !mouse.has()) { setEax(regs, 0); clearCarry(regs); return 0; }
+        switch (ax) {
+          case 0x0000:                    // reset and status: AX = installed, BX = button count
+            setEax(regs, 0xffff);
+            setEbx(regs, 3);
+            break;
+          case 0x0003:                    // read buttons and position
+            setEbx(regs, mouse.state());
+            /*
+             * CX and DX are the POSITION, and this driver has none to give: the page captures
+             * relative motion (Pointer Lock reports nothing else) and a first-person game reads
+             * AX=000B anyway. Zero is the honest answer and Quake does not look at them --
+             * in_dos.c:203 takes regs.x.bx and nothing more.
+             */
+            setEcx(regs, 0);
+            setEdx(regs, 0);
+            break;
+          case 0x000b: {                  // read motion counters, and RESET them
+            const { dx, dy } = mouse.take();
+            // Signed 16-bit, as the driver returns them: the caller casts to short.
+            setEcx(regs, dx & 0xffff);
+            setEdx(regs, dy & 0xffff);
+            break;
+          }
+          default:
+            break;                        // every other service: no answer, no pretence
+        }
         clearCarry(regs);
         return 0;
+      }
       case 0x2f:
         /*
          * Multiplex. Quake asks AX=0x160A, "get Windows version", to decide whether it is running

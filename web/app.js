@@ -14,7 +14,7 @@
 // The shell's own reporting — compile timings, stubbed headers, functions it could not emit — stays
 // in the side pane. A DOS screen never showed "894 functions in 700 ms".
 
-import { makeControl, controlViews, makeKeyboard, wake, KEY_HOLD_FRAMES, AUDIO_RING, SLOT, STATE }
+import { makeControl, controlViews, makeKeyboard, makeMouse, wake, KEY_HOLD_FRAMES, AUDIO_RING, SLOT, STATE }
   from '../src/env/webhost.js';
 import { scancodeForEvent } from '../src/env/scancodes.js';
 import { makePipe } from '../src/env/pipe.js';
@@ -717,6 +717,7 @@ async function loadData(root, say) {
 // what getchar reads once each). Answering the second with the first reports Enter as pressed for as
 // long as the finger is down.
 let keyboard = null;
+let mouse = null;
 
 /*
  * Fullscreen, on the STAGE rather than the canvas: see the CSS for why. Keyboard input keeps working
@@ -830,6 +831,85 @@ addEventListener('keyup', (e) => {
   wake(views.ctrl);
   e.preventDefault();
 });
+// ---------------------------------------------------------------- the mouse
+//
+// RELATIVE MOTION, which is the only kind these programs want. Quake's DOS build reads INT 33h
+// AX=000B ("read motion counters"), an X client differences successive MotionNotify positions around
+// a warp, and a Win32 game reads WM_MOUSEMOVE the same way -- all three want "how far since last
+// time", and none of them wants a cursor position inside a web page.
+//
+// A browser only gives that under POINTER LOCK. Without it, `movementX` is still reported but the
+// pointer stops at the edge of the window, so a turn to the left ends after a few hundred pixels;
+// with it, the pointer has no position at all and the motion is unbounded, which is what a
+// first-person game has always assumed.
+//
+// So capture is a deliberate act -- click the screen -- and Esc gives it back, because that is the
+// browser's own contract and fighting it would be worse than following it.
+const stage = $('stage');
+
+/*
+ * Whether motion is being taken at all. Pointer lock is the good case; the fallback below is the
+ * honest one, and they are told apart because they behave differently at the edge of the window.
+ */
+let capturing = false;
+
+stage.addEventListener('click', () => {
+  // Only while something is running: locking the pointer over a machine's prompt would take the
+  // mouse away from the page for nothing.
+  if (!worker || document.pointerLockElement === stage) return;
+  const p = stage.requestPointerLock?.();
+  /*
+   * POINTER LOCK CAN BE REFUSED, and it is refused in some embeddings -- an iframe without
+   * `allow="pointer-lock"` among them. Falling back to plain `movementX` is not the same thing and
+   * must not pretend to be: the deltas are identical, but the pointer still has a position, so it
+   * stops at the edge of the window and a long turn ends there. Better than nothing, worse than
+   * lock, and said out loud rather than left to be discovered mid-turn.
+   */
+  Promise.resolve(p).catch(() => {
+    if (capturing) return;
+    capturing = true;
+    stage.classList.add('captured');
+    log('pointer lock refused — mouse still works, but the pointer stops at the window edge', 'warn');
+  });
+});
+
+document.addEventListener('pointerlockchange', () => {
+  const on = document.pointerLockElement === stage;
+  capturing = on;
+  stage.classList.toggle('captured', on);
+  if (!on && mouse) mouse.buttons(0);      // a released capture holds no buttons down
+  log(on ? 'mouse captured — Esc to release' : 'mouse released');
+});
+
+addEventListener('mousemove', (e) => {
+  if (!mouse || !capturing) return;
+  /*
+   * `movementX` is already the delta, in the same unit a DOS driver called a mickey. Quake scales it
+   * by `sensitivity` itself, so nothing is scaled here -- a host that pre-multiplied would be
+   * silently overriding the game's own setting.
+   */
+  mouse.move(e.movementX | 0, e.movementY | 0);
+});
+
+/*
+ * Buttons as a LEVEL, not as edges. INT 33h AX=0003 and X11's `state` mask both report which buttons
+ * are down right now, and Quake turns that into presses and releases itself (in_dos.c:206) -- so the
+ * page must not do it too, or every click would arrive twice.
+ */
+let mouseButtons = 0;
+for (const [type, down] of [['mousedown', true], ['mouseup', false]]) {
+  addEventListener(type, (e) => {
+    if (!mouse || !capturing) return;
+    // The DOM numbers them 0 left, 1 middle, 2 right; INT 33h wants bit 0 left, 1 right, 2 middle.
+    const bit = e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
+    mouseButtons = down ? (mouseButtons | bit) : (mouseButtons & ~bit);
+    mouse.buttons(mouseButtons);
+    e.preventDefault();
+  });
+}
+// A right-click inside a captured screen is the game's, not the browser's context menu.
+stage.addEventListener('contextmenu', (e) => { if (document.pointerLockElement === stage) e.preventDefault(); });
+
 // A lost focus must release everything, or the program keeps walking left for ever.
 addEventListener('blur', releaseAll);
 // And so must clicking into the command line: from here on its keys are the page's, so the ones
@@ -968,6 +1048,16 @@ async function startRun(typedAs = null) {
   const control = makeControl();
   views = controlViews(control);
   keyboard = makeKeyboard(views);
+  mouse = makeMouse(views);
+  /*
+   * The machine HAS a mouse from the moment it starts, and capture is a separate question.
+   *
+   * Quake probes once, in IN_StartupMouse, and remembers the answer for the whole run -- so if this
+   * said "no mouse" until somebody clicked, the probe would fail and there would be no mouse for the
+   * rest of the session however much you clicked afterwards. A mouse that is plugged in and not
+   * being touched reports no movement; that is what an uncaptured page is.
+   */
+  mouse.present(true);
   Atomics.store(views.ctrl, SLOT.SPEED, +$('speed').value);
   Atomics.store(views.ctrl, SLOT.TEXTMODE, 1);
 
@@ -1032,7 +1122,7 @@ async function startRun(typedAs = null) {
   // bug look identical from the outside, and this is what tells them apart.
   // `data` is here because "the program cannot find its file" and "the page never loaded it" look
   // identical from the outside, and that is exactly the question this seam exists to answer.
-  window.PRISM = { views, program, argv, get guest() { return guest; }, paint, keyboard, SLOT, STATE,
+  window.PRISM = { views, program, argv, get guest() { return guest; }, paint, keyboard, mouse, SLOT, STATE,
                    get data() { return dataFiles; } };
 
   $('run').disabled = true; $('stopBtn').disabled = false;
