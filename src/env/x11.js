@@ -40,8 +40,16 @@ const GC_TOKEN = 0x7200_0004;
  */
 const XKEY_KEYCODE = 52;
 const XEXPOSE_COUNT = 36;
+/*
+ * The pointer fields, from the same struct: `int x, y` at 32 and 36, `unsigned int state` at 48, and
+ * at 52 either `keycode` (a key event) or `button` (a button event). XMotionEvent has a `char is_hint`
+ * there instead, which nothing in this corpus reads.
+ */
+const XEV_X = 32, XEV_Y = 36, XEV_STATE = 48, XEV_BUTTON = 52;
+/* X numbers its buttons 1 left, 2 MIDDLE, 3 right, and its state mask starts at bit 8. */
+const X_BUTTON_MASK = [0, 1 << 8, 1 << 9, 1 << 10];
 
-export function installX11(M, { publish = null, keyboard = null, onFrame = null } = {}) {
+export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null } = {}) {
   const dv = () => M.mod.dv;
 
   // XImage, in the layout PRISM's own X11/Xlib.h declares. The two are one thing in two places.
@@ -51,7 +59,14 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
 
   const state = { width: 0, height: 0, imageData: 0, palette: new Uint8Array(768),
                   // Interned atom names, and the window's own title when it sets one through ICCCM.
-                  atoms: new Map(), windowName: '' };
+                  atoms: new Map(), windowName: '',
+                  /*
+                   * A VIRTUAL POINTER. X reports where the pointer IS; the host has only how far it
+                   * moved. So the position is kept here, advanced by each delta and reset by
+                   * XWarpPointer -- which is exactly the loop both games run, and it means their
+                   * "subtract the centre" arithmetic works out to the delta they wanted.
+                   */
+                  pointer: { x: 0, y: 0 }, buttons: 0 };
 
   /*
    * An event queue, because a real X server sends events a client waits for. Doom maps its window and
@@ -85,7 +100,21 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
     XFillRectangle: () => 0,
     XGrabPointer: () => 0,
     XUngrabPointer: () => 0,
-    XWarpPointer: () => 0,
+    /*
+     * XWarpPointer MOVES THE POINTER, and here that is the whole mechanism rather than a courtesy.
+     *
+     * Both games use the same idiom: read a MotionNotify's absolute x, subtract the window centre to
+     * get a delta, then warp back to the centre so the next one is a delta too. If the warp did
+     * nothing -- as this stub did -- the position would keep drifting and the "delta" would grow
+     * without bound until the pointer pinned itself to an edge. Quake even turns PointerMotionMask
+     * off around its warp (vid_x.c:889) precisely so the warp itself does not look like motion, so
+     * this does not synthesise an event for it either.
+     */
+    XWarpPointer: (_dpy, _src, _dst, _sx, _sy, _sw, _sh, x, y) => {
+      state.pointer.x = x | 0;
+      state.pointer.y = y | 0;
+      return 0;
+    },
     XSelectInput: () => 0,
     XStoreName: () => 0,
 
@@ -259,10 +288,25 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
      * Input. A keycode here is a PC scan code, because that is what the host has and what
      * XKeycodeToKeysym is asked to translate; the mapping to X keysyms lives below.
      */
-    XPending: () => events.length + (keyboard ? keyboard.pending() : 0),
+    XPending: () => events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0),
 
     XNextEvent: (_dpy, ev) => {
       M.u8.fill(0, ev, ev + 96);
+      /*
+       * The POINTER first, and before the keyboard, because a game reads its mouse every frame and
+       * its keys occasionally: leaving motion behind a queue of keystrokes would make aiming lag
+       * behind typing. A synthesised event is built here rather than pushed into `events` so that no
+       * motion is ever stale -- it carries the position as of the moment the client asked.
+       */
+      const m = takeMouseEvent();
+      if (m) {
+        dv().setInt32(ev, m.type, true);
+        dv().setInt32(ev + XEV_X, state.pointer.x, true);
+        dv().setInt32(ev + XEV_Y, state.pointer.y, true);
+        dv().setInt32(ev + XEV_STATE, m.state, true);
+        if (m.button) dv().setInt32(ev + XEV_BUTTON, m.button, true);
+        return 0;
+      }
       const e = events.shift() ?? (keyboard ? keyboard.next() : null)
         // An Expose when there is nothing else: XNextEvent BLOCKS on a real system, and a client that
         // waits for one must eventually get it. Returning a harmless redraw request is the closest
@@ -306,8 +350,65 @@ export function installX11(M, { publish = null, keyboard = null, onFrame = null 
     },
   };
 
+  /*
+   * WHAT THE POINTER HAS TO SAY, as one event at a time.
+   *
+   * Buttons are edges here even though the channel carries a level, because X sends ButtonPress and
+   * ButtonRelease and a client counts them (Doom's `event.data1` is built from the STATE mask, but
+   * Quake's `case ButtonPress` is an edge). Comparing against the last mask turns one into the other,
+   * and one button changes per event because that is what a real server sends.
+   */
+  function pendingButtonChange() {
+    if (!mouse) return 0;
+    const now = mouse.state();
+    return now ^ state.buttons;                 // bits that differ; 0 when nothing changed
+  }
+  const mousePending = () => !!mouse && (pendingButtonChange() !== 0 || mouseHasMotion());
+
+  let carriedDx = 0, carriedDy = 0;
+  function mouseHasMotion() {
+    if (carriedDx || carriedDy) return true;
+    const { dx, dy } = mouse.take();
+    carriedDx += dx; carriedDy += dy;
+    return !!(carriedDx || carriedDy);
+  }
+
+  /** X's `state` mask for the buttons currently down, from the channel's INT 33h bit order. */
+  function stateMask(mask) {
+    return ((mask & 1) ? X_BUTTON_MASK[1] : 0)      // left  -> X button 1
+         | ((mask & 4) ? X_BUTTON_MASK[2] : 0)      // middle-> X button 2
+         | ((mask & 2) ? X_BUTTON_MASK[3] : 0);     // right -> X button 3
+  }
+
+  function takeMouseEvent() {
+    if (!mouse) return null;
+    // A button change first: a click that arrived with a movement must not be delayed behind it.
+    const changed = pendingButtonChange();
+    if (changed) {
+      const bit = changed & -changed;             // lowest differing bit, one event at a time
+      const now = mouse.state();
+      state.buttons ^= bit;
+      const button = bit === 1 ? 1 : bit === 2 ? 3 : 2;   // left, right, middle -> X's 1, 3, 2
+      return { type: (now & bit) ? 4 : 5, button, state: stateMask(state.buttons) };  // Press / Release
+    }
+    if (!mouseHasMotion()) return null;
+    state.pointer.x += carriedDx;
+    state.pointer.y += carriedDy;
+    carriedDx = 0; carriedDy = 0;
+    return { type: 6, button: 0, state: stateMask(state.buttons) };                   // MotionNotify
+  }
+
   function publishGeometry() {
     if (!publish || !state.imageData) return;
+    /*
+     * The pointer starts at the CENTRE, because that is where these games warp it to and what they
+     * subtract from. Starting at 0,0 would make the first MotionNotify report a delta of half the
+     * screen -- one enormous spin before anything settled.
+     */
+    if (!state.pointer.x && !state.pointer.y) {
+      state.pointer.x = state.width >> 1;
+      state.pointer.y = state.height >> 1;
+    }
     Atomics.store(publish.ctrl, SLOT.WIDTH, state.width);
     Atomics.store(publish.ctrl, SLOT.HEIGHT, state.height);
     Atomics.store(publish.ctrl, SLOT.PIXELS, state.imageData);

@@ -74,7 +74,7 @@
   },
   "memory": 134217728,
   "args": "",
-  "argsHint": "empty starts the game as it shipped: title screen, attract demos, and a key opens the menu. `-warp <episode> <map> -skill <1-5>` drops straight into a level; `-playdemo <name>` replays one.",
+  "argsHint": "empty starts the game as it shipped: title screen, attract demos, and a key opens the menu. `-warp <episode> <map> -skill <1-5>` drops straight into a level; `-playdemo <name>` replays one. **`-grabmouse` is what turns the mouse on** -- id left `PointerMotionMask` commented out in i_video.c:802, so the window never asks X for motion; the XGrabPointer behind -grabmouse is what does.",
   "fps": 35,
   "host": "x11",
   "needsData": {
@@ -113,5 +113,6 @@
   ],
   "_soundServer": "Doom delegates sound to a separate PROCESS -- doomdef.h defines SNDSERV and i_sound.c popens './sndserver' -- so making it audible was never an audio problem. Naming the source here is enough: web/worker.js starts a second worker on it and connects the two with a byte pipe.",
   "soundServer": "corpus/DOOM/sndserv",
-  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data."
+  "_needsData": "`dir` is the data ROOT this program's files live under -- a directory served by `serve.mjs --games=<dir>`, named after it. The shell fetches that one when the program starts, and no other: a program's data is not the shelf's data.",
+  "_mouse": "Two conditions, both id's own. -grabmouse selects the motion events (i_video.c:847). And i_video.c:257 posts the event only `if (x != X_width/2 && y != X_height/2)` -- an AND, so a purely HORIZONTAL movement is discarded by the game itself. Doom needs both axes to move before it turns."
 }

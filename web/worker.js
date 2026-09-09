@@ -383,6 +383,8 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         pending: () => keyboard.pending(),
         next: () => keyboard.nextEvent(),
       },
+      /* The same channel the DOS host reads through INT 33h, delivered here as X events instead. */
+      mouse,
       onFrame: () => { reader.endFrame(); pace(); },
     });
   } else if (platform === 'quake') {
