@@ -197,6 +197,25 @@
         "go32"
       ]
     },
+    "svgalib": {
+      "host": "svgalib",
+      "title": "QUAKE (Linux svgalib, id386=0)",
+      "_doc": "id's OTHER Linux video driver: vid_svgalib.c draws to the virtual console's framebuffer with no X server at all, and reads the RAW keyboard. It is a whole platform layer in one file -- VID_*, Sys_SendKeyEvents and every IN_* -- like vid_x.c and vid_sunx.c, so this is a second display path on the same MACHINE rather than a new machine.",
+      "_planar": "The driver has a planar path (`if (VGA_planar) VGA_UpdatePlanarScreen(...)`, the routine that blocks P3.5) and never takes it here, for a reason rather than by luck: `VGA_planar = modes[current_mode].bytesperpixel == 0` and with no arguments it selects G320x200x256, which on a real svgalib is a LINEAR eight-bit mode. Ask for a planar mode and it would need the same two things mode-X needs.",
+      "addUnits": [
+        "sys_linux.c",
+        "vid_svgalib.c",
+        "snd_null.c",
+        "cd_null.c",
+        "net_none.c"
+      ],
+      "_snd": "snd_null.c rather than snd_linux.c: /dev/dsp is a separate device surface and not what this variant is for. The X11 variant is where the sound path is exercised.",
+      "env": [
+        "stdio",
+        "ports",
+        "svgalib"
+      ]
+    },
     "sun": {
       "host": "x11",
       "title": "QUAKE (SunOS/X11, id386=0)",

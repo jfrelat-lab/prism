@@ -25,6 +25,7 @@ import { installVgaDac } from '../src/env/vgadac.js';
 import { installKbd8042 } from '../src/env/kbd8042.js';
 import { installPIT } from '../src/env/pit.js';
 import { installGo32 } from '../src/env/go32.js';
+import { installSvgalib } from '../src/env/svgalib.js';
 import { installWatcom } from '../src/env/watcom.js';
 import { installVgaFont } from '../src/env/vgafont.js';
 import { installWsock } from '../src/env/wsock.js';
@@ -755,6 +756,34 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     prog.F.VID_Update = w;
     prog.mod.bindFunc('VID_Update', w);
 
+  } else if (platform === 'svgalib') {
+    /*
+     * A LINUX CONSOLE host: the same machine as x11, the other display path. svgalib is shimmed at
+     * the library boundary like Xlib is, and it is the easiest of the three input surfaces in the
+     * corpus -- its keyboard hands the client a raw PC scan code and its mouse hands it relative
+     * deltas, which are exactly the two channels the control block already carries.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    installPortMachine(prog.M);                      // the game programs the VGA planes itself
+    installSvgalib(prog.M, {
+      publish: { ctrl, pal },
+      keyboard: { next: () => keyboard.nextEvent() },
+      mouse,
+    });
+    /*
+     * The frame boundary is the game's own VID_Update: this driver writes straight into the
+     * framebuffer it was handed, so unlike X11 there is no library call left to hook.
+     */
+    const inner = prog.F.VID_Update;
+    const wrapped = function (...a) {
+      const r = inner.apply(this, a);
+      reader.endFrame();
+      pace();
+      return r;
+    };
+    prog.F.VID_Update = wrapped;
+    prog.mod.bindFunc('VID_Update', wrapped);
+
   } else if (platform === 'console') {
     /*
      * NO PLATFORM AT ALL: libc, a text screen, and the keyboard as stdin.
@@ -803,7 +832,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * from a program that was handed the wrong world.
      */
     throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
-      `it presents x11, mgl, gdi, dos, watcom, console and allegro. This build runs in Node: ` +
+      `it presents x11, svgalib, mgl, gdi, dos, watcom, console and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*

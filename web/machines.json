@@ -47,6 +47,7 @@
       "programs": [
         { "program": "doom", "file": "doom", "date": "Dec 23  1997" },
         { "program": "quake", "variant": "x11", "file": "quake", "date": "Aug  1  1996" },
+        { "program": "quake-svgalib", "file": "quake.svga", "date": "Aug  1  1996" },
         { "program": "quake2", "file": "quake2", "date": "Dec  9  1997" },
         { "program": "lua", "file": "lua", "date": "May  2  2023" }
       ]

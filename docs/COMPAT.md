@@ -1440,3 +1440,68 @@ Two more defects stood between "connects" and "shows text", and both were about 
   bytes to the terminal, which decodes UTF-8 (PuTTY's `decode_codepage` answers 65001), and the
   screen filled with U+FFFD. The server's fault, not the terminal's, and worth recording because the
   symptom pointed squarely at the character-set code.
+
+## The Linux machine gets its second video driver: Quake on svgalib
+
+```
+node tools/build.mjs targets/quake.json:svgalib --run --data=<dir with id1/> --frames=60 --png=/tmp/svga.png
+
+QUAKE (Linux svgalib, id386=0) -- 68 translation units, 45,671 lines, 1052 functions
+frames 60 · display 320x200
+60701 non-zero pixels of 64000, 141 colours
+```
+
+`vid_svgalib.c` is the other video driver id shipped for Linux: no X server, no window, just the
+framebuffer of a virtual console and the raw keyboard. Like `vid_x.c` and `vid_sunx.c` it is a whole
+platform layer in one file — `VID_*`, `Sys_SendKeyEvents` and every `IN_*` — so the choice between
+them is a **display path inside one machine**, not another machine. The shelf's Linux row now offers
+both, which is what the program itself offered.
+
+**The roadmap said this shared P3.5's blocker, and it does not.** I had written that the driver "is
+bank-switched and planar". It has both paths —
+
+```c
+VGA_planar = modes[current_mode].bytesperpixel == 0;
+...
+if (VGA_planar) VGA_UpdatePlanarScreen (vid.buffer);   /* d_copy.s, no C equivalent */
+```
+
+— but with no arguments the driver takes `current_mode = G320x200x256`, and on a real svgalib that is
+a **linear** eight-bit mode: `bytesperpixel == 1`. So the planar branch is not avoided by a trick, it
+is not the mode the program asks for, and `VGA_UpdatePlanarScreen` is the one unresolved symbol in
+the build — referenced, never called. A planar svgalib mode would still need what mode X needs.
+
+**The two input surfaces are the cheapest in the corpus.** svgalib delivers a **raw PC scan code** to
+a handler the client installs, and **relative** mouse deltas to another. Those are exactly the two
+channels the control block already carries, so this layer forwards where the X11 one translates.
+Two details are still the host's to get right:
+
+* **One event per `keyboard_update()`.** The client's loop is `while (keyboard_update());`, so a
+  function that drained the queue and returned 1 would spin for ever, and one that returned 0 after
+  draining would deliver only the first key.
+* **svgalib's own button bits**, which are not the channel's: `MOUSE_LEFTBUTTON` is 4 and
+  `MOUSE_RIGHTBUTTON` is 1. Quake then indexes them `1 << i` for K_MOUSE1..3, so on real svgalib its
+  "button 1" is the right-hand one. That is id's mapping and reproducing it is the point.
+
+**A struct's SIZE is part of this ABI.** The driver does
+`Q_memcpy(&modes[i], vga_getmodeinfo(i), sizeof (vga_modeinfo))`, so `vga_modeinfo` is written out in
+full — all seventeen i386 words — even though five fields are read: a short declaration would copy
+garbage over whatever followed it. Same class of fact as `src/env/x11.js`'s event offsets.
+
+**One header decision was mine and it was wrong first.** I declared `<asm/io.h>` empty on the grounds
+that port I/O was svgalib's own business. The **game** does it: `D_BeginDirectRect` and
+`D_EndDirectRect` program the VGA sequencer and graphics controller by hand to select a plane before
+drawing the little status rectangles. Empty made both unemittable ("call to undeclared function
+`outb`"). Declared, they route to PRISM's port machine — with the arguments swapped, because Linux's
+`outb` takes the value first and the DOS convention does not.
+
+**The gate is the result.** `tools/gate-pixels.mjs` now asserts a fourth pair:
+
+```
+x11 == svgalib   identical, 64000 pixels and 768 palette bytes
+all 3 asserted comparisons agree
+```
+
+Bit-identical over the whole surface and the whole palette — which is what two drivers over one
+renderer and one linear 8-bit buffer should give, and would have caught a palette shifted by the two
+bits `VID_SetPalette` drops on the way into `vga_setpalvec`. `gate-run` stays 60/60.

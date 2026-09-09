@@ -30,6 +30,7 @@ import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
 import { installSDL2 } from './sdl2.js';
+import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
 import { installVgaFont } from './vgafont.js';
 import { installWsock } from './wsock.js';
@@ -83,6 +84,9 @@ export const ENV = {
 
   // SDL2 for the Open* family. See src/env/sdl2.js.
   sdl2: { install: (M, _c, o) => installSDL2(M, o) },
+
+  // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
+  svgalib: { needs: ['ports'], install: (M, _c, o) => installSvgalib(M, o) },
 };
 
 /**

@@ -184,6 +184,17 @@ function capture(variant, extraArgs, envExtra = {}) {
       const palette = Uint8Array.from(program.M.dac?.palette ?? new Uint8Array(768));
       return { w: 320, h: 200, at: 0xa0000, palette };
     };
+  } else if (variant === 'svgalib') {
+    /*
+     * The console framebuffer. Like the DOS build this driver writes straight into the memory it was
+     * handed, so the game's own VID_Update is the boundary; unlike it, the memory is an ordinary
+     * allocation the shim made rather than 0xA0000.
+     */
+    wrap('VID_Update', () => {});
+    read = () => {
+      const g = program.M.svgalib;
+      return { w: g.width, h: g.height, at: g.mem, palette: Uint8Array.from(g.palette) };
+    };
   } else {
     throw new Error(`no capture for variant '${variant}'`);
   }
@@ -282,6 +293,12 @@ const runs = {
    * Quake's own switch for exactly this.
    */
   sun: () => capture('sun', ['-zone', '512', '-width', '320', '-height', '200']),
+  /*
+   * The other LINUX path: the console framebuffer instead of an X server. Same renderer, same linear
+   * eight-bit surface, so this pair is asserted -- if it ever differs, the difference is in one of
+   * the two drivers and not in Quake.
+   */
+  svgalib: () => capture('svgalib', ['-width', '320', '-height', '200']),
   dos: () => capture('dos', []),
   win: () => capture('win', ['-window', ...SETTABLE]),
 };
@@ -345,6 +362,8 @@ const pairs = [
    */
   { a: 'x11', b: 'sun', assert: false,
     note: 'SUN and X11 set the renderer up differently; see the comment above' },
+  { a: 'x11', b: 'svgalib', assert: true,
+    note: 'the two Linux drivers, same renderer and same linear surface' },
   { a: 'x11', b: 'win', assert: true,
     allow: (l, r) => l === 0 && r === remap,
     note: `allowing X11's index 0 to be Win32's black remap, index ${remap}` },

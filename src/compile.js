@@ -16,6 +16,7 @@ import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
 import { dlBuiltins } from './env/dl.js';
 import { sdl2Builtins } from './env/sdl2.js';
+import { svgalibBuiltins } from './env/svgalib.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
 import { installPorts } from './env/ports.js';
@@ -581,6 +582,7 @@ for (const [k, v] of Object.entries(wsockBuiltins(T))) BUILTINS.set(k, v);
 for (const [k, v] of Object.entries(go32Builtins(T))) BUILTINS.set(k, v);
 for (const [k, v] of Object.entries(dlBuiltins(T))) BUILTINS.set(k, v);
 for (const [k, v] of Object.entries(sdl2Builtins(T))) BUILTINS.set(k, v);
+for (const [k, v] of Object.entries(svgalibBuiltins(T))) BUILTINS.set(k, v);
 
 export class CompileError extends Error {}
 

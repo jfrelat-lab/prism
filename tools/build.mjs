@@ -254,6 +254,21 @@ if ((frameCap || pngPath) && program.M.rt.XPutImage) {
   };
 }
 /*
+ * ...and for a program presenting through SVGALIB, whose boundary is its own VID_Update: the driver
+ * writes straight into the framebuffer it was handed, so there is no library call to hook and the
+ * game's own function is the only moment a frame exists.
+ */
+if ((frameCap || pngPath) && program.M.svgalib && program.F.VID_Update) {
+  const inner = program.F.VID_Update;
+  const wrapped = function (...a) {
+    const r = inner.apply(this, a);
+    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+    return r;
+  };
+  program.F.VID_Update = wrapped;
+  program.mod.bindFunc('VID_Update', wrapped);
+}
+/*
  * The same thing for a program presenting through MGL, whose frame boundary is MGL_bitBltCoord.
  *
  * The four integers it reads are published by src/env/mgl.c, in C, on purpose: `surface` and
@@ -373,6 +388,17 @@ if (mgl) {
     for (const b of pixels) if (b) nz++;
     writeIndexedPng(pngPath, { pixels, width, height, palette });
     console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
+  }
+} else if (program.M.svgalib?.mem) {
+  /* svgalib: the framebuffer IS the console's memory, and the palette came through vga_setpalvec. */
+  const g = program.M.svgalib;
+  console.log(`\nframes ${frames} · display ${g.width}x${g.height}`);
+  if (pngPath) {
+    const px = program.M.u8.subarray(g.mem, g.mem + g.width * g.height);
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    writeIndexedPng(pngPath, { pixels: px, width: g.width, height: g.height, palette: g.palette });
+    console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
   }
 } else if (program.M.x11?.imageData) {
   const x = program.M.x11;

@@ -1,0 +1,16 @@
+{
+  "title": "Quake (svgalib)",
+  "subtitle": "id Software, 1996 · the OTHER Linux driver: the console framebuffer, no X server",
+  "target": "quake:svgalib",
+  "args": "+host_framerate 0.0138",
+  "argsHint": "the same arguments as the X11 build. `-mode G320x200x256` names the one mode this shim offers; any other would want a planar VGA, which is P3.5's problem.",
+  "fps": 72,
+  "memory": 536870912,
+  "needsData": {
+    "dir": "quake",
+    "hint": "Quake's own data: id1/pak0.pak"
+  },
+  "controls": [],
+  "_why": "Not a different machine -- a different DISPLAY PATH on the same one. vid_svgalib.c draws to the virtual console's framebuffer and reads the raw keyboard, where vid_x.c talks to an X server; both are id's, both are Linux, and having both is what a Linux box in 1996 actually offered.",
+  "_planar": "Its planar branch calls VGA_UpdatePlanarScreen, the one routine in this build with no C equivalent -- and it is never taken, because `VGA_planar = modes[current_mode].bytesperpixel == 0` and the default mode is a linear one."
+}

@@ -11,6 +11,7 @@
 import { DJGPP_HEADERS } from './headers-djgpp.js';
 import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
+import { SVGALIB_HEADERS } from './headers-svgalib.js';
 import { WIN32_HEADERS } from './headers-win32.js';
 
 const STDDEF = `
@@ -1722,6 +1723,9 @@ int sigaddset(sigset_t *set, int sig);
   ...WATCOM_HEADERS,
   // SDL2, for the Open* family. See src/env/headers-sdl2.js.
   ...SDL2_HEADERS,
+
+  // svgalib, for Quake's Linux console driver. See src/env/headers-svgalib.js.
+  ...SVGALIB_HEADERS,
   'dos.h': WATCOM_DOS_H,
   'i86.h': WATCOM_I86_H,
   'errno.h': ERRNO,
