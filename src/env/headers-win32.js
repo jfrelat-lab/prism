@@ -100,6 +100,12 @@ typedef UINT_PTR SOCKET;
 
 #define FD_SETSIZE      64
 typedef struct fd_set { u_int fd_count; SOCKET fd_array[FD_SETSIZE]; } fd_set;
+/* The set macros, beside the type they operate on. net_wins.c's NET_Sleep uses FD_ZERO and FD_SET. */
+#define FD_ZERO(s)      ((s)->fd_count = 0)
+#define FD_SET(f, s)    (((s)->fd_count < FD_SETSIZE) ? ((s)->fd_array[(s)->fd_count++] = (f)) : 0)
+#define FD_ISSET(f, s)  __WSAFDIsSet((SOCKET)(f), (fd_set *)(s))
+#define FD_CLR(f, s)    ((void)0)
+int __WSAFDIsSet(SOCKET fd, fd_set *set);
 #ifndef _PRISM_TIMEVAL
 #define _PRISM_TIMEVAL
 struct timeval { long tv_sec, tv_usec; };
@@ -268,8 +274,20 @@ int WINAPI WSAAddressToStringA(LPSOCKADDR a, DWORD alen, LPVOID info, char *buf,
  */
 #define AF_IPX                  6
 #define PF_IPX                  AF_IPX
+#define PF_INET                 AF_INET
 #define NSPROTO_IPX             1000
 #define INADDR_BROADCAST        0xffffffff
+/*
+ * sockaddr_ipx by the members net_wins.c reads and writes. Declaring the constants alone was not
+ * enough and the compiler said so twice: NetadrToSockadr assigns sa_family and SockadrToNetadr
+ * copies sa_netnum, so an incomplete type stops both from being emitted.
+ */
+struct sockaddr_ipx {
+    short         sa_family;
+    unsigned char sa_netnum[4];
+    unsigned char sa_nodenum[6];
+    unsigned short sa_socket;
+};
 #define WSABASEERR              10000
 #define WSAEINTR                (WSABASEERR+4)
 #define WSAEACCES               (WSABASEERR+13)
@@ -2300,6 +2318,71 @@ BOOL WINAPI SetSysColors(int, const int *, const COLORREF *);
 #define SPI_SCREENSAVERRUNNING         97
 #define MOD_ALT                        0x0001
 
+/*
+ * THE MSVC LIBC NAMES, and they are here rather than in io.h, direct.h and float.h on purpose.
+ *
+ * q_shwin.c includes all three and sys_win.c includes float.h, but PRISM already answers those from
+ * its general header set with POSIX shapes that every other target shares. Overriding them for
+ * Windows would change what Doom and Quake and OpenDUNE see, to declare four names one program
+ * wants. windows.h is pulled in by winquake.h regardless, so this reaches the same files and
+ * nothing else.
+ */
+#ifndef _PRISM_MSVC_LIBC
+#define _PRISM_MSVC_LIBC
+
+/* MSVC's directory walk, which q_shwin.c uses for Sys_FindFirst/Next/Close. */
+struct _finddata_t {
+    unsigned attrib;
+    long     time_create, time_access, time_write;
+    long     size;
+    char     name[260];
+};
+#define _A_NORMAL 0x00
+#define _A_RDONLY 0x01
+#define _A_HIDDEN 0x02
+#define _A_SYSTEM 0x04
+#define _A_SUBDIR 0x10
+#define _A_ARCH   0x20
+long _findfirst(const char *spec, struct _finddata_t *info);
+int  _findnext(long handle, struct _finddata_t *info);
+int  _findclose(long handle);
+
+char *_getcwd(char *buf, int size);
+int _stricmp(const char *a, const char *b);
+int _strnicmp(const char *a, const char *b, unsigned n);
+
+/* The x87 control word. _PC_24 asks for single precision; see the note in src/env/win32.c. */
+#define _MCW_PC        0x00030000
+#define _PC_24         0x00020000
+#define _PC_53         0x00010000
+#define _PC_64         0x00000000
+#define _MCW_EM        0x0008001F
+#define _EM_ZERODIVIDE 0x00000004
+#define _EM_INVALID    0x00000010
+unsigned int _controlfp(unsigned int newval, unsigned int mask);
+void _endthreadex(unsigned int code);
+unsigned long _beginthreadex(void *sec, unsigned stack, unsigned (*start)(void *),
+                             void *arg, unsigned flags, unsigned *id);
+UINT WINAPI GetDriveType(LPCSTR root);
+
+/*
+ * Eight entry points src/env/win32.c implements and this header did not declare -- which is not the
+ * same thing, and the difference cost a diagnosis: an implemented-but-undeclared function leaves the
+ * CALLER unemittable, so sys_win.c:Sys_ScanForCD went on throwing "unimplemented" while
+ * SetErrorMode sat there defined. In this design the declaration and the definition are two files;
+ * doing one is doing half.
+ */
+UINT  WINAPI SetErrorMode(UINT mode);
+DWORD WINAPI FormatMessage(DWORD flags, const void *src, DWORD id, DWORD lang,
+                           LPSTR buf, DWORD size, void *args);
+BOOL  WINAPI RegisterHotKey(HWND w, int id, UINT mods, UINT vk);
+BOOL  WINAPI UnregisterHotKey(HWND w, int id);
+void  WINAPI OutputDebugString(LPCSTR text);
+DWORD WINAPI timeBeginPeriod(UINT period);
+DWORD WINAPI timeEndPeriod(UINT period);
+
+#endif
+
 /* windows.h has always pulled in the multimedia header, and dsound.h relies on that: it names
    LPWAVEFORMATEX without including anything that declares it. */
 #include <mmsystem.h>
@@ -2510,6 +2593,16 @@ typedef struct IDirectDrawSurfaceVtbl {
     HRESULT (WINAPI *Lock)(LPDIRECTDRAWSURFACE, LPRECT, LPDDSURFACEDESC, DWORD, HANDLE);
     HRESULT (WINAPI *Unlock)(LPDIRECTDRAWSURFACE, void *);
     HRESULT (WINAPI *SetPalette)(LPDIRECTDRAWSURFACE, LPDIRECTDRAWPALETTE);
+    /*
+     * Two more, and they were in my first measurement of this file's vtable calls -- I read BltFast
+     * and GetCaps as ordinary member names and left them out. The compiler found both, which is the
+     * right outcome and a reminder that a list of methods is not a list of guesses.
+     */
+    HRESULT (WINAPI *BltFast)(LPDIRECTDRAWSURFACE, DWORD, DWORD, LPDIRECTDRAWSURFACE,
+                              LPRECT, DWORD);
+    HRESULT (WINAPI *GetCaps)(LPDIRECTDRAWSURFACE, LPDDSCAPS);
+    HRESULT (WINAPI *Flip)(LPDIRECTDRAWSURFACE, LPDIRECTDRAWSURFACE, DWORD);
+    HRESULT (WINAPI *Restore)(LPDIRECTDRAWSURFACE);
 } IDirectDrawSurfaceVtbl;
 struct IDirectDrawSurface { IDirectDrawSurfaceVtbl *lpVtbl; };
 

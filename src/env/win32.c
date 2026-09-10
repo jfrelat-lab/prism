@@ -1070,6 +1070,127 @@ BOOL WINAPI MoveWindow(HWND wnd, int x, int y, int w, int h, BOOL repaint)
 BOOL WINAPI UnregisterClass(LPCSTR name, HINSTANCE inst) { (void)name; (void)inst; return TRUE; }
 HWND WINAPI SetFocus(HWND wnd) { (void)wnd; return 0; }
 
+/* ---------------------------------------------------------------- the MSVC libc names
+ *
+ * Four names a Win32 program takes from its C library rather than from the API, declared in
+ * headers-win32.js and answered here.
+ */
+
+/*
+ * _controlfp sets the x87 control word, and Quake II asks for single precision:
+ *
+ *     _controlfp( _PC_24, _MCW_PC );
+ *
+ * There is no x87 here, and the request cannot be honoured even in spirit -- PRISM computes float
+ * in float (Math.fround on every store and operation) and double in double, which is what a program
+ * asking for 24-bit precision was trying to approximate on hardware that computed everything in 80.
+ * So this reports the mask back, the shape of "nothing changed", and does not pretend to round.
+ *
+ * WHY IT MATTERED OUT OF ALL PROPORTION: WinMain calls it, so while it was undeclared WinMain could
+ * not be emitted and became a stub that threw. The run said "unimplemented: WinMain", which reads
+ * like a missing entry point and was a missing libc name.
+ */
+unsigned int _controlfp(unsigned int newval, unsigned int mask)
+{
+    (void)newval;
+    return mask;
+}
+
+char *_getcwd(char *buf, int size) { return getcwd(buf, size); }
+int _stricmp(const char *a, const char *b) { return strcasecmp(a, b); }
+int _strnicmp(const char *a, const char *b, unsigned n) { return strncasecmp(a, b, n); }
+/* conproc.c's console thread ends with this; PRISM's threads end by returning. */
+void _endthreadex(unsigned int code) { (void)code; }
+
+/*
+ * _beginthreadex, refused. conproc.c starts a thread to read a parent process's console pipe -- the
+ * dedicated server's remote console -- and there is no parent and no pipe here. Returning 0 is the
+ * failure a Windows program is written to handle, and InitConProc gives up quietly.
+ */
+unsigned long _beginthreadex(void *sec, unsigned stack, unsigned (*start)(void *),
+                             void *arg, unsigned flags, unsigned *id)
+{
+    (void)sec; (void)stack; (void)start; (void)arg; (void)flags;
+    if (id) *id = 0;
+    return 0;
+}
+
+/*
+ * GetDriveType, answering that there is no CD. Sys_ScanForCD walks the drive letters looking for
+ * one; DRIVE_UNKNOWN on every letter ends the scan with nothing found, which agrees with what
+ * mciSendCommand already tells CDAudio. Two shims that disagreed about whether a CD exists would be
+ * worse than either answer.
+ */
+UINT WINAPI GetDriveType(LPCSTR root) { (void)root; return 0; }
+
+/* FD_ISSET's out-of-line half, over the ring the wsock env publishes. */
+int __WSAFDIsSet(SOCKET fd, fd_set *set)
+{
+    unsigned i;
+    if (!set) return 0;
+    for (i = 0; i < set->fd_count; i++) if (set->fd_array[i] == fd) return 1;
+    return 0;
+}
+
+/*
+ * Five more the Win32 client reaches for, each answered the way this file answers everything: with
+ * what is true of a machine that has no desktop shell.
+ *
+ * timeBeginPeriod and timeEndPeriod ask the multimedia timer for a finer tick; there is one clock
+ * here and it does not get finer. RegisterHotKey is how vid_dll.c disables Alt-Tab, which a page
+ * cannot intercept and should not pretend to. OutputDebugString goes where a debugger would be.
+ */
+DWORD WINAPI timeBeginPeriod(UINT period) { (void)period; return 0; }
+DWORD WINAPI timeEndPeriod(UINT period) { (void)period; return 0; }
+BOOL  WINAPI RegisterHotKey(HWND w, int id, UINT mods, UINT vk)
+{
+    (void)w; (void)id; (void)mods; (void)vk;
+    return FALSE;                      /* no hot key registered, so Alt-Tab keeps working */
+}
+BOOL  WINAPI UnregisterHotKey(HWND w, int id) { (void)w; (void)id; return TRUE; }
+void  WINAPI OutputDebugString(LPCSTR text) { (void)text; }
+UINT  WINAPI SetErrorMode(UINT mode) { (void)mode; return 0; }
+
+/*
+ * FormatMessage, which sys_win.c uses to turn GetLastError into a sentence for its error box. It
+ * gets a short one rather than nothing: an empty buffer would make the box say a number and no
+ * words, which is the shape of a bug report nobody can act on.
+ */
+DWORD WINAPI FormatMessage(DWORD flags, const void *src, DWORD id, DWORD lang,
+                           LPSTR buf, DWORD size, void *args)
+{
+    static char text[64];
+    (void)flags; (void)src; (void)lang; (void)args;
+    sprintf(text, "error %lu", (unsigned long)id);
+    if (flags & FORMAT_MESSAGE_ALLOCATE_BUFFER) {
+        if (buf) *(char **)buf = text;
+    } else if (buf && size) {
+        strncpy(buf, text, size - 1);
+        buf[size - 1] = 0;
+    }
+    return (DWORD)strlen(text);
+}
+
+/*
+ * The directory walk, and it finds nothing -- which is a state Quake II is written for, not a
+ * refusal dressed up.
+ *
+ * Sys_FindFirst drives the MENU's lists: saved games, demos, the map list. The DATA does not come
+ * through here, because qcommon/files.c:535 adds pak files by numbered name in a loop rather than
+ * by scanning, so a game whose directory walk returns nothing still loads every pak it has and
+ * plays. What is empty is the file list in a menu nobody has opened yet.
+ *
+ * Making it real would mean enumerating PRISM's virtual filesystem from C, which needs a primitive
+ * the stdio layer does not expose today. That is a small piece of work and it is not this one.
+ */
+long _findfirst(const char *spec, struct _finddata_t *info)
+{
+    (void)spec; (void)info;
+    return -1;
+}
+int _findnext(long handle, struct _finddata_t *info) { (void)handle; (void)info; return -1; }
+int _findclose(long handle) { (void)handle; return 0; }
+
 /*
  * timeGetTime, the multimedia clock Sys_Milliseconds is built on. Milliseconds since the process
  * started, from the same gettimeofday this file already uses for QueryPerformanceCounter -- one

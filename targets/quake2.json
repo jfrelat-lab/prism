@@ -351,10 +351,13 @@
           "_rw": "quake2.mak builds ref_soft.dll from the renderer plus rw_imp, rw_dib and rw_ddraw: rw_imp.c is the platform half, rw_dib.c the GDI surface and rw_ddraw.c the DirectDraw one. The DIB path is the one PRISM already serves for WinQuake and PuTTY."
         }
       },
-      "_defines": "The platform macros MSVC defines for a Win32 build, the same pair targets/quake.json's win variant carries. Not a convenience: win32/rw_dib.c opens with #ifndef _WIN32 and its own #error, so the file refuses to compile without them -- the program stating its own platform requirement, which is configuration rather than modification. C_ONLY comes from the base target and selects the renderer's C paths over its assembly, the same choice as Quake's id386=0.",
+      "_defines": "The platform macros MSVC defines for a Win32 build, the same pair targets/quake.json's win variant carries. Not a convenience: win32/rw_dib.c opens with #ifndef _WIN32 and its own #error, so the file refuses to compile without them -- the program stating its own platform requirement, which is configuration rather than modification. C_ONLY comes from the base target and selects the renderer's C paths over its assembly, the same choice as Quake's id386=0. NDEBUG, _M_IX86 and CPUSTRING come from the same place: they are what the Win32 project file passes, and the SOURCE reads them. sys_win.c picks its debugdir inside #ifdef branches on _M_IX86 and NDEBUG -- with neither defined no branch declares it at all -- and common.c prints CPUSTRING in its version banner. Configuration the build states, not a patch.",
       "defines": {
         "_WIN32": "1",
-        "WIN32": "1"
+        "WIN32": "1",
+        "NDEBUG": "1",
+        "_M_IX86": "500",
+        "CPUSTRING": "\"x86\""
       },
       "_generated": "The Win32 shim is COMPILED, not registered as an environment module: win32-app.c is its non-graphical half (last error, code pages, module handles) and win32.c is the window and its message queue, both in C because their contracts are structs the program reads and writes. Same pair targets/quake.json's win variant pulls in -- minus mgl.c, which is WinQuake's renderer boundary and not Quake II's: this one draws through GDI, from win32/rw_dib.c. win32-net.c is the third: the wsock ENV supplies primitives (prism_net_open, prism_net_send and the rest) and this file is Winsock itself written over them, which is why env alone left WSAStartup and closesocket undefined -- and why win32.c called a prism_net_pump nobody defined. PuTTY reaches it the same way.",
       "generated": [
