@@ -327,6 +327,14 @@ export const BUILTINS = new Map(Object.entries({
   __atomic_fetch_add: { ret: I, params: [P, I, I] },
   strcasecmp: { ret: I, params: [P, P] },
   strncasecmp: { ret: I, params: [P, P, U] },
+  /*
+   * MSVC's spellings. A runtime function needs THREE things to exist for a program: a declaration in
+   * a header, an implementation in the runtime, and an entry here. This session managed to get each
+   * of the three wrong in turn on the same two names before getting all three right, which is worth
+   * one line of comment so the next one costs nobody a diagnosis.
+   */
+  _stricmp: { ret: I, params: [P, P] },
+  _strnicmp: { ret: I, params: [P, P, U] },
   perror: { ret: V, params: [P] },
   setbuf: { ret: V, params: [P, P] },
   setvbuf: { ret: I, params: [P, P, I, U] },

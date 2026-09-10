@@ -98,14 +98,19 @@ typedef UINT_PTR SOCKET;
 #define INVALID_SOCKET  ((SOCKET)~0)
 #define SOCKET_ERROR    (-1)
 
-#define FD_SETSIZE      64
-typedef struct fd_set { u_int fd_count; SOCKET fd_array[FD_SETSIZE]; } fd_set;
-/* The set macros, beside the type they operate on. net_wins.c's NET_Sleep uses FD_ZERO and FD_SET. */
-#define FD_ZERO(s)      ((s)->fd_count = 0)
-#define FD_SET(f, s)    (((s)->fd_count < FD_SETSIZE) ? ((s)->fd_array[(s)->fd_count++] = (f)) : 0)
-#define FD_ISSET(f, s)  __WSAFDIsSet((SOCKET)(f), (fd_set *)(s))
-#define FD_CLR(f, s)    ((void)0)
-int __WSAFDIsSet(SOCKET fd, fd_set *set);
+/*
+ * NO fd_set HERE, and that is the decision rather than an omission.
+ *
+ * This header used to declare Winsock's shape (fd_count, fd_array) beside the POSIX one PRISM
+ * already has in headers.js (fds_bits), so a Win32 unit saw whichever include came first and my
+ * FD_ZERO wrote through the wrong member. What settles it is that net_wins.c NEVER TOUCHES A
+ * MEMBER: it calls FD_ZERO and FD_SET and hands the set to select. A program that only ever uses
+ * the macros cannot tell the two apart, so there is one fd_set in PRISM and it is the POSIX one.
+ *
+ * Which this header OBTAINS rather than redefines: select() below takes fd_set *, so the type has to
+ * be in scope, and sys/types.h is where PRISM keeps it -- the same place Solaris and Linux do.
+ */
+#include <sys/types.h>
 #ifndef _PRISM_TIMEVAL
 #define _PRISM_TIMEVAL
 struct timeval { long tv_sec, tv_usec; };
@@ -188,6 +193,7 @@ typedef void (CALLBACK *LPWSAOVERLAPPED_COMPLETION_ROUTINE)(DWORD, DWORD, LPWSAO
 /* ---- options and shutdown */
 #define SOL_SOCKET      0xffff
 #define SO_REUSEADDR    0x0004
+#define SO_BROADCAST            0x0020
 #define SO_KEEPALIVE    0x0008
 #define SO_OOBINLINE    0x0100
 #define SO_EXCLUSIVEADDRUSE ((int)(~0x0004))
@@ -2311,6 +2317,8 @@ BOOL WINAPI SetSysColors(int, const int *, const COLORREF *);
 #define FORMAT_MESSAGE_FROM_SYSTEM     0x00001000
 #define LANG_NEUTRAL                   0x00
 #define SUBLANG_DEFAULT                0x01
+/* The language-id pair sys_win.c hands FormatMessage, as documented: sublanguage above primary. */
+#define MAKELANGID(p, s) ((((WORD)(s)) << 10) | (WORD)(p))
 #define SEM_FAILCRITICALERRORS         0x0001
 #define DRIVE_CDROM                    5
 #define PAGE_READONLY                  0x02
@@ -2347,9 +2355,7 @@ long _findfirst(const char *spec, struct _finddata_t *info);
 int  _findnext(long handle, struct _finddata_t *info);
 int  _findclose(long handle);
 
-char *_getcwd(char *buf, int size);
-int _stricmp(const char *a, const char *b);
-int _strnicmp(const char *a, const char *b, unsigned n);
+/* _getcwd, _stricmp and _strnicmp live in headers.js beside the twins they alias. */
 
 /* The x87 control word. _PC_24 asks for single precision; see the note in src/env/win32.c. */
 #define _MCW_PC        0x00030000

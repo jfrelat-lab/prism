@@ -692,6 +692,16 @@ function makeLibc(M) {
       const y = M.mod.cstr(b).toLowerCase().slice(0, n | 0);
       return x < y ? -1 : x > y ? 1 : 0;
     },
+    /*
+     * MSVC's spellings, aliased to the twins above rather than reimplemented. They live HERE, in the
+     * general runtime, for the same reason their declarations live in headers.js: a program built
+     * for Windows uses them in files that include no Windows header -- Quake II's q_shared.c is one
+     * -- so an implementation in src/env/win32.c would be out of reach of the very callers that ask.
+     * That mistake was made in both directions before it was made in neither.
+     */
+    _stricmp: (a, b) => lib.strcasecmp(a, b),
+    _strnicmp: (a, b, n) => lib.strncasecmp(a, b, n),
+
     perror: (p) => { M.write(`${M.mod.cstr(p)}: No such file or directory\n`); },
     setbuf: () => {},
     setvbuf: () => 0,

@@ -257,6 +257,14 @@ void *memmove(void *d, const void *s, size_t n);
 void *memset(void *d, int v, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
 int strcasecmp(const char *a, const char *b);
+/*
+ * MSVC spells these with a leading underscore, and a program built for Windows uses that spelling
+ * even in files that include no Windows header at all -- Quake II's q_shared.c is one. So the alias
+ * belongs beside the function it aliases, not in headers-win32.js: putting it there reached only
+ * what pulls in windows.h, which is a smaller set than the programs that ask for it.
+ */
+int _stricmp(const char *a, const char *b);
+int _strnicmp(const char *a, const char *b, unsigned long n);
 int strncasecmp(const char *a, const char *b, size_t n);
 #endif
 `;
@@ -765,6 +773,7 @@ int getuid(void); int geteuid(void); int getgid(void); int getegid(void);
 int setuid(int uid); int seteuid(int uid); int setgid(int gid); int setegid(int gid);
 int setreuid(int r, int e); int setregid(int r, int e);
 char *getcwd(char *buf, size_t size);
+char *_getcwd(char *buf, int size);   /* MSVC's spelling; see _stricmp above. */
 int ftruncate(int fd, off_t len);
 int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t owner, gid_t group);

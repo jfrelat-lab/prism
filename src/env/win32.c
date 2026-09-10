@@ -1097,8 +1097,6 @@ unsigned int _controlfp(unsigned int newval, unsigned int mask)
 }
 
 char *_getcwd(char *buf, int size) { return getcwd(buf, size); }
-int _stricmp(const char *a, const char *b) { return strcasecmp(a, b); }
-int _strnicmp(const char *a, const char *b, unsigned n) { return strncasecmp(a, b, n); }
 /* conproc.c's console thread ends with this; PRISM's threads end by returning. */
 void _endthreadex(unsigned int code) { (void)code; }
 
@@ -1123,14 +1121,7 @@ unsigned long _beginthreadex(void *sec, unsigned stack, unsigned (*start)(void *
  */
 UINT WINAPI GetDriveType(LPCSTR root) { (void)root; return 0; }
 
-/* FD_ISSET's out-of-line half, over the ring the wsock env publishes. */
-int __WSAFDIsSet(SOCKET fd, fd_set *set)
-{
-    unsigned i;
-    if (!set) return 0;
-    for (i = 0; i < set->fd_count; i++) if (set->fd_array[i] == fd) return 1;
-    return 0;
-}
+
 
 /*
  * Five more the Win32 client reaches for, each answered the way this file answers everything: with
