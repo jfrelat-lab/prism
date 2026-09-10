@@ -41,7 +41,7 @@ const TARGETS = [
   { name: 'hexen', dir: join(ROOT, 'corpus/Hexen'), defines: { __WATCOMC__: '1100', __386__: '1' } },
   // The same -I list tools/mame.mjs passes; a gate that used a different one would be testing
   // a build nobody performs.
-  { name: 'mame', dir: join(ROOT, 'corpus/mame01/src'), defines: { LSB_FIRST: '1' }, incs: ['Z80', 'msdos'] },
+  { name: 'mame', dir: join(ROOT, 'corpus/mame05/src'), defines: { LSB_FIRST: '1' }, incs: ['Z80', 'msdos'] },
   { name: 'quake', dir: join(ROOT, 'corpus/Quake/WinQuake'), defines: {} },
 ].filter(t => existsSync(t.dir));
 

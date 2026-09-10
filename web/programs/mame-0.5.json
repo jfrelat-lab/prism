@@ -1,14 +1,14 @@
 {
-  "title": "MAME 0.4",
-  "subtitle": "Nicola Salmoria, May 1997 · fourteen drivers, still C89 — the newest MAME PRISM builds",
-  "target": "mame04",
+  "title": "MAME 0.5",
+  "subtitle": "Nicola Salmoria, June 1997 · thirty-four games, still C89 — the newest MAME PRISM builds",
+  "target": "mame05",
   "platform": "allegro",
-  "args": "wow -nojoy",
-  "argsHint": "a driver name plus msdos.c's own switches (-nosound -nojoy -vesa -noscanlines). 0.4 adds Wizard of Wor, Gorf, Robby Roto, Bagman and the Galaxian family to what 0.3 already drove.",
+  "args": "pacman -nojoy",
+  "argsHint": "a game name plus msdos.c's own switches (-nosound -nojoy -vesa -noscanlines). 0.5 adds Donkey Kong Jr, the Galaxian family and its clones, Pisces, War of the Bugs, Moon Cresta and The End to what 0.4 already drove — thirty-four names in all, and each wants its own ROM set in a directory named after it.",
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the program paces itself from drv->frames_per_second through the real clock.",
   "needsData": {
-    "hint": "each driver's own ROMs, in a directory named after it (wow/, pacman/, dkong/, ...)",
+    "hint": "each game's own ROMs, in a directory named after it (pacman/, wow/, galaxian/, dkongjr/, ...). MAME 0.5 uses its OWN 1997 filenames, which are not a later MAME's: it says which file it wanted when one is missing.",
     "dir": "roms"
   },
   "controls": [

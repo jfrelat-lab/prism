@@ -11,7 +11,7 @@ question.** Each column names something outside PRISM that could contradict it.
 | gate | external authority | asserts |
 |---|---|---|
 | `gate-cpp.mjs` | `gcc -E` | token-identical preprocessing, 42 hand + 250 generated cases x 7 seeds |
-| `gate-cpp-files.mjs` | `gcc -E` | the same over **287 whole translation units** from five programs |
+| `gate-cpp-files.mjs` | `gcc -E` | the same over **289 whole translation units** from five programs — at `--limit=200`; the DEFAULT is 8 files per program, i.e. 36 |
 | `gate-decl.mjs` | gcc 12, i386 | sizeof / align / offsets / enum values of every tag PRISM parses |
 | `gate-abi.mjs` | gcc 12, i386 | i386 SysV layout, ~105k checks over 13 seeds |
 | `gate-abi16.mjs` | Open Watcom, from the OBJECT FILE | 16-bit DOS layout, ~4,970 checks over six seeds |
@@ -1633,8 +1633,9 @@ to fix a known-quadratic loop is strong enough that the entry had to warn its ow
 node tools/gate-cpp-files.mjs [--limit=N] [--verbose] [filter]
 ```
 
-**287 of 287 whole translation units from five programs match `gcc -E` token for token.** Doom,
-Heretic, Hexen, MAME 0.1 and Quake — real units, real include paths, thousands of macros deep.
+**289 of 289 whole translation units from five programs match `gcc -E` token for token** — with
+`--limit=200`, because the default caps each program at 8 files and compares 36. Doom,
+Heretic, Hexen, MAME 0.5 and Quake — real units, real include paths, thousands of macros deep.
 
 `tools/gate-cpp.mjs` compares self-contained snippets on purpose: it tests the preprocessor and
 nothing else. This tests it on what it is actually asked to do, and the whole difficulty is making
@@ -2705,3 +2706,63 @@ Two things the gate found immediately, both worth keeping:
 | WOW, played (coin, start, fire) | **402 of 915 lines differed** | **915/915 identical** |
 | gate-run | 60/60 | 61/61 |
 | gate-pixels | 3/3 asserted | 3/3 asserted |
+
+## A golden per ROM set, born green (`tools/mame-golden.mjs`)
+
+`mamediff` answers the strong question — does PRISM agree with a native build of the same sources —
+and costs a container, a compiler and a run per game. A golden answers the cheap one, *does PRISM
+still do what it did*, for every game at once:
+
+```
+node tools/mame-golden.mjs --write --roms=<dir>     # against the reference, once
+node tools/mame-golden.mjs --check --roms=<dir>     # 19 games in 12.5 s, no reference
+```
+
+**The rule that makes it worth having: an entry is only ever written for a game whose differential
+was GREEN at that moment.** A fingerprint recorded from PRISM alone would freeze whatever PRISM
+happened to do, wrong answers included, and then detect only departures from that — a check bounded
+by its own assumption. `--write` runs the full differential and *omits* a game that disagreed,
+reporting it instead.
+
+The fingerprint is a sha256 prefix over the frame log MAME itself prints (a display hash per frame),
+so it covers the whole observable behaviour of the run, not a final screenshot.
+
+### MAME 0.5, all nineteen ROM sets present
+
+| game | display | pens | lines | fingerprint |
+|---|---|---|---|---|
+| pacman, puckman, piranha, mspacman, crush | 224x288 | 16 | 146 | `c6c24c55…` `aedaa8fa…` `9a63b169…` `4f06ef7f…` `d3add663…` |
+| pengo | 224x288 | 32 | 162 | `c03abbcc…` |
+| ladybug, galapx, pisces, warofbug | 256x256 | 32 | 162 | `5d222405…` `adfbac61…` `236ce124…` `d4d29597…` |
+| mrdo | 256x256 | **256** | 386 | `0628643c…` |
+| cclimber, ccboot | 256x256 | 96 | 226 | `62022731…` `c8863814…` |
+| ckong, bagman | 256x256 | 41 | 171 | `e32ce389…` `1a92031e…` |
+| dkong, dkongjr | 256x256 | 12 | 142 | `f0cc68e4…` `60e14049…` |
+| theend | 256x256 | 17 | 147 | `3078730d…` |
+| wow | 320x204 | 5 | 135 | `6f785550…` |
+
+**19 recorded, 0 left out.** The resolutions run from 224x288 to 320x204 and the palettes from 5 pens
+to 256, which is the answer to "are these nineteen runs of the same code?" — they are not.
+
+Of MAME 0.5's 34 games, 15 have no ROMs here and are reported rather than skipped silently: 13
+directories hold only a readme (`galaxian` itself, `mooncrst`, `japirem` and ten clones) and `robby`
+and `gorf` have no directory. **PRISM never fetches ROM data**, so that list is the user's to close.
+
+### Two defects this built, both mine
+
+* **A partial write destroyed the rest of the golden.** `--write --games=pacman,wow` started from an
+  empty object and deleted the other seventeen entries — data loss disguised as an update, on the
+  first partial run. A partial write now merges.
+* **The geometry came back `null` for every game**, because the tool parsed `display WxH` out of
+  `mamediff`'s stdout, which never echoes the frame log. Reading a number from a place that never
+  carried it. `mamediff` now prints the geometry and the pen count beside the fingerprint.
+
+### The positive control
+
+Tamper with one entry and the check must go red — otherwise the golden is decoration:
+
+```
+pacman     ok
+wow        CHANGED — golden 0000000000000000, now 6f785550cf5a3846
+1 match, 1 changed
+```

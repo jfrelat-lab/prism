@@ -26,7 +26,7 @@ import { installPorts } from '../src/env/ports.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const SRC = join(ROOT, 'corpus', 'mame01');
+const SRC = join(ROOT, 'corpus', 'mame05');
 if (!existsSync(join(SRC, 'src', 'msdos', 'msdos.c'))) {
   console.error(`corpus missing: ${SRC}`);
   process.exit(2);

@@ -16,6 +16,7 @@
 // gitignored .oracle/ so the container can read the same bytes.
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sh, SCRATCH, version } from './oracle.mjs';
@@ -24,7 +25,7 @@ import { installStdio } from '../src/env/stdio.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const RELEASE = process.argv.find(a => a.startsWith('--release='))?.slice(10) ?? '01';
+const RELEASE = process.argv.find(a => a.startsWith('--release='))?.slice(10) ?? '05';
 const MAME = join(ROOT, 'corpus', `mame${RELEASE}`);
 
 const romDir = process.argv.find(a => a.startsWith('--roms='))?.slice(7);
@@ -125,6 +126,15 @@ const VRAM = DUMP > 0 && process.argv.includes('--vram');
  * frame the two builds' state actually parted, which can be much earlier and invisible.
  */
 const RAMHASH = process.argv.includes('--ram');
+/*
+ * --no-reference skips the native build entirely and prints only PRISM's fingerprint.
+ *
+ * It exists for the GOLDEN (tools/mame-golden.mjs): a golden is created against the reference, once,
+ * and replayed afterwards without it. Replaying against a stored fingerprint costs one PRISM build;
+ * rebuilding the reference costs a container, a compiler and a run per game, and buys nothing on a
+ * replay because the answer it would give is already written down.
+ */
+const NOREF = process.argv.includes('--no-reference');
 const PLAY_DEFS = play.length === 4 && play.every(Number.isFinite)
   ? { PLAY_COIN: play[0], PLAY_START: play[1], PLAY_FIRE_FROM: play[2], PLAY_FIRE_TO: play[3] } : {};
 const playFlags = Object.entries(PLAY_DEFS).map(([k, v]) => `-D${k}=${v}`).join(' ');
@@ -156,7 +166,7 @@ const runIt = (cc) => sh(`cd mamediff && ${build(cc)}${cfiles.join(' ')} 2>&1 &&
   `./mameref ${GAME} < /dev/null > ref.txt 2>&1; echo "RC $?"`, { timeout: 1800000 });
 
 let CC = 'gcc';
-let r = runIt(CC);
+let r = NOREF ? { stdout: 'RC 0' } : runIt(CC);
 if (!/RC 0/.test(r.stdout) && /pointers are not permitted as case values/.test(r.stdout)) {
   console.log(`gcc refuses 'case MRA_RAM:' (driver.h defines it as a cast POINTER constant, which ` +
     `gcc 2.7 on DJGPP took as a case label). Falling back to tcc, which accepts it.`);
@@ -184,8 +194,9 @@ if (!/RC 0/.test(r.stdout)) {
   console.error(`${CC} side failed:\n${r.stdout.split('\n').slice(0, 25).join('\n')}`);
   process.exit(1);
 }
-const ref = readFileSync(join(work, 'ref.txt'), 'utf8').trim().split('\n');
-console.log(`reference: ${ref.length} lines, built with ${CC}`);
+const ref = NOREF ? [] : readFileSync(join(work, 'ref.txt'), 'utf8').trim().split('\n');
+if (NOREF) console.log('no reference build (--no-reference)');
+else console.log(`reference: ${ref.length} lines, built with ${CC}`);
 
 // --- the PRISM side, from the same flat directory so both see identical text
 function resolver(name) {
@@ -367,6 +378,27 @@ if (DUMP) {
 
 // --- the diff, over the frame log only: the pixel rows are compared above, on their own terms.
 const refL = strip(ref), oursL = strip(ours);
+
+/*
+ * ONE LINE THAT IDENTIFIES THE RUN. The frame log is the whole observable behaviour of the build --
+ * a display hash per frame -- so a hash of it is a fingerprint for "this program, this game, this
+ * many frames". tools/mame-golden.mjs stores it per game and replays against it, which is why it is
+ * printed unconditionally rather than behind a flag: a golden written from a line nobody else can
+ * see would be a golden nobody can check.
+ */
+const fingerprint = createHash('sha256').update(oursL.join('\n')).digest('hex').slice(0, 16);
+/*
+ * The geometry and the palette size, beside the fingerprint, because they are what tells one of
+ * these drivers from another and a caller should not have to re-derive them. They are read from
+ * PRISM's own log (`display WxH` once, one `pen N = rrggbb` per pen) rather than printed by the
+ * backend a second time -- and they are printed HERE because the frame log itself is not echoed:
+ * tools/mame-golden.mjs first tried to parse them out of this tool's stdout and got nothing, which
+ * is the honest failure of reading a number from a place that never carried it.
+ */
+const geom = oursL.find(l => l.startsWith('display '))?.slice(8) ?? '?';
+const penCount = oursL.filter(l => /^pen \d+ = /.test(l)).length;
+console.log(`fingerprint ${fingerprint} over ${oursL.length} lines · display ${geom} · ${penCount} pens`);
+if (NOREF) process.exit(0);
 let bad = -1;
 for (let i = 0; i < Math.max(refL.length, oursL.length); i++) {
   if (refL[i] !== oursL[i]) { bad = i; break; }

@@ -2242,6 +2242,233 @@ struct hostent {
 #define MAKEWORD_WSA(a,b) ((unsigned short)(((unsigned char)(a))|(((unsigned short)((unsigned char)(b)))<<8)))
 #endif
 `,
+  'dsound.h': `
+#ifndef _PRISM_DSOUND_H
+#define _PRISM_DSOUND_H
+#include <windows.h>
+
+/*
+ * dsound.h, and it is DELIBERATELY two typedefs.
+ *
+ * win32/snd_win.c is NOT in this target's unit list -- the variant takes the tree's own
+ * null/snddma_null.c, the same build selection the Linux one makes -- so nothing in this build ever
+ * calls DirectSound. What forces the header to exist at all is that winquake.h includes it
+ * unconditionally and then declares two globals with its types:
+ *
+ *     extern LPDIRECTSOUND pDS;
+ *     extern LPDIRECTSOUNDBUFFER pDSBuf;
+ *
+ * So the requirement is a NAME for each and nothing more. Declaring the interfaces would be writing
+ * a contract no code in this build reads, and getting it wrong would be discovered by nobody.
+ */
+typedef struct IDirectSound       *LPDIRECTSOUND;
+typedef struct IDirectSoundBuffer *LPDIRECTSOUNDBUFFER;
+#endif
+`,
+  'ddraw.h': `
+#ifndef _PRISM_DDRAW_H
+#define _PRISM_DDRAW_H
+#include <windows.h>
+
+/*
+ * ddraw.h, enough for win32/rw_ddraw.c to COMPILE -- which is the whole requirement, and saying so
+ * is the point of this comment.
+ *
+ * rw_imp.c:147 calls DIB_Init unconditionally in SWimp_InitGraphics: the GDI surface is the path
+ * Quake II's software renderer takes on this host, and the DirectDraw branch beside it is never
+ * entered. But quake2.mak builds rw_ddraw.obj into ref_soft.dll, so that file is part of the build
+ * id shipped and dropping it would be assembling one they did not. It therefore has to parse, and
+ * DirectDrawCreate has to LINK -- it is declared here and refused at run time, which nothing
+ * reaches.
+ *
+ * THE DDERR_ VALUES BELOW ARE NOT MEASURED. They are 86 distinct constants because that is what a
+ * switch over them needs; nothing in PRISM produces a DirectDraw result, so which number each one
+ * carries is unobservable. If a real DirectDraw shim is ever written they stop being arbitrary and
+ * become part of its contract -- and they must be measured then, from a real header, exactly as
+ * every other number in this file was.
+ *
+ * The struct members are the ones the program TOUCHES, under the names it uses: ddsd.lPitch,
+ * ddsd.lpSurface, ddsd.ddsCaps.dwCaps. Several of those are union members in the real API; that
+ * distinction is unobservable to a program that only ever names these.
+ */
+
+typedef struct _DDSCAPS { DWORD dwCaps; } DDSCAPS, *LPDDSCAPS;
+
+typedef struct _DDSURFACEDESC {
+    DWORD   dwSize;
+    DWORD   dwFlags;
+    DWORD   dwHeight;
+    DWORD   dwWidth;
+    LONG    lPitch;
+    DWORD   dwBackBufferCount;
+    void   *lpSurface;
+    DDSCAPS ddsCaps;
+} DDSURFACEDESC, *LPDDSURFACEDESC;
+
+typedef struct _DDCAPS { DWORD dwSize; DWORD dwCaps; } DDCAPS, *LPDDCAPS;
+
+/*
+ * The three interfaces, as C sees COM: an object whose first member points at a table of function
+ * pointers. Only the methods rw_ddraw.c calls through lpVtbl-> are declared, plus Release, which it
+ * calls on all three.
+ */
+struct IDirectDraw;
+struct IDirectDrawSurface;
+struct IDirectDrawPalette;
+typedef struct IDirectDraw        *LPDIRECTDRAW;
+typedef struct IDirectDrawSurface *LPDIRECTDRAWSURFACE;
+typedef struct IDirectDrawPalette *LPDIRECTDRAWPALETTE;
+
+typedef struct IDirectDrawVtbl {
+    HRESULT (WINAPI *QueryInterface)(LPDIRECTDRAW, void *, void **);
+    DWORD   (WINAPI *AddRef)(LPDIRECTDRAW);
+    DWORD   (WINAPI *Release)(LPDIRECTDRAW);
+    HRESULT (WINAPI *CreatePalette)(LPDIRECTDRAW, DWORD, LPPALETTEENTRY,
+                                    LPDIRECTDRAWPALETTE *, void *);
+    HRESULT (WINAPI *CreateSurface)(LPDIRECTDRAW, LPDDSURFACEDESC,
+                                    LPDIRECTDRAWSURFACE *, void *);
+    HRESULT (WINAPI *GetCaps)(LPDIRECTDRAW, LPDDCAPS, LPDDCAPS);
+    HRESULT (WINAPI *RestoreDisplayMode)(LPDIRECTDRAW);
+    HRESULT (WINAPI *SetCooperativeLevel)(LPDIRECTDRAW, HWND, DWORD);
+    HRESULT (WINAPI *SetDisplayMode)(LPDIRECTDRAW, DWORD, DWORD, DWORD);
+} IDirectDrawVtbl;
+struct IDirectDraw { IDirectDrawVtbl *lpVtbl; };
+
+typedef struct IDirectDrawSurfaceVtbl {
+    HRESULT (WINAPI *QueryInterface)(LPDIRECTDRAWSURFACE, void *, void **);
+    DWORD   (WINAPI *AddRef)(LPDIRECTDRAWSURFACE);
+    DWORD   (WINAPI *Release)(LPDIRECTDRAWSURFACE);
+    HRESULT (WINAPI *GetAttachedSurface)(LPDIRECTDRAWSURFACE, LPDDSCAPS,
+                                         LPDIRECTDRAWSURFACE *);
+    HRESULT (WINAPI *Lock)(LPDIRECTDRAWSURFACE, LPRECT, LPDDSURFACEDESC, DWORD, HANDLE);
+    HRESULT (WINAPI *Unlock)(LPDIRECTDRAWSURFACE, void *);
+    HRESULT (WINAPI *SetPalette)(LPDIRECTDRAWSURFACE, LPDIRECTDRAWPALETTE);
+} IDirectDrawSurfaceVtbl;
+struct IDirectDrawSurface { IDirectDrawSurfaceVtbl *lpVtbl; };
+
+typedef struct IDirectDrawPaletteVtbl {
+    HRESULT (WINAPI *QueryInterface)(LPDIRECTDRAWPALETTE, void *, void **);
+    DWORD   (WINAPI *AddRef)(LPDIRECTDRAWPALETTE);
+    DWORD   (WINAPI *Release)(LPDIRECTDRAWPALETTE);
+    HRESULT (WINAPI *SetEntries)(LPDIRECTDRAWPALETTE, DWORD, DWORD, DWORD, LPPALETTEENTRY);
+} IDirectDrawPaletteVtbl;
+struct IDirectDrawPalette { IDirectDrawPaletteVtbl *lpVtbl; };
+
+/* The flags rw_ddraw.c passes, and the one result it compares against. */
+#define DD_OK                        0
+#define DDSD_CAPS                    0x00000001L
+#define DDSD_HEIGHT                  0x00000002L
+#define DDSD_WIDTH                   0x00000004L
+#define DDSD_BACKBUFFERCOUNT         0x00000020L
+#define DDSCAPS_PRIMARYSURFACE       0x00000200L
+#define DDSCAPS_OFFSCREENPLAIN       0x00000040L
+#define DDSCAPS_SYSTEMMEMORY         0x00000800L
+#define DDSCAPS_BACKBUFFER           0x00000004L
+#define DDSCAPS_COMPLEX              0x00000008L
+#define DDSCAPS_FLIP                 0x00000010L
+#define DDSCAPS_MODEX                0x00200000L
+#define DDSCL_EXCLUSIVE              0x00000010L
+#define DDSCL_FULLSCREEN             0x00000001L
+#define DDSCL_NORMAL                 0x00000008L
+#define DDSCL_ALLOWMODEX             0x00000040L
+#define DDSCL_NOWINDOWCHANGES        0x00000004L
+#define DDLOCK_WAIT                  0x00000001L
+#define DDFLIP_WAIT                  0x00000001L
+#define DDBLTFAST_WAIT               0x00000010L
+#define DDPCAPS_8BIT                 0x00000004L
+#define DDPCAPS_ALLOW256             0x00000040L
+
+/* The 86 result codes rw_ddraw.c's error-to-string switch names. See the warning above. */
+#define DDERR_ALREADYINITIALIZED               0x88760001L
+#define DDERR_BLTFASTCANTCLIP                  0x88760002L
+#define DDERR_CANNOTATTACHSURFACE              0x88760003L
+#define DDERR_CANNOTDETACHSURFACE              0x88760004L
+#define DDERR_CANTCREATEDC                     0x88760005L
+#define DDERR_CANTDUPLICATE                    0x88760006L
+#define DDERR_CLIPPERISUSINGHWND               0x88760007L
+#define DDERR_COLORKEYNOTSET                   0x88760008L
+#define DDERR_CURRENTLYNOTAVAIL                0x88760009L
+#define DDERR_DIRECTDRAWALREADYCREATED         0x8876000aL
+#define DDERR_EXCEPTION                        0x8876000bL
+#define DDERR_EXCLUSIVEMODEALREADYSET          0x8876000cL
+#define DDERR_GENERIC                          0x8876000dL
+#define DDERR_HEIGHTALIGN                      0x8876000eL
+#define DDERR_HWNDALREADYSET                   0x8876000fL
+#define DDERR_HWNDSUBCLASSED                   0x88760010L
+#define DDERR_IMPLICITLYCREATED                0x88760011L
+#define DDERR_INCOMPATIBLEPRIMARY              0x88760012L
+#define DDERR_INVALIDCAPS                      0x88760013L
+#define DDERR_INVALIDCLIPLIST                  0x88760014L
+#define DDERR_INVALIDDIRECTDRAWGUID            0x88760015L
+#define DDERR_INVALIDMODE                      0x88760016L
+#define DDERR_INVALIDOBJECT                    0x88760017L
+#define DDERR_INVALIDPARAMS                    0x88760018L
+#define DDERR_INVALIDPIXELFORMAT               0x88760019L
+#define DDERR_INVALIDPOSITION                  0x8876001aL
+#define DDERR_INVALIDRECT                      0x8876001bL
+#define DDERR_LOCKEDSURFACES                   0x8876001cL
+#define DDERR_NOALPHAHW                        0x8876001dL
+#define DDERR_NOBLTHW                          0x8876001eL
+#define DDERR_NOCLIPLIST                       0x8876001fL
+#define DDERR_NOCLIPPERATTACHED                0x88760020L
+#define DDERR_NOCOLORCONVHW                    0x88760021L
+#define DDERR_NOCOLORKEY                       0x88760022L
+#define DDERR_NOCOLORKEYHW                     0x88760023L
+#define DDERR_NOCOOPERATIVELEVELSET            0x88760024L
+#define DDERR_NODC                             0x88760025L
+#define DDERR_NODDROPSHW                       0x88760026L
+#define DDERR_NODIRECTDRAWHW                   0x88760027L
+#define DDERR_NOEMULATION                      0x88760028L
+#define DDERR_NOEXCLUSIVEMODE                  0x88760029L
+#define DDERR_NOFLIPHW                         0x8876002aL
+#define DDERR_NOGDI                            0x8876002bL
+#define DDERR_NOHWND                           0x8876002cL
+#define DDERR_NOMIRRORHW                       0x8876002dL
+#define DDERR_NOOVERLAYDEST                    0x8876002eL
+#define DDERR_NOOVERLAYHW                      0x8876002fL
+#define DDERR_NOPALETTEATTACHED                0x88760030L
+#define DDERR_NOPALETTEHW                      0x88760031L
+#define DDERR_NORASTEROPHW                     0x88760032L
+#define DDERR_NOROTATIONHW                     0x88760033L
+#define DDERR_NOSTRETCHHW                      0x88760034L
+#define DDERR_NOTAOVERLAYSURFACE               0x88760035L
+#define DDERR_NOTEXTUREHW                      0x88760036L
+#define DDERR_NOTFLIPPABLE                     0x88760037L
+#define DDERR_NOTFOUND                         0x88760038L
+#define DDERR_NOTLOCKED                        0x88760039L
+#define DDERR_NOTPALETTIZED                    0x8876003aL
+#define DDERR_NOVSYNCHW                        0x8876003bL
+#define DDERR_NOZBUFFERHW                      0x8876003cL
+#define DDERR_NOZOVERLAYHW                     0x8876003dL
+#define DDERR_OUTOFCAPS                        0x8876003eL
+#define DDERR_OUTOFMEMORY                      0x8876003fL
+#define DDERR_OUTOFVIDEOMEMORY                 0x88760040L
+#define DDERR_OVERLAYCANTCLIP                  0x88760041L
+#define DDERR_OVERLAYCOLORKEYONLYONEACTIVE     0x88760042L
+#define DDERR_OVERLAYNOTVISIBLE                0x88760043L
+#define DDERR_PALETTEBUSY                      0x88760044L
+#define DDERR_PRIMARYSURFACEALREADYEXISTS      0x88760045L
+#define DDERR_REGIONTOOSMALL                   0x88760046L
+#define DDERR_SURFACEALREADYATTACHED           0x88760047L
+#define DDERR_SURFACEALREADYDEPENDENT          0x88760048L
+#define DDERR_SURFACEBUSY                      0x88760049L
+#define DDERR_SURFACEISOBSCURED                0x8876004aL
+#define DDERR_SURFACELOST                      0x8876004bL
+#define DDERR_SURFACENOTATTACHED               0x8876004cL
+#define DDERR_TOOBIGHEIGHT                     0x8876004dL
+#define DDERR_TOOBIGSIZE                       0x8876004eL
+#define DDERR_TOOBIGWIDTH                      0x8876004fL
+#define DDERR_UNSUPPORTED                      0x88760050L
+#define DDERR_UNSUPPORTEDFORMAT                0x88760051L
+#define DDERR_UNSUPPORTEDMASK                  0x88760052L
+#define DDERR_VERTICALBLANKINPROGRESS          0x88760053L
+#define DDERR_WASSTILLDRAWING                  0x88760054L
+#define DDERR_WRONGMODE                        0x88760055L
+#define DDERR_XALIGN                           0x88760056L
+
+HRESULT WINAPI DirectDrawCreate(void *lpGUID, LPDIRECTDRAW *lplpDD, void *pUnkOuter);
+#endif
+`,
   'windowsx.h': '#include <windows.h>\n',
   'objbase.h': '#include <windows.h>\n',
   'mmsystem.h': `

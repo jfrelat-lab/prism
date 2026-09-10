@@ -33,7 +33,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
  * The unit list comes from each makefile's own OBJS, so it is transcribed once per release rather
  * than guessed: 0.1 and 0.2 have a `machine.c` per driver that 0.3 mostly dropped.
  */
-const RELEASE = process.argv.find(a => a.startsWith('--release='))?.slice(10) ?? '01';
+const RELEASE = process.argv.find(a => a.startsWith('--release='))?.slice(10) ?? '05';
 const SRC = join(ROOT, 'corpus', `mame${RELEASE}`);
 
 if (!existsSync(join(SRC, 'src'))) {
@@ -43,57 +43,24 @@ if (!existsSync(join(SRC, 'src'))) {
   process.exit(2);
 }
 
-// The makefile's own object list, minus the platform backend PRISM replaces.
-const UNITS_BY_RELEASE = {
-  '02': [
-    'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
-    'src/pacman/machine.c', 'src/pacman/vidhrdw.c', 'src/pacman/driver.c',
-    'src/crush/machine.c', 'src/crush/driver.c',
-    'src/pengo/machine.c', 'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
-    'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
-    'src/mrdo/machine.c', 'src/mrdo/vidhrdw.c', 'src/mrdo/driver.c',
-    'src/cclimber/vidhrdw.c', 'src/cclimber/sndhrdw.c', 'src/cclimber/driver.c',
-    'src/z80/z80.c', 'src/msdos/msdos.c',
-  ],
-  '04': [
-    'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
-    'src/pacman/machine.c', 'src/pacman/vidhrdw.c', 'src/pacman/driver.c',
-    'src/crush/driver.c',
-    'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
-    'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
-    'src/mrdo/machine.c', 'src/mrdo/vidhrdw.c', 'src/mrdo/driver.c',
-    'src/cclimber/vidhrdw.c', 'src/cclimber/sndhrdw.c', 'src/cclimber/driver.c',
-    'src/ckong/vidhrdw.c', 'src/ckong/driver.c',
-    'src/dkong/vidhrdw.c', 'src/dkong/driver.c',
-    'src/bagman/machine.c', 'src/bagman/vidhrdw.c', 'src/bagman/driver.c',
-    'src/wow/vidhrdw.c', 'src/wow/driver.c',
-    'src/z80/z80.c', 'src/msdos/msdos.c',
-  ],
-  '03': [
-    'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
-    'src/pacman/machine.c', 'src/pacman/vidhrdw.c', 'src/pacman/driver.c',
-    'src/crush/driver.c',
-    'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
-    'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
-    'src/mrdo/machine.c', 'src/mrdo/vidhrdw.c', 'src/mrdo/driver.c',
-    'src/cclimber/vidhrdw.c', 'src/cclimber/sndhrdw.c', 'src/cclimber/driver.c',
-    'src/ckong/vidhrdw.c', 'src/ckong/driver.c',
-    'src/dkong/vidhrdw.c', 'src/dkong/driver.c',
-    'src/z80/z80.c', 'src/msdos/msdos.c',
-  ],
-};
-
-const UNITS = UNITS_BY_RELEASE[RELEASE] ?? [
-  'src/mame.c', 'src/common.c', 'src/machine.c', 'src/driver.c',
-  'src/Z80/Z80.c',
-  'src/pacman/machine.c', 'src/pacman/driver.c',
-  'src/crush/machine.c', 'src/crush/driver.c',
-  'src/pengo/machine.c', 'src/pengo/vidhrdw.c', 'src/pengo/sndhrdw.c', 'src/pengo/driver.c',
-  'src/ladybug/machine.c', 'src/ladybug/vidhrdw.c', 'src/ladybug/sndhrdw.c', 'src/ladybug/driver.c',
-  // MAME's OWN platform backend, the file its makefile selects for DOS. It used to be replaced by a
-  // JavaScript one; what is shimmed now is the two libraries it links (src/env/allegro.js).
-  'src/msdos/msdos.c',
-];
+/*
+ * THE UNIT LIST COMES FROM THE TARGET, not from a copy kept here.
+ *
+ * It used to be a `UNITS_BY_RELEASE` table in this file plus a fallback, which is exactly the drift
+ * P7.1 named: the build described twice, once in `targets/mame0N.json` and once in each tool. The
+ * fifth release is what made it bite -- `--release=05` fell through to the fallback, asked for
+ * `src/crush/machine.c` (a 0.1 unit that 0.3 dropped) and failed on a file the corpus never had.
+ *
+ * So the target is the single statement of it, and every release's list is still its own makefile's
+ * OBJS, transcribed once, where `tools/build.mjs` and `tools/mamediff.mjs` already read it.
+ */
+const targetPath = join(ROOT, 'targets', `mame${RELEASE}.json`);
+if (!existsSync(targetPath)) {
+  console.error(`no target for release ${RELEASE}: ${targetPath}\n` +
+    `Each release's unit list is its makefile's OBJS, stated once in targets/mame0N.json.`);
+  process.exit(2);
+}
+const UNITS = JSON.parse(readFileSync(targetPath, 'utf8')).units.list;
 
 const INCLUDE_DIRS = ['src', 'src/Z80', 'src/msdos'];
 

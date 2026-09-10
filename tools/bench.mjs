@@ -27,7 +27,7 @@ import { installStdio } from '../src/env/stdio.js';
 import { HEADERS } from '../src/env/headers.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const MAME = join(ROOT, 'corpus', 'mame01');
+const MAME = join(ROOT, 'corpus', 'mame05');
 const Z80DIR = join(MAME, 'src', 'Z80');
 const STEPS = +(process.argv.find(a => a.startsWith('--steps='))?.slice(8) ?? 2_000_000);
 const romDir = process.argv.find(a => a.startsWith('--roms='))?.slice(7);

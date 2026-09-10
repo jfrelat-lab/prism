@@ -260,6 +260,97 @@
         }
       },
       "_modules": "Only the game. sv_game.c still dlopens gamei386.so -- solaris/g_so.c is that object's own build -- and there is no refresh to load."
+    },
+    "win32": {
+      "title": "QUAKE II 3.19 (Win32, ref_soft, C_ONLY)",
+      "host": "win32",
+      "env": [
+        "stdio",
+        "dl",
+        "win32"
+      ],
+      "args": "+set vid_ref soft +set cl_maxfps 1000 +map base1",
+      "_doc": "id's Win32 client, and the fifth platform layer over this engine. THE UNIT LIST IS NOT TRANSCRIBED FROM quake2.mak, on purpose: that makefile is OLDER THAN THE SOURCE BESIDE IT -- seven of its forty-one objects (cl_demo, sbar2, scr_cin, screen, sv_move, sv_phys, view) name files 3.19 no longer has, and one of ref_soft's (r_inter) likewise. It is the same staleness P7.7 found in linux/Makefile.i386, so the engine list is the one the Linux target already proves and only the FIVE platform files are swapped: sys_linux/q_shlinux/vid_so/net_udp/glob become sys_win/q_shwin/vid_dll/net_wins -- and glob.c has no twin because q_shwin.c implements Sys_FindFirst itself. Sound and CD stay on the tree's own null drivers, the same build selection the Linux variant makes.",
+      "units": {
+        "list": [
+          "qcommon/cmd.c",
+          "qcommon/cmodel.c",
+          "qcommon/common.c",
+          "qcommon/crc.c",
+          "qcommon/cvar.c",
+          "qcommon/files.c",
+          "qcommon/md4.c",
+          "qcommon/net_chan.c",
+          "qcommon/pmove.c",
+          "client/cl_cin.c",
+          "client/cl_ents.c",
+          "client/cl_fx.c",
+          "client/cl_newfx.c",
+          "client/cl_input.c",
+          "client/cl_inv.c",
+          "client/cl_main.c",
+          "client/cl_parse.c",
+          "client/cl_pred.c",
+          "client/cl_tent.c",
+          "client/cl_scrn.c",
+          "client/cl_view.c",
+          "client/console.c",
+          "client/keys.c",
+          "client/menu.c",
+          "client/qmenu.c",
+          "game/m_flash.c",
+          "client/snd_dma.c",
+          "client/snd_mem.c",
+          "client/snd_mix.c",
+          "server/sv_ccmds.c",
+          "server/sv_ents.c",
+          "server/sv_game.c",
+          "server/sv_init.c",
+          "server/sv_main.c",
+          "server/sv_send.c",
+          "server/sv_user.c",
+          "server/sv_world.c",
+          "game/q_shared.c",
+          "null/snddma_null.c",
+          "null/cd_null.c",
+          "win32/sys_win.c",
+          "win32/q_shwin.c",
+          "win32/vid_dll.c",
+          "win32/vid_menu.c",
+          "win32/net_wins.c",
+          "win32/conproc.c",
+          "win32/in_win.c"
+        ]
+      },
+      "modules": {
+        "ref_soft": {
+          "units": [
+            "ref_soft/r_aclip.c",
+            "ref_soft/r_alias.c",
+            "ref_soft/r_bsp.c",
+            "ref_soft/r_draw.c",
+            "ref_soft/r_edge.c",
+            "ref_soft/r_image.c",
+            "ref_soft/r_light.c",
+            "ref_soft/r_main.c",
+            "ref_soft/r_misc.c",
+            "ref_soft/r_model.c",
+            "ref_soft/r_part.c",
+            "ref_soft/r_poly.c",
+            "ref_soft/r_polyse.c",
+            "ref_soft/r_rast.c",
+            "ref_soft/r_scan.c",
+            "ref_soft/r_sprite.c",
+            "ref_soft/r_surf.c",
+            "win32/rw_imp.c",
+            "win32/rw_dib.c",
+            "win32/rw_ddraw.c"
+          ],
+          "soname": "ref_soft.dll",
+          "exportsFrom": "ref_soft/ref_soft.def",
+          "_rw": "quake2.mak builds ref_soft.dll from the renderer plus rw_imp, rw_dib and rw_ddraw: rw_imp.c is the platform half, rw_dib.c the GDI surface and rw_ddraw.c the DirectDraw one. The DIB path is the one PRISM already serves for WinQuake and PuTTY."
+        }
+      }
     }
   }
 }
