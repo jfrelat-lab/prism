@@ -129,6 +129,70 @@ function makeLibc(M) {
   // strtok's static saved pointer. See strtok below for why it cannot live in a stack frame.
   let strtokSaved = 0;
 
+  /*
+   * rand() -- GLIBC'S generator, because for this project "deterministic" is not the same
+   * requirement as "the same answer as the reference build".
+   *
+   * WHY IT WAS CHANGED, since the old ANSI sample LCG was perfectly deterministic. `rand()` is
+   * implementation-defined, and PRISM's oracle is a native i386 gcc build, so anywhere a program's
+   * output can depend on rand() the two builds must agree or the differential is measuring the C
+   * library rather than the compiler. MAME 0.4 is where that stopped being theoretical:
+   * `Z80_Reset` does `R.R = rand()` -- the Z80's refresh register, deliberately randomised -- and
+   * Wizard of Wor reads it (`LD A,R`) to seed its OWN generator. One implementation-defined value
+   * therefore reached the guest and decided, 266 frames later, whether a glyph was erased on frame
+   * 267 or 269.
+   *
+   * The algorithm is glibc's TYPE_3 additive-feedback generator, from its specification: a table of
+   * 31 int32 words, taps at 3 and 0, output the sum's top 31 bits.
+   *
+   *   seeding   r[0] = seed (0 becomes 1); r[i] = 16807 * r[i-1] mod 2^31-1, by Schrage's method so
+   *             the product never needs more than 31 bits of precision
+   *   warm-up   310 outputs discarded, which is 10 x the degree
+   *   output    r[f] += r[r]; return (uint32)r[f] >> 1, then advance both taps cyclically
+   *
+   * The unseeded default is seed 1, so `rand()` with no `srand()` gives glibc's familiar first
+   * value, 1804289383 -- and that number is how this was confirmed rather than assumed: MAME's
+   * reported fetch count at frame 1 was 1804294666, i.e. that value plus the 5,283 instructions
+   * since reset.
+   */
+  const RAND_DEG = 31, RAND_SEP = 3;
+  let randTable = new Int32Array(RAND_DEG);
+  let randF = RAND_SEP, randR = 0;
+
+  function randAdvance() {
+    randTable[randF] = (randTable[randF] + randTable[randR]) | 0;
+    // The shift is on the UNSIGNED reinterpretation: `>>>` on a negative int32 is what glibc's
+    // `(unsigned int)*fptr >> 1` does, and `>>` would sign-extend and halve the range.
+    const out = randTable[randF] >>> 1;
+    if (++randF >= RAND_DEG) randF = 0;
+    if (++randR >= RAND_DEG) randR = 0;
+    return out;
+  }
+
+  function randSeed(seed) {
+    let v = seed | 0;
+    if (v === 0) v = 1;                       // glibc maps a zero seed to 1
+    randTable = new Int32Array(RAND_DEG);
+    randTable[0] = v;
+    for (let i = 1; i < RAND_DEG; i++) {
+      /*
+       * r[i] = 16807 * r[i-1] mod 2147483647, by Schrage: the product is split so that neither half
+       * exceeds 31 bits. Written with plain division rather than Math.imul because the intermediate
+       * 16807 * lo reaches ~2.1e9, which is exact in a double and would wrap in an int32.
+       */
+      const prev = randTable[i - 1];
+      const hi = Math.trunc(prev / 127773);
+      const lo = prev % 127773;
+      let word = 16807 * lo - 2836 * hi;
+      if (word < 0) word += 2147483647;
+      randTable[i] = word;
+    }
+    randF = RAND_SEP; randR = 0;
+    for (let i = 0; i < 10 * RAND_DEG; i++) randAdvance();
+  }
+
+  randSeed(1);                                // the unseeded default, as glibc's is
+
   const lib = {
     // --- stdio
     printf: (fmt, args) => { const s = format(M, fmt, args ?? []); M.write(s); return s.length; },
@@ -548,18 +612,23 @@ function makeLibc(M) {
       return i < 0 ? 0 : h + i;
     },
     /*
-     * A DETERMINISTIC PRNG, the ANSI C sample generator that DJGPP also shipped. It must not read
-     * host entropy: the same run has to produce the same frames, which is what makes a golden
-     * fingerprint possible. Lived in MAME's platform shim until Quake asked for it — the same
-     * mis-filing as fopen, and for the same reason: this is ISO C, not one program's.
+     * A DETERMINISTIC PRNG, and it is GLIBC'S, not the ANSI sample LCG that used to be here.
+     *
+     * It must not read host entropy -- the same run has to produce the same frames, which is what
+     * makes a golden fingerprint possible -- but "deterministic" was never enough on its own, and
+     * MAME 0.4 is what proved it. `rand()` is implementation-defined, PRISM's oracle is a native
+     * i386 gcc build, and glibc's answer is therefore the right one wherever a program's output can
+     * depend on it. See randSeed/randAdvance above for the algorithm and for the measurement.
      */
-    rand: () => { M.randState = (Math.imul(M.randState, 1103515245) + 12345) | 0; return (M.randState >>> 16) & 0x7fff; },
-    // random/srandom are BSD's names for the same generator, and a program that wants a
-    // longer period than rand's is entitled to assume it gets one. It does not here; what it
-    // does get is the same sequence, which is what matters for reproducing a run.
-    random: (...a) => lib.rand(...a),
-    srand: (seed) => { M.randState = seed | 0; },
-    srandom: (seed) => lib.srand(seed),
+    rand: () => randAdvance(),
+    /*
+     * random/srandom are the SAME generator here, and now that is the truth rather than an
+     * approximation: glibc implements rand() by calling random(), so a program that reaches for the
+     * longer period gets it.
+     */
+    random: () => randAdvance(),
+    srand: (seed) => randSeed(seed),
+    srandom: (seed) => randSeed(seed),
 
     // ctype, C locale. EOF (-1) must answer false everywhere except tolower/toupper, which pass it
     // through -- a program looping on getchar() relies on exactly that.

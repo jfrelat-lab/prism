@@ -38,6 +38,20 @@
  * samples, which are built once at load time and should never change at all.
  */
 extern unsigned char RAM[];
+
+/*
+ * AND THE Z80'S INSTRUCTION-FETCH COUNT, through the core's own public accessor.
+ *
+ * `R.R` is `unsigned` in Z80_Regs and the execute loop does `++R.R` on every opcode fetch, so it is
+ * a count of instructions rather than a real 7-bit refresh register. That matters because
+ * `LD A,R` reads `(R.R & 127) | (R.R2 & 128)` -- which makes the count OBSERVABLE TO THE GUEST, and
+ * Wizard of Wor seeds its random-number state from exactly that (`ED 5F` then `32 4A D3`). If two
+ * builds execute a different number of instructions, the game gets a different random seed, and the
+ * difference surfaces hundreds of frames later wherever that seed is finally used.
+ *
+ * So this number is not diagnostic colour: for this driver it is an INPUT to the game.
+ */
+#include "Z80.h"
 #endif
 
 #ifdef DUMP_VRAM
@@ -147,10 +161,12 @@ void osd_update_display(void)
   {
     unsigned long r1 = 5381, r2 = 5381;
     int i;
+    Z80_Regs regs;
     for (i = 0; i < 0x10000; i++) r1 = r1 * 33 + RAM[i];
     for (i = 0x10000; i < 0x20000; i++) r2 = r2 * 33 + RAM[i];
-    printf("frame %d hash %08lx nz %d cpu %08lx gfx %08lx\n", frames, h & 0xffffffffUL, nz,
-           r1 & 0xffffffffUL, r2 & 0xffffffffUL);
+    Z80_GetRegs(&regs);
+    printf("frame %d hash %08lx nz %d cpu %08lx gfx %08lx fetches %u\n", frames,
+           h & 0xffffffffUL, nz, r1 & 0xffffffffUL, r2 & 0xffffffffUL, regs.R);
   }
 #else
   printf("frame %d hash %08lx nz %d\n", frames, h & 0xffffffffUL, nz);

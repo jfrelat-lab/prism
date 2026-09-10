@@ -2634,3 +2634,74 @@ frame it happened on.** That is the lesson worth keeping: hash the state, not on
 There is no random source in the driver either — `readport` is `input_port_0_r`..`_3_r` and nothing
 else — so the value is derived from something the game computed. The next step is one question: which
 Z80 PC writes `0xd34a`.
+
+## Wizard of Wor was `rand()`, and "deterministic" was the wrong requirement
+
+The instruments in the section above narrowed the complaint to one byte, `0xd34a`, differing from
+frame 1. Wrapping MAME's memory-write entry point named the writer without touching the game:
+
+```js
+wrap('Z80_WRMEM', (orig) => (A, V) => {
+  if ((A & 0xffff) === 0xd34a) hits.push({ frame, pc: prog.F['Z80_GetPC'](), v: V });
+  return orig(A, V);
+});
+```
+
+**PC 0x0f61, fifteen times in six frames**, with values that looked random — `bd 58 29 9c f5 00 …`.
+Reading the ROM at the other writing site gave the answer in two instructions:
+
+```
+ED 5F        LD A,R          ; the Z80's refresh register
+32 4A D3     LD (0D34AH),A   ; …becomes the game's random seed
+```
+
+and MAME's own Z80 core supplies it:
+
+```c
+void Z80_Reset (void)
+{
+ memset (&R,0,sizeof(Z80_Regs));
+ R.SP.D=0xF000;
+ R.R=rand();          /* deliberately randomised */
+ Z80_ICount=Z80_IPeriod;
+}
+```
+
+**The arithmetic confirmed it instead of my arguing it.** The reference reported 1804294666 fetches
+at frame 1; glibc's first unseeded `rand()` is **1804289383**, and the difference — 5,283 — is the
+instructions executed since reset. PRISM's 22121 minus the same 5,283 is **16838**, which is the first
+value of the ANSI sample LCG it used to implement. Two correct implementations of an
+implementation-defined function, and the guest could see which one it had.
+
+### The fix, and the principle it corrects
+
+PRISM's `rand()` is now **glibc's** TYPE_3 additive-feedback generator — 31 int32 words, taps at 3
+and 0, output the sum's top 31 bits, seeded by the 16807 Lehmer recurrence with 310 outputs
+discarded. `random()`/`srandom()` are the same generator, which they now genuinely are.
+
+The old comment called the ANSI LCG "deterministic on purpose", and that was true and insufficient.
+**PRISM's oracle is a native i386 gcc build, so wherever a program's output can depend on an
+implementation-defined value, the requirement is not determinism — it is agreeing with the
+reference.** A new `gate-run` case pins it on five seeds and on `RAND_MAX`, and it can only pass
+against a glibc reference, which is exactly what the oracle is.
+
+Two things the gate found immediately, both worth keeping:
+
+* **`RAND_MAX` was never declared** in PRISM's `<stdlib.h>`. That absence is the only reason changing
+  the generator could not turn a compiling program into a wrong answer: the old LCG returned
+  0..32767 and glibc's returns 31 bits, so a program that had read the constant would have been
+  silently miscompiled by the change.
+* **My own case failed first, on unspecified behaviour.** `printf("%ld %ld %ld", random(), random(),
+  random())` tests the order arguments are evaluated in: gcc goes right-to-left, PRISM left-to-right,
+  and both are correct. The values were identical and reversed. One call per statement fixes the
+  test, not the compiler — the second time this project has written a test of undefined behaviour and
+  believed it.
+
+### Result
+
+| | before | after |
+|---|---|---|
+| WOW, attract mode | 135/135 lines | 295/295 |
+| WOW, played (coin, start, fire) | **402 of 915 lines differed** | **915/915 identical** |
+| gate-run | 60/60 | 61/61 |
+| gate-pixels | 3/3 asserted | 3/3 asserted |

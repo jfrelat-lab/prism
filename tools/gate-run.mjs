@@ -1574,6 +1574,54 @@ int main(void)
 }
 `);
 
+/*
+ * rand() must AGREE WITH THE REFERENCE, not merely be deterministic.
+ *
+ * `rand()` is implementation-defined, so any two libcs may differ and both be right -- which makes
+ * it harmless until a program's OUTPUT depends on it, and then it silently invalidates every
+ * comparison downstream. MAME 0.4 is where that happened: its Z80 core does `R.R = rand()` for the
+ * refresh register and Wizard of Wor reads it with `LD A,R` to seed its own generator, so one
+ * implementation-defined value reached the guest and changed the picture 266 frames later.
+ *
+ * This case exists so that never regresses silently. It checks the unseeded default and three
+ * seeds, including 0 (which glibc maps to 1) -- and note that it can only pass against a glibc
+ * reference, which is exactly what the oracle is.
+ */
+C('rand-matches-the-reference', `#include <stdio.h>
+#include <stdlib.h>
+
+static void run(const char *what)
+{
+    int i;
+    printf("%s:", what);
+    for (i = 0; i < 8; i++) printf(" %d", rand());
+    printf("\\n");
+}
+
+int main(void)
+{
+    long a, b, c;
+    run("unseeded");
+    srand(1);      run("seed 1");
+    srand(0);      run("seed 0");
+    srand(12345);  run("seed 12345");
+    srand(2147483647); run("seed INT_MAX");
+    /*
+     * random() is the same generator in glibc; rand() is defined as calling it.
+     *
+     * One call per statement, and that is not style: passing three random() calls as three printf
+     * arguments tests the ORDER THEY ARE EVALUATED IN, which C leaves unspecified. The first draft
+     * of this case did exactly that and "failed" -- the same three values, reversed, because gcc
+     * evaluates arguments right-to-left and PRISM left-to-right. Both are correct; the test was not.
+     */
+    srandom(42);
+    a = random(); b = random(); c = random();
+    printf("random after srandom(42): %ld %ld %ld\\n", a, b, c);
+    printf("RAND_MAX %d\\n", RAND_MAX);
+    return 0;
+}
+`);
+
 const active = cases.filter(c => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-run: ${active.length} cases\n`);

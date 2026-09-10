@@ -211,6 +211,13 @@ int system(const char *cmd);
 char *tmpnam(char *buf);
 long random(void);
 void srandom(unsigned seed);
+/*
+ * RAND_MAX is glibc's, because src/runtime/runtime.js implements glibc's generator: the TYPE_3
+ * additive-feedback one, whose output is 31 bits. The old ANSI sample LCG here returned 0..32767,
+ * so this constant would have been 32767 -- it was never declared at all, which is the only reason
+ * changing the generator could not turn a compiling program into a wrong answer.
+ */
+#define RAND_MAX 2147483647
 int atoi(const char *s);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 int putenv(char *s);
