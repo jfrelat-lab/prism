@@ -23,6 +23,42 @@
 #define MAX_FRAMES 400
 #endif
 
+#ifdef HASH_RAM
+/*
+ * THE WHOLE MACHINE STATE, hashed per frame — `unsigned char RAM[0x20000]` in machine.c, which is
+ * MAME's entire CPU-visible address space plus its graphics area.
+ *
+ * Why this and not the picture: a display hash only diverges once the difference has been DRAWN, so
+ * the frame it names is the frame the symptom became visible, not the frame the machine went wrong.
+ * Hashing memory says when the two builds' state actually parted, which may be much earlier and
+ * invisible. Generic across every driver and release — nothing here knows which game is running.
+ *
+ * The two halves are hashed apart because they answer different questions: 0x00000-0x0ffff is the
+ * Z80's address space (the game's own state), and everything above it is decoded graphics and
+ * samples, which are built once at load time and should never change at all.
+ */
+extern unsigned char RAM[];
+#endif
+
+#ifdef DUMP_VRAM
+/*
+ * The GAME's video RAM, read through the pointer MAME's own memory map filled in
+ * (`{ 0x4000, 0x7fff, wow_videoram_w, &wow_videoram }` in wow/driver.c).
+ *
+ * WHY THIS IS THE QUESTION. `wow_videoram_w` early-outs on an unchanged byte and then writes all
+ * four of that byte's pixels from scratch, so a pixel's value depends only on the LAST accepted
+ * write to its byte -- which makes the picture a pure function of the video RAM's CONTENT. Dumping
+ * the content therefore splits the diagnosis in two and cannot be argued with: same bytes and a
+ * different picture means the write handler was invoked differently; different bytes means the
+ * divergence is upstream of the video hardware entirely.
+ *
+ * Declared here rather than added to the game: osdnull.c is the harness's own file, and referencing
+ * a global the driver already exports is not a modification of it. It is wow-specific, which is why
+ * it is behind a define and not compiled for any other driver.
+ */
+extern unsigned char *wow_videoram;
+#endif
+
 /*
  * stricmp is a DOS-ism with no ISO equivalent, so glibc does not have it and the platform layer must
  * supply it — the same role src/msdos/msdos.c plays on DJGPP. PRISM provides it as a builtin; here it
@@ -107,7 +143,63 @@ void osd_update_display(void)
       }
   }
   /* Every frame, so the first divergence is pinned to the frame it happens on. */
+#ifdef HASH_RAM
+  {
+    unsigned long r1 = 5381, r2 = 5381;
+    int i;
+    for (i = 0; i < 0x10000; i++) r1 = r1 * 33 + RAM[i];
+    for (i = 0x10000; i < 0x20000; i++) r2 = r2 * 33 + RAM[i];
+    printf("frame %d hash %08lx nz %d cpu %08lx gfx %08lx\n", frames, h & 0xffffffffUL, nz,
+           r1 & 0xffffffffUL, r2 & 0xffffffffUL);
+  }
+#else
   printf("frame %d hash %08lx nz %d\n", frames, h & 0xffffffffUL, nz);
+#endif
+
+  /*
+   * ONE FRAME, PIXEL BY PIXEL, when asked. A hash says two frames differ and nothing else; the next
+   * question is always which pixels and which pens, and that cannot be answered from a hash by
+   * anyone. -DDUMP_FRAME=N is compiled into BOTH sides, so the dump is produced by the same code on
+   * the same frame and the comparison stays a comparison.
+   *
+   * It goes to stdout rather than to a file because PRISM's guest has no host filesystem to write
+   * to, and stdout is the one channel both builds already share. `pix` prefixes the rows so the
+   * frame-hash diff can ignore them and read them separately.
+   */
+#ifdef DUMP_FRAME
+  if (frames == DUMP_FRAME && display)
+  {
+    printf("dump %d %d\n", display->width, display->height);
+    for (y = 0; y < display->height; y++)
+    {
+      printf("pix");
+      for (x = 0; x < display->width; x++) printf("%02x", display->line[y][x]);
+      printf("\n");
+    }
+#ifdef HASH_RAM
+    /*
+     * The Z80's whole address space, 256 bytes a row, so a diff names an ADDRESS. Emitted with the
+     * frame dump because "which bytes" is the question a hash mismatch always raises next.
+     */
+    for (y = 0; y < 256; y++)
+    {
+      printf("mem");
+      for (x = 0; x < 256; x++) printf("%02x", RAM[y * 256 + x]);
+      printf("\n");
+    }
+#endif
+#ifdef DUMP_VRAM
+    /* 80 bytes per screen row: two per 8-pixel group, 40 groups. See the note above. */
+    if (wow_videoram)
+      for (y = 0; y < 204; y++)
+      {
+        printf("vrm");
+        for (x = 0; x < 80; x++) printf("%02x", wow_videoram[y * 80 + x]);
+        printf("\n");
+      }
+#endif
+  }
+#endif
 }
 
 void osd_update_audio(void) { }

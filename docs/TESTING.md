@@ -2580,3 +2580,57 @@ starts it. And the builds keep re-converging, which rules out simulation state p
 step. The report now prints the count and the span for exactly that reason: "two frames then
 agreement" and "every frame from here on" are different defects, and the old report — first differing
 line only — could not tell them apart.
+
+## Three instruments for MAME, and the order they had to be used in
+
+`mamediff` compared display hashes and nothing else, which is enough to say two builds part company
+and useless for saying why. Wizard of Wor needed three more, and the order they were applied in is
+the reusable part — each one answered a question the previous one raised.
+
+```
+node tools/mamediff.mjs --release=04 --game=wow --roms=<dir> \
+     --frames=280 --play=240,9999,9999,9999 --dump=267 --vram --ram
+```
+
+| flag | what it dumps | the question it settles |
+|---|---|---|
+| `--dump=N` | frame N, pixel by pixel, from **both** sides | how many pixels, where, and **which pens** — the index-pair census, as `gate-pixels` does for Quake |
+| `--vram` | the game's own video RAM on that frame | wrong CONTENT, or a wrong WRITE? |
+| `--ram` | a hash of the whole Z80 address space every frame, and the differing **addresses** on the dumped frame | when did the *machine* diverge, as opposed to when did it become visible |
+
+Everything is compiled into both sides from the same `-D`, so the dumps are produced by the same code
+on the same frame and the comparison stays a comparison.
+
+**The `--vram` question has a clean answer because of how the driver works**, which is why it was
+worth building: `wow_videoram_w` early-outs on an unchanged byte and then writes all four of that
+byte's pixels from scratch, so a pixel depends only on the *last accepted write to its byte* — the
+picture is a pure function of the video RAM's content. Same bytes and a different picture would mean
+the handler was invoked differently; different bytes means the divergence is upstream of the video
+hardware entirely.
+
+### What they found, and why the order mattered
+
+1. **The picture**: 116 of 65,280 pixels on frame 267, a 21×10 box at x150,y32, **one** pen pair
+   `3→0`. One glyph — not a drift, not a rasteriser.
+2. **The video RAM**: identical at 266, different at 267–268, identical again at 269. PRISM **erases
+   that glyph two frames early**. It is ahead, not behind — the opposite of the first reading, and
+   only the frame-266 dump distinguishes them.
+3. **The machine state**: `RAM[0..0xffff]` differs from **frame 1** — one byte, `0xd34a`, in WOW's
+   work RAM, `0x85` against `0x52`. The two builds were never in step. The display hash named frame
+   267 because that is when something finally *read* that byte.
+
+**A display hash names the frame a difference became visible, which here was 266 frames after the
+frame it happened on.** That is the lesson worth keeping: hash the state, not only the picture.
+
+### Two hypotheses killed by measurement rather than argument
+
+* **A global placed on top of `RAM`.** A single differing byte is exactly that shape. Refuted by
+  reading PRISM's own symbol table: `RAM` is the sole occupant of that address and no symbol sits
+  within 4 KB of it.
+* **Nondeterminism in the reference.** The control that should precede any accusation of the compiler
+  under test: run the tcc binary twice and diff it against itself. Byte-identical, 483 lines. The
+  harness's "deterministic by construction" claim holds, and the byte is genuinely PRISM's.
+
+There is no random source in the driver either — `readport` is `input_port_0_r`..`_3_r` and nothing
+else — so the value is derived from something the game computed. The next step is one question: which
+Z80 PC writes `0xd34a`.
