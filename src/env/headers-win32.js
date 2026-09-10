@@ -2338,21 +2338,98 @@ BOOL WINAPI SetSysColors(int, const int *, const COLORREF *);
 #include <windows.h>
 
 /*
- * dsound.h, and it is DELIBERATELY two typedefs.
+ * dsound.h.
  *
- * win32/snd_win.c is NOT in this target's unit list -- the variant takes the tree's own
- * null/snddma_null.c, the same build selection the Linux one makes -- so nothing in this build ever
- * calls DirectSound. What forces the header to exist at all is that winquake.h includes it
- * unconditionally and then declares two globals with its types:
+ * THIS HEADER USED TO BE TWO TYPEDEFS, and the comment justifying that said snd_win.c was not in the
+ * unit list. That justification is gone, undone by a correction on the other side: this variant took
+ * the tree's null sound driver at first, carried over from the Linux one, and S_Activate is defined
+ * ONLY in win32/snd_win.c while win32/vid_dll.c calls it on every window activation. So the honest
+ * Win32 build compiles snd_win.c, and the moment it did, the two typedefs were not enough. A stale
+ * justification is worse than a missing declaration, so it is rewritten rather than left standing.
  *
- *     extern LPDIRECTSOUND pDS;
- *     extern LPDIRECTSOUNDBUFFER pDSBuf;
+ * What it declares is the surface snd_win.c reaches, measured: twelve vtable methods across the two
+ * interfaces, the three descriptor structs by the fields the program touches, and nineteen
+ * constants. NOTHING IMPLEMENTS ANY OF IT -- src/env/win32.c returns NULL from LoadLibrary, so the
+ * program's own GetProcAddress on dsound.dll fails and it stands down to waveOut, which also fails.
+ * That is the path a 1996 game took on a machine with no sound card, and it is the one taken here.
  *
- * So the requirement is a NAME for each and nothing more. Declaring the interfaces would be writing
- * a contract no code in this build reads, and getting it wrong would be discovered by nobody.
+ * The DSERR_ and DSBCAPS_ values are therefore UNOBSERVABLE, exactly as ddraw.h's DDERR_ ones are:
+ * distinct constants so the program's comparisons compile, not measured numbers. If DirectSound is
+ * ever implemented they become part of that contract and must be measured then.
  */
 typedef struct IDirectSound       *LPDIRECTSOUND;
 typedef struct IDirectSoundBuffer *LPDIRECTSOUNDBUFFER;
+
+typedef struct _DSCAPS {
+    DWORD dwSize;
+    DWORD dwFlags;
+    DWORD dwMinSecondarySampleRate, dwMaxSecondarySampleRate;
+    DWORD dwPrimaryBuffers;
+} DSCAPS, *LPDSCAPS;
+
+typedef struct _DSBCAPS {
+    DWORD dwSize;
+    DWORD dwFlags;
+    DWORD dwBufferBytes;
+    DWORD dwUnlockTransferRate;
+    DWORD dwPlayCpuOverhead;
+} DSBCAPS, *LPDSBCAPS;
+
+typedef struct _DSBUFFERDESC {
+    DWORD dwSize;
+    DWORD dwFlags;
+    DWORD dwBufferBytes;
+    DWORD dwReserved;
+    LPWAVEFORMATEX lpwfxFormat;
+} DSBUFFERDESC, *LPDSBUFFERDESC;
+
+typedef struct IDirectSoundVtbl {
+    HRESULT (WINAPI *QueryInterface)(LPDIRECTSOUND, void *, void **);
+    DWORD   (WINAPI *AddRef)(LPDIRECTSOUND);
+    DWORD   (WINAPI *Release)(LPDIRECTSOUND);
+    HRESULT (WINAPI *CreateSoundBuffer)(LPDIRECTSOUND, LPDSBUFFERDESC,
+                                        LPDIRECTSOUNDBUFFER *, void *);
+    HRESULT (WINAPI *GetCaps)(LPDIRECTSOUND, LPDSCAPS);
+    HRESULT (WINAPI *SetCooperativeLevel)(LPDIRECTSOUND, HWND, DWORD);
+} IDirectSoundVtbl;
+struct IDirectSound { IDirectSoundVtbl *lpVtbl; };
+
+typedef struct IDirectSoundBufferVtbl {
+    HRESULT (WINAPI *QueryInterface)(LPDIRECTSOUNDBUFFER, void *, void **);
+    DWORD   (WINAPI *AddRef)(LPDIRECTSOUNDBUFFER);
+    DWORD   (WINAPI *Release)(LPDIRECTSOUNDBUFFER);
+    HRESULT (WINAPI *GetCaps)(LPDIRECTSOUNDBUFFER, LPDSBCAPS);
+    HRESULT (WINAPI *GetCurrentPosition)(LPDIRECTSOUNDBUFFER, LPDWORD, LPDWORD);
+    HRESULT (WINAPI *GetStatus)(LPDIRECTSOUNDBUFFER, LPDWORD);
+    HRESULT (WINAPI *Lock)(LPDIRECTSOUNDBUFFER, DWORD, DWORD, void **, LPDWORD,
+                           void **, LPDWORD, DWORD);
+    HRESULT (WINAPI *Play)(LPDIRECTSOUNDBUFFER, DWORD, DWORD, DWORD);
+    HRESULT (WINAPI *Restore)(LPDIRECTSOUNDBUFFER);
+    HRESULT (WINAPI *SetFormat)(LPDIRECTSOUNDBUFFER, LPWAVEFORMATEX);
+    HRESULT (WINAPI *Stop)(LPDIRECTSOUNDBUFFER);
+    HRESULT (WINAPI *Unlock)(LPDIRECTSOUNDBUFFER, void *, DWORD, void *, DWORD);
+} IDirectSoundBufferVtbl;
+struct IDirectSoundBuffer { IDirectSoundBufferVtbl *lpVtbl; };
+
+#define DS_OK                    0
+#define DSERR_ALLOCATED          0x88780001L
+#define DSERR_BUFFERLOST         0x88780002L
+#define DSERR_INVALIDCALL        0x88780003L
+#define DSERR_INVALIDPARAM       0x88780004L
+#define DSERR_PRIOLEVELNEEDED    0x88780005L
+#define DSSCL_NORMAL             1
+#define DSSCL_PRIORITY           2
+#define DSSCL_EXCLUSIVE          3
+#define DSSCL_WRITEPRIMARY       4
+#define DSBCAPS_PRIMARYBUFFER    0x00000001L
+#define DSBCAPS_CTRLFREQUENCY    0x00000020L
+#define DSBCAPS_LOCSOFTWARE      0x00000008L
+#define DSBPLAY_LOOPING          0x00000001L
+#define DSBSTATUS_PLAYING        0x00000001L
+#define DSBSTATUS_BUFFERLOST     0x00000002L
+#define DSCAPS_EMULDRIVER        0x00000020L
+
+HRESULT WINAPI DirectSoundCreate(void *lpGuid, LPDIRECTSOUND *ppDS, void *pUnkOuter);
 #endif
 `,
   'ddraw.h': `

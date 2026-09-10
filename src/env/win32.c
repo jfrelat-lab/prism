@@ -915,6 +915,185 @@ BOOL WINAPI PatBlt(HDC dc, int x, int y, int w, int h, DWORD rop)
     (void)dc; (void)x; (void)y; (void)w; (void)h; (void)rop;
     return TRUE;
 }
+/* ---------------------------------------------------------------- the DIB, which is the picture
+ *
+ * GDI is how Quake II's software renderer reaches the screen on Windows: rw_imp.c calls DIB_Init
+ * unconditionally, so this path -- not the DirectDraw one beside it -- is the one that draws.
+ *
+ * The shape is the same bargain MGL makes in src/env/mgl.c, and for the same reason: the program
+ * asks for a buffer, writes its pixels into it, and hands it back. So CreateDIBSection ALLOCATES and
+ * reports where, SetDIBColorTable takes the palette, and BitBlt is the moment a picture is finished.
+ * The host reads these globals out of the linked image exactly as it reads prism_mgl_surface.
+ *
+ * One DIB section is modelled, because rw_dib.c creates one. A second would replace it, which is
+ * stated rather than guarded: a program that wanted two off-screen surfaces would need a table, and
+ * this one does not.
+ */
+void *prism_dib_surface = 0;
+int   prism_dib_width = 0;
+int   prism_dib_height = 0;
+int   prism_dib_pitch = 0;
+int   prism_dib_topdown = 0;
+int   prism_dib_frames = 0;
+unsigned char prism_dib_palette[256 * 3];
+int   prism_dib_palgen = 0;
+
+/*
+ * Handles as TAGGED INTEGERS, distinct per kind so that a program comparing two of them, or testing
+ * one for NULL, gets an answer that means something. Nothing dereferences these.
+ */
+#define PRISM_DC_TAG      0x44430000
+#define PRISM_DIB_TAG     0x44490000
+#define PRISM_PAL_TAG     0x50410000
+static int prism_gdi_serial = 1;
+
+HDC WINAPI CreateCompatibleDC(HDC dc)
+{
+    (void)dc;
+    return (HDC)(PRISM_DC_TAG | (prism_gdi_serial++ & 0xffff));
+}
+BOOL WINAPI DeleteDC(HDC dc) { (void)dc; return TRUE; }
+
+/*
+ * The surface. A DIB's rows are padded to a DWORD -- vid.rowbytes downstream is this pitch, so the
+ * renderer strides by it -- and a NEGATIVE biHeight means the rows run top-down, which is what
+ * Quake II asks for and what a host wants to read.
+ */
+HBITMAP WINAPI CreateDIBSection(HDC dc, LPBITMAPINFO bmi, UINT usage,
+                                void **bits, HANDLE section, DWORD offset)
+{
+    int w, h, bpp;
+    (void)dc; (void)usage; (void)section; (void)offset;
+    if (!bmi) return 0;
+    w = (int)bmi->bmiHeader.biWidth;
+    h = (int)bmi->bmiHeader.biHeight;
+    bpp = (int)bmi->bmiHeader.biBitCount;
+    prism_dib_topdown = h < 0;
+    if (h < 0) h = -h;
+    if (w <= 0 || h <= 0) return 0;
+    prism_dib_pitch = ((w * bpp + 31) / 32) * 4;
+    prism_dib_surface = malloc((size_t)prism_dib_pitch * (size_t)h);
+    if (!prism_dib_surface) return 0;
+    memset(prism_dib_surface, 0, (size_t)prism_dib_pitch * (size_t)h);
+    prism_dib_width = w;
+    prism_dib_height = h;
+    if (bits) *bits = prism_dib_surface;
+    return (HBITMAP)(PRISM_DIB_TAG | (prism_gdi_serial++ & 0xffff));
+}
+
+/* The palette, in the DIB's own currency: BGRA quads, which become the host's r,g,b triples. */
+UINT WINAPI SetDIBColorTable(HDC dc, UINT start, UINT n, RGBQUAD *colors)
+{
+    UINT i;
+    (void)dc;
+    if (!colors) return 0;
+    for (i = 0; i < n && start + i < 256; i++) {
+        prism_dib_palette[(start + i) * 3 + 0] = colors[i].rgbRed;
+        prism_dib_palette[(start + i) * 3 + 1] = colors[i].rgbGreen;
+        prism_dib_palette[(start + i) * 3 + 2] = colors[i].rgbBlue;
+    }
+    prism_dib_palgen++;
+    return n;
+}
+
+/*
+ * THE FRAME BOUNDARY. rw_imp.c blits the DIB section to the window's DC once a picture is complete,
+ * so this is where a host gets its one chance to present and to pace the guest -- the same role
+ * MGL_bitBltCoord plays for WinQuake and XPutImage for the X11 client.
+ */
+BOOL WINAPI BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, DWORD rop)
+{
+    (void)dst; (void)x; (void)y; (void)w; (void)h; (void)src; (void)sx; (void)sy; (void)rop;
+    prism_dib_frames++;
+    return TRUE;
+}
+
+/*
+ * Objects and palettes as tokens. The DIB path takes its colours through SetDIBColorTable, so the
+ * palette calls exist to be called and to return something a null-check accepts; SelectObject must
+ * hand back the PREVIOUS object, because a caller restores it.
+ */
+HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj)
+{
+    static HGDIOBJ previous = 0;
+    HGDIOBJ was = previous;
+    (void)dc;
+    previous = obj;
+    return was;
+}
+BOOL      WINAPI DeleteObject(HGDIOBJ obj) { (void)obj; return TRUE; }
+HPALETTE  WINAPI CreatePalette(LOGPALETTE *pal)
+{
+    (void)pal;
+    return (HPALETTE)(PRISM_PAL_TAG | (prism_gdi_serial++ & 0xffff));
+}
+HPALETTE  WINAPI SelectPalette(HDC dc, HPALETTE pal, BOOL force)
+{
+    (void)dc; (void)pal; (void)force;
+    return 0;
+}
+UINT      WINAPI RealizePalette(HDC dc) { (void)dc; return 0; }
+
+/*
+ * System colours. There is no desktop, so these are inert -- but rw_dib.c SAVES them, changes them
+ * and restores them around its palette, so the pair has to behave like storage or the restore
+ * writes back nonsense.
+ */
+static COLORREF prism_sys_colors[NUM_SYS_COLORS];
+DWORD WINAPI GetSysColor(int index)
+{
+    if (index < 0 || index >= NUM_SYS_COLORS) return 0;
+    return prism_sys_colors[index];
+}
+BOOL WINAPI SetSysColors(int n, const int *indices, const COLORREF *colors)
+{
+    int i;
+    if (!indices || !colors) return FALSE;
+    for (i = 0; i < n; i++) {
+        if (indices[i] >= 0 && indices[i] < NUM_SYS_COLORS) {
+            prism_sys_colors[indices[i]] = colors[i];
+        }
+    }
+    return TRUE;
+}
+
+/* The window geometry calls vid_dll.c makes. AdjustWindowRectEx above already does the work. */
+BOOL WINAPI AdjustWindowRect(LPRECT r, DWORD style, BOOL menu)
+{
+    return AdjustWindowRectEx(r, style, menu, 0);
+}
+BOOL WINAPI MoveWindow(HWND wnd, int x, int y, int w, int h, BOOL repaint)
+{
+    (void)repaint;
+    return SetWindowPos(wnd, 0, x, y, w, h, 0);
+}
+BOOL WINAPI UnregisterClass(LPCSTR name, HINSTANCE inst) { (void)name; (void)inst; return TRUE; }
+HWND WINAPI SetFocus(HWND wnd) { (void)wnd; return 0; }
+
+/*
+ * timeGetTime, the multimedia clock Sys_Milliseconds is built on. Milliseconds since the process
+ * started, from the same gettimeofday this file already uses for QueryPerformanceCounter -- one
+ * clock, so two timers cannot disagree with each other.
+ */
+DWORD WINAPI timeGetTime(void)
+{
+    struct timeval tv;
+    static long base_sec = 0;
+    gettimeofday(&tv, 0);
+    if (!base_sec) base_sec = tv.tv_sec;
+    return (DWORD)((tv.tv_sec - base_sec) * 1000 + tv.tv_usec / 1000);
+}
+
+/*
+ * The clipboard, answered honestly: there is none. OpenClipboard failing is what a Windows program
+ * from 1996 was written to cope with, and Quake II's console paste simply does nothing -- which is
+ * the correct outcome, not a missing feature pretending to work.
+ */
+BOOL   WINAPI OpenClipboard(HWND wnd) { (void)wnd; return FALSE; }
+HANDLE WINAPI GetClipboardData(UINT format) { (void)format; return 0; }
+BOOL   WINAPI CloseClipboard(void) { return TRUE; }
+DWORD  WINAPI GlobalSize(HANDLE mem) { (void)mem; return 0; }
+
 BOOL WINAPI EnumDisplaySettings(LPCSTR device, DWORD mode, LPVOID dm)
 {
     (void)device; (void)mode; (void)dm;

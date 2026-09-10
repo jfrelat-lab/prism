@@ -266,10 +266,11 @@
       "host": "win32",
       "env": [
         "stdio",
-        "dl"
+        "dl",
+        "wsock"
       ],
       "args": "+set vid_ref soft +set cl_maxfps 1000 +map base1",
-      "_doc": "id's Win32 client, and the fifth platform layer over this engine. THE UNIT LIST IS NOT TRANSCRIBED FROM quake2.mak, on purpose: that makefile is OLDER THAN THE SOURCE BESIDE IT -- seven of its forty-one objects (cl_demo, sbar2, scr_cin, screen, sv_move, sv_phys, view) name files 3.19 no longer has, and one of ref_soft's (r_inter) likewise. It is the same staleness P7.7 found in linux/Makefile.i386, so the engine list is the one the Linux target already proves and only the FIVE platform files are swapped: sys_linux/q_shlinux/vid_so/net_udp/glob become sys_win/q_shwin/vid_dll/net_wins -- and glob.c has no twin because q_shwin.c implements Sys_FindFirst itself. Sound and CD stay on the tree's own null drivers, the same build selection the Linux variant makes.",
+      "_doc": "id's Win32 client, and the fifth platform layer over this engine. THE UNIT LIST IS NOT TRANSCRIBED FROM quake2.mak, on purpose: that makefile is OLDER THAN THE SOURCE BESIDE IT -- seven of its forty-one objects (cl_demo, sbar2, scr_cin, screen, sv_move, sv_phys, view) name files 3.19 no longer has, and one of ref_soft's (r_inter) likewise. It is the same staleness P7.7 found in linux/Makefile.i386, so the engine list is the one the Linux target already proves and only the FIVE platform files are swapped: sys_linux/q_shlinux/vid_so/net_udp/glob become sys_win/q_shwin/vid_dll/net_wins -- and glob.c has no twin because q_shwin.c implements Sys_FindFirst itself. Sound and CD stay on the tree's own null drivers, the same build selection the Linux variant makes. ONE BUILD SELECTION WAS WRONG AND THE LINKER SAID SO: this variant first took the tree's own null sound and CD drivers, carried over from the Linux one. But S_Activate is defined ONLY in win32/snd_win.c and win32/vid_dll.c calls it on every window activation -- on Linux vid_so.c does not. So the null drivers are not a selection id's Win32 tree offers, and this build takes snd_win.c and cd_win.c as it shipped. That costs nothing, because src/env/win32.c was designed for exactly this: LoadLibrary returns NULL so the DirectSound path stands down, waveOutOpen fails so the fallback gives up, and mciSendCommand fails so CDAudio reports no drive.",
       "units": {
         "list": [
           "qcommon/cmd.c",
@@ -310,15 +311,15 @@
           "server/sv_user.c",
           "server/sv_world.c",
           "game/q_shared.c",
-          "null/snddma_null.c",
-          "null/cd_null.c",
           "win32/sys_win.c",
           "win32/q_shwin.c",
           "win32/vid_dll.c",
           "win32/vid_menu.c",
           "win32/net_wins.c",
           "win32/conproc.c",
-          "win32/in_win.c"
+          "win32/in_win.c",
+          "win32/snd_win.c",
+          "win32/cd_win.c"
         ]
       },
       "modules": {
@@ -355,9 +356,10 @@
         "_WIN32": "1",
         "WIN32": "1"
       },
-      "_generated": "The Win32 shim is COMPILED, not registered as an environment module: win32-app.c is its non-graphical half (last error, code pages, module handles) and win32.c is the window and its message queue, both in C because their contracts are structs the program reads and writes. Same pair targets/quake.json's win variant pulls in -- minus mgl.c, which is WinQuake's renderer boundary and not Quake II's: this one draws through GDI, from win32/rw_dib.c.",
+      "_generated": "The Win32 shim is COMPILED, not registered as an environment module: win32-app.c is its non-graphical half (last error, code pages, module handles) and win32.c is the window and its message queue, both in C because their contracts are structs the program reads and writes. Same pair targets/quake.json's win variant pulls in -- minus mgl.c, which is WinQuake's renderer boundary and not Quake II's: this one draws through GDI, from win32/rw_dib.c. win32-net.c is the third: the wsock ENV supplies primitives (prism_net_open, prism_net_send and the rest) and this file is Winsock itself written over them, which is why env alone left WSAStartup and closesocket undefined -- and why win32.c called a prism_net_pump nobody defined. PuTTY reaches it the same way.",
       "generated": [
         "src/env/win32-app.c",
+        "src/env/win32-net.c",
         "src/env/win32.c"
       ]
     }
