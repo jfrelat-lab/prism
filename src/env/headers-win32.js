@@ -294,16 +294,30 @@ int WINAPI WSAAddressToStringA(LPSOCKADDR a, DWORD alen, LPVOID info, char *buf,
 #define WSAETIMEDOUT            (WSABASEERR+60)
 #define WSAECONNREFUSED         (WSABASEERR+61)
 #define WSAEHOSTDOWN            (WSABASEERR+64)
+/*
+ * The seven Quake II's net_wins.c switches on that were absent. Same scheme as every line above --
+ * WSABASEERR plus the BSD errno number, which is how Winsock numbered these -- and the last three
+ * are its own startup errors rather than a Berkeley code. They must be integer CONSTANTS because
+ * NET_ErrorString uses them as case labels; an undeclared one reads as "not a constant expression",
+ * which is how these were found.
+ */
+#define WSAEBADF                (WSABASEERR+9)
+#define WSAETOOMANYREFS         (WSABASEERR+59)
+#define WSAELOOP                (WSABASEERR+62)
+#define WSAENAMETOOLONG         (WSABASEERR+63)
+#define WSASYSNOTREADY          (WSABASEERR+91)
+#define WSAVERNOTSUPPORTED      (WSABASEERR+92)
+#define WSANOTINITIALISED       (WSABASEERR+93)
 #define WSAEHOSTUNREACH         (WSABASEERR+65)
 #define WSAEPROCLIM             (WSABASEERR+67)
 #define WSAEDISCON              (WSABASEERR+101)
 #define WSAHOST_NOT_FOUND       (WSABASEERR+1001)
 #define WSATRY_AGAIN            (WSABASEERR+1002)
+/* The rest of the resolver family, which net_wins.c's NET_ErrorString also switches on. */
+#define WSANO_RECOVERY          (WSABASEERR+1003)
+#define WSANO_DATA              (WSABASEERR+1004)
 #endif
 `,
-  'winsock.h': `#include <winsock2.h>
-`,
-
   /*
    * winspool, at the depth PuTTY's printing.c reaches: it enumerates printers at level 4 or 5 and
    * spools raw bytes. Every entry point is loaded from winspool.drv by name, so the header supplies
@@ -544,6 +558,9 @@ typedef enum {
 #define STDMETHODCALLTYPE
 #define STDAPICALLTYPE
 #define __stdcall
+/* The SINGLE-underscore spelling, which MSVC has always accepted alongside the reserved one, and
+   which Quake II's conproc.c uses in "unsigned _stdcall RequestProc (void *arg);". */
+#define _stdcall
 #define __cdecl
 #define __declspec(x)
 #define _far
@@ -2207,38 +2224,22 @@ HWND WINAPI CreateDialog(HINSTANCE, LPCSTR, HWND, LPVOID);
    * including anything that names SOCKET or LPWSADATA. The declarations stand whichever net_*.c the
    * build links, so even a net_none.c build needs the types.
    */
-  'winsock.h': `
-#ifndef _PRISM_WINSOCK_H
-#define _PRISM_WINSOCK_H
-typedef unsigned int SOCKET;
-typedef unsigned long u_long;
-typedef unsigned short u_short;
-typedef unsigned char u_char;
-typedef unsigned int u_int;
-#define INVALID_SOCKET ((SOCKET)~0)
-#define SOCKET_ERROR (-1)
-typedef struct WSAData {
-    unsigned short wVersion, wHighVersion;
-    char szDescription[257], szSystemStatus[129];
-    unsigned short iMaxSockets, iMaxUdpDg;
-    char *lpVendorInfo;
-} WSADATA, *LPWSADATA;
-struct sockaddr { unsigned short sa_family; char sa_data[14]; };
-struct in_addr { unsigned long s_addr; };
-struct sockaddr_in {
-    short sin_family; unsigned short sin_port; struct in_addr sin_addr; char sin_zero[8];
-};
-struct hostent {
-    char *h_name; char **h_aliases; short h_addrtype, h_length; char **h_addr_list;
-};
-#define h_addr h_addr_list[0]
-#define AF_INET 2
-#define SOCK_DGRAM 2
-#define SOCK_STREAM 1
-#define IPPROTO_UDP 17
-#define SOL_SOCKET 0xffff
-#define SO_BROADCAST 0x0020
-#define FIONBIO 0x8004667e
+  /*
+   * winsock.h, and there used to be TWO of these keys.
+   *
+   * One said '#include <winsock2.h>' (written for PuTTY); the other, added later for winquake.h,
+   * re-declared thirteen names of its own. In a JavaScript object literal the LAST key silently
+   * wins, so the fuller one had been discarded ever since -- and the narrow one does not declare
+   * fd_set, which is what Quake II's net_wins.c:717 needs for NET_Sleep. A duplicate key is not a
+   * merge; it is a deletion that reads like an addition.
+   *
+   * Measured before merging: winsock2.h declares 88 names and covers every one of the narrow
+   * entry's except a single macro, kept below. So this is now one key.
+   */
+  'winsock.h': `#include <winsock2.h>
+/* winquake.h calls MAKEWORD to build its version word; this is that macro under a name that cannot
+   collide with the windows.h one. */
+#ifndef MAKEWORD_WSA
 #define MAKEWORD_WSA(a,b) ((unsigned short)(((unsigned char)(a))|(((unsigned short)((unsigned char)(b)))<<8)))
 #endif
 `,

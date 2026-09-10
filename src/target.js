@@ -114,7 +114,7 @@ function exportsFromDef(path) {
 }
 
 /** An #include resolver over one source tree plus PRISM's own headers. */
-function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing) {
+function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing, dosPaths) {
   // Where to look, in order. `include` exists because MAME's tree is not flat: its makefile passes
   // -Isrc -Isrc/Z80 -Isrc/msdos and its units live in per-driver subdirectories.
   const dirs = [dir, ...(include ?? []).map(d => join(dir, d))];
@@ -131,29 +131,60 @@ function makeResolver(dir, { caseInsensitive = false, include = null } = {}, mis
     }
     return null;
   };
-  return function resolver(name, angled, fromFile) {
-    const want = basename(name);
-    const from = angled ? null : fromFile;
-    /*
-     * Order matters, and OpenDUNE is what proved it.
-     *
-     * The path as WRITTEN comes first -- `Z80/Z80.h` is a real relative path, and a quoted include
-     * resolves against the including file before anything else. Then the STANDARD header by its full
-     * name, and only after that the basename fallback, which exists for DOS trees that write
-     * `sys\types.h`.
-     *
-     * Letting the basename fallback run before the standard table means `<sys/types.h>` reduces to
-     * `types.h` and finds OpenDUNE's `include/types.h`, so `ssize_t` never gets declared and PRISM's
-     * own unistd.h fails to parse. A header in the tree may shadow a standard one when the program
-     * asks for it BY THAT NAME, never by accident of its basename.
-     */
+  /*
+   * One spelling of the name, tried in full. Order matters, and OpenDUNE is what proved it.
+   *
+   * The path as WRITTEN comes first -- `Z80/Z80.h` is a real relative path, and a quoted include
+   * resolves against the including file before anything else. Then the STANDARD header by its full
+   * name, and only after that the basename fallback.
+   *
+   * Letting the basename fallback run before the standard table means `<sys/types.h>` reduces to
+   * `types.h` and finds OpenDUNE's `include/types.h`, so `ssize_t` never gets declared and PRISM's
+   * own unistd.h fails to parse. A header in the tree may shadow a standard one when the program
+   * asks for it BY THAT NAME, never by accident of its basename.
+   */
+  const lookup = (name, from) => {
     const path = find(name, from);
     if (path) return { path, text: readFileSync(path, 'latin1') };
     if (HEADERS[name] !== undefined) return { path: `<${name}>`, text: HEADERS[name] };
+    const want = basename(name);
     const loose = find(want, from);
     if (loose) return { path: loose, text: readFileSync(loose, 'latin1') };
     const std = HEADERS[want];
     if (std !== undefined) return { path: `<${name}>`, text: std };
+    return null;
+  };
+
+  return function resolver(name, angled, fromFile) {
+    const from = angled ? null : fromFile;
+    let hit = lookup(name, from);
+
+    /*
+     * A BACKSLASH IS A PATH SEPARATOR, on the second attempt only.
+     *
+     * Period Windows and DOS sources write their includes the DOS way -- 59 of them in this corpus,
+     * across four programs: `#include "..\ref_soft\r_local.h"` in Quake II's Win32 layer,
+     * `#include "editor\editor.h"` throughout Descent's, and `<sys\types.h>`, `<sys\stat.h>`,
+     * `<SYS\STAT.H>` for headers that are standard. C99 6.4.7p3 makes a backslash in a
+     * q-char-sequence UNDEFINED precisely so that an implementation may read it as a separator, and
+     * a compiler targeting Windows does. PRISM compiles Windows translation units, so it does too.
+     *
+     * WHY A FALLBACK RATHER THAN AN OPTION. Retrying only after the literal spelling has failed
+     * cannot change any translation unit that resolves today, so there is nothing for a flag to
+     * protect -- and a flag would have to be set by whoever already knew the answer. No file in this
+     * corpus has a backslash in its name, so there is no ambiguity for a switch to resolve either.
+     *
+     * The basename fallback above was written FOR this case -- its comment used to name
+     * `sys\types.h` -- and could never reach it: POSIX basename() leaves a DOS path untouched, so
+     * `sys\types.h` stayed one long filename and was stubbed empty. Measured, not assumed.
+     */
+    if (!hit && name.includes('\\')) {
+      const posix = name.replace(/\\/g, '/');
+      hit = lookup(posix, from);
+      if (hit) dosPaths?.add(name);
+    }
+    if (hit) return hit;
+
     // Stub and record, so ONE run reports every absent header instead of dying on the first.
     // Printed by the caller, never silent.
     missing.add(name);
@@ -293,13 +324,14 @@ export function targetUnits(target, root) {
 export function buildTarget(target, { root, envExtra = {}, compile: overrides = {} } = {}) {
   const { units, dir, asm } = targetUnits(target, root);
   const missing = new Set();
+  const dosPaths = new Set();
   const c = { ...(target.compile ?? {}), ...overrides };
   // What each extra module makes visible to the main one, from the program's own .def file.
   const moduleExports = moduleExportsOf(target, dir);
   const program = compileProgram(units, {
     exports: moduleExports,
     defines: target.defines ?? {},
-    resolve: makeResolver(dir, target, missing),
+    resolve: makeResolver(dir, target, missing, dosPaths),
     memory: (c.memory ?? 64) * 1024 * 1024,
     pack: c.pack ?? null,
     collect: c.collect ?? true,
@@ -329,6 +361,6 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     for (const n of f.names) if (undef.has(n)) asmWanted.push({ name: n, file: f.file });
   }
   return {
-    program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing],
+    program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing], dosPaths: [...dosPaths],
   };
 }

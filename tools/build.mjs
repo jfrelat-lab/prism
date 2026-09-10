@@ -122,7 +122,7 @@ try {
   console.error(`${target.name}: ${e.message}`);
   process.exit(1);
 }
-const { program, env, units, asm, missingHeaders, asmExports, asmWanted } = built;
+const { program, env, units, asm, missingHeaders, dosPaths, asmExports, asmWanted } = built;
 const secs = ((performance.now() - t0) / 1000).toFixed(1);
 
 const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
@@ -130,6 +130,12 @@ console.log(`${target.title ?? target.name} — ${units.length} translation unit
   `${loc.toLocaleString('en')} lines, ${Object.keys(program.F).length} functions in ${secs} s`);
 if (asm?.length) console.log(`  ${asm.length} assembly objects skipped: ${asm.join(' ')}`);
 if (missingHeaders.length) console.log(`  headers stubbed: ${missingHeaders.join(' ')}`);
+/* A resolution that needed an extra rule is reported, never silent: these includes were written
+   the DOS way and only resolved once a backslash was read as a path separator. */
+if (dosPaths?.length) {
+  console.log(`  ${dosPaths.length} include${dosPaths.length === 1 ? '' : 's'} resolved by reading ` +
+    `a backslash as a path separator: ${dosPaths.join(' ')}`);
+}
 /*
  * A duplicate external definition is not a warning to skim past: every emitted function shares one
  * JavaScript scope, so the last one wins and calls emitted BEFORE it also go to it.

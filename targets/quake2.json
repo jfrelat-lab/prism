@@ -350,6 +350,11 @@
           "exportsFrom": "ref_soft/ref_soft.def",
           "_rw": "quake2.mak builds ref_soft.dll from the renderer plus rw_imp, rw_dib and rw_ddraw: rw_imp.c is the platform half, rw_dib.c the GDI surface and rw_ddraw.c the DirectDraw one. The DIB path is the one PRISM already serves for WinQuake and PuTTY."
         }
+      },
+      "_defines": "The platform macros MSVC defines for a Win32 build, the same pair targets/quake.json's win variant carries. Not a convenience: win32/rw_dib.c opens with #ifndef _WIN32 and its own #error, so the file refuses to compile without them -- the program stating its own platform requirement, which is configuration rather than modification. C_ONLY comes from the base target and selects the renderer's C paths over its assembly, the same choice as Quake's id386=0.",
+      "defines": {
+        "_WIN32": "1",
+        "WIN32": "1"
       }
     }
   }
