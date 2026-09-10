@@ -261,6 +261,15 @@ int WINAPI WSAAddressToStringA(LPSOCKADDR a, DWORD alen, LPVOID info, char *buf,
 #define WSAGETSELECTEVENT(l)  ((int)LOWORD(l))
 #define WSAGETSELECTERROR(l)  ((int)HIWORD(l))
 
+/*
+ * IPX, which net_wins.c names in a branch it does not take here: NET_OpenIPX is compiled but the
+ * engine only opens UDP. Declared so the file parses; a program that asked for an IPX socket would
+ * be refused by the shim, which is the honest outcome for a protocol no browser has.
+ */
+#define AF_IPX                  6
+#define PF_IPX                  AF_IPX
+#define NSPROTO_IPX             1000
+#define INADDR_BROADCAST        0xffffffff
 #define WSABASEERR              10000
 #define WSAEINTR                (WSABASEERR+4)
 #define WSAEACCES               (WSABASEERR+13)
@@ -2211,6 +2220,86 @@ BOOL WINAPI SetConsoleTitle(LPCSTR);
 PTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter(PTOP_LEVEL_EXCEPTION_FILTER);
 HWND WINAPI CreateDialog(HINSTANCE, LPCSTR, HWND, LPVOID);
 
+/*
+ * THE DIB SURFACE, measured in one pass over Quake II's Win32 layer rather than discovered one
+ * build at a time. Of 828 uppercase names those units use, all but a handful were already declared
+ * here or in Quake II's own tree; what follows is the remainder.
+ *
+ * It matters because the DIB is the path that actually draws: rw_imp.c calls DIB_Init
+ * unconditionally, so this is Quake II's software renderer reaching the screen through GDI.
+ */
+typedef struct tagRGBQUAD {
+    BYTE rgbBlue, rgbGreen, rgbRed, rgbReserved;
+} RGBQUAD;
+
+typedef struct tagBITMAPINFOHEADER {
+    DWORD biSize;
+    LONG  biWidth, biHeight;
+    WORD  biPlanes, biBitCount;
+    DWORD biCompression, biSizeImage;
+    LONG  biXPelsPerMeter, biYPelsPerMeter;
+    DWORD biClrUsed, biClrImportant;
+} BITMAPINFOHEADER, *LPBITMAPINFOHEADER;
+
+typedef struct tagBITMAPINFO {
+    BITMAPINFOHEADER bmiHeader;
+    RGBQUAD          bmiColors[1];
+} BITMAPINFO, *LPBITMAPINFO;
+
+#define BI_RGB               0
+#define DIB_RGB_COLORS       0
+#define DIB_PAL_COLORS       1
+#define SYSPAL_ERROR         0
+#define SRCCOPY              0x00CC0020L
+
+HBITMAP WINAPI CreateDIBSection(HDC, LPBITMAPINFO, UINT, void **, HANDLE, DWORD);
+UINT    WINAPI SetDIBColorTable(HDC, UINT, UINT, RGBQUAD *);
+BOOL    WINAPI UnregisterClass(LPCSTR, HINSTANCE);
+
+/*
+ * The system-colour indices rw_dib.c saves and restores around its palette.
+ *
+ * These are interface numbers in a documented order, so they are written out as such. NUM_SYS_COLORS
+ * is the one CHOSEN value: rw_dib.c sizes an array with it and loops, so it only has to cover the
+ * indices the program touches -- 21 does, and a desktop PRISM does not have makes the saved values
+ * unobservable anyway.
+ */
+#define COLOR_SCROLLBAR           0
+#define COLOR_BACKGROUND          1
+#define COLOR_ACTIVECAPTION       2
+#define COLOR_INACTIVECAPTION     3
+#define COLOR_MENU                4
+#define COLOR_WINDOW              5
+#define COLOR_WINDOWFRAME         6
+#define COLOR_MENUTEXT            7
+#define COLOR_WINDOWTEXT          8
+#define COLOR_CAPTIONTEXT         9
+#define COLOR_ACTIVEBORDER        10
+#define COLOR_INACTIVEBORDER      11
+#define COLOR_APPWORKSPACE        12
+#define COLOR_HIGHLIGHT           13
+#define COLOR_HIGHLIGHTTEXT       14
+#define COLOR_BTNFACE             15
+#define COLOR_BTNSHADOW           16
+#define COLOR_GRAYTEXT            17
+#define COLOR_BTNTEXT             18
+#define COLOR_INACTIVECAPTIONTEXT 19
+#define COLOR_BTNHIGHLIGHT        20
+#define NUM_SYS_COLORS            21
+BOOL WINAPI SetSysColors(int, const int *, const COLORREF *);
+
+/* The rest of what sys_win.c, vid_dll.c and in_win.c name and this header lacked. */
+#define FORMAT_MESSAGE_ALLOCATE_BUFFER 0x00000100
+#define FORMAT_MESSAGE_FROM_SYSTEM     0x00001000
+#define LANG_NEUTRAL                   0x00
+#define SUBLANG_DEFAULT                0x01
+#define SEM_FAILCRITICALERRORS         0x0001
+#define DRIVE_CDROM                    5
+#define PAGE_READONLY                  0x02
+#define WM_MOUSELAST                   0x0209
+#define SPI_SCREENSAVERRUNNING         97
+#define MOD_ALT                        0x0001
+
 /* windows.h has always pulled in the multimedia header, and dsound.h relies on that: it names
    LPWAVEFORMATEX without including anything that declares it. */
 #include <mmsystem.h>
@@ -2380,6 +2469,15 @@ struct IDirectDrawPalette { IDirectDrawPaletteVtbl *lpVtbl; };
 #define DDPCAPS_ALLOW256             0x00000040L
 
 /* The 86 result codes rw_ddraw.c's error-to-string switch names. See the warning above. */
+/*
+ * Four names my extraction MISSED, and the reason is worth keeping: it matched DDERR_[A-Z_]+, a
+ * character class with no digits, so every code with a numeral in it was invisible to the tool that
+ * was supposed to find them all. Found later by measuring the whole layer instead.
+ */
+#define DDERR_NO3D                             0x88760101L
+#define DDERR_NOT4BITCOLOR                     0x88760102L
+#define DDERR_NOT4BITCOLORINDEX                0x88760103L
+#define DDERR_NOT8BITCOLOR                     0x88760104L
 #define DDERR_ALREADYINITIALIZED               0x88760001L
 #define DDERR_BLTFASTCANTCLIP                  0x88760002L
 #define DDERR_CANNOTATTACHSURFACE              0x88760003L

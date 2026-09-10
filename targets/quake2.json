@@ -266,8 +266,7 @@
       "host": "win32",
       "env": [
         "stdio",
-        "dl",
-        "win32"
+        "dl"
       ],
       "args": "+set vid_ref soft +set cl_maxfps 1000 +map base1",
       "_doc": "id's Win32 client, and the fifth platform layer over this engine. THE UNIT LIST IS NOT TRANSCRIBED FROM quake2.mak, on purpose: that makefile is OLDER THAN THE SOURCE BESIDE IT -- seven of its forty-one objects (cl_demo, sbar2, scr_cin, screen, sv_move, sv_phys, view) name files 3.19 no longer has, and one of ref_soft's (r_inter) likewise. It is the same staleness P7.7 found in linux/Makefile.i386, so the engine list is the one the Linux target already proves and only the FIVE platform files are swapped: sys_linux/q_shlinux/vid_so/net_udp/glob become sys_win/q_shwin/vid_dll/net_wins -- and glob.c has no twin because q_shwin.c implements Sys_FindFirst itself. Sound and CD stay on the tree's own null drivers, the same build selection the Linux variant makes.",
@@ -355,7 +354,12 @@
       "defines": {
         "_WIN32": "1",
         "WIN32": "1"
-      }
+      },
+      "_generated": "The Win32 shim is COMPILED, not registered as an environment module: win32-app.c is its non-graphical half (last error, code pages, module handles) and win32.c is the window and its message queue, both in C because their contracts are structs the program reads and writes. Same pair targets/quake.json's win variant pulls in -- minus mgl.c, which is WinQuake's renderer boundary and not Quake II's: this one draws through GDI, from win32/rw_dib.c.",
+      "generated": [
+        "src/env/win32-app.c",
+        "src/env/win32.c"
+      ]
     }
   }
 }
