@@ -18,6 +18,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, basename, dirname, resolve as resolvePath } from 'node:path';
 import { compileProgram } from './compile.js';
 import { HEADERS } from './env/headers.js';
+import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars } from './env/registry.js';
 
 /**
@@ -350,6 +351,12 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const env = buildEnv(program.M, target.env ?? ['stdio'],
     { ...envExtra, dl: { modules: sonames, ...(envExtra.dl ?? {}) } });
   /*
+   * And the same answer for a Win32 program, through the table src/env/win32-app.c already walks.
+   * A no-op unless the image actually declares `prism_extra_exports`, so every other target is
+   * untouched: with no modules there is no table and LoadLibrary keeps returning NULL.
+   */
+  const win32Exports = bindWin32Exports(program, target.modules ?? {}, moduleExports);
+  /*
    * The cross-reference: every assembly export, and whether the program still lacks it. A name that
    * appears here AND in program.undefined is one an assembler would buy; one that appears only here
    * is already covered -- by a C fallback the source ships, or by a generated unit.
@@ -362,5 +369,6 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   }
   return {
     program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing], dosPaths: [...dosPaths],
+    win32Exports,
   };
 }

@@ -79,6 +79,63 @@ export function installDl(M, { modules = {}, verbose = false } = {}) {
   return { open, modules: bySoname };
 }
 
+/*
+ * THE SAME ANSWER FOR WIN32, through the table src/env/win32-app.c already walks.
+ *
+ * A Windows program of this era loads its replaceable parts exactly as a Unix one does, with a
+ * different pair of names: vid_dll.c calls LoadLibrary("ref_soft.dll") and then GetProcAddress for
+ * "GetRefAPI". So the question is identical to dlopen/dlsym's and deserves the identical answer --
+ * nothing is loaded, because everything is already linked; the name selects a module and the symbol
+ * is looked up under the linkage name pass 1 gave it.
+ *
+ * WHAT THIS DOES NOT DO IS REPLACE THE C SIDE, and that is deliberate. win32-app.c already
+ * implements LoadLibraryA and GetProcAddress over a table of {module, name, fn}, and its comment
+ * explains why the mechanism has to be a table rather than a blanket yes:
+ *
+ *     "found nothing" and "no such library" have to stay different answers -- which is why
+ *     LoadLibrary only admits to the modules a table covers.
+ *
+ * PuTTY depends on that distinction. The table was simply never filled: `prism_extra_exports` is
+ * declared extern and defined nowhere, so it read as zero and every LoadLibrary returned NULL --
+ * which is right for dsound.dll and fatal for the renderer. This fills it, and a target that
+ * declares no modules still gets an empty table and the old behaviour exactly.
+ */
+export function bindWin32Exports(program, modules = {}, moduleExports = {}) {
+  const M = program.M ?? program;
+  const sym = (n) => M.mod.symbols.get(n)?.addr ?? 0;
+  const tablePtr = sym('prism_extra_exports');
+  const countPtr = sym('prism_extra_export_count');
+  if (!tablePtr || !countPtr) return null;          // not a Win32 program; nothing to wire
+
+  const cstr = (text) => M.mod.intern([...new TextEncoder().encode(text), 0]);
+  const rows = [];
+  for (const [name, exports] of Object.entries(moduleExports)) {
+    const soname = modules[name]?.soname ?? `${name}.dll`;
+    /*
+     * ONE interned string per module, shared by its rows: GetProcAddress matches the handle against
+     * the module field by POINTER, not by strcmp, so two copies of the same name would make a handle
+     * from LoadLibrary fail to match its own exports.
+     */
+    const modPtr = cstr(soname);
+    for (const fn of exports) {
+      const f = M.mod.funcs.get(`${name}$${fn}`) ?? M.mod.funcs.get(fn);
+      if (!f) continue;
+      rows.push([modPtr, cstr(fn), f.addr]);
+    }
+  }
+
+  const REC = 12;                                   // { const char *module; const char *name; void *fn; }
+  const base = rows.length ? M.rt.malloc(REC * rows.length) : 0;
+  rows.forEach(([mod, nm, fn], i) => {
+    M.mod.dv.setInt32(base + i * REC + 0, mod, true);
+    M.mod.dv.setInt32(base + i * REC + 4, nm, true);
+    M.mod.dv.setInt32(base + i * REC + 8, fn, true);
+  });
+  M.mod.dv.setInt32(tablePtr, base, true);
+  M.mod.dv.setInt32(countPtr, rows.length, true);
+  return { count: rows.length, modules: Object.keys(moduleExports) };
+}
+
 /** The declarations, in the shape src/compile.js's BUILTINS table wants. */
 export function dlBuiltins(T) {
   const P = T.ptr(T.CHAR), I = T.INT;
