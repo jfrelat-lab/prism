@@ -462,11 +462,22 @@ if (mgl) {
   const at = (n) => dv.getInt32(dibSym(n), true);
   const surface = dv.getInt32(dibBase, true);
   const w = at('prism_dib_width'), h = at('prism_dib_height'), pitch = at('prism_dib_pitch');
-  console.log(`\nframes ${frames} · display ${w}x${h}` + fpsNote());
+  const topdown = at('prism_dib_topdown');
+  console.log(`\nframes ${frames} · display ${w}x${h} · pitch ${pitch} · ` +
+    `${topdown ? 'top-down' : 'bottom-up'}` + fpsNote());
   if (pngPath && w > 0 && h > 0) {
+    /*
+     * BOTTOM-UP IS THE DEFAULT, and ignoring it turns the picture upside down.
+     *
+     * A DIB with a POSITIVE biHeight stores row 0 at the BOTTOM of the image -- the convention
+     * bitmaps have had since OS/2 -- and Quake II asks for one: measured here as bottom-up, which is
+     * why the first console this target drew came out inverted. A negative biHeight means top-down,
+     * and src/env/win32.c records which was asked for rather than assuming either.
+     */
     const px = new Uint8Array(w * h);
     for (let y = 0; y < h; y++) {
-      px.set(program.M.u8.subarray(surface + y * pitch, surface + y * pitch + w), y * w);
+      const src = surface + (topdown ? y : h - 1 - y) * pitch;
+      px.set(program.M.u8.subarray(src, src + w), y * w);
     }
     const palAddr = dibSym('prism_dib_palette');
     const palette = Uint8Array.from(program.M.u8.subarray(palAddr, palAddr + 768));
