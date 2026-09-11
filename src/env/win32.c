@@ -1013,9 +1013,25 @@ BOOL WINAPI BitBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy,
  * palette calls exist to be called and to return something a null-check accepts; SelectObject must
  * hand back the PREVIOUS object, because a caller restores it.
  */
+/*
+ * SelectObject returns the PREVIOUS object, and it must never return NULL on success -- which is not
+ * a detail: rw_dib.c tests exactly that.
+ *
+ *     if ( ( previously_selected_GDI_obj = SelectObject( ... ) ) == NULL )
+ *             DIB_Init() - SelectObject failed
+ *
+ * A real memory DC is not empty when it is created: it comes with a default 1x1 monochrome bitmap
+ * already selected, so the first swap hands that back rather than nothing. Returning 0 for "there
+ * was nothing before" made DIB_Init fail on its first call, and the failure surfaced four layers up
+ * as SWimp_SetMode's rserr_unknown and Quake II's "catastrophic mode change failure".
+ *
+ * One slot, not one per DC: this build selects into a single memory DC. A program juggling two would
+ * get the wrong previous object back, and would deserve a table.
+ */
+#define PRISM_STOCK_OBJ ((HGDIOBJ)(PRISM_DIB_TAG | 0xffff))
 HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj)
 {
-    static HGDIOBJ previous = 0;
+    static HGDIOBJ previous = PRISM_STOCK_OBJ;
     HGDIOBJ was = previous;
     (void)dc;
     previous = obj;

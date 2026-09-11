@@ -264,6 +264,23 @@ if ((frameCap || pngPath) && program.M.rt.XPutImage) {
  * writes straight into the framebuffer it was handed, so there is no library call to hook and the
  * game's own function is the only moment a frame exists.
  */
+/*
+ * GDI's frame boundary is BitBlt: rw_imp.c blits the DIB section to the window once a picture is
+ * complete, which is the same moment MGL_bitBltCoord marks for WinQuake and XPutImage for X11.
+ * src/env/win32.c publishes the surface beside it, in the prism_dib_* globals.
+ */
+const dibSym = (n) => program.mod.symbols.get(n)?.addr ?? 0;
+const dibBase = dibSym('prism_dib_surface');
+if ((frameCap || pngPath) && dibBase && program.F.BitBlt) {
+  const inner = program.F.BitBlt;
+  const wrapped = function (...a) {
+    const r = inner.apply(this, a);
+    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+    return r;
+  };
+  program.F.BitBlt = wrapped;
+  program.mod.bindFunc('BitBlt', wrapped);
+}
 if ((frameCap || pngPath) && program.M.svgalib && program.F.VID_Update) {
   const inner = program.F.VID_Update;
   const wrapped = function (...a) {
@@ -422,6 +439,29 @@ if (mgl) {
     for (const b of pixels) if (b) nz++;
     writeIndexedPng(pngPath, { pixels, width, height, palette });
     console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
+  }
+} else if (dibBase && program.mod.dv.getInt32(dibBase, true)) {
+  /*
+   * The DIB section, read back out of guest memory. Its rows are padded to a DWORD, so the picture
+   * has to be de-strided before it is a bitmap -- pitch is what the renderer strides by, width is
+   * what the image is.
+   */
+  const dv = program.mod.dv;
+  const at = (n) => dv.getInt32(dibSym(n), true);
+  const surface = dv.getInt32(dibBase, true);
+  const w = at('prism_dib_width'), h = at('prism_dib_height'), pitch = at('prism_dib_pitch');
+  console.log(`\nframes ${frames} · display ${w}x${h}` + fpsNote());
+  if (pngPath && w > 0 && h > 0) {
+    const px = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      px.set(program.M.u8.subarray(surface + y * pitch, surface + y * pitch + w), y * w);
+    }
+    const palAddr = dibSym('prism_dib_palette');
+    const palette = Uint8Array.from(program.M.u8.subarray(palAddr, palAddr + 768));
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    writeIndexedPng(pngPath, { pixels: px, width: w, height: h, palette });
+    console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
   }
 } else if (program.M.svgalib?.mem) {
   /* svgalib: the framebuffer IS the console's memory, and the palette came through vga_setpalvec. */

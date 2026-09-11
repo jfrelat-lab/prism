@@ -269,7 +269,7 @@
         "dl",
         "wsock"
       ],
-      "args": "+set vid_ref soft +set cl_maxfps 1000 +map base1",
+      "args": "+set vid_fullscreen 0 +set vid_ref soft +set cl_maxfps 1000 +map base1",
       "_doc": "id's Win32 client, and the fifth platform layer over this engine. THE UNIT LIST IS NOT TRANSCRIBED FROM quake2.mak, on purpose: that makefile is OLDER THAN THE SOURCE BESIDE IT -- seven of its forty-one objects (cl_demo, sbar2, scr_cin, screen, sv_move, sv_phys, view) name files 3.19 no longer has, and one of ref_soft's (r_inter) likewise. It is the same staleness P7.7 found in linux/Makefile.i386, so the engine list is the one the Linux target already proves and only the FIVE platform files are swapped: sys_linux/q_shlinux/vid_so/net_udp/glob become sys_win/q_shwin/vid_dll/net_wins -- and glob.c has no twin because q_shwin.c implements Sys_FindFirst itself. Sound and CD stay on the tree's own null drivers, the same build selection the Linux variant makes. ONE BUILD SELECTION WAS WRONG AND THE LINKER SAID SO: this variant first took the tree's own null sound and CD drivers, carried over from the Linux one. But S_Activate is defined ONLY in win32/snd_win.c and win32/vid_dll.c calls it on every window activation -- on Linux vid_so.c does not. So the null drivers are not a selection id's Win32 tree offers, and this build takes snd_win.c and cd_win.c as it shipped. That costs nothing, because src/env/win32.c was designed for exactly this: LoadLibrary returns NULL so the DirectSound path stands down, waveOutOpen fails so the fallback gives up, and mciSendCommand fails so CDAudio reports no drive.",
       "units": {
         "list": [
@@ -364,7 +364,8 @@
         "src/env/win32-app.c",
         "src/env/win32-net.c",
         "src/env/win32.c"
-      ]
+      ],
+      "_args": "vid_fullscreen 0 is not tuning, it is the branch selector. rw_imp.c's SWimp_InitGraphics takes DIB_Init when windowed and DDRAW_Init when full screen, and DirectDraw is declared here and refused -- so full screen cannot draw by construction. The cvar defaults to 0 but carries CVAR_ARCHIVE, so a saved config.cfg in the user's baseq2 turns it back on; setting it on the command line is the same kind of choice as WinQuake's -window in the quake:win variant."
     }
   }
 }
