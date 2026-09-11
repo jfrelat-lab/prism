@@ -502,8 +502,27 @@ LRESULT WINAPI DefWindowProc(HWND w, UINT m, WPARAM wp, LPARAM lp)
  * so when the page gains or loses focus -- which is also what makes alt-tabbing away release the
  * mouse, as it should.
  */
+/*
+ * ACTIVATION IS A TRANSITION, not a state you can re-announce, and posting it unconditionally was an
+ * infinite loop with Quake II in it:
+ *
+ *     post(WM_ACTIVATE) -> MainWndProc -> re.AppActivate -> SWimp_AppActivate
+ *         -> ShowWindow(SW_RESTORE) -> "shown means activated" -> post(WM_ACTIVATE) -> ...
+ *
+ * Measured at two million turns of WinMain's message pump in 0.8 s, with Qcommon_Frame never once
+ * reached -- the program initialised fully and then spent its life re-activating a window that was
+ * already active. Windows sends WM_ACTIVATE when the ACTIVE WINDOW CHANGES; ShowWindow on a visible,
+ * active window sends nothing, which is what breaks the cycle on real hardware.
+ *
+ * -1 is "not yet known", so the first activation is always announced.
+ */
+static int prism_win32_active = -1;
+
 void prism_win32_activate(int active)
 {
+    active = active ? 1 : 0;
+    if (active == prism_win32_active) return;
+    prism_win32_active = active;
     post(WM_ACTIVATE, active ? WA_ACTIVE : 0, 0);
 }
 

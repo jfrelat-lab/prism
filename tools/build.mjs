@@ -219,7 +219,19 @@ if (!flag('run')) process.exit(0);
  * returns needs a tool that knows where to interrupt it -- which is exactly the program-specific
  * half that stays in tools/.
  */
-const args = (opt('args') ?? '').split(/\s+/).filter(Boolean);
+/*
+ * A TARGET'S OWN ARGUMENTS ARE PART OF THE TARGET, and this dropped them.
+ *
+ * Several variants declare args because the build does not work without them -- quake:sun needs
+ * `-zone 512` (vid_sunx.c takes its framebuffer from the zone, whose default cannot hold a frame),
+ * quake2:solaris needs `+set dedicated 1`, and quake2:win32 needs `+set vid_fullscreen 0` because
+ * rw_imp.c takes DIB_Init when windowed and DDRAW_Init when not, and DirectDraw is refused here.
+ * Reading only --args meant every one of those ran in a configuration its own JSON said it could
+ * not: quake2:win32 died in "catastrophic mode change failure" for exactly this reason.
+ *
+ * An explicit --args still wins, because a person naming arguments means them.
+ */
+const args = (opt('args') ?? target.args ?? '').split(/\s+/).filter(Boolean);
 console.log(`\nrunning: ${target.name} ${args.join(' ')}`);
 /*
  * What the program SAYS. Its stdout goes into an in-memory buffer -- the page reads it there -- so a
