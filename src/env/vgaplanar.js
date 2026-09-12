@@ -43,29 +43,62 @@ const CHAIN4 = 0x08;
  * compiler emits, and that is a compile option rather than something this file can reach. See
  * src/env/ports.js, which named the asymmetry before either half existed.
  */
-export function installVgaPlanar(machine, { onChange = null } = {}) {
-  const planes = [0, 1, 2, 3].map(() => new Uint8Array(0x10000));
+export function installVgaPlanar(machine, { onChange = null, map = null, planes = 0 } = {}) {
   const state = {
     mapMask: 0x0f,        // all four planes, which is the reset value and what a clear uses
     readPlane: 0,
     chained: true,        // mode 13h until a program says otherwise
-    planes,
+    planes,               // guest address of four 64 kB banks, then a fifth used as scratch
+    scratchWrites: 0,
   };
+
+  const WINDOW = 0xa0000, WINDOW_LEN = 0x20000, BANK = 0x10000;
+  const bank = (n) => planes + n * BANK;
+  const SCRATCH = 4;
+
+  /*
+   * Push the current register state into the page map.
+   *
+   * CHAINED is the identity: with Chain-4 set the window is plain linear memory, which is mode 13h
+   * and exactly what every other DOS target here already does. MAME's tweaked 256x256 lands in this
+   * branch, so wiring this device changes nothing for it -- and the golden says so rather than this
+   * comment.
+   *
+   * UNCHAINED splits: a read comes from the plane in Read Map Select, a write goes to the planes in
+   * Map Mask. Those are two different answers for one address, which is why the map has two tables.
+   *
+   * THE CASE A TABLE CANNOT EXPRESS is a Map Mask with more than one bit. Refusing when the REGISTER
+   * is set would be wrong -- the game writes 0x0f legitimately, before clearing 64 kB through
+   * memset -- so the refusal has to attach to the byte write, which a silent translation cannot
+   * intercept. What happens instead: writes go to a scratch bank nobody displays, and they are
+   * COUNTED. A fill through the runtime's memset can fan out properly once that is wired; an
+   * emitted byte write under such a mask is lost, and `scratchWrites` is how it stops being silent.
+   */
+  const apply = () => {
+    if (!map || !planes) return;
+    if (state.chained) { map.identity(WINDOW, WINDOW_LEN); return; }
+    map.redirect(WINDOW, WINDOW_LEN, bank(state.readPlane), { how: 'r', who: 'vga' });
+    const single = [1, 2, 4, 8].indexOf(state.mapMask & 0x0f);
+    map.redirect(WINDOW, WINDOW_LEN, bank(single >= 0 ? single : SCRATCH), { how: 'w', who: 'vga' });
+    state.unexpressible = single < 0 ? (state.mapMask & 0x0f) : 0;
+  };
+  state.apply = apply;
 
   // Sequencer and Graphics Controller both work as index-then-data, and both accept the word form.
   let seqIndex = 0, gcIndex = 0;
 
   const seqData = (v) => {
-    if (seqIndex === 2) state.mapMask = v & 0x0f;
+    if (seqIndex === 2) { state.mapMask = v & 0x0f; apply(); }
     else if (seqIndex === 4) {
       const chained = (v & CHAIN4) !== 0;
       if (chained !== state.chained) {
         state.chained = chained;
+        apply();
         if (onChange) onChange(state);
       }
     }
   };
-  const gcData = (v) => { if (gcIndex === 4) state.readPlane = v & 3; };
+  const gcData = (v) => { if (gcIndex === 4) { state.readPlane = v & 3; apply(); } };
 
   machine.onPortWrite(0x3c4, (p, size, v) => {
     seqIndex = v & 0xff;

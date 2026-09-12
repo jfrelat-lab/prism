@@ -17,6 +17,7 @@
 // decoder is exercised at the end to prove the checks can fail at all.
 import { installPorts } from '../src/env/ports.js';
 import { installVgaPlanar } from '../src/env/vgaplanar.js';
+import { installMemMap } from '../src/env/memmap.js';
 
 /** A bare machine: no guest, no memory to speak of, just the port seam these devices plug into. */
 function machine() {
@@ -70,11 +71,39 @@ const check = (what, got, want) => checks.push([what, got === want ? null
   check('chained again through the byte pair', vga.chained, true);
 }
 
-// --- four planes of 64 kB, which is the adapter this decoder is describing.
+/*
+ * --- THE WIRING, which is the half the decoder alone cannot demonstrate. A register write has to
+ * reach the page map and move where an address lands, and these check the address rather than the
+ * register: the register state was already proved above, and a state that nothing reads is not a
+ * mechanism.
+ */
 {
-  const { vga } = machine();
-  check('four planes', vga.planes.length, 4);
-  check('64 kB each', vga.planes[0].length, 0x10000);
+  const PLANES = 0x800000, W = 0xa0000;
+  const M = { u8: new Uint8Array(16 << 20), mod: { dv: new DataView(new ArrayBuffer(16)) }, rt: {} };
+  const m = installPorts(M, {});
+  const map = installMemMap(M, {});
+  const vga = installVgaPlanar(m, { map, planes: PLANES });
+
+  check('chained, the window is plain memory', map.translateRead(W + 5), W + 5);
+
+  m.write(0x3c4, 2, 0x0604);                           // unchain, as the game does
+  m.write(0x3ce, 2, (2 << 8) | 0x04);                  // Read Map Select = plane 2
+  m.write(0x3c4, 2, (0x04 << 8) | 0x02);               // Map Mask = plane 2 only
+  check('a read comes from the selected plane', map.translateRead(W + 5), PLANES + 2 * 0x10000 + 5);
+  check('a write goes to the masked plane', map.translateWrite(W + 5), PLANES + 2 * 0x10000 + 5);
+
+  m.write(0x3c4, 2, (0x08 << 8) | 0x02);               // Map Mask = plane 3, read plane unchanged
+  check('the write plane moves alone', map.translateWrite(W + 5), PLANES + 3 * 0x10000 + 5);
+  check('and the read plane stays put', map.translateRead(W + 5), PLANES + 2 * 0x10000 + 5);
+
+  // The case a table cannot express: four planes at once. Contained and counted, not approximated.
+  m.write(0x3c4, 2, (0x0f << 8) | 0x02);
+  check('a multi-plane mask is recorded as unexpressible', vga.unexpressible, 0x0f);
+  check('and its writes go to a scratch bank nobody displays',
+    map.translateWrite(W + 5), PLANES + 4 * 0x10000 + 5);
+
+  m.write(0x3c4, 2, 0x0e04);                           // Chain-4 back on
+  check('chained again gives the window back', map.translateWrite(W + 5), W + 5);
 }
 
 /*
