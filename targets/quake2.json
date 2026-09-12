@@ -269,7 +269,7 @@
         "dl",
         "wsock"
       ],
-      "args": "+set vid_fullscreen 0 +set vid_ref soft +set cl_maxfps 1000 +map base1",
+      "args": "+set vid_fullscreen 0 +set vid_ref soft +map demo1",
       "_doc": "id's Win32 client, and the fifth platform layer over this engine. THE UNIT LIST IS NOT TRANSCRIBED FROM quake2.mak, on purpose: that makefile is OLDER THAN THE SOURCE BESIDE IT -- seven of its forty-one objects (cl_demo, sbar2, scr_cin, screen, sv_move, sv_phys, view) name files 3.19 no longer has, and one of ref_soft's (r_inter) likewise. It is the same staleness P7.7 found in linux/Makefile.i386, so the engine list is the one the Linux target already proves and only the FIVE platform files are swapped: sys_linux/q_shlinux/vid_so/net_udp/glob become sys_win/q_shwin/vid_dll/net_wins -- and glob.c has no twin because q_shwin.c implements Sys_FindFirst itself. Sound and CD stay on the tree's own null drivers, the same build selection the Linux variant makes. ONE BUILD SELECTION WAS WRONG AND THE LINKER SAID SO: this variant first took the tree's own null sound and CD drivers, carried over from the Linux one. But S_Activate is defined ONLY in win32/snd_win.c and win32/vid_dll.c calls it on every window activation -- on Linux vid_so.c does not. So the null drivers are not a selection id's Win32 tree offers, and this build takes snd_win.c and cd_win.c as it shipped. That costs nothing, because src/env/win32.c was designed for exactly this: LoadLibrary returns NULL so the DirectSound path stands down, waveOutOpen fails so the fallback gives up, and mciSendCommand fails so CDAudio reports no drive.",
       "units": {
         "list": [
@@ -349,6 +349,60 @@
           "soname": "ref_soft.dll",
           "exportsFrom": "ref_soft/ref_soft.def",
           "_rw": "quake2.mak builds ref_soft.dll from the renderer plus rw_imp, rw_dib and rw_ddraw: rw_imp.c is the platform half, rw_dib.c the GDI surface and rw_ddraw.c the DirectDraw one. The DIB path is the one PRISM already serves for WinQuake and PuTTY."
+        },
+        "game": {
+          "_doc": "linux/Makefile.i386's GAME_OBJS. q_shared.c and m_flash.c are NOT repeated here even though the real build compiles them into the game too: a module already sees the main one's symbols, which is where those live.",
+          "units": [
+            "game/g_ai.c",
+            "game/p_client.c",
+            "game/g_chase.c",
+            "game/g_cmds.c",
+            "game/g_svcmds.c",
+            "game/g_combat.c",
+            "game/g_func.c",
+            "game/g_items.c",
+            "game/g_main.c",
+            "game/g_misc.c",
+            "game/g_monster.c",
+            "game/g_phys.c",
+            "game/g_save.c",
+            "game/g_spawn.c",
+            "game/g_target.c",
+            "game/g_trigger.c",
+            "game/g_turret.c",
+            "game/g_utils.c",
+            "game/g_weapon.c",
+            "game/m_actor.c",
+            "game/m_berserk.c",
+            "game/m_boss2.c",
+            "game/m_boss3.c",
+            "game/m_boss31.c",
+            "game/m_boss32.c",
+            "game/m_brain.c",
+            "game/m_chick.c",
+            "game/m_flipper.c",
+            "game/m_float.c",
+            "game/m_flyer.c",
+            "game/m_gladiator.c",
+            "game/m_gunner.c",
+            "game/m_hover.c",
+            "game/m_infantry.c",
+            "game/m_insane.c",
+            "game/m_medic.c",
+            "game/m_move.c",
+            "game/m_mutant.c",
+            "game/m_parasite.c",
+            "game/m_soldier.c",
+            "game/m_supertank.c",
+            "game/m_tank.c",
+            "game/p_hud.c",
+            "game/p_trail.c",
+            "game/p_view.c",
+            "game/p_weapon.c"
+          ],
+          "soname": "gamex86.dll",
+          "exportsFrom": "game/game.def",
+          "_newer": "g_chase.c is not in GAME_OBJS either, and g_cmds.c and p_client.c call four of its functions. Same finding as cl_newfx.c: linux/Makefile.i386 is older than the source beside it."
         }
       },
       "_defines": "The platform macros MSVC defines for a Win32 build, the same pair targets/quake.json's win variant carries. Not a convenience: win32/rw_dib.c opens with #ifndef _WIN32 and its own #error, so the file refuses to compile without them -- the program stating its own platform requirement, which is configuration rather than modification. C_ONLY comes from the base target and selects the renderer's C paths over its assembly, the same choice as Quake's id386=0. NDEBUG, _M_IX86 and CPUSTRING come from the same place: they are what the Win32 project file passes, and the SOURCE reads them. sys_win.c picks its debugdir inside #ifdef branches on _M_IX86 and NDEBUG -- with neither defined no branch declares it at all -- and common.c prints CPUSTRING in its version banner. Configuration the build states, not a patch.",
@@ -365,7 +419,8 @@
         "src/env/win32-net.c",
         "src/env/win32.c"
       ],
-      "_args": "vid_fullscreen 0 is not tuning, it is the branch selector. rw_imp.c's SWimp_InitGraphics takes DIB_Init when windowed and DDRAW_Init when full screen, and DirectDraw is declared here and refused -- so full screen cannot draw by construction. The cvar defaults to 0 but carries CVAR_ARCHIVE, so a saved config.cfg in the user's baseq2 turns it back on; setting it on the command line is the same kind of choice as WinQuake's -window in the quake:win variant."
+      "_args": "demo1 is the map the DATA here has, and it is what web/programs/quake2.json already uses for the Linux client. This variant said base1 for a while, copied from the solaris one -- which is a DEDICATED SERVER and so never had to draw what it loaded. vid_fullscreen 0 is the real branch selector: rw_imp.c takes DIB_Init when windowed and DDRAW_Init when not, and DirectDraw is declared here and refused.",
+      "_modules": "BOTH modules, because a variant's block REPLACES the base's rather than extending it -- declaring only ref_soft dropped `game`, LoadLibrary found no gamex86.dll and Quake II said so: 'failed to load game DLL'. The soname is the Win32 one from sys_win.c:479; the same module is gamei386.so on Linux and the .def file it exports from is the same either way."
     }
   }
 }
