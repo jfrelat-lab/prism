@@ -69,15 +69,28 @@ export function installMemMap(M, { bytes = null } = {}) {
     if (start < 0 || start + len > size) throw new Error(`${who}: range outside the guest image`);
   };
 
+  const xr = (a) => xlatR[a >>> PAGE_SHIFT] + (a & (PAGE_SIZE - 1));
+  const xw = (a) => xlatW[a >>> PAGE_SHIFT] + (a & (PAGE_SIZE - 1));
+
   const map = {
     PAGE_SHIFT,
     PAGE_SIZE,
     xlatR,
     xlatW,
 
-    /** Where an address really lands. The same arithmetic the emitted code does, for tests. */
-    translateRead: (a) => xlatR[a >>> PAGE_SHIFT] + (a & (PAGE_SIZE - 1)),
-    translateWrite: (a) => xlatW[a >>> PAGE_SHIFT] + (a & (PAGE_SIZE - 1)),
+    /*
+     * THE TWO FUNCTIONS THE EMITTED CODE CALLS. One argument, evaluated once -- which is both what
+     * makes them implementable and, measured, what makes them fast: the inline form
+     * `X[a >>> 12] + (a & 4095)` names the address twice and costs MORE (stores +58% against +33%),
+     * besides needing a temporary at all 26 of the emitter's load/store sites.
+     *
+     * They are also the public `translate*` API, deliberately the same objects: a test that checks
+     * where an address lands must exercise exactly what the program runs.
+     */
+    xr,
+    xw,
+    translateRead: xr,
+    translateWrite: xw,
 
     /**
      * Point `len` bytes at `start` somewhere else. `to` is an address in the same image: the planes

@@ -7,11 +7,12 @@ import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap, vaReader } from './runtime/runtime.js';
-import { FunctionEmitter, EmitError , jsIdent, flexibleExtra } from './backend/emit.js';
+import { FunctionEmitter, EmitError , jsIdent, flexibleExtra, setPaged } from './backend/emit.js';
 import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
 import { djBuiltins } from './env/dj.js';
+import { installMemMap } from './env/memmap.js';
 import { wsockBuiltins } from './env/wsock.js';
 import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
@@ -771,7 +772,19 @@ export { installPorts, installPIT };
 // must stay loadable in a browser: the web shell imports these modules directly, unbundled.
 const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
 
-export function compileProgram(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, exports: moduleExports = {} } = {}) {
+/**
+ * `paged` is a PLATFORM property, not a per-game favour: on DOS the low megabyte has devices in it.
+ * It is a module-level flag inside the emitter (26 call sites would otherwise each need an extra
+ * argument), so it is set here and cleared in a finally -- a compilation that throws must not leave
+ * it on for the next one, and a gate compiles hundreds in a row.
+ */
+export function compileProgram(units, opts = {}) {
+  setPaged(!!opts.paged);
+  try { return compileProgramInner(units, opts); }
+  finally { setPaged(false); }
+}
+
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, paged = false, exports: moduleExports = {} } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   const failures = [];
@@ -1088,7 +1101,12 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
   pieces.push(...auxPieces);
 
   finalizeHeap(M);
-  const src = '"use strict";\nreturn function(M,F,D){\n' + pieces.join('\n') + '\n' +
+  /*
+   * The module takes two extra names ONLY when the platform is paged, so a target that is not pays
+   * nothing and -- more usefully -- emits a byte-for-byte identical program. That is checked rather
+   * than trusted: MAME, Quake II/win32 and Jump 'n Bump all hash the same with this code present.
+   */
+  const src = `"use strict";\nreturn function(M,F,D${paged ? ',xr,xw' : ''}){\n` + pieces.join('\n') + '\n' +
     moduleEpilogue(emitted) + '};';
 
   let factory;
@@ -1106,7 +1124,15 @@ export function compileProgram(units, { defines = {}, resolve = null, memory, in
     throw err;
   }
   const F = Object.create(null);
-  const rebind = factory(M, F, mod.dv);
+  /*
+   * THE MAP BELONGS TO THE IMAGE, which is why it is built here rather than by the environment: the
+   * environment is installed after this returns, and the emitted code needs its two translations at
+   * the moment the module is instantiated. Every page starts as itself, so a paged program with no
+   * device claiming anything behaves exactly like an unpaged one -- it merely pays for the lookup.
+   * Devices claim their ranges later, through M.memmap.
+   */
+  const memmap = paged ? installMemMap(M) : null;
+  const rebind = paged ? factory(M, F, mod.dv, memmap.xr, memmap.xw) : factory(M, F, mod.dv);
   for (const name of emitted) mod.bindFunc(name, F[name]);
   wireRebind(F, mod, emitted, rebind);
   // A builtin whose ADDRESS was taken needs its table slot filled with the runtime's own function,

@@ -132,15 +132,34 @@ function accessor(t) {
   return null;
 }
 
+/*
+ * PAGED MEMORY, off by default and off for every target that does not ask.
+ *
+ * When a platform declares a memory map (src/env/memmap.js), every access goes through a one-line
+ * translation instead of straight to the DataView: `D.setUint8(xw(a), v)` rather than
+ * `D.setUint8(a, v)`. That is what lets a DOS program's 0xA0000 window mean something other than
+ * plain memory -- a planar VGA's four planes, a VESA bank -- without the game being touched.
+ *
+ * A MODULE-LEVEL FLAG rather than a parameter, because loadExpr and storeExpr have 26 call sites
+ * between them and threading an argument through all of them would be a large diff for a setting
+ * that is constant for a whole compilation. compile.js sets it in a try/finally around emission.
+ *
+ * With it off, these emit exactly the string they emitted before -- which is checked rather than
+ * asserted: the emitted JavaScript for MAME, Quake II and Jump 'n Bump hashes identically with the
+ * feature present and unused.
+ */
+let PAGED = false;
+export function setPaged(on) { PAGED = !!on; }
+
 const loadExpr = (addr, t) => {
   const a = accessor(t);
   if (!a) unsup(`loading a ${T.typeName(t)}`);
-  return `D.${a.get}(${addr}${a.endian ? ',1' : ''})`;
+  return `D.${a.get}(${PAGED ? `xr(${addr})` : addr}${a.endian ? ',1' : ''})`;
 };
 const storeExpr = (addr, t, val) => {
   const a = accessor(t);
   if (!a) unsup(`storing a ${T.typeName(t)}`);
-  return `D.${a.set}(${addr},${val}${a.endian ? ',1' : ''})`;
+  return `D.${a.set}(${PAGED ? `xw(${addr})` : addr},${val}${a.endian ? ',1' : ''})`;
 };
 
 /** Types tier-0 cannot represent at all. Checked on every conversion, which is the one place every
