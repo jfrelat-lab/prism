@@ -11,6 +11,7 @@ import { FunctionEmitter, EmitError , jsIdent, flexibleExtra } from './backend/e
 import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
+import { djBuiltins } from './env/dj.js';
 import { wsockBuiltins } from './env/wsock.js';
 import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
@@ -582,6 +583,8 @@ export const BUILTINS = new Map(Object.entries({
  * against. Kept next to their implementation in src/env/allegro.js.
  */
 for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
+// dj, Jump n Bump's DOS sound library; see src/env/dj.js.
+for (const [k, v] of Object.entries(djBuiltins(T))) BUILTINS.set(k, v);
 // The Watcom/DOS4GW runtime Heretic and Hexen call; see src/env/watcom.js.
 for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
 /* The socket thread's six primitives; see src/env/wsock.js. */

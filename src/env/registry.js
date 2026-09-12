@@ -25,6 +25,7 @@ import { installGo32 } from './go32.js';
 import { installWatcom } from './watcom.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
+import { installDj } from './dj.js';
 import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
@@ -64,6 +65,8 @@ export const ENV = {
   // globals, which is why no target file has to remember them.
   watcom: { install: (M, _c, o) => installWatcom(M, o), vars: WATCOM_VARS },
   allegro: { install: (M, _c, o) => installAllegro(M, o), vars: ALLEGRO_VARS },
+  // dj: Jump n Bump s DOS sound library, source-less and therefore answered rather than built.
+  dj: { install: (M, _c, o) => installDj(M, o) },
 
   // The POSIX side, for the one target that is not a DOS program.
   x11: { install: (M, _c, o) => installX11(M, o) },
