@@ -870,7 +870,25 @@ BOOL WINAPI GetWindowRect(HWND w, LPRECT r)
 
 /* ---------------------------------------------------------------- mouse and cursor */
 
-BOOL WINAPI ShowCursor(BOOL show) { (void)show; return TRUE; }
+/*
+ * ShowCursor keeps a DISPLAY COUNT and returns the NEW value: TRUE increments it, FALSE decrements
+ * it, and the cursor is drawn while it is >= 0. It starts at zero when a mouse is present.
+ *
+ * Returning a constant TRUE here was an infinite loop in the guest, and nothing outside could see
+ * it: in_win.c ends IN_ActivateMouse with
+ *
+ *     while (ShowCursor (FALSE) >= 0)
+ *         ;
+ *
+ * which never leaves if the answer never goes negative. Quake II reached it the moment its window
+ * took focus -- after the level loaded, at frame 101 -- and then spun in guest code that calls no
+ * service at all, so no clock leash and no frame boundary could stop it. tools/find-loop.mjs named
+ * it from a safepoint in two minutes.
+ *
+ * The return type is int, not BOOL: the count is signed and the loop above tests its sign.
+ */
+static int cursor_show_count = 0;
+int WINAPI ShowCursor(BOOL show) { return show ? ++cursor_show_count : --cursor_show_count; }
 /* The cursor has a position now -- see prism_win32_mouse. A program that centres it gets centred. */
 BOOL WINAPI SetCursorPos(int x, int y) { cursor_x = x; cursor_y = y; return TRUE; }
 BOOL WINAPI GetCursorPos(LPPOINT p) { if (p) { p->x = cursor_x; p->y = cursor_y; } return TRUE; }

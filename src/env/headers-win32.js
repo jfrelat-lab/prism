@@ -2177,7 +2177,7 @@ UINT WINAPI RealizePalette(HDC);
 BOOL WINAPI DeleteObject(HGDIOBJ);
 BOOL WINAPI EnumDisplaySettings(LPCSTR, DWORD, LPVOID);
 LONG WINAPI ChangeDisplaySettings(LPVOID, DWORD);
-BOOL WINAPI ShowCursor(BOOL);
+int WINAPI ShowCursor(BOOL);
 BOOL WINAPI SetCursorPos(int, int);
 BOOL WINAPI GetCursorPos(LPPOINT);
 BOOL WINAPI ClientToScreen(HWND, LPPOINT);
