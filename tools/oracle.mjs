@@ -95,6 +95,13 @@ export function watcomRun16(source, { model = 'ms', timeout = 30 } = {}) {
     // from a script with no display.
     env: { ...process.env, SDL_VIDEODRIVER: 'dummy' },
     timeout: (timeout + 15) * 1000,
+    /*
+     * SIGKILL, because spawnSync's default SIGTERM DOES NOT KILL THIS PROGRAM. A DOSBox-X left over
+     * from this work was found alive after six days: it ignored SIGTERM and died only on SIGKILL.
+     * With the default, the timeout returns here while the child lives on, reparented to init --
+     * a leash that reports the timeout without enforcing it.
+     */
+    killSignal: 'SIGKILL',
   });
   let stdout = '';
   try { stdout = readFileSync(join(dir, 'OUT.TXT'), 'latin1'); } catch { /* the program printed nothing */ }
