@@ -31,6 +31,21 @@ export class ExitCalled extends Error {
  */
 const EPOCH_US = 855_100_800_000_000;
 
+/*
+ * THE RUN LEASH. `M.leashDeadline` is a performance.now() value past which the program is stopped.
+ *
+ * It is checked from the CLOCK, not from a frame boundary, because a frame boundary assumes the
+ * program keeps crossing one -- and the failure this exists for is exactly a program that stops
+ * drawing while still running (Quake II's Win32 client leaves the BitBlt path the moment it goes
+ * fullscreen). A running program still asks what time it is. Hooking a guest function instead would
+ * not work at all: a direct call never passes through a wrapper installed on prog.F.
+ *
+ * Off unless a tool sets the deadline, so nothing that does not ask for a leash ever pays for one.
+ */
+export function checkLeash(M) {
+  if (M.leashDeadline && performance.now() > M.leashDeadline) throw new Error('__leash');
+}
+
 export function makeMachine(mod = new Module()) {
   const M = {
     mod,
@@ -733,6 +748,7 @@ function makeLibc(M) {
      * loop. installRealClock replaces it where real time is wanted.
      */
     gettimeofday: (tv, _tz) => {
+      checkLeash(M);
       M.wallMicros = (M.wallMicros ?? EPOCH_US) + 28571;
       if (tv) {
         M.mod.dv.setInt32(tv, Math.floor(M.wallMicros / 1e6), true);
@@ -817,7 +833,7 @@ function makeLibc(M) {
      * the first caller. It belongs here rather than in a device: a clock is not a socket, and a
      * target that has one and not the other should not have to choose.
      */
-    prism_now_ms: () => Date.now(),
+    prism_now_ms: () => { checkLeash(M); return Date.now(); },
 
     /*
      * Bitfields of a 64-bit type, byte-wise in BigInt.
@@ -1352,6 +1368,7 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
    * "not a game, a blur" that the pacer exists to prevent.
    */
   M.rt.gettimeofday = (tv, _tz) => {
+    checkLeash(M);
     // EPOCH_US for the same reason as the deterministic one: tv_sec must never be zero.
     const us = advance() + EPOCH_US;
     if (tv) {

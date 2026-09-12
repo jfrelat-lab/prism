@@ -61,6 +61,13 @@ if (!existsSync(join(ROOT, target.dir))) {
  * game data, and none of it enters the repository.
  */
 const files = {};
+/*
+ * --seconds=N: a wall-clock ceiling on the RUN, enforced from the clock hook below. Zero, the
+ * default, means no ceiling. `runStarted` is set when the program is actually launched, so the
+ * build itself is never on the clock.
+ */
+const leashMs = +(opt('seconds') ?? 0) * 1000;
+let leashed = false;
 const dataArg = opt('data');
 if (dataArg) {
   const walk = (d, prefix = '') => {
@@ -232,7 +239,10 @@ if (!flag('run')) process.exit(0);
  * An explicit --args still wins, because a person naming arguments means them.
  */
 const args = (opt('args') ?? target.args ?? '').split(/\s+/).filter(Boolean);
-console.log(`\nrunning: ${target.name} ${args.join(' ')}`);
+console.log(`\nrunning: ${target.name} ${args.join(' ')}` +
+  (leashMs ? ` · leash ${leashMs / 1000}s` : ''));
+// Enforced from the runtime's clock, not from the frame boundary -- see checkLeash in runtime.js.
+if (leashMs) program.M.leashDeadline = performance.now() + leashMs;
 /*
  * What the program SAYS. Its stdout goes into an in-memory buffer -- the page reads it there -- so a
  * console run showed nothing at all, which for a program whose whole output is text reads as a
@@ -392,7 +402,12 @@ const runT0 = performance.now();
 try {
   program.run([target.name, ...args]);
 } catch (e) {
-  if (e.message !== '__frames_done') console.log(`exited: ${e.message}`);
+  /*
+   * A leashed run is REPORTED, never silently treated as a completed one: it ended because time ran
+   * out, and whatever it drew is a snapshot of an unfinished run, not the frame that was asked for.
+   */
+  if (e.message === '__leash') leashed = true;
+  else if (e.message !== '__frames_done') console.log(`exited: ${e.message}`);
 }
 const runSecs = (performance.now() - runT0) / 1000;
 /**
@@ -403,7 +418,8 @@ const runSecs = (performance.now() - runT0) / 1000;
 const fpsNote = () => (frames > 0
   ? ` · ${runSecs.toFixed(1)} s, ${(frames / runSecs).toFixed(0)} rendered frames/s ` +
     `(deterministic clock, unthrottled)`
-  : ` · ${runSecs.toFixed(1)} s`);
+  : ` · ${runSecs.toFixed(1)} s`) +
+  (leashed ? ` · STOPPED BY --seconds: the run did not finish on its own` : '');
 
 if (wavPath && program.M.dsp?.wav) {
   const w = program.M.dsp.wav, ch = program.M.dsp.channels || 2, rate = program.M.dsp.rate || 11025;
