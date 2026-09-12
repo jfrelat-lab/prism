@@ -1,0 +1,21 @@
+{
+  "title": "QUAKE II",
+  "subtitle": "id Software, 1997 · 3.19 with ref_soft — id's own Win32 client, drawing through GDI",
+  "target": "quake2:win32",
+  "host": "win",
+  "args": "+set vid_fullscreen 0 +set vid_ref soft +map demo1",
+  "argsHint": "`+map <name>` loads a level. `+set vid_ref soft` is ref_soft.dll, id's software renderer, and `+set vid_fullscreen 0` keeps it in a window -- which is not cosmetic: rw_imp.c blits with BitBlt only under `if (!sw_state.fullscreen)` and goes through DirectDraw otherwise, and the DirectDraw path is not served here.",
+  "fps": 30,
+  "needsData": {
+    "dir": "quake2",
+    "hint": "baseq2/ from the shareware or retail release — pak0.pak"
+  },
+  "controls": [
+    ["arrows", "move"],
+    ["Ctrl", "fire"],
+    ["Esc", "menu"],
+    ["~", "console"]
+  ],
+  "_why": "The same engine as the X11 client, with only its five platform files swapped -- and three shared objects rather than one: the engine, ref_soft.dll and gamex86.dll, each with its own external namespace, each found by the program's own LoadLibrary call.",
+  "_measured": "300 frames of demo1 at 320x240 in 1.3 s, 237 rendered frames/s on the deterministic clock, 76,800 of 76,800 pixels in 140 colours. 117 translation units, 96,305 lines, 2,450 functions, compiled in 1.7 s."
+}

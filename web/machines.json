@@ -78,7 +78,9 @@
         { "program": "quake", "variant": "win", "file": "quake.exe",
           "icon": "corpus/Quake/WinQuake/quake.ico" },
         { "program": "putty", "variant": "tel", "file": "putty.exe",
-          "icon": "corpus/putty/windows/putty.ico" }
+          "icon": "corpus/putty/windows/putty.ico" },
+        { "program": "quake2-win32", "file": "quake2.exe", "date": "Dec  9  1997",
+          "icon": "corpus/quake2/win32/q2.ico" }
       ],
       "_icons": "The icons are the PROGRAM's own files, pointed at where they sit in its source tree -- a browser decodes .ico natively, so there is no conversion step and no build artefact to keep in step. And they are here and on no other machine because an icon is a Windows idea: a DOS or X11 program never had one, and drawing something for it would be inventing evidence."
     }
