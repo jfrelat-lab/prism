@@ -66,6 +66,22 @@ const CASES = {
   'store-xlat': { what: 'store  translated, all RAM', device: false, kind: 'store', xlat: true },
   'load-xlat': { what: 'load   translated, all RAM', device: false, kind: 'load', xlat: true },
   'store-xlat-device': { what: 'store  translated, 0xA0000 redirected', device: true, kind: 'store', xlat: true },
+  /*
+   * THE FORM THAT CAN ACTUALLY BE EMITTED, which is not the one above.
+   *
+   * `X[a >>> 12] + (a & 4095)` mentions `a` TWICE, and in emitted code the address is an arbitrary
+   * expression that may have side effects -- so every one of the emitter's 26 load/store sites would
+   * need a temporary. That is a blast radius out of all proportion to the feature.
+   *
+   * A one-line function evaluates it once and changes two functions instead of twenty-six:
+   *
+   *     D.setUint8(xw(a), v)
+   *
+   * Whether a call can be inlined back down to the table lookup is not something to assume, which is
+   * why it is here rather than in a design note.
+   */
+  'store-fn': { what: 'store  via a translate function', device: false, kind: 'store', fn: true },
+  'load-fn': { what: 'load   via a translate function', device: false, kind: 'load', fn: true },
 };
 
 function runCase(name) {
@@ -84,6 +100,9 @@ function runCase(name) {
   for (let p = 0; p < XLAT.length; p++) XLAT[p] = p << PAGE_SHIFT;
   const PLANES = 0x800000;                   // where the redirected window lands, 8 MB in
 
+  /** The one-line translation the emitter can actually call, evaluating its argument once. */
+  const xw = (a) => XLAT[a >>> PAGE_SHIFT] + (a & 4095);
+
   if (c.device) {
     for (let p = 0xa0000 >>> PAGE_SHIFT; p < (0xc0000 >>> PAGE_SHIFT); p++) {
       PAGE[p] = 1;
@@ -99,6 +118,8 @@ function runCase(name) {
     'load-guarded': (n) => { let s = 0, a = 0; for (let i = 0; i < n; i++) { a = (a + STRIDE) & (HEAP - 1); s += PAGE[a >>> PAGE_SHIFT] ? mmioRead(a) : D.getUint8(a); } return s; },
     'store-xlat': (n) => { let a = 0; for (let i = 0; i < n; i++) { a = (a + STRIDE) & (HEAP - 1); D.setUint8(XLAT[a >>> PAGE_SHIFT] + (a & 4095), i & 0xff); } return a; },
     'load-xlat': (n) => { let s = 0, a = 0; for (let i = 0; i < n; i++) { a = (a + STRIDE) & (HEAP - 1); s += D.getUint8(XLAT[a >>> PAGE_SHIFT] + (a & 4095)); } return s; },
+    'store-fn': (n) => { let a = 0; for (let i = 0; i < n; i++) { a = (a + STRIDE) & (HEAP - 1); D.setUint8(xw(a), i & 0xff); } return a; },
+    'load-fn': (n) => { let s = 0, a = 0; for (let i = 0; i < n; i++) { a = (a + STRIDE) & (HEAP - 1); s += D.getUint8(xw(a)); } return s; },
   };
   const fn = fns[name === 'store-trapping' ? 'store-guarded'
     : name === 'store-xlat-device' ? 'store-xlat' : name];
