@@ -81,6 +81,27 @@ export function installVgaPlanar(machine, { onChange = null, map = null, planes 
     const single = [1, 2, 4, 8].indexOf(state.mapMask & 0x0f);
     map.redirect(WINDOW, WINDOW_LEN, bank(single >= 0 ? single : SCRATCH), { how: 'w', who: 'vga' });
     state.unexpressible = single < 0 ? (state.mapMask & 0x0f) : 0;
+
+    /*
+     * AND THE ANSWER A TRANSLATION CANNOT GIVE. A block write under a multi-plane mask has to reach
+     * every masked plane, which one translated address cannot say -- but memset and memcpy are
+     * runtime functions and can simply write the bytes several times. This is where the game's own
+     * `memset(ptr1, 0, 65535)` after Map Mask 0x0f goes: four spans, one per plane.
+     *
+     * Only for the window. Anything else falls through to the map's own answer.
+     */
+    map.setSpanner((addr, len) => {
+      if (state.chained) return null;
+      if (addr + len <= WINDOW || addr >= WINDOW + WINDOW_LEN) return null;
+      // `from: 0` for every plane: a fan-out gives each destination the SAME bytes, where a page
+      // split gives each a successive slice. That distinction is the map's `from` field.
+      const spans = [];
+      for (let p = 0; p < 4; p++) {
+        if (!(state.mapMask & (1 << p))) continue;
+        spans.push({ to: bank(p) + (addr - WINDOW), from: 0, len });
+      }
+      return spans.length ? spans : [{ to: bank(SCRATCH) + (addr - WINDOW), from: 0, len }];
+    });
   };
   state.apply = apply;
 

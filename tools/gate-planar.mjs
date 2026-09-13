@@ -102,8 +102,25 @@ const check = (what, got, want) => checks.push([what, got === want ? null
   check('and its writes go to a scratch bank nobody displays',
     map.translateWrite(W + 5), PLANES + 4 * 0x10000 + 5);
 
+  /*
+   * AND THE BLOCK WRITE THE TABLE CANNOT EXPRESS. This is the game's own clear: Map Mask 0x0f,
+   * then memset of 64 kB. A translation gives one destination; a fan-out gives four, each taking
+   * the SAME bytes -- which is what `from: 0` on every span says.
+   */
+  const spans = map.writeSpans(W, 0x10000);
+  check('a multi-plane clear fans out to four planes', spans.length, 4);
+  check('  each plane takes the same bytes', spans.every(s => s.from === 0), true);
+  check('  and they land in four different banks',
+    new Set(spans.map(s => s.to)).size, 4);
+
+  m.write(0x3c4, 2, (0x02 << 8) | 0x02);               // Map Mask = plane 1 alone
+  const one = map.writeSpans(W, 0x1000);
+  check('a single-plane mask is one span', one.length, 1);
+  check('  in that plane', one[0].to, PLANES + 1 * 0x10000);
+
   m.write(0x3c4, 2, 0x0e04);                           // Chain-4 back on
   check('chained again gives the window back', map.translateWrite(W + 5), W + 5);
+  check('and a block write is plain memory again', map.writeSpans(W, 64)[0].to, W);
 }
 
 /*

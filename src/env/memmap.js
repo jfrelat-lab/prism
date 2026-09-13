@@ -69,6 +69,9 @@ export function installMemMap(M, { bytes = null } = {}) {
     if (start < 0 || start + len > size) throw new Error(`${who}: range outside the guest image`);
   };
 
+  /** A device's answer for block writes it cannot express as one translation. See writeSpans. */
+  let spanner = null;
+
   const xr = (a) => xlatR[a >>> PAGE_SHIFT] + (a & (PAGE_SIZE - 1));
   const xw = (a) => xlatW[a >>> PAGE_SHIFT] + (a & (PAGE_SIZE - 1));
 
@@ -140,6 +143,46 @@ export function installMemMap(M, { bytes = null } = {}) {
         `0x${where.toString(16)} cannot be expressed by an address translation. ` +
         `This is refused rather than approximated.`);
     },
+
+    /*
+     * WHERE A BLOCK WRITE HAS TO LAND, which is the question a translation table cannot answer.
+     *
+     * One address means one place, so `xw` can never express a VGA write under a Map Mask with
+     * several bits set. A block move CAN: memset and memcpy are runtime functions, so they are free
+     * to write the same bytes four times. `writeSpans` is how a device says so -- it returns one
+     * destination per plane the write must reach, and the runtime loops over them.
+     *
+     * The fast path is the one every other program takes: when nothing in the range is redirected,
+     * the answer is the range itself and the caller does exactly what it did before.
+     */
+    writeSpans(addr, len) {
+      if (spanner) {
+        const s = spanner(addr, len);
+        if (s) return s;
+      }
+      const first = addr >>> PAGE_SHIFT, last = (addr + len - 1) >>> PAGE_SHIFT;
+      let plain = true;
+      for (let p = first; p <= last && plain; p++) if (xlatW[p] !== (p << PAGE_SHIFT)) plain = false;
+      if (plain) return [{ to: addr, from: 0, len }];
+      /*
+       * `from` is which part of the SOURCE block this destination takes, and it exists because
+       * "several destinations" means two different things. A page split hands each destination a
+       * successive slice; a plane fan-out hands every destination the SAME bytes. Without it a copy
+       * would write slice 0 four times, or the same slice to every page -- right in one case and
+       * silently wrong in the other.
+       */
+      const out = [];
+      for (let off = 0; off < len;) {
+        const a = addr + off;
+        const room = Math.min(PAGE_SIZE - (a & (PAGE_SIZE - 1)), len - off);
+        out.push({ to: xw(a), from: off, len: room });
+        off += room;
+      }
+      return out;
+    },
+
+    /** A device that needs more than a translation installs its answer here. */
+    setSpanner(fn) { spanner = fn; },
 
     /** What is claimed, for a tool that wants to print the map rather than guess at it. */
     claims() {

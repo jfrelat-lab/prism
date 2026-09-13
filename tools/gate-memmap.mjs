@@ -81,6 +81,34 @@ const fresh = () => installMemMap({ u8: new Uint8Array(16 * MB) }, {});
   check('and releases the claim', m.claims().length, 0);
 }
 
+/*
+ * --- BLOCK WRITES, which is the question a translation cannot answer on its own.
+ *
+ * `from` is the part of the source block a destination takes, and it carries the distinction that
+ * makes this mechanism correct: a page split gives each destination a SUCCESSIVE slice, while a
+ * device's fan-out gives every destination the SAME bytes. A version without it wrote slice 0
+ * everywhere -- right for planes, silently wrong for pages.
+ */
+{
+  const m = fresh();
+  const plain = m.writeSpans(0x123000, 100);
+  check('an unclaimed range is one span, itself', JSON.stringify(plain),
+    JSON.stringify([{ to: 0x123000, from: 0, len: 100 }]));
+
+  m.redirect(VGA, VGA_LEN, PLANES, { who: 'vga' });
+  const one = m.writeSpans(VGA + 16, 64);
+  check('a claimed range inside one page is one translated span', JSON.stringify(one),
+    JSON.stringify([{ to: PLANES + 16, from: 0, len: 64 }]));
+
+  // A write that straddles a page boundary: two spans, and the second takes the LATER bytes.
+  const two = m.writeSpans(VGA + 0x1000 - 8, 16);
+  check('a straddling write splits at the page', two.length, 2);
+  check('  the first span takes the first bytes', JSON.stringify(two[0]),
+    JSON.stringify({ to: PLANES + 0x1000 - 8, from: 0, len: 8 }));
+  check('  the second span takes the rest', JSON.stringify(two[1]),
+    JSON.stringify({ to: PLANES + 0x1000, from: 8, len: 8 }));
+}
+
 // --- what it REFUSES, which is as much of the contract as what it does.
 {
   const m = fresh();

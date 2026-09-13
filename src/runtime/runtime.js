@@ -72,6 +72,37 @@ export function makeMachine(mod = new Module()) {
     zero(addr, n) { M.u8.fill(0, addr, addr + n); },
     copy(dst, src, n) { M.u8.copyWithin(dst, src, src + n); return dst; },
 
+    /**
+     * A copy that respects a platform's memory map, for the same reason memset does: the emitted
+     * code routes every access through the map, and a runtime block move that did not would walk
+     * straight past the device.
+     *
+     * When BOTH sides are plain memory -- every program without a map, and nearly every range in
+     * one that has it -- this is `copy` with one comparison in front. When either side is claimed,
+     * it falls to a byte loop through the map's own translations: slow, and only on the ranges a
+     * device owns, which is the trade a correct answer is worth here. The destination goes through
+     * writeSpans, so a copy into a multi-plane window reaches every masked plane.
+     */
+    blockCopy(dst, src, n) {
+      const map = M.memmap;
+      if (!map) return M.copy(dst, src, n);
+      const claimed = (a, len) => {
+        for (let p = a >>> map.PAGE_SHIFT; p <= (a + len - 1) >>> map.PAGE_SHIFT; p++) {
+          if (map.xlatR[p] !== (p << map.PAGE_SHIFT) || map.xlatW[p] !== (p << map.PAGE_SHIFT)) return true;
+        }
+        return false;
+      };
+      if (!claimed(dst, n) && !claimed(src, n)) return M.copy(dst, src, n);
+      // Read the whole source first, through the READ table: the destination may overlap it once
+      // planes are involved, and a copy that read as it wrote would see its own output.
+      const bytes = new Uint8Array(n);
+      for (let i = 0; i < n; i++) bytes[i] = M.u8[map.xr(src + i)];
+      for (const sp of map.writeSpans(dst, n)) {
+        M.u8.set(bytes.subarray(sp.from, sp.from + sp.len), sp.to);
+      }
+      return dst;
+    },
+
     /** An indirect call through a function pointer. */
     icall(p, args) {
       if (!isFuncPtr(p)) throw new Trap(`call through a non-function pointer 0x${(p >>> 0).toString(16)}`);
@@ -609,9 +640,26 @@ function makeLibc(M) {
       if (u8()[p]) { u8()[p] = 0; strtokSaved = p + 1; } else strtokSaved = 0;
       return start;
     },
-    memcpy: (d, s, n) => { M.copy(d, s, n); return d; },
-    memmove: (d, s, n) => { M.copy(d, s, n); return d; },
-    memset: (d, v, n) => { u8().fill(v & 0xff, d, d + n); return d; },
+    /*
+     * BLOCK MOVES GO THROUGH THE MAP when a platform has one, and this is not an optimisation
+     * detail -- it is the hole a compiler-side translation cannot close. The emitted code routes
+     * every load and store through xr/xw, but memcpy and memset are RUNTIME functions: without this
+     * they write straight into the flat image and walk past the device entirely. Jump 'n Bump
+     * clears its screen with `memset(ptr1, 0, 65535)` right after setting Map Mask to all four
+     * planes, which is exactly the case.
+     *
+     * A block write can also have SEVERAL destinations -- four planes at once -- which no single
+     * translated address can express. `writeSpans` is the map's answer, and for a program with no
+     * map, or a range nothing claims, it is the range itself and this costs one comparison.
+     */
+    memcpy: (d, s, n) => { M.blockCopy(d, s, n); return d; },
+    memmove: (d, s, n) => { M.blockCopy(d, s, n); return d; },
+    memset: (d, v, n) => {
+      const map = M.memmap;
+      if (!map) { u8().fill(v & 0xff, d, d + n); return d; }
+      for (const sp of map.writeSpans(d, n)) u8().fill(v & 0xff, sp.to, sp.to + sp.len);
+      return d;
+    },
     memcmp: (a, b, n) => {
       for (let i = 0; i < n; i++) {
         const x = u8()[a + i], y = u8()[b + i];
