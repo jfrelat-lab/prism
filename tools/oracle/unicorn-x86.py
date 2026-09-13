@@ -24,6 +24,7 @@ Input is one JSON object on stdin, output is one JSON object on stdout:
 Relocation handling is the whole of the loader and it is small because nasm's output here is: 60
 entries, ALL R_386_32, 58 against the section itself and 2 against the one external symbol.
 """
+import hashlib
 import json
 import struct
 import sys
@@ -164,7 +165,11 @@ def run(spec):
         'finished': uc.reg_read(UC_X86_REG_EIP) == DONE,
     }
     for dmp in spec.get('dump', []):
-        out['dump'][str(dmp['addr'])] = uc.mem_read(dmp['addr'], dmp['size']).hex()
+        blob = bytes(uc.mem_read(dmp['addr'], dmp['size']))
+        # `hash` exists so a comparison can cover a WHOLE region instead of its first few hundred
+        # bytes. A routine that writes at an offset computed from its arguments will often write
+        # nothing near the start, and two empty prefixes compare equal -- a green that means nothing.
+        out['dump'][str(dmp['addr'])] = hashlib.sha256(blob).hexdigest() if dmp.get('hash') else blob.hex()
     return out
 
 

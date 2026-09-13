@@ -67,12 +67,12 @@ function parseOperand(text, sizeHint) {
     const r = /^(e[a-z]{2})\s*([+-])\s*(\d+|0x[0-9a-f]+)$/i.exec(inner);
     if (r) {
       return { k: 'mem', base: r[1].toLowerCase(), disp: (r[2] === '-' ? -1 : 1) * Number(r[3]),
-               size: sizeHint ?? 4 };
+               size: sizeHint ?? null };
     }
     if (REGS32.includes(inner.toLowerCase())) {
-      return { k: 'mem', base: inner.toLowerCase(), disp: 0, size: sizeHint ?? 4 };
+      return { k: 'mem', base: inner.toLowerCase(), disp: 0, size: sizeHint ?? null };
     }
-    if (/^[.\w$]+$/.test(inner)) return { k: 'mem', sym: inner, disp: 0, size: sizeHint ?? 4 };
+    if (/^[.\w$]+$/.test(inner)) return { k: 'mem', sym: inner, disp: 0, size: sizeHint ?? null };
     throw new AsmError(`memory operand not in the subset: [${inner}]`);
   }
 
@@ -150,7 +150,15 @@ export function parse(source) {
       for (const piece of splitOperands(rest)) {
         // A jump's operand is a label, which is not an operand form parseOperand knows.
         if (op[0] === 'j' || op === 'call') operands.push({ k: 'label', name: qualify(piece, current) });
-        else operands.push(parseOperand(piece));
+        else {
+          const o = parseOperand(piece);
+          // A LOCAL data slot is qualified the same way a local label is, and for the same reason:
+          // `.x` exists in both routines and they are two different variables. Missing this made
+          // every memory operand look up a name nothing defined -- which the translator refused,
+          // loudly, rather than inventing an address for.
+          if (o.k === 'mem' && o.sym?.startsWith('.')) o.sym = qualify(o.sym, current);
+          operands.push(o);
+        }
       }
     }
     items.push({ kind: 'insn', op, operands, near, at, text: line.trim() });
