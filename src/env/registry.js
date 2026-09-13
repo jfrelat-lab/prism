@@ -27,6 +27,7 @@ import { installWatcom } from './watcom.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
 import { installDj } from './dj.js';
+import { GETOPT_VARS } from './getopt.js';
 import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
@@ -96,6 +97,13 @@ export const ENV = {
   allegro: { install: (M, _c, o) => installAllegro(M, o), vars: ALLEGRO_VARS },
   // dj: Jump n Bump s DOS sound library, source-less and therefore answered rather than built.
   dj: { install: (M, _c, o) => installDj(M, o) },
+
+  /*
+   * POSIX getopt, supplied as C because it is pure logic over argv and its state is three globals
+   * the program reads directly. Named by a target rather than given to everything: an extra
+   * translation unit for every program would change the JavaScript every existing target emits.
+   */
+  getopt: { install: () => ({}), vars: GETOPT_VARS },
 
   // The POSIX side, for the one target that is not a DOS program.
   x11: { install: (M, _c, o) => installX11(M, o) },

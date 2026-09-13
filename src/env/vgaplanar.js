@@ -43,13 +43,20 @@ const CHAIN4 = 0x08;
  * compiler emits, and that is a compile option rather than something this file can reach. See
  * src/env/ports.js, which named the asymmetry before either half existed.
  */
-export function installVgaPlanar(machine, { onChange = null, map = null, planes = 0 } = {}) {
+export function installVgaPlanar(machine, { onChange = null, onFrame = null, map = null, planes = 0 } = {}) {
   const state = {
     mapMask: 0x0f,        // all four planes, which is the reset value and what a clear uses
     readPlane: 0,
     chained: true,        // mode 13h until a program says otherwise
     planes,               // guest address of four 64 kB banks, then a fifth used as scratch
     scratchWrites: 0,
+    frames: 0,            // how many times the program has presented a page
+    start: 0,             // the CRTC start address, i.e. which page is visible
+    /*
+     * Read from `state` on every flip rather than closed over, so a harness that builds the target
+     * first and decides what to do with frames second can still be told. build.mjs is exactly that.
+     */
+    onFrame: onFrame ?? null,
   };
 
   const WINDOW = 0xa0000, WINDOW_LEN = 0x20000, BANK = 0x10000;
@@ -132,6 +139,48 @@ export function installVgaPlanar(machine, { onChange = null, map = null, planes 
     if (size === 2) gcData((v >> 8) & 0xff);
   });
   machine.onPortWrite(0x3cf, (p, size, v) => gcData(v & 0xff));
+
+  /*
+   * THE CRTC, for two things only: where the visible page starts, and how big it is.
+   *
+   * THE FRAME BOUNDARY IS THE PROGRAM'S OWN ACT OF PRESENTING. main.c flips pages by writing the
+   * start address -- index 0x0D then 0x0C, with the page number shifted in -- and that instant, when
+   * a freshly drawn page becomes the visible one, is this host's BitBlt. It is read out of the
+   * game's source rather than invented: there was no boundary for a planar target before, so a run
+   * could never reach its frame count and never stopped.
+   *
+   * Firing on 0x0C because this program writes 0x0D first and 0x0C second, so 0x0C completes the
+   * pair. A program writing them the other way round would need the rule stated differently, and
+   * that is worth knowing rather than papering over.
+   *
+   * THE GEOMETRY IS READ, NOT ASSUMED. The Offset register (0x13) is bytes-per-row in units of two
+   * per plane: the game writes 0x32, so 100 bytes a row and 400 pixels across -- the same 100 the
+   * assembly adds. Height comes from Vertical Display End (0x12 plus two bits of the 0x07 overflow)
+   * divided by the character height in 0x09: 512 scanlines over 2 gives 256 rows.
+   */
+  let crtIndex = 0;
+  const crt = new Uint8Array(0x40);
+  const crtData = (v) => {
+    crt[crtIndex & 0x3f] = v & 0xff;
+    if (crtIndex === 0x0c || crtIndex === 0x0d) {
+      state.start = ((crt[0x0c] << 8) | crt[0x0d]) >>> 0;
+      if (crtIndex === 0x0c) { state.frames++; if (state.onFrame) state.onFrame(state); }
+    }
+  };
+  machine.onPortWrite(0x3d4, (p, size, v) => {
+    crtIndex = v & 0xff;
+    if (size === 2) crtData((v >> 8) & 0xff);
+  });
+  machine.onPortWrite(0x3d5, (p, size, v) => crtData(v & 0xff));
+  machine.onPortRead(0x3d5, () => crt[crtIndex & 0x3f]);
+
+  /** Width and height as the registers state them, for a host that has to show the picture. */
+  state.geometry = () => {
+    const rowBytes = (crt[0x13] || 50) * 2;                    // per plane
+    const vde = crt[0x12] | ((crt[0x07] & 0x02) << 7) | ((crt[0x07] & 0x40) << 3);
+    const charHeight = (crt[0x09] & 0x1f) + 1;
+    return { width: rowBytes * 4, height: Math.max(1, Math.floor((vde + 1) / charHeight)), rowBytes };
+  };
 
   machine.onPortRead(0x3c5, () => (seqIndex === 2 ? state.mapMask
     : seqIndex === 4 ? (state.chained ? CHAIN4 | 0x06 : 0x06) : 0));

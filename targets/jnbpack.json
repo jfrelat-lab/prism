@@ -1,0 +1,20 @@
+{
+  "name": "jnbpack",
+  "title": "Jump 'n Bump's own packer (Brainchild Design, 1998)",
+  "dir": "corpus/jumpnbump-dos",
+  "_doc": "The tool the game ships for building its data file, and the reason it is a target rather than a script: the alternative was to read the format out of pack.c and write the archive here, which is re-implementing a format instead of using the program that owns it. It is also a second program from the same tree passing through PRISM, which costs nothing and checks something.",
+  "_host": "NOT a DOS program. The packer runs on the developer's machine -- getopt, unistd.h, open/write, and the BSD spelling u_int32_t -- while the game it feeds is DJGPP. Same tree, two platforms, which is ordinary for a tool.",
+  "units": {
+    "list": [
+      "modify/pack.c"
+    ]
+  },
+  "compile": {
+    "memory": 64,
+    "collect": true
+  },
+  "env": [
+    "stdio",
+    "getopt"
+  ]
+}

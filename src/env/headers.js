@@ -764,6 +764,7 @@ const UNISTD = `
 #define _PRISM_UNISTD_H
 #include <stddef.h>
 #include <sys/types.h>
+#include <getopt.h>
 int close(int fd);
 ssize_t read(int fd, void *dst, size_t n);
 ssize_t write(int fd, const void *src, size_t n);
@@ -879,6 +880,18 @@ const SYS_TYPES = `
  * that found this -- a plain 'fd_set fdset;' inside NET_Sleep, with no include that this set connected to
  * the definition, so the parse failed on the declaration and named the variable rather than the type.
  */
+/*
+ * The BSD spellings, which glibc puts here too. Jump n Bump's own packer declares its directory
+ * entry with u_int32_t, and a program using the name its platform offers is not doing anything
+ * unusual -- the gap was PRISM's. Sized for the i386 ABI, like everything else in this header.
+ */
+typedef unsigned char u_int8_t;
+typedef unsigned short u_int16_t;
+typedef unsigned int u_int32_t;
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+typedef unsigned int u_int;
+typedef unsigned long u_long;
 #define FD_SETSIZE 1024
 typedef struct { unsigned long fds_bits[FD_SETSIZE / 32]; } fd_set;
 /*
@@ -1728,6 +1741,19 @@ int sigaddset(sigset_t *set, int sig);
 `,
   'ctype.h': CTYPE,
   'sys/types.h': SYS_TYPES,
+  /*
+   * getopt's DECLARATIONS. Its definitions are C, in src/env/getopt.js, supplied by the `getopt`
+   * environment -- externs here rather than tentative definitions like errno, because there really
+   * is a translation unit that defines them, and two definitions would be one too many.
+   */
+  'getopt.h': `
+#ifndef _PRISM_GETOPT_H
+#define _PRISM_GETOPT_H
+extern char *optarg;
+extern int optind, opterr, optopt;
+int getopt(int argc, char * const argv[], const char *optstring);
+#endif
+`,
   'sys/stat.h': SYS_STAT,
   'sys/mman.h': SYS_MMAN,
   'sys/ioctl.h': SYS_IOCTL,

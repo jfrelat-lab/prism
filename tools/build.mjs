@@ -305,6 +305,17 @@ if ((frameCap || pngPath) && program.M.rt.XPutImage) {
  */
 const dibSym = (n) => program.mod.symbols.get(n)?.addr ?? 0;
 const dibBase = dibSym('prism_dib_surface');
+/*
+ * THE PLANAR VGA'S FRAME BOUNDARY IS THE PAGE FLIP, and it comes from the program rather than from
+ * this file: main.c makes a page visible by writing the CRTC start address, and src/env/vgaplanar.js
+ * counts that. Without it a planar target crosses no boundary this tool knows, so --frames can
+ * never be reached and the run never ends -- which is exactly what happened on the first attempt.
+ */
+if (program.M.vga) {
+  program.M.vga.onFrame = () => {
+    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+  };
+}
 if ((frameCap || pngPath) && dibBase && program.F.BitBlt) {
   const inner = program.F.BitBlt;
   const wrapped = function (...a) {
@@ -479,6 +490,41 @@ if (mgl) {
     for (const b of pixels) if (b) nz++;
     writeIndexedPng(pngPath, { pixels, width, height, palette });
     console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
+  }
+} else if (program.M.vga && !program.M.vga.chained) {
+  /*
+   * THE PLANAR PICTURE, de-interleaved. In unchained VGA four consecutive pixels live in four
+   * different planes at the SAME offset, so pixel (x, y) is plane x&3 at start + y*rowBytes + x/4.
+   *
+   * Every number here is read from the adapter rather than assumed: the width and height come from
+   * the Offset and Vertical Display End registers the program itself wrote, and `start` is the CRTC
+   * start address -- which is how the page it just flipped to is the page that gets saved. For this
+   * game start is 0x8000 on the second page, the same 32768 its assembly shifts a page number by.
+   */
+  const vga = program.M.vga;
+  const { width: w, height: h, rowBytes } = vga.geometry();
+  console.log(`\nframes ${frames} · display ${w}x${h} · planar, ${rowBytes} bytes a row per plane ` +
+    `· page at 0x${vga.start.toString(16)}` + fpsNote());
+  if (pngPath && w > 0 && h > 0) {
+    const px = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const plane = vga.planes + (x & 3) * 0x10000;
+        px[y * w + x] = program.M.u8[plane + vga.start + y * rowBytes + (x >> 2)];
+      }
+    }
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    /*
+     * The DAC's palette -- the ARRAY, not the device. installVgaDac returns { palette }, and
+     * passing the object where 768 bytes were wanted produced a picture that was entirely black
+     * while the run truthfully reported 27,694 non-zero pixels in 84 colours. Two numbers that
+     * cannot both be right about the same image is what made it worth looking at rather than
+     * explaining.
+     */
+    const palette = program.M.dac?.palette ?? null;
+    writeIndexedPng(pngPath, { pixels: px, width: w, height: h, palette });
+    console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
   }
 } else if (dibBase && program.mod.dv.getInt32(dibBase, true)) {
   /*
