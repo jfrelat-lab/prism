@@ -338,6 +338,14 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     pack: c.pack ?? null,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
+    /*
+     * PAGED IS OPT-IN, and it stays opt-in even for a DOS program. A target asks for it by naming
+     * the `vgaplanar` environment -- the one thing that needs an address to mean somewhere other
+     * than itself -- or by setting compile.paged outright. MAME is DOS and does NOT want it: its
+     * tweaked modes leave Chain-4 set, so its window is linear and it would pay for nothing. A
+     * target that asks for neither emits, byte for byte, what it emitted before any of this.
+     */
+    paged: c.paged ?? (target.env ?? []).includes('vgaplanar'),
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
   });
   /*

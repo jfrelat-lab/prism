@@ -20,6 +20,7 @@ import { installPorts } from './ports.js';
 import { installPIT } from './pit.js';
 import { installCrtStatus } from './crtstatus.js';
 import { installVgaDac } from './vgadac.js';
+import { installVgaPlanar } from './vgaplanar.js';
 import { installKbd8042 } from './kbd8042.js';
 import { installGo32 } from './go32.js';
 import { installWatcom } from './watcom.js';
@@ -56,6 +57,34 @@ export const ENV = {
   vgadac: { needs: ['ports'], install: (M, c, o) => (M.dac = installVgaDac(c.machine, o)) },
   // The keyboard controller is reached as M.kbd by everything that pushes a scan code into it.
   kbd8042: { needs: ['ports'], install: (M, c, o) => (M.kbd = installKbd8042(c.machine, o)) },
+
+  /*
+   * UNCHAINED PLANAR VGA -- mode X -- and it is OPTIONAL even for a DOS program, which is the whole
+   * point of its being an env a target lists rather than something the platform switches on.
+   *
+   * MAME is the reason. Its tweaked 256x256 modes write the same register file, but leave Chain-4
+   * SET, so the window stays linear and it needs nothing from here. Turning this on for every DOS
+   * target would make it pay for a mechanism it does not use, and change the JavaScript it emits.
+   * A target that does not name this emits, byte for byte, what it emitted before this existed.
+   *
+   * Naming it has one consequence beyond the device: the image must be PAGED, because a planar
+   * window means an address no longer denotes one place. buildTarget turns that on for a target
+   * that asks for this, and the check below refuses rather than silently drawing into flat memory.
+   */
+  vgaplanar: {
+    needs: ['ports'],
+    install: (M, c, o) => {
+      if (!M.memmap) {
+        throw new Error("env 'vgaplanar' needs a paged image — it is the page map that makes a " +
+          'planar window mean anything. Set compile.paged in the target.');
+      }
+      // Four planes plus the scratch bank the multi-plane case is contained in, in GUEST memory:
+      // a translation target has to be an address the emitted code can reach.
+      const planes = M.rt.malloc(5 * 0x10000);
+      M.u8.fill(0, planes, planes + 5 * 0x10000);
+      return (M.vga = installVgaPlanar(c.machine, { map: M.memmap, planes, ...o }));
+    },
+  },
 
   // The three compilers' runtimes.
   go32: { install: (M, _c, o) => installGo32(M, o) },          // DJGPP: Quake
