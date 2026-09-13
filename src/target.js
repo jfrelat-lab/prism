@@ -20,6 +20,7 @@ import { compileProgram } from './compile.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars } from './env/registry.js';
+import { installAsm } from './asm/link.js';
 
 /**
  * @typedef {object} Target
@@ -357,6 +358,20 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
    */
   const win32Exports = bindWin32Exports(program, target.modules ?? {}, moduleExports);
   /*
+   * ASSEMBLY THE PROGRAM'S OWN BUILD REQUIRES. Listed in the target rather than discovered, because
+   * a file being present is not a reason to translate it -- every other game here ships a C twin
+   * its build selects, and P5.2 measured that an assembler buys exactly one symbol corpus-wide.
+   * Jump 'n Bump is the exception: its tree defines get_block and put_block nowhere else.
+   *
+   * After buildEnv, because a routine that does `out` needs the port seam to exist.
+   */
+  const asmBound = target.asmTranslate?.length
+    ? installAsm(program, {
+      sources: target.asmTranslate.map(f => ({ file: f, text: readFileSync(join(dir, f), 'latin1') })),
+      machine: program.M.machine ?? null,
+    })
+    : [];
+  /*
    * The cross-reference: every assembly export, and whether the program still lacks it. A name that
    * appears here AND in program.undefined is one an assembler would buy; one that appears only here
    * is already covered -- by a C fallback the source ships, or by a generated unit.
@@ -369,6 +384,6 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   }
   return {
     program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing], dosPaths: [...dosPaths],
-    win32Exports,
+    win32Exports, asmBound,
   };
 }

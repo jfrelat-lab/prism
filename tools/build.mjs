@@ -157,6 +157,18 @@ if (program.duplicates?.length) {
  * called. Nearly always they are what an ASSEMBLY file was providing, so the list beside the skipped
  * .asm objects above is the whole answer to "what does this build still need?".
  */
+/*
+ * MINUS WHAT WAS BOUND AFTER COMPILATION. program.undefined is computed while emitting, and a
+ * routine translated from the program's own assembly is bound later -- so the raw list called
+ * get_block "never defined" while it was sitting in F, callable, two lines further down. A report
+ * that says a defined thing is undefined is worse than no report.
+ */
+const asmNames = new Set((built.asmBound ?? []).map(b => b.name));
+if (asmNames.size) {
+  program.undefined = (program.undefined ?? []).filter(u => !asmNames.has(u.name.split('$').pop()));
+  console.log(`  assembly translated and bound: ${[...asmNames].join(' ')} ` +
+    `(checked against Unicorn — tools/gate-asm.mjs)`);
+}
 if (program.undefined?.length) {
   console.log(`  ${program.undefined.length} symbols declared and called but NEVER DEFINED ` +
     `(they fail when called):`);
