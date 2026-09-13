@@ -140,6 +140,15 @@ export function installGo32(M, { onVideoMode = null, mouse = null } = {}) {
     _go32_dpmi_free_iret_wrapper: () => 0,
 
     /*
+     * Locking memory against paging, so a hardware interrupt can touch it. Nothing here pages and
+     * there is no page to be out, so success is the truthful answer rather than a convenient one --
+     * this is not a refusal dressed up as a zero. interrpt.c locks its keyboard state before it
+     * hooks IRQ 1, which is exactly what a DJGPP program is supposed to do.
+     */
+    _go32_dpmi_lock_data: () => 0,
+    _go32_dpmi_lock_code: () => 0,
+
+    /*
      * DOS memory, from the guest's own heap. `rm_segment` is a paragraph number, so the address is
      * rounded up to 16 and shifted -- and because the image is flat with the low megabyte inside it,
      * the segment a program computes from that address really does address those bytes.
@@ -214,6 +223,8 @@ export function go32Builtins(T) {
     _go32_dpmi_get_protected_mode_interrupt_vector: f(I, I, P),
     _go32_dpmi_allocate_iret_wrapper: f(I, P),
     _go32_dpmi_free_iret_wrapper: f(I, P),
+    _go32_dpmi_lock_data: f(I, P, U),
+    _go32_dpmi_lock_code: f(I, P, U),
     _go32_dpmi_allocate_dos_memory: f(I, P),
     _go32_dpmi_free_dos_memory: f(I, P),
     __dpmi_lock_linear_region: f(I, P),
@@ -227,3 +238,20 @@ export function go32Builtins(T) {
     enable: f(V), disable: f(V),
   };
 }
+
+/*
+ * The DATA half of DJGPP's runtime: what libc DEFINES in a real build, as opposed to what it
+ * declares. src/env/headers-djgpp.js already declares both, so without these a program that merely
+ * mentions them links against nothing and reads zero -- which the build report says plainly, and
+ * which is harmless right up until something depends on the value.
+ *
+ * _dos_ds is a SELECTOR, and its value is a pure token here: every far accessor in this project
+ * ignores the selector and treats the offset as a linear address (see _farpokeb, whose first
+ * parameter is named _s precisely to say it is unused). So any non-zero value is as correct as any
+ * other, and non-zero is the better choice because a DJGPP program may test it before use.
+ */
+export const GO32_VARS = `
+#include <go32.h>
+int _dos_ds = 4;
+unsigned long _go32_info_block;
+`;

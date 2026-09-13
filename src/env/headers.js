@@ -219,6 +219,9 @@ void srandom(unsigned seed);
  */
 #define RAND_MAX 2147483647
 int atoi(const char *s);
+/* itoa is not ISO C. DJGPP and MSVC both declare it here, and Jump n Bump formats its scores
+   with it -- so a program that calls it is not doing anything unusual for its compiler. */
+char *itoa(int value, char *buffer, int radix);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 int putenv(char *s);
 long atol(const char *s);

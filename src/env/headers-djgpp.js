@@ -262,6 +262,13 @@ const DPMI_H = `
 #ifndef _PRISM_DPMI_H
 #define _PRISM_DPMI_H
 
+/* Locking memory so a hardware interrupt can touch it without faulting on a page that is out.
+   Nothing here pages, so the answer is always success -- but the call has to EXIST, because
+   interrpt.c locks its keyboard state before it hooks IRQ 1, and a program whose lock call is
+   missing is unemittable at the CALLER rather than at the name. */
+int _go32_dpmi_lock_data(void *addr, unsigned long size);
+int _go32_dpmi_lock_code(void *addr, unsigned long size);
+
 typedef struct { unsigned long edi, esi, ebp, res, ebx, edx, ecx, eax;
                  unsigned short flags, es, ds, fs, gs, ip, cs, sp, ss; } __dpmi_dword_regs;
 typedef struct { unsigned short di, di_hi, si, si_hi, bp, bp_hi, res, res_hi,

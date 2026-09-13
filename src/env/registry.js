@@ -22,7 +22,7 @@ import { installCrtStatus } from './crtstatus.js';
 import { installVgaDac } from './vgadac.js';
 import { installVgaPlanar } from './vgaplanar.js';
 import { installKbd8042 } from './kbd8042.js';
-import { installGo32 } from './go32.js';
+import { installGo32, GO32_VARS } from './go32.js';
 import { installWatcom } from './watcom.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
@@ -87,7 +87,7 @@ export const ENV = {
   },
 
   // The three compilers' runtimes.
-  go32: { install: (M, _c, o) => installGo32(M, o) },          // DJGPP: Quake
+  go32: { install: (M, _c, o) => installGo32(M, o), vars: GO32_VARS },          // DJGPP: Quake
   // `vars` is the DATA half of a platform layer: what the LINKER provides in a real build. It has
   // to be real C with external linkage because the program takes its address -- Allegro's `screen`
   // and `key[]`, Heretic's `joystickx`. Declaring the environment therefore also supplies its

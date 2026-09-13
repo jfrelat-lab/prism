@@ -383,6 +383,23 @@ function makeLibc(M) {
     atoi: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
 
     /*
+     * itoa, which is not ISO C but is what DJGPP and MSVC both give a program -- Jump n Bump
+     * formats its scores with it.
+     *
+     * The sign rule is the one that is easy to get wrong: it applies to base 10 ONLY. In every
+     * other radix the value is treated as UNSIGNED, so itoa(-1, b, 16) is "ffffffff" and not
+     * "-1". Returns the buffer, as the callers expect.
+     */
+    itoa: (value, buf, radix) => {
+      const r = radix | 0;
+      const v = r === 10 ? (value | 0) : (value >>> 0);
+      const s = v.toString(r >= 2 && r <= 36 ? r : 10);
+      for (let i = 0; i < s.length; i++) M.u8[buf + i] = s.charCodeAt(i);
+      M.u8[buf + s.length] = 0;
+      return buf;
+    },
+
+    /*
      * strtol / strtoul, and the part that is not optional is `endptr`: a program parses a list by
      * calling strtol in a loop and advancing over what it consumed, so a version that returns the
      * right number and the wrong end pointer loops for ever.

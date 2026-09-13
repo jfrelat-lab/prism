@@ -368,6 +368,8 @@ export const BUILTINS = new Map(Object.entries({
   _exit: { ret: V, params: [I] },
   abort: { ret: V, params: [] },
   atoi: { ret: I, params: [P] },
+  // Not ISO C, but DJGPP and MSVC both offer it and a DOS program formats numbers with it.
+  itoa: { ret: P, params: [I, P, I] },
   atol: { ret: T.LONG, params: [P] },
   // Watcom #pragma aux intrinsics; see src/runtime/runtime.js. A program's own definition wins.
   FixedMul: { ret: I, params: [I, I] },
