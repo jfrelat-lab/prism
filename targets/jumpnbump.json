@@ -22,6 +22,8 @@
     "memory": 64,
     "collect": true
   },
+  "host": "planar",
+  "_host": "Which shell branch presents it. Not 'dos', though it is a DOS program: that branch publishes ONE address and lets the page read a linear framebuffer, and there is no linear framebuffer here -- four consecutive pixels live in four different planes. The planar branch de-interleaves each flipped page instead, and takes its frame boundary from the CRTC start-address write rather than from a function call.",
   "env": [
     "stdio",
     "go32",

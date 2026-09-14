@@ -1,0 +1,20 @@
+{
+  "title": "JUMP 'N BUMP",
+  "subtitle": "Brainchild Design, 1998 · the original DOS/DJGPP source — unchained planar VGA at 400x256",
+  "target": "jumpnbump",
+  "host": "planar",
+  "fps": 60,
+  "needsData": {
+    "dir": "jumpnbump",
+    "hint": "jumpbump.dat — the game's own packed data file. The tree ships its packer (modify/pack.c); `node tools/build.mjs targets/jnbpack.json --run` builds one from a directory of the game's files."
+  },
+  "controls": [
+    ["arrows", "player 1: move, ↑ jumps"],
+    ["A / D / W", "player 2: move, W jumps"],
+    ["Esc", "quit"]
+  ],
+  "_why": "The first program on the shelf whose screen is NOT a buffer. Every other DOS game here draws into a linear framebuffer at 0xA0000 and the page reads it where it lies; this one runs unchained VGA -- mode X -- where four consecutive pixels live in four different planes and an address no longer denotes one place. That costs a paged image, a page map, a planar device, and a frame that is de-interleaved rather than published. Its frame boundary is a register write (the CRTC start address) rather than a function call, and it is also the first target whose assembly cannot be sidestepped: get_block and put_block are defined nowhere but dos/gfx.S, with no C twin anywhere in the tree.",
+  "_keys": "Player one's keys are the ARROWS, and they are the reason the web keyboard learned about 0xE0. Set 1's software convention gives ArrowUp and Numpad8 the same code, 72, and every other program here is happy with that -- but this game's own vector-9 handler files an extended key at (code + 0x80), so its KEY_PL1_JUMP is 0xc8 and a bare 72 lands in a byte it never reads. The queue now carries the prefix flag beside the code, and this host sends the pair the hardware would.",
+  "_data": "jumpbump.dat is the game's data, not PRISM's: it is named here and read from a directory the player points at, and it never enters the repository. Brainchild's own tarball is not recoverable -- the site serves an empty page and the Wayback Machine has jnb-src.zip only as a 404 -- so the source comes from the CVS import at the LibreGames repository's root commit, which is DOS with no platform guard to choose.",
+  "_measured": "900 frames of the menu in 0.5 s, 1,894 rendered frames/s on the deterministic clock; 400x256, 100 bytes a row per plane, 55,481 non-zero pixels of 102,400 in 101 colours. Keyboard measured against the game's own keyb[] and against the first frame at which the picture diverges: 61, one frame after the tap."
+}

@@ -136,8 +136,19 @@ const CTRL_INTS = 512;              // 128 int32 slots, more than the contract n
 const KEYS_AT = 512;                // 256 bytes: one per PC set-1 scancode, 1 = down
 const LATCH_AT = 768;               // 256 bytes: a key that went down since the guest last looked
 const PAL_AT = 1024;                // 256 * 3 bytes, r,g,b
-const KBD_AT = 1792;                // 64 keystrokes, two bytes each: scan code then ASCII
+/*
+ * 64 keystrokes, THREE bytes each: scan code, ASCII, flags.
+ *
+ * The third byte carries what a scan code cannot. Set 1's software convention gives ArrowUp and
+ * Numpad8 the same 72, and a real controller separates them with an 0xE0 prefix byte -- so a host
+ * that feeds port 0x60 directly has no way to reproduce the pair from the queue alone. Rather than
+ * overload the ASCII byte (an accented character really can set its high bit), the flag gets its
+ * own. 64 * 3 = 192 bytes ends at 1984, still clear of the audio ring at 2048.
+ */
+const KBD_AT = 1792;
 export const KBD_SIZE = 64;
+const KBD_STRIDE = 3;
+export const KBD_EXTENDED = 1;      // flags bit 0: this key arrives 0xE0-prefixed on real hardware
 /*
  * The audio ring: 16384 signed 16-bit samples, about 370 ms at 44100 Hz. A power of two so the
  * wrapped index is a mask, and generous because the guest tops it up once per frame — a browser that
@@ -159,7 +170,7 @@ export function controlViews(sab) {
     keys: new Uint8Array(sab, KEYS_AT, 256),
     latch: new Uint8Array(sab, LATCH_AT, 256),
     pal: new Uint8Array(sab, PAL_AT, 768),
-    kbd: new Uint8Array(sab, KBD_AT, KBD_SIZE * 2),
+    kbd: new Uint8Array(sab, KBD_AT, KBD_SIZE * KBD_STRIDE),
     audio: new Int16Array(sab, AUDIO_AT, AUDIO_RING),
   };
 }
@@ -338,13 +349,14 @@ export function makeKeyboard(views) {
      * Host side: a key was struck. Dropped rather than overwritten when the guest is not reading —
      * a real BIOS buffer overflows the same way, and beeps.
      */
-    push(scan, ascii) {
+    push(scan, ascii, flags = 0) {
       const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
       const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
       if (head - tail >= KBD_SIZE) return false;
-      const at = (head % KBD_SIZE) * 2;
+      const at = (head % KBD_SIZE) * KBD_STRIDE;
       kbd[at] = scan & 0xff;
       kbd[at + 1] = ascii & 0xff;
+      kbd[at + 2] = flags & 0xff;
       Atomics.store(ctrl, SLOT.KBD_HEAD, head + 1);
       Atomics.notify(ctrl, SLOT.KBD_HEAD);
       return true;
@@ -372,9 +384,12 @@ export function makeKeyboard(views) {
     nextEvent() {
       if (this.pending() <= 0) return null;
       const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
-      const raw = kbd[(tail % KBD_SIZE) * 2];
+      const at = (tail % KBD_SIZE) * KBD_STRIDE;
+      const raw = kbd[at], flags = kbd[at + 2];
       Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
-      return { scan: raw & 0x7f, down: (raw & 0x80) === 0 };
+      // `extended` is what a host feeding port 0x60 needs to send the 0xE0 byte first; a host that
+      // wants set 1's software convention ignores it and reads the same number it always did.
+      return { scan: raw & 0x7f, down: (raw & 0x80) === 0, extended: (flags & KBD_EXTENDED) !== 0 };
     },
 
     /**
@@ -391,7 +406,7 @@ export function makeKeyboard(views) {
       const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
       const head = Atomics.load(ctrl, SLOT.KBD_HEAD);
       if (head !== tail) {
-        const v = kbd[(tail % KBD_SIZE) * 2 + which];
+        const v = kbd[(tail % KBD_SIZE) * KBD_STRIDE + which];
         Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
         /*
          * A RELEASE produced no character. The queue carries both -- one BIOS buffer, read either as

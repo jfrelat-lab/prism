@@ -64,6 +64,9 @@ const TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.c': 'text/plain; charset=utf-8',
   '.h': 'text/plain; charset=utf-8',
+  /* A program's own assembly, for a target that names it in asmTranslate. src/asm/ is pure JS, so
+     the browser translates the same .S file Node does rather than fetching a pre-built artefact. */
+  '.s': 'text/plain; charset=utf-8',
   /* A program's own icon, from its own source tree: the Windows shelf points an <img> straight at
      it, and a browser decodes ICO natively. Without the type it arrives as application/octet-stream
      and Chrome will not decode it -- the desktop then draws four empty labels and looks broken. */
@@ -159,6 +162,14 @@ const server = createServer(async (req, res) => {
            */
           moduleExports: moduleExportsOf(resolved, dir),
           asm,
+          /*
+           * The assembly the target asks to be TRANSLATED, as repository paths the page can fetch.
+           * `asm` above is a different list -- the assembly stems that had no C twin, which is a
+           * report about the build. This one is an instruction, and Jump 'n Bump is why it exists:
+           * its tree defines get_block and put_block nowhere but dos/gfx.S, so a browser that cannot
+           * reach that file cannot draw anything at all.
+           */
+          asmTranslate: (resolved.asmTranslate ?? []).map(f => `${rel(dir)}/${f}`),
         }));
       } catch (e) {
         res.writeHead(404).end(JSON.stringify({ error: String(e.message) }));

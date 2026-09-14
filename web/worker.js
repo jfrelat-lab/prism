@@ -10,6 +10,13 @@
 
 import { compileProgram } from '../src/compile.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
+/*
+ * The registry and the assembler, both pure JS. The planar branch below builds its devices from the
+ * TARGET'S OWN env list through buildEnv rather than naming them one by one, which is the same rule
+ * the DOS branch's comment states and did not follow.
+ */
+import { buildEnv } from '../src/env/registry.js';
+import { installAsm } from '../src/asm/link.js';
 import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
@@ -130,6 +137,12 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       env: t.env ?? [],
       /* Files the INSTALLATION provides -- see targets/*.json's `files`. */
       installFiles: t.files ?? {},
+      /*
+       * The program's OWN assembly, as repo paths to fetch and translate here. src/asm/ imports
+       * nothing from Node, so the browser runs the same parser and translator the Node build does
+       * and the .S file is the artefact -- there is nothing pre-built to keep in step.
+       */
+      asmTranslate: t.asmTranslate ?? [],
     };
   }
 
@@ -185,7 +198,24 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     const r = await fetch(`/${f}`);
     if (r.ok) tree.set(f.toLowerCase(), await r.text());
   }
-  log(`fetched ${tree.size} source files (${(performance.now() - t0).toFixed(0)} ms)`);
+  /*
+   * The assembly to translate, read as LATIN-1 rather than as text. `Response.text()` decodes UTF-8
+   * and replaces any byte that is not valid UTF-8 with U+FFFD, which would silently corrupt a
+   * comment or a string in a file written in 1998 -- the Node build reads these with 'latin1' for
+   * the same reason.
+   */
+  const asmSources = [];
+  for (const f of program.asmTranslate ?? []) {
+    const r = await fetch(`/${f}`);
+    if (!r.ok) throw new Error(`missing assembly ${f}: ${r.status}`);
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    let text = '';
+    for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+    asmSources.push({ file: f, text });
+  }
+  log(`fetched ${tree.size} source files` +
+    (asmSources.length ? ` and ${asmSources.length} assembly file(s)` : '') +
+    ` (${(performance.now() - t0).toFixed(0)} ms)`);
 
   /*
    * The platform's own data, not the program's: the 8x16 ROM font a Win32 build rasterises text
@@ -262,6 +292,13 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       exports: program.moduleExports || {},
       resolve,
       pack: program.pack ?? null,
+      /*
+       * A PAGED image, when the build wants one. Naming vgaplanar is what asks for it: a planar
+       * window means an address no longer denotes one place, so the emitted code has to go through
+       * the translation tables rather than straight at the heap. Same rule as src/target.js, read
+       * from the same env list, so Node and the browser cannot disagree about it.
+       */
+      paged: program.compile?.paged ?? (program.env ?? []).includes('vgaplanar'),
     memory: program.memory,
       shared: true,                    // the page reads pixels straight out of this image
       /*
@@ -756,6 +793,112 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     prog.F.VID_Update = w;
     prog.mod.bindFunc('VID_Update', w);
 
+  } else if (platform === 'planar') {
+    /*
+     * A DOS HOST WITH UNCHAINED PLANAR VGA -- mode X. Jump 'n Bump.
+     *
+     * Two things make it different from the `dos` branch above rather than a variant of it.
+     *
+     * THE PICTURE IS NOT A BUFFER. In unchained VGA four consecutive pixels live in four different
+     * planes at the same offset, so there is no linear framebuffer to publish: pixel (x, y) is
+     * plane x&3 at start + y*rowBytes + x/4. The page reads w*h bytes at one address, so the frame
+     * is DE-INTERLEAVED into a buffer of this host's own each time the program flips a page.
+     *
+     * THE FRAME BOUNDARY IS A REGISTER WRITE. There is no VID_Update to wrap: the program makes a
+     * page visible by writing the CRTC start address, and src/env/vgaplanar.js fires onFrame there.
+     *
+     * The devices come from the TARGET'S OWN env list through buildEnv -- stdio, go32, ports, dj,
+     * vgadac, crtstatus, kbd8042, vgaplanar -- so this branch names no device the target did not
+     * ask for, and Node's build and this one install the same set from the same line.
+     */
+    const env = buildEnv(prog.M, program.env ?? [], {
+      stdio: { files, readChar: () => keyboard.read() },
+      vgadac: {
+        onChange: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
+      },
+      go32: { mouse },
+    });
+    const dosHost = env.go32 ?? null;
+
+    /*
+     * The program's own assembly. Jump 'n Bump defines get_block and put_block nowhere but
+     * dos/gfx.S -- no C twin anywhere in the tree -- so without this the two routines that draw
+     * every sprite are missing and their CALLERS cannot be emitted either. After buildEnv, because
+     * a routine that does `out` needs the port seam to exist.
+     */
+    if (asmSources.length) {
+      const bound = installAsm(prog, { sources: asmSources, machine: prog.M.machine ?? null });
+      log(`assembly translated and bound: ${bound.join(' ')}`);
+    }
+
+    /*
+     * The de-interleaved frame. Allocated on the first flip rather than up front, because the
+     * geometry is read from the registers the PROGRAM wrote -- width from the Offset register,
+     * height from Vertical Display End and the character height -- and none of them are set until
+     * it has chosen its mode.
+     */
+    const view = { addr: 0, w: 0, h: 0 };
+    const heldBack = [];                 // releases deferred one frame; see the drain below
+    const vga = prog.M.vga;
+    if (!vga) {
+      throw new Error("host 'planar' needs the vgaplanar environment — it is the device that makes " +
+        'the 0xA0000 window four planes. Name it in the target\'s env list.');
+    }
+    const u8 = prog.M.u8;
+    vga.onFrame = () => {
+      const g = vga.geometry();
+      if (!g.width || !g.height) return;
+      if (g.width !== view.w || g.height !== view.h) {
+        view.addr = prog.M.rt.malloc(g.width * g.height);
+        view.w = g.width; view.h = g.height;
+        Atomics.store(ctrl, SLOT.WIDTH, g.width);
+        Atomics.store(ctrl, SLOT.HEIGHT, g.height);
+        Atomics.store(ctrl, SLOT.PIXELS, view.addr);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        log(`planar display ${g.width}x${g.height}, ${g.rowBytes} bytes a row per plane`);
+      }
+      const start = vga.start, rb = g.rowBytes, planes = vga.planes;
+      for (let y = 0; y < view.h; y++) {
+        const row = view.addr + y * view.w, src = start + y * rb;
+        for (let x = 0; x < view.w; x++) {
+          u8[row + x] = u8[planes + ((x & 3) << 16) + src + (x >> 2)];
+        }
+      }
+      /*
+       * The page flip is also this host's only moment to deliver an interrupt: a DOS program's
+       * asynchronous events arrive while it is inside a loop of its own C.
+       *
+       * An EXTENDED key is sent as the two bytes the hardware sends, 0xE0 then the code, each its
+       * own interrupt -- the guest's handler reads one byte per interrupt and carries `extended` in
+       * a static between them. Without the prefix the arrows land in keyb[0x48] and the game reads
+       * keyb[0xc8], so player one could never jump.
+       */
+      if (dosHost && prog.M.kbd) {
+        const send = (e) => {
+          if (e.extended) { prog.M.kbd.push(0xe0); dosHost.deliver(0x09); }
+          prog.M.kbd.push(e.down ? e.scan : (e.scan | 0x80));
+          dosHost.deliver(0x09);
+        };
+        /*
+         * A RELEASE THAT ARRIVES IN THE SAME DRAIN AS ITS PRESS IS HELD BACK ONE FRAME. This whole
+         * loop runs between two of the guest's own instructions, so a press and a release delivered
+         * together leave no moment at which the program can look and find the key down -- a quick
+         * tap is simply lost. Measured on this page: tapping Escape did nothing at all, while
+         * holding it for 400 ms quit the game as its menu says it should.
+         */
+        for (const e of heldBack) send(e);
+        heldBack.length = 0;
+        const pressedNow = new Set();
+        for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+          if (!e.down && pressedNow.has(e.scan)) { heldBack.push(e); continue; }
+          if (e.down) pressedNow.add(e.scan);
+          send(e);
+        }
+      }
+      reader.endFrame();
+      pace();
+    };
+
   } else if (platform === 'svgalib') {
     /*
      * A LINUX CONSOLE host: the same machine as x11, the other display path. svgalib is shimmed at
@@ -832,7 +975,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * from a program that was handed the wrong world.
      */
     throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
-      `it presents x11, svgalib, mgl, gdi, dos, watcom, console and allegro. This build runs in Node: ` +
+      `it presents x11, svgalib, mgl, gdi, dos, planar, watcom, console and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*

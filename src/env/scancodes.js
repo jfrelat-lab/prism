@@ -45,6 +45,23 @@ export function scancodeFor(code) {
   return SCANCODE[code] | 0;
 }
 
+/**
+ * The keys a real controller sends as an 0xE0-PREFIXED PAIR, by `code`.
+ *
+ * The numbers above are the SOFTWARE convention and stay that way: Allegro, the BIOS and MAME all
+ * read the arrows as the keypad codes, which is why ArrowUp and Numpad8 are both 72. But that makes
+ * a scan code alone AMBIGUOUS -- 72 is either key -- and the prefix is how a real keyboard tells
+ * them apart. A program that reads port 0x60 itself can care: Jump 'n Bump's vector-9 handler files
+ * an extended key at (code + 0x80), so its KEY_PL1_JUMP is 0xc8 and a bare 72 lands in a byte it
+ * never reads. Carrying this flag ALONGSIDE the code lets such a host send the pair the hardware
+ * would, while every program that wants the software convention keeps reading 72.
+ */
+export const EXTENDED = new Set([
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+  'Home', 'End', 'PageUp', 'PageDown', 'Insert', 'Delete',
+  'ControlRight', 'AltRight', 'NumpadEnter', 'NumpadDivide',
+]);
+
 // `key` values for the keys whose name does not simply map onto a `code`.
 const BY_KEY = {
   ' ': 'Space', Escape: 'Escape', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace',
@@ -77,4 +94,14 @@ export function scancodeForEvent(e) {
   }
   if (/^F([1-9]|1[0-2])$/.test(k)) return SCANCODE[k] | 0;
   return 0;
+}
+
+/**
+ * Whether that same event is an extended key -- resolved the way scancodeForEvent resolves it, by
+ * `code` first and `key` second, so a synthesised event with no `code` is not silently reported as
+ * a plain key while its scan code comes through.
+ */
+export function extendedForEvent(e) {
+  if (e.code) return EXTENDED.has(e.code);
+  return !!(e.key && BY_KEY[e.key] && EXTENDED.has(BY_KEY[e.key]));
 }

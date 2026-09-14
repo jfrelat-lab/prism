@@ -14,9 +14,9 @@
 // The shell's own reporting — compile timings, stubbed headers, functions it could not emit — stays
 // in the side pane. A DOS screen never showed "894 functions in 700 ms".
 
-import { makeControl, controlViews, makeKeyboard, makeMouse, wake, KEY_HOLD_FRAMES, AUDIO_RING, SLOT, STATE }
-  from '../src/env/webhost.js';
-import { scancodeForEvent } from '../src/env/scancodes.js';
+import { makeControl, controlViews, makeKeyboard, makeMouse, wake, KEY_HOLD_FRAMES, AUDIO_RING,
+  KBD_EXTENDED, SLOT, STATE } from '../src/env/webhost.js';
+import { scancodeForEvent, extendedForEvent } from '../src/env/scancodes.js';
 import { makePipe } from '../src/env/pipe.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 
@@ -756,13 +756,21 @@ const typing = () => /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName |
  * held-key ARRAY without sending them leaves it walking left for ever -- which is what the window's
  * blur handler used to do.
  */
+/*
+ * Which held keys are the 0xE0-prefixed ones. The scan code alone cannot say -- ArrowUp and Numpad8
+ * are both 72 -- and the RELEASE has to carry the same prefix as the press, or a host feeding port
+ * 0x60 files the press under 0xc8 and the release under 0x48 and the key is held for ever.
+ */
+const heldExtended = new Set();
+
 function releaseAll() {
   if (!views) return;
   for (let sc = 0; sc < views.keys.length; sc++) {
     if (!views.keys[sc]) continue;
     views.keys[sc] = 0;
-    keyboard?.push(sc | 0x80, 0);
+    keyboard?.push(sc | 0x80, 0, heldExtended.has(sc) ? KBD_EXTENDED : 0);
   }
+  heldExtended.clear();
   wake(views.ctrl);
 }
 
@@ -815,7 +823,9 @@ addEventListener('keydown', (e) => {
     else if (e.key === 'Tab') ascii = 9;
     else if (e.key === 'Escape') ascii = 27;
     else if (e.key && e.key.length === 1) ascii = e.key.charCodeAt(0);
-    keyboard.push(sc, ascii);
+    const ext = extendedForEvent(e);
+    if (ext) heldExtended.add(sc); else heldExtended.delete(sc);
+    keyboard.push(sc, ascii, ext ? KBD_EXTENDED : 0);
   }
   e.preventDefault();
 });
@@ -825,7 +835,11 @@ addEventListener('keyup', (e) => {
   if (!sc) return;
   views.keys[sc] = 0;
   // A release, in the PC's break-code convention, so a program that wants key-up events gets them.
-  if (keyboard) keyboard.push(sc | 0x80, 0);
+  // The prefix flag has to match the press: filing a press under 0xc8 and its release under 0x48
+  // leaves the key held for ever.
+  const ext = extendedForEvent(e);
+  heldExtended.delete(sc);
+  if (keyboard) keyboard.push(sc | 0x80, 0, ext ? KBD_EXTENDED : 0);
   // A guest parked inside `while (osd_key_pressed(k));` is waiting for exactly this, so tell it now
   // rather than leaving it to notice on its next timeout.
   wake(views.ctrl);
