@@ -59,7 +59,14 @@ export function installVgaPlanar(machine, { onChange = null, onFrame = null, map
     onFrame: onFrame ?? null,
   };
 
-  const WINDOW = 0xa0000, WINDOW_LEN = 0x20000, BANK = 0x10000;
+  /*
+   * SIXTY-FOUR KILOBYTES, not 128. The graphics window is A000:0000..A000:FFFF and a plane bank is
+   * the same size; 0xB0000 upwards is the text window and has no business here. Redirecting 128 kB
+   * into 64 kB banks meant an access past 0xB0000 landed in the NEXT PLANE's bank -- silently, and
+   * only for a program that touched that range, which this one does not. Found by writing the
+   * arithmetic down rather than by a failure.
+   */
+  const WINDOW = 0xa0000, WINDOW_LEN = 0x10000, BANK = 0x10000;
   const bank = (n) => planes + n * BANK;
   const SCRATCH = 4;
 
