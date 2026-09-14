@@ -1,9 +1,19 @@
 // gate-asm.mjs — PRISM's translation of the game's own assembly against Unicorn, instruction for
 // instruction, over random inputs.
 //
-// P5 had no oracle until now. MIRAGE cannot be one here (it is real-mode; this is 32-bit flat) and
-// a native i386 harness faults on the routine's privileged `out`. Unicorn runs the real bytes that
-// nasm produces from the UNMODIFIED dos/gfx.S, and this compares PRISM's JavaScript against it.
+// P5 had no oracle until now. A native i386 harness cannot be one: the routine contains a
+// privileged `out`, which faults in user space. Unicorn runs the real bytes nasm produces from the
+// UNMODIFIED dos/gfx.S, and this compares PRISM's JavaScript against it.
+//
+// WHAT THIS FILE USED TO SAY, AND IT WAS WRONG: "MIRAGE cannot be one here (it is real-mode; this
+// is 32-bit flat)". MIRAGE is not real-mode only -- its COMPAT.md records Quake PLAYING as "a
+// DJGPP program [driving] our DPMI host directly", and its roadmap carries CR0.PE, GDT/LDT/IDT,
+// paging and V86. The claim came from a stale line in this project's own ARCHITECTURE.md and was
+// repeated as if measured. The privileged `out` argues FOR an emulator, not against one: MIRAGE
+// emulates ports by design. What actually stands in the way is narrower and is a harness
+// question, not a CPU one -- MIRAGE runs whole programs, and nothing there yet exposes ONE routine
+// as a callable unit: entry at a flat address, registers and stack supplied, end state read back.
+// That is what Unicorn gives for free, and why it is used here.
 //
 // CAPTURE ONCE, REPLAY FOREVER -- the idea is MIRAGE's tools/uc-capture.py, and it is the reason
 // this gate is worth having rather than merely possible: `--capture` runs Unicorn and writes the

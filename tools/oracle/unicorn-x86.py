@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """unicorn-x86.py — run a 32-bit x86 routine under Unicorn, as the reference PRISM must match.
 
-WHY THIS EXISTS. P5 (the assembly subset) is the one piece of PRISM with no oracle yet, and the
-plan's answer -- MIRAGE's x86 recompiler -- does not apply to Jump 'n Bump's dos/gfx.S: MIRAGE is
-real-mode only and this is 32-bit flat DJGPP code. A native i386 harness cannot run it either,
-because the routine contains an `out`, which faults in user space. Unicorn runs 32-bit protected
-mode and hooks I/O instructions, so it can.
+WHY THIS EXISTS. P5 (the assembly subset) is the one piece of PRISM with no oracle yet. A native
+i386 harness cannot serve, because the routine contains an `out`, which faults in user space.
+Unicorn runs 32-bit protected mode and hooks I/O instructions, so it can.
+
+AN EARLIER VERSION OF THIS NOTE SAID MIRAGE COULD NOT SERVE BECAUSE IT IS "REAL-MODE ONLY". That
+is false: MIRAGE's COMPAT.md records Quake playing as a DJGPP program driving its DPMI host
+directly, and its roadmap carries CR0.PE, GDT/LDT/IDT, paging and V86. The claim was read from a
+stale line in PRISM's own ARCHITECTURE.md and repeated as measured. The privileged `out` argues
+FOR an emulator rather than against one. What is actually missing is a harness: MIRAGE runs whole
+programs and exposes no way to call ONE routine with registers and a stack and read the end state
+back. Unicorn does, which is the real reason it is used here.
 
 WHAT IT IS NOT: it is not part of PRISM. Like Docker, DOSBox-X and gcc, it is an external reference
 this project calls and compares against. PRISM itself still has zero dependencies.
