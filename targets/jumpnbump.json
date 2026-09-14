@@ -29,6 +29,7 @@
     "dj",
     "vgadac",
     "crtstatus",
+    "kbd8042",
     "vgaplanar"
   ],
   "_sound": "dj is a LIBRARY, and it ships here as dos/libdj.a with no source -- the binary names its own six units (dj.c mixer.c mod.c sb.c sb_dma.c sfx.c), a Sound Blaster DMA mixer with MOD playback. That is the Allegro and SEAL situation exactly (P1.7): the library is shimmed from its header, never compiled. dj.h declares 40 functions. NOTE that silence is not a compile-time option here -- NOSOUND exists in the later ports' config.h and is tested nowhere in the code -- but the API itself offers dj_set_nosound, which the program calls, so a silent build uses the library's own switch rather than an invented one.",
@@ -39,5 +40,6 @@
   ],
   "_asmTranslate": "The program's own assembly, translated by src/asm/ and bound as ordinary functions. Listed here rather than discovered: a .S file being present is not a reason to translate it, and every other target in the corpus ships a C twin its build selects instead. Checked against Unicorn on 400 random cases -- tools/gate-asm.mjs.",
   "_env": "vgaplanar is what makes this target paged: naming it says the 0xA0000 window is four planes rather than plain memory, and buildTarget turns compile.paged on for it. It is OPTIONAL even among DOS targets -- MAME writes the same VGA registers but leaves Chain-4 set, so its window stays linear and it names none of this, emitting exactly the JavaScript it always did.",
-  "_crtstatus": "The vertical retrace register, 0x3DA, and it is what PACES THE GAME. wait_vrt() in dos/gfx.c polls bit 3 both ways, and the palette fade loop in main.c calls it every iteration -- so without this device the fade never advances and the screen stays black. It is NOT a timer interrupt, which is what I claimed for several hours: the game asks the video hardware, not the clock. src/env/crtstatus.js already existed and its own comment describes this exact eternal loop."
+  "_crtstatus": "The vertical retrace register, 0x3DA, and it is what PACES THE GAME. wait_vrt() in dos/gfx.c polls bit 3 both ways, and the palette fade loop in main.c calls it every iteration -- so without this device the fade never advances and the screen stays black. It is NOT a timer interrupt, which is what I claimed for several hours: the game asks the video hardware, not the clock. src/env/crtstatus.js already existed and its own comment describes this exact eternal loop.",
+  "_kbd8042": "The keyboard controller, port 0x60. The game hooks vector 9 itself and its handler reads 0x60 into its own keyb[] array, so there is no key function to shim -- the host has to BE the interrupt: queue a scan code here, then call the guest handler through go32 deliver(9). That is P1.7 saying the keyboard stopped being a function, on a second program."
 }

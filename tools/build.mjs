@@ -313,7 +313,12 @@ const dibBase = dibSym('prism_dib_surface');
  */
 if (program.M.vga) {
   program.M.vga.onFrame = () => {
-    if (frameCap && ++frames >= frameCap) throw new Error('__frames_done');
+    frames++;
+    // The page flip is this platform's frame boundary, so it is also where a key is tapped: the
+    // MGL branch below had the only tapKeys() call, which made --keys silently do nothing here --
+    // the run came back byte-identical to a keyless one and printed no [key] line to say why.
+    tapKeys();
+    if (frameCap && frames >= frameCap) throw new Error('__frames_done');
   };
 }
 if ((frameCap || pngPath) && dibBase && program.F.BitBlt) {
@@ -365,21 +370,61 @@ const keyScript = (opt('keys') ?? '').split(',').map(k => k.trim()).filter(Boole
   .map(k => KEYNAMES[k.toLowerCase()] ?? parseInt(k, 16));
 const keyEvery = +(opt('keyevery') ?? 20);
 const keyFirst = +(opt('keyat') ?? 40);
-let keyAt = 0;
-const pressKey = program.F.prism_win32_key ?? null;
+/*
+ * --keyhold=N IS NOT A REFINEMENT, IT IS WHAT MAKES A KEYSTROKE EXIST. Pressing and releasing
+ * inside one frame callback runs no guest code between the two, so the program never looks while
+ * the key is down. Measured on Jump 'n Bump over 900 frames: its own key_pressed() was called
+ * 12,601 times and returned DOWN 0 times with no hold, and 104 times with a 6-frame hold.
+ */
+const keyHold = +(opt('keyhold') ?? 6);
+let keyAt = 0, keyHeld = null, keyReleaseAt = 0;
+/*
+ * THE SECOND DOOR, for a DOS program that hooks the keyboard interrupt itself.
+ *
+ * Jump 'n Bump takes vector 9 through _go32_dpmi_set_protected_mode_interrupt_vector, and its
+ * handler reads port 0x60 and fills its own `keyb[]` array. So there is nothing to call in the
+ * game: the keystroke has to arrive the way the hardware sends it -- a scan code waiting at 0x60,
+ * and then the guest's OWN handler invoked. Both halves already existed and nothing joined them:
+ * src/env/kbd8042.js queues the code (its header says so in as many words) and src/env/go32.js
+ * records the vector and can `deliver` it through M.icall.
+ *
+ * This is what P1.7 means by the keyboard having stopped being a function. There is no
+ * osd_key_pressed to shim: `key_pressed()` reads memory an interrupt writes behind the program's
+ * back, and the host's only way in is to BE that interrupt.
+ */
+/*
+ * A CODE OF 0x80 OR MORE IS AN EXTENDED KEY, and it has to arrive as the two bytes the hardware
+ * really sends -- 0xe0, then the base code -- because the handler reads ONE byte per interrupt and
+ * keeps `extended` in a static across the two. Jump 'n Bump's own KEY_PL1_JUMP is 0xc8, and its
+ * handler reaches that slot only as `(key & 0x7f) + 0x80` inside the extended branch: sending 0x48
+ * alone fills keyb[0x48], a byte the game never reads. Masking the code to 0x7f here made the door
+ * and the probe wrong in the same direction, so the check could not fail.
+ */
+const dosKey = (program.M.kbd && env.go32?.deliver)
+  ? (code, down) => {
+    const send = (b) => { program.M.kbd.push(b); env.go32.deliver(9); };
+    if (code >= 0x80) send(0xe0);
+    send(down ? (code & 0x7f) : ((code & 0x7f) | 0x80));
+  }
+  : null;
+const pressKey = program.F.prism_win32_key ?? dosKey;
 if (keyScript.length && !pressKey) {
   // A flag that quietly does nothing is worse than one that is missing: say so.
-  console.log(`  --keys: this target has no key door here (it needs prism_win32_key, from ` +
-    `src/env/win32.c). For an X11 program use tools/doom.mjs --keys, and for a DOS one ` +
-    `tools/raven.mjs or tools/quake.mjs.`);
+  console.log(`  --keys: this target has no key door here. A Win32 program needs prism_win32_key ` +
+    `(src/env/win32.c); a DOS one that hooks vector 9 needs the kbd8042 and go32 environments, ` +
+    `which is what joins a scan code at port 0x60 to the guest's own handler.`);
 }
 const tapKeys = () => {
-  if (!pressKey || keyAt >= keyScript.length) return;
+  if (!pressKey) return;
+  // The release comes from a LATER frame than the press, so guest code runs while the key is down.
+  if (keyHeld !== null && frames >= keyReleaseAt) { pressKey(keyHeld, 0); keyHeld = null; }
+  if (keyHeld !== null || keyAt >= keyScript.length) return;
   if (frames < keyFirst || (frames - keyFirst) % keyEvery !== 0) return;
-  const code = keyScript[keyAt++] & 0x7f;
+  const code = keyScript[keyAt++] & 0xff;   // NOT 0x7f: that truncated every extended key to its base
   pressKey(code, 1);
-  pressKey(code, 0);
-  console.log(`[key] 0x${code.toString(16).padStart(2, '0')} at frame ${frames}`);
+  if (keyHold > 0) { keyHeld = code; keyReleaseAt = frames + keyHold; } else pressKey(code, 0);
+  console.log(`[key] 0x${code.toString(16).padStart(2, '0')} at frame ${frames}` +
+    (keyHold > 0 ? `, held ${keyHold} frames` : ''));
 };
 
 if ((frameCap || pngPath || keyScript.length) && mgl) {
