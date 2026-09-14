@@ -53,7 +53,7 @@ export class EmitError extends Error {}
  * called for every `out`. That is deliberately Unicorn's own shape: the differential then compares
  * two things that were asked the same question, rather than two things that had to be adapted first.
  */
-export function translate(parsed, name, { symbols = {}, dataBase = 0 } = {}) {
+export function translate(parsed, name, { symbols = {}, dataBase = 0, paged = false } = {}) {
   // Where each in-.text data slot lives. They are given addresses in the guest image, because the
   // routine takes no special care with them -- they are just memory it happens to keep near itself.
   const slots = new Map();
@@ -89,8 +89,25 @@ export function translate(parsed, name, { symbols = {}, dataBase = 0 } = {}) {
     }
     return o.disp ? `((${o.base}+${o.disp})|0)` : `(${o.base}|0)`;
   };
-  const loadMem = (o) => `D.${{ 1: 'getUint8', 2: 'getUint16', 4: 'getUint32' }[o.size]}(${addr(o)}${o.size > 1 ? ',1' : ''})`;
-  const storeMem = (o, v) => `D.${{ 1: 'setUint8', 2: 'setUint16', 4: 'setUint32' }[o.size]}(${addr(o)},${v}${o.size > 1 ? ',1' : ''});`;
+  /*
+   * THROUGH THE PAGE MAP WHEN THERE IS ONE, and this is the defect that produced a background with
+   * one column in four. These two routines exist precisely to move rectangles in and out of PLANAR
+   * video memory, and they were emitting D.setUint8 straight at the flat image -- so every byte they
+   * wrote landed at 0xA0000 and never reached a plane.
+   *
+   * It is the same hole as memset and memcpy, closed hours earlier the same day and reopened here by
+   * hand. The reason it went unseen is worth more than the fix: the translator was validated against
+   * Unicorn on a FLAT image, where the question cannot arise, so 400 green cases said nothing about
+   * it either way.
+   */
+  // The stack too, for uniformity: it is plain memory, so a map translates it to itself -- and a
+  // rule with one exception is a rule somebody trips over later.
+  const SW = (e) => (paged ? `xw(${e})` : e);
+  const SR = (e) => (paged ? `xr(${e})` : e);
+  const A = (o) => (paged ? `xw(${addr(o)})` : addr(o));
+  const Ar = (o) => (paged ? `xr(${addr(o)})` : addr(o));
+  const loadMem = (o) => `D.${{ 1: 'getUint8', 2: 'getUint16', 4: 'getUint32' }[o.size]}(${Ar(o)}${o.size > 1 ? ',1' : ''})`;
+  const storeMem = (o, v) => `D.${{ 1: 'setUint8', 2: 'setUint16', 4: 'setUint32' }[o.size]}(${A(o)},${v}${o.size > 1 ? ',1' : ''});`;
 
   /** An operand's value, unsigned, at `size` bytes. */
   const rd = (o, size) => {
@@ -177,18 +194,18 @@ export function translate(parsed, name, { symbols = {}, dataBase = 0 } = {}) {
         break;
       }
 
-      case 'push': body.push(`${line} esp=(esp-4)|0;D.setUint32(esp,${rd(ops[0], 4)},1);`); break;
-      case 'pop': body.push(`${line} ` + wr(ops[0], 'D.getUint32(esp,1)', 4) + `esp=(esp+4)|0;`); break;
+      case 'push': body.push(`${line} esp=(esp-4)|0;D.setUint32(${SW('esp')},${rd(ops[0], 4)},1);`); break;
+      case 'pop': body.push(`${line} ` + wr(ops[0], `D.getUint32(${SR('esp')},1)`, 4) + `esp=(esp+4)|0;`); break;
 
       case 'pusha':
         body.push(`${line} { const _sp=esp; ` +
           ['eax', 'ecx', 'edx', 'ebx', '_sp', 'ebp', 'esi', 'edi']
-            .map(r => `esp=(esp-4)|0;D.setUint32(esp,${r}>>>0,1);`).join('') + ' }');
+            .map(r => `esp=(esp-4)|0;D.setUint32(${SW('esp')},${r}>>>0,1);`).join('') + ' }');
         break;
       case 'popa':
         body.push(`${line} ` + ['edi', 'esi', 'ebp', '_skip', 'ebx', 'edx', 'ecx', 'eax']
           .map(r => r === '_skip' ? `esp=(esp+4)|0;`
-            : `${r}=D.getUint32(esp,1)|0;esp=(esp+4)|0;`).join(''));
+            : `${r}=D.getUint32(${SR('esp')},1)|0;esp=(esp+4)|0;`).join(''));
         break;
 
       case 'out':
@@ -219,7 +236,9 @@ export function translate(parsed, name, { symbols = {}, dataBase = 0 } = {}) {
   }
 
   const entry = labels.get(name);
-  return `(function ${name.replace(/[^\w]/g, '_')}(D, regs, io){
+  // The two translations arrive as parameters only when the platform is paged, so an unpaged target
+  // emits exactly the function it emitted before any of this -- which gate-asm runs, flat.
+  return `(function ${name.replace(/[^\w]/g, '_')}(D, regs, io${paged ? ', xr, xw' : ''}){
   let ${R.join('=0, ')}=0;
   ${R.map(r => `${r}=regs.${r}|0;`).join(' ')}
   let _a=0,_b=0,_r=0,_c=0;

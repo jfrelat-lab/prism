@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { parse } from '../src/asm/nasm.js';
 import { translate } from '../src/asm/x86.js';
+import { installMemMap } from '../src/env/memmap.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(ROOT, 'corpus/jumpnbump-dos/dos/gfx.S');
@@ -101,7 +102,7 @@ function capture(routine, obj, python) {
 
 /* ---------------------------------------------------------------- the translation, every time */
 
-function runTranslation(routineSrc, c, routine) {
+function runTranslation(routineSrc, c, routine, map = null) {
   const image = new ArrayBuffer(8 << 20);
   const D = new DataView(image);
   const u8 = new Uint8Array(image);
@@ -118,7 +119,8 @@ function runTranslation(routineSrc, c, routine) {
   const ports = [];
   const fn = (0, eval)(routineSrc);
   const regs = { eax: 0, ebx: 0, ecx: 0, edx: 0, esi: 0, edi: 0, ebp: 0, esp };
-  const end = fn(D, regs, { out: (port, size, value) => ports.push({ port, size, value }) });
+  const io = { out: (port, size, value) => ports.push({ port, size, value }) };
+  const end = map ? fn(D, regs, io, map.xr, map.xw) : fn(D, regs, io);
   return {
     regs: end,
     ports,
@@ -164,9 +166,11 @@ const golden = JSON.parse(readFileSync(GOLDEN, 'utf8'));
 let bad = 0, ok = 0;
 const problems = [];
 for (const routine of ROUTINES) {
-  let src;
+  let src, pagedSrc = null;
   try {
-    src = translate(parsed, routine, { symbols: { ___djgpp_base_address: BASEVAR }, dataBase: DATA });
+    const opts = { symbols: { ___djgpp_base_address: BASEVAR }, dataBase: DATA };
+    src = translate(parsed, routine, opts);
+    pagedSrc = translate(parsed, routine, { ...opts, paged: true });
   } catch (e) {
     problems.push(`${routine}: the translator refused it — ${e.message}`);
     bad += golden.routines[routine].length;
@@ -190,6 +194,45 @@ for (const routine of ROUTINES) {
     const gp = got.ports.map(p => `${p.port}:${p.value}`).join(',');
     const wp = want.ports.map(p => `${p.port}:${p.value}`).join(',');
     if (gp !== wp) why.push(`ports [${gp}] ≠ [${wp}]`);
+
+    /*
+     * AND THE PAGED TRANSLATION, which the Unicorn cases above cannot say anything about: they run
+     * on a FLAT image, where the question of whether the routine consults a memory map cannot even
+     * arise. 400 of them stayed green while get_block and put_block wrote straight past the planes
+     * and put one column in four on the screen.
+     *
+     * Two checks, and the second is the one that matters. With an IDENTITY map the paged form must
+     * agree with the flat one byte for byte -- that catches broken wiring. But identity would also
+     * agree if xr and xw were ignored entirely, so a REDIRECTING map must make the result differ:
+     * that is what proves the translation really goes through them.
+     */
+    if (pagedSrc) {
+      const idMap = installMemMap({ u8: new Uint8Array(8 << 20) }, {});
+      const flat = runTranslation(pagedSrc, c, routine, idMap);
+      if (flat.dump[BUF] !== got.dump[BUF] || flat.dump[VGA] !== got.dump[VGA]) {
+        why.push('the paged form disagrees with the flat one under an identity map');
+      }
+
+      /*
+       * The redirect control applies only where the routine TOUCHED anything. Cases are drawn with
+       * deliberately out-of-range rectangles to exercise the clipping at the top of both routines,
+       * and those leave through `jge near .exit` having read and written nothing at all -- so
+       * "moving the window changed nothing" is the correct answer for them, not a defect. Demanding
+       * a difference there made 34 of 400 red on a translation that was in fact consulting the map,
+       * which is a control that fires on the wrong thing.
+       */
+      const untouched = { buf: sha(new Uint8Array(BUF_LEN)), vga: sha(windowBytes(c)) };
+      const didSomething = got.dump[BUF] !== untouched.buf || got.dump[VGA] !== untouched.vga;
+      if (didSomething) {
+        const moved = installMemMap({ u8: new Uint8Array(8 << 20) }, {});
+        moved.redirect(VGA, VGA_LEN, 0x400000, { who: 'test' });
+        const away = runTranslation(pagedSrc, c, routine, moved);
+        // get_block READS the window; put_block WRITES it. Either way, moving it has to show.
+        if (away.dump[BUF] === got.dump[BUF] && away.dump[VGA] === got.dump[VGA]) {
+          why.push('redirecting the window changed NOTHING — the translation ignores the map');
+        }
+      }
+    }
 
     if (why.length) { bad++; if (problems.length < 12) problems.push(`${routine} case ${c.i}: ${why.join('; ')}`); }
     else ok++;

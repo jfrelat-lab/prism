@@ -69,7 +69,13 @@ export function installAsm(program, { sources, symbols = {}, machine = null }) {
       const declared = program.mod.symbols?.has?.(cName) ?? true;
       if (!declared && !(cName in program.F)) { /* nothing calls it; bind anyway, it is harmless */ }
 
-      const src = translate(parsed, g, { symbols: externs, dataBase });
+      /*
+       * PAGED WHEN THE IMAGE IS. Without this the routine writes at the flat image and never
+       * reaches a plane -- which is what put one column in four on the screen, because these two
+       * routines are the ones that move rectangles in and out of planar video memory.
+       */
+      const map = M.memmap ?? null;
+      const src = translate(parsed, g, { symbols: externs, dataBase, paged: !!map });
       // eslint-disable-next-line no-eval
       const routine = (0, eval)(src);
 
@@ -83,7 +89,9 @@ export function installAsm(program, { sources, symbols = {}, machine = null }) {
         for (let i = args.length - 1; i >= 0; i--) { esp -= 4; D.setUint32(esp, args[i] >>> 0, true); }
         esp -= 4;
         D.setUint32(esp, 0, true);                    // the return address, which `ret` pops
-        const end = routine(D, { eax: 0, ebx: 0, ecx: 0, edx: 0, esi: 0, edi: 0, ebp: 0, esp }, io);
+        const end = map
+          ? routine(D, { eax: 0, ebx: 0, ecx: 0, edx: 0, esi: 0, edi: 0, ebp: 0, esp }, io, map.xr, map.xw)
+          : routine(D, { eax: 0, ebx: 0, ecx: 0, edx: 0, esi: 0, edi: 0, ebp: 0, esp }, io);
         return end.eax | 0;                           // cdecl: an int result comes back in EAX
       };
 
