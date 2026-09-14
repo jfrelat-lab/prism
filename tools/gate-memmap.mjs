@@ -109,6 +109,30 @@ const fresh = () => installMemMap({ u8: new Uint8Array(16 * MB) }, {});
     JSON.stringify({ to: PLANES + 0x1000, from: 8, len: 8 }));
 }
 
+/*
+ * --- MULTI-BYTE WRITES THAT STRADDLE A PAGE BOUNDARY.
+ *
+ * A 16- or 32-bit store translates only its START address, so its tail bytes land at
+ * xw(start)+1.. rather than through the next page's entry. That is correct only because
+ * `redirect` maps consecutive pages consecutively -- a property worth a test rather than a
+ * comment, since nothing else would notice if it changed.
+ *
+ * These were written to chase a real lead: three planes first faulting at offset 8188, four
+ * bytes short of a 4 kB boundary. The lead was WRONG -- every case here passes -- and the
+ * cases are kept because a refutation that leaves no check behind has to be redone.
+ */
+{
+  const m = fresh();
+  m.redirect(VGA, VGA_LEN, PLANES, { who: 'vga' });
+  for (const page of [1, 2, 15]) {
+    const off = page * 0x1000 - 3;
+    check(`a 32-bit store straddling page ${page} translates as one run`,
+      m.translateWrite(VGA + off) + 3, PLANES + off + 3);
+  }
+  check('a 16-bit store on a page seam translates as one run',
+    m.translateWrite(VGA + 0x1000 - 1) + 1, PLANES + 0x1000);
+}
+
 // --- what it REFUSES, which is as much of the contract as what it does.
 {
   const m = fresh();
