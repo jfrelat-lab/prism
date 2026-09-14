@@ -132,7 +132,20 @@ export function finalizeHeap(M) {
   const GAP = 64 * 1024;                    // room for every string a shim may intern while running
   M.heap = Math.ceil((M.mod.brk + GAP) / 16) * 16;
   M.mod.staticLimit = M.heap;               // Module.alloc refuses to cross this
-  M.heapEnd = M.heap;
+  /*
+   * THE FRONTIER NEVER MOVES BACKWARDS, and this is not a refinement -- it is the same defect the
+   * comment above sbrk describes, in a second place: handing out bytes that have already been given
+   * away. This function is called TWICE, once while compiling and again inside run() before main,
+   * and everything an ENVIRONMENT allocated in between was silently given back.
+   *
+   * Jump 'n Bump is what exposed it. src/env/registry.js asks for 320 kB of VGA planes while
+   * installing the device; run() then reset the frontier to exactly that address, and the game's own
+   * malloc for its background image came back sixteen bytes inside the planes. The background pass
+   * then read its source and wrote plane 0 over the top of it -- a loop overwriting what it was
+   * reading. It showed up as a banded picture and cost seven refuted hypotheses to reach, because
+   * every symptom pointed at the planar mapping and the mapping was correct throughout.
+   */
+  M.heapEnd = Math.max(M.heapEnd ?? M.heap, M.heap);
   M.heapTop = M.mod.stackLimit - 64 * 1024;
 }
 
