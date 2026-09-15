@@ -143,8 +143,28 @@ check(rc2[0] === 24 && rc2[1] === 32 && rc2[2] === 48 && rc2[3] === 64,
  * draws -- its WndProc answers WM_PAINT with SCR_UpdateWholeScreen, so gate-pixels went red on 152
  * rows. Nothing in this host covers or resizes a window behind the program's back.
  */
+/*
+ * ...but it DOES activate, and the check has to say which message it is forbidding.
+ *
+ * This read `PeekMessage() === 0` -- no message at all -- and stayed green for four days because
+ * ShowWindow posted nothing yet. It has been red since WM_ACTIVATE landed (6b50497), failing on a
+ * message the shim is RIGHT to post: src/env/win32.c makes activation a transition and announces
+ * the first one, which is what stops Quake II re-activating an already-active window for ever. An
+ * assertion broader than its own name turns a correct change into a red gate.
+ */
 program.F.ShowWindow(0, 5);
-check(program.F.PeekMessage(msg, 0, 0, 0, 0) === 0, 'ShowWindow does NOT invent a paint');
+let paints = 0, others = 0;
+while (program.F.PeekMessage(msg, 0, 0, 0, 1) !== 0) {   // 1 = PM_REMOVE, so this terminates
+  if (message() === WM_PAINT) paints++; else others++;
+}
+check(paints === 0, `ShowWindow does NOT invent a paint (${others} other message(s), WM_ACTIVATE among them)`);
+/*
+ * And the control, without which the line above passes on a ShowWindow that does nothing at all:
+ * an invalidation after it must still produce the paint, so the queue is known to be live.
+ */
+program.F.InvalidateRect(0, 0, 0);
+check(program.F.PeekMessage(msg, 0, 0, 0, 0) !== 0 && message() === WM_PAINT,
+      'the control: a paint still arrives after ShowWindow, so the queue is live');
 
 if (pngPath) {
   const px = new Uint8Array(w * h);
