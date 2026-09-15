@@ -62,7 +62,23 @@ export function makeMachine(mod = new Module()) {
      * replaces sp_ to sample which loop is running — see tools/doom.mjs.
      */
     spBudget: 1 << 30,
-    sp_(_id) { M.spBudget = 1 << 30; },
+    /*
+     * The default handler refills the budget AND enforces the run leash, which is the only place
+     * some hangs can be caught. A leash checked at the clock, at safepoints in runtime.js and at the
+     * port seam still misses a loop that touches none of the three: Jump 'n Bump spins in
+     * `while (key_pressed(1) == 1) dj_mix();` -- a memory read and a silent sound shim, no port, no
+     * clock -- and a 40 s leash went unenforced for three minutes. A back edge is the one thing
+     * every loop has, so this is the general answer and the others are the cheap ones.
+     */
+    sp_(_id) {
+      // The refill decides how PROMPT the leash is, and the two cases want very different numbers.
+      // 1<<30 back edges between checks is right for a run nobody is bounding -- it makes the
+      // safepoint cost a decrement and nothing else -- and useless for one that is: a 40 s deadline
+      // first came due 54 s in, because a billion back edges take that long to spend. 1<<20 brings
+      // it to a few milliseconds and is still far too coarse to be felt.
+      M.spBudget = M.leashDeadline ? (1 << 20) : (1 << 30);
+      checkLeash(M);
+    },
 
     clockTicks: 0,           // the deterministic clock, see rt.clock
     uclockTicks: 0n,         // ~1/60 s per call at the PIT rate

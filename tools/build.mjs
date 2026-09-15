@@ -118,7 +118,17 @@ let built;
 try {
   built = buildTarget(target, {
     root: ROOT,
-    compile: { safepoints: flag('safepoints'), ...(opt('memory') ? { memory: +opt('memory') } : {}) },
+    /*
+     * --seconds IMPLIES --safepoints, because otherwise the leash has nothing to hang from. The
+     * deadline is enforced from the clock, from the port seam and from a safepoint; a loop that
+     * touches neither a port nor the clock is caught only by the safepoint, and a safepoint that was
+     * never emitted catches nothing. Asking for a time limit and silently not getting one is worse
+     * than not offering it.
+     */
+    compile: {
+      safepoints: flag('safepoints') || leashMs > 0,
+      ...(opt('memory') ? { memory: +opt('memory') } : {}),
+    },
     envExtra: {
       stdio: { files },
       // A real clock, because a program that times itself with a fake one measures fiction.

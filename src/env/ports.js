@@ -18,6 +18,8 @@
 // the guest image, which is free for a linear mode like 13h and needs a write barrier for a planar
 // one. That asymmetry decides how far the collaboration reaches, and it is measured, not assumed.
 
+import { checkLeash } from '../runtime/runtime.js';
+
 /**
  * A port with no device answers 0xFF on read and swallows writes — which is what an ISA bus does
  * with nothing driving it, and what a program probing for absent hardware expects to see.
@@ -38,7 +40,21 @@ export function installPorts(M, { trace = false } = {}) {
     onPortRead(port, fn) { readers.set(port & 0xffff, fn); },
     onPortWrite(port, fn) { writers.set(port & 0xffff, fn); },
 
+    /*
+     * THE RUN LEASH IS CHECKED HERE, and it took a hang to learn why it has to be.
+     *
+     * `--seconds` sets M.leashDeadline, and runtime.js tests it at safepoints and when the clock
+     * advances. A DOS-era spin loop reaches NEITHER -- it polls a port and calls nothing else -- so
+     * the one mechanism meant to bound a hang could not see the hang. Measured on Jump 'n Bump,
+     * stuck in `while (key_pressed(1) == 1) dj_mix();`: a 40 s leash was still not enforced three
+     * minutes later and the process had to be killed from outside.
+     *
+     * A port poll is the one thing every loop of this class does, which is what makes this the right
+     * place: a compare against a number, on a path a program in trouble is already hammering, and
+     * free (checkLeash returns at once) for every program that never asked for a leash.
+     */
     read(port, size = 1) {
+      checkLeash(M);
       const p = port & 0xffff;
       if (seen) seen.set(`r${p.toString(16)}`, (seen.get(`r${p.toString(16)}`) || 0) + 1);
       const fn = readers.get(p);
