@@ -19,7 +19,7 @@ import { join, basename, dirname, resolve as resolvePath } from 'node:path';
 import { compileProgram } from './compile.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
-import { buildEnv, envVars } from './env/registry.js';
+import { buildEnv, envVars, envHeaders } from './env/registry.js';
 import { installAsm } from './asm/link.js';
 
 /**
@@ -116,7 +116,8 @@ function exportsFromDef(path) {
 }
 
 /** An #include resolver over one source tree plus PRISM's own headers. */
-function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing, dosPaths) {
+function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing, dosPaths,
+  envTable = {}) {
   // Where to look, in order. `include` exists because MAME's tree is not flat: its makefile passes
   // -Isrc -Isrc/Z80 -Isrc/msdos and its units live in per-driver subdirectories.
   const dirs = [dir, ...(include ?? []).map(d => join(dir, d))];
@@ -148,11 +149,15 @@ function makeResolver(dir, { caseInsensitive = false, include = null } = {}, mis
   const lookup = (name, from) => {
     const path = find(name, from);
     if (path) return { path, text: readFileSync(path, 'latin1') };
-    if (HEADERS[name] !== undefined) return { path: `<${name}>`, text: HEADERS[name] };
+    // An environment's own headers sit in FRONT of the standard table and behind the program's own
+    // tree: naming `sdl2` is what decides that "SDL.h" means SDL2's, and a header the game ships
+    // under that name still wins, exactly as before.
+    const env = envTable[name] ?? HEADERS[name];
+    if (env !== undefined) return { path: `<${name}>`, text: env };
     const want = basename(name);
     const loose = find(want, from);
     if (loose) return { path: loose, text: readFileSync(loose, 'latin1') };
-    const std = HEADERS[want];
+    const std = envTable[want] ?? HEADERS[want];
     if (std !== undefined) return { path: `<${name}>`, text: std };
     return null;
   };
@@ -333,7 +338,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const program = compileProgram(units, {
     exports: moduleExports,
     defines: target.defines ?? {},
-    resolve: makeResolver(dir, target, missing, dosPaths),
+    // The environments' own headers, which override the global table for the names they claim --
+    // and which refuse rather than resolve when two of them claim one name differently.
+    resolve: makeResolver(dir, target, missing, dosPaths, envHeaders(target.env)),
     memory: (c.memory ?? 64) * 1024 * 1024,
     pack: c.pack ?? null,
     collect: c.collect ?? true,

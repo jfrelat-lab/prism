@@ -10,7 +10,6 @@
 
 import { DJGPP_HEADERS } from './headers-djgpp.js';
 import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js';
-import { SDL2_HEADERS } from './headers-sdl2.js';
 import { SVGALIB_HEADERS } from './headers-svgalib.js';
 import { WIN32_HEADERS } from './headers-win32.js';
 
@@ -1766,8 +1765,13 @@ int getopt(int argc, char * const argv[], const char *optstring);
    * One dos.h that satisfies both beats two that cannot coexist under one name.
    */
   ...WATCOM_HEADERS,
-  // SDL2, for the Open* family. See src/env/headers-sdl2.js.
-  ...SDL2_HEADERS,
+  /*
+   * SDL2's headers are NOT here any more. They travel with the `sdl2` environment instead
+   * (src/env/registry.js), because one global table cannot serve two versions of a library: spread
+   * here, they went to EVERY target, so a build compiled against SDL 1.2 asked for "SDL.h", received
+   * SDL2's, and died on `SDLKey key;` -- a type SDL2 renamed to SDL_Keycode. What a target names in
+   * its `env` list is now what decides which library's declarations it sees.
+   */
 
   // svgalib, for Quake's Linux console driver. See src/env/headers-svgalib.js.
   ...SVGALIB_HEADERS,

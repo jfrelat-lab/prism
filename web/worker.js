@@ -15,7 +15,7 @@ import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js'
  * TARGET'S OWN env list through buildEnv rather than naming them one by one, which is the same rule
  * the DOS branch's comment states and did not follow.
  */
-import { buildEnv } from '../src/env/registry.js';
+import { buildEnv, envHeaders } from '../src/env/registry.js';
 import { installAsm } from '../src/asm/link.js';
 import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
@@ -231,6 +231,9 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
   /** The include search, over the fetched tree: the program's own -I list, then PRISM's headers. */
   const dirOf = (p) => p.includes('/') ? p.replace(/\/[^/]*$/, '') : '';
   const missing = new Set();
+  // Built here, before the resolver runs, so a target that names two versions of one library is
+  // refused with the same message Node gives rather than quietly taking whichever was spread last.
+  const envTable = envHeaders(program.env ?? []);
   function resolve(name, angled, fromFile) {
     const tryPath = (p) => {
       /*
@@ -251,7 +254,11 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       const hit = tryPath(`${d}/${name}`);
       if (hit) return hit;
     }
-    const std = HEADERS[name] ?? HEADERS[name.replace(/^.*\//, '')];
+    // The environments' headers in front of the standard table, as src/target.js does it -- so the
+    // page and Node hand the same program the same declarations. Without this the browser would
+    // still give every build SDL2's "SDL.h" whatever its env list says.
+    const std = envTable[name] ?? envTable[name.replace(/^.*\//, '')]
+      ?? HEADERS[name] ?? HEADERS[name.replace(/^.*\//, '')];
     if (std !== undefined) return { path: `<${name}>`, text: std };
     // Stub and record, so one build reports every absent header rather than dying on the first.
     // Printed, never silent.

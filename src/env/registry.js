@@ -33,6 +33,7 @@ import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
 import { installSDL2 } from './sdl2.js';
+import { SDL2_HEADERS } from './headers-sdl2.js';
 import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
 import { installVgaFont } from './vgafont.js';
@@ -122,8 +123,14 @@ export const ENV = {
    */
   wsock: { install: (M, _c, o) => installWsock(M, o) },
 
-  // SDL2 for the Open* family. See src/env/sdl2.js.
-  sdl2: { install: (M, _c, o) => installSDL2(M, o) },
+  /*
+   * SDL2 for the Open* family. See src/env/sdl2.js.
+   *
+   * The headers travel WITH the shim rather than in the global table, and the two must stay one
+   * artifact: the guest reads `surface->pixels` and `surface->pitch` at offsets this header decides,
+   * and the shim writes the values. Split them and they drift silently.
+   */
+  sdl2: { install: (M, _c, o) => installSDL2(M, o), headers: SDL2_HEADERS },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
   svgalib: { needs: ['ports'], install: (M, _c, o) => installSvgalib(M, o) },
@@ -161,4 +168,37 @@ export function buildEnv(M, spec, extra = {}) {
 export function envVars(spec) {
   const names = Array.isArray(spec) ? spec : Object.keys(spec ?? {});
   return names.filter(n => ENV[n]?.vars).map(n => ({ name: n, source: ENV[n].vars }));
+}
+
+/**
+ * The HEADERS an environment supplies, which is the other half of `vars`: that one is the data a
+ * linker would provide, this one is the declarations a compiler would find on the include path.
+ *
+ * It exists because one global table cannot serve two versions of a library. src/env/headers.js
+ * spread SDL2's headers into every build, so a target compiled against SDL 1.2 asked for "SDL.h",
+ * received SDL2's, and died on `SDLKey key;` at main.c:1847 -- the parser reads an unknown type
+ * name as an expression. Not a missing header: the WRONG one, handed to a target that had named no
+ * SDL environment at all.
+ *
+ * THE CONFLICT IS REFUSED RATHER THAN RESOLVED, and generally rather than by naming the pair. Two
+ * environments that claim one header name with different text cannot both be right, and picking the
+ * last one is how `SDL_Surface` ends up with fields the shim does not write. Same rule as the page
+ * map's multiWrite and vgaplanar's check: refuse, and say which two.
+ */
+export function envHeaders(spec) {
+  const names = Array.isArray(spec) ? spec : Object.keys(spec ?? {});
+  const out = {}, from = new Map();
+  for (const n of names) {
+    for (const [file, text] of Object.entries(ENV[n]?.headers ?? {})) {
+      const held = from.get(file);
+      if (held !== undefined && out[file] !== text) {
+        throw new Error(`environments '${held}' and '${n}' both supply the header '${file}', with ` +
+          `different contents. They are two versions of one library and a build compiles against ` +
+          `exactly one — name the one this program was written for.`);
+      }
+      out[file] = text;
+      from.set(file, n);
+    }
+  }
+  return out;
 }
