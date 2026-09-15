@@ -34,6 +34,7 @@ import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
 import { installSDL2 } from './sdl2.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
+import { SDL12_HEADERS } from './headers-sdl12.js';
 import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
 import { installVgaFont } from './vgafont.js';
@@ -131,6 +132,16 @@ export const ENV = {
    * and the shim writes the values. Split them and they drift silently.
    */
   sdl2: { install: (M, _c, o) => installSDL2(M, o), headers: SDL2_HEADERS },
+
+  /*
+   * SDL 1.2, for the ports written against it. See src/env/headers-sdl12.js.
+   *
+   * HEADERS ONLY, FOR NOW, and deliberately so: with the declarations in place the program parses
+   * and the build reports every function it cannot resolve, which is the shim's work list read off
+   * the program instead of recalled from SDL. Installing an empty shim first would make those names
+   * resolve to nothing and hide exactly the list being sought.
+   */
+  sdl12: { install: () => ({}), headers: SDL12_HEADERS },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
   svgalib: { needs: ['ports'], install: (M, _c, o) => installSvgalib(M, o) },

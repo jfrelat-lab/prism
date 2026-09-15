@@ -1,0 +1,41 @@
+{
+  "name": "jumpnbump-sdl",
+  "title": "Jump 'n Bump (SDL 1.2 port, tag 1.51 — Chuck Mason / Florian Schulze)",
+  "dir": "corpus/jumpnbump-sdl12",
+  "fetch": "git clone https://gitlab.com/LibreGames/jumpnbump.git corpus/jumpnbump && mkdir -p corpus/jumpnbump-sdl12 && git -C corpus/jumpnbump archive 1.51 | tar -x -C corpus/jumpnbump-sdl12 && sed -e 's#%%PREFIX%%#/usr/local#g' < corpus/jumpnbump-sdl12/globals.pre > corpus/jumpnbump-sdl12/globals.h",
+  "_doc": "THE SAME GAME AS targets/jumpnbump.json, OVER A DIFFERENT PLATFORM LAYER -- which is the whole reason it is here. main.c, menu.c, filter.c and fireworks.c are the game; dos/ and sdl/ are two ports of the same floor. That is Quake's arrangement (one engine, four platform layers) on a program small enough to see all of at once, and it is the thesis PRISM exists to test: the compatibility frontier sits at the LIBRARY, not at the game. Tag 1.51 is the SDL 1.2 tree -- the repository's head is SDL2 and its root commit is the DOS original.",
+  "_prefix": "globals.h is GENERATED, by the program's own Makefile rule: `sed -e 's#%%PREFIX%%#$(PREFIX)#g' < globals.pre > globals.h`. Running that step is using the build, not editing the source; the only thing it substitutes is DATA_PATH, and /usr/local is the Makefile's own default. It lands in the gitignored corpus, where make would have put it.",
+  "units": {
+    "list": [
+      "main.c",
+      "menu.c",
+      "filter.c",
+      "fireworks.c",
+      "sdl/gfx.c",
+      "sdl/input.c",
+      "sdl/interrpt.c",
+      "sdl/sound.c"
+    ]
+  },
+  "_units": "The Makefile's own two lists: OBJS = fireworks.o main.o menu.o filter.o, plus sdl.a, which sdl/Makefile builds from gfx.o interrpt.o sound.o input.o. modify/ is excluded for the same reason as in the DOS target -- gobpack, jnbpack and jnbunpack are separate TOOLS, each with its own main(). dos/ is excluded because this build selects sdl/ instead; both trees ship, and choosing between them is what the Makefile does.",
+  "include": [
+    "."
+  ],
+  "defines": {
+    "USE_SDL": "1",
+    "NDEBUG": "1",
+    "stricmp": "strcasecmp",
+    "strnicmp": "strncasecmp"
+  },
+  "_defines": "Copied from the Makefile's CFLAGS, minus three. -DUSE_NET is left OUT and that is a build option the source offers rather than one invented here: USE_NET appears 24 times in main.c and nowhere else, all of it inside #ifdef, so a build without networking is a configuration this tree supports. -DZLIB_SUPPORT and -DBZLIB_SUPPORT are left out on the same grounds. The two -D renames are not options at all -- the program calls stricmp and strnicmp, which are DOS spellings, and the Makefile maps them onto the POSIX names.",
+  "compile": {
+    "memory": 64,
+    "collect": true
+  },
+  "env": [
+    "stdio",
+    "sdl12"
+  ],
+  "_env": "stdio plus sdl12. The SDL 1.2 environment supplies its own headers (src/env/headers-sdl12.js) rather than taking them from the global table, because SDL2's are in that table under the same names and a program compiled against 1.2 is not compiled against them.",
+  "_versions": "SDL 1.2 AND SDL 2 CANNOT SHARE ONE HEADER TABLE, which is the design question this target opens. The two APIs are mostly disjoint at the entry points -- SDL_SetVideoMode, SDL_WM_SetCaption and SDL_SetColors exist only in 1.2 -- but they overlap on the names that matter: SDL_Surface and SDL_PixelFormat have different fields, SDL_PollEvent hands back a different union, and SDL_KEYDOWN differs in both value and layout. This program includes \"SDL.h\" and \"SDL_endian.h\" unqualified, and src/env/headers-sdl2.js already claims SDL_endian.h in the ONE global table src/env/headers.js builds -- so the header a target gets does not currently depend on the env it named. The version is a property of the BUILD, never something to detect at run time: PRISM supplies the headers, so the target's env list is the whole discriminator, and it can only be that once the headers are env-scoped and naming both is refused rather than silently resolved."
+}
