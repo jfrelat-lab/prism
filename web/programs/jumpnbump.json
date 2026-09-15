@@ -4,6 +4,8 @@
   "target": "jumpnbump",
   "host": "planar",
   "fps": 60,
+  "safepoints": true,
+  "safepointsNote": "Not for profiling: this is what keeps the KEYBOARD alive. The planar host's frame boundary is the CRTC page flip, and this game has a screen that never flips one -- the scoreboard Escape leads to draws once and then loops on the palette and the retrace. With the flip as the only hook, the picture froze and the keyboard died together: the program sat in `while (key_pressed(1) == 1) dj_mix();` waiting for a release that could only be delivered by a flip that would only happen after the release. A back edge is the one thing every loop has, so the host drains keys there too, and that needs safepoints emitted. Measured cost on this program: 1,468 rendered frames/s without them, 1,436 with, about 2%.",
   "needsData": {
     "dir": "jumpnbump",
     "hint": "jumpbump.dat from the 1998 DOS release — NOT one repacked from the source tree's data/. The tree ships its packer (modify/pack.c) and it works, but the 2002 source release carries a different levelmap.txt from the game that shipped, so a rebuilt archive makes the rabbit swim on a solid platform. See _data."

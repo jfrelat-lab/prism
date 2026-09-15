@@ -845,7 +845,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         'the 0xA0000 window four planes. Name it in the target\'s env list.');
     }
     const u8 = prog.M.u8;
-    vga.onFrame = () => {
+    const composeFrame = () => {
       const g = vga.geometry();
       if (!g.width || !g.height) return;
       if (g.width !== view.w || g.height !== view.h) {
@@ -864,39 +864,80 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
           u8[row + x] = u8[planes + ((x & 3) << 16) + src + (x >> 2)];
         }
       }
-      /*
-       * The page flip is also this host's only moment to deliver an interrupt: a DOS program's
-       * asynchronous events arrive while it is inside a loop of its own C.
-       *
-       * An EXTENDED key is sent as the two bytes the hardware sends, 0xE0 then the code, each its
-       * own interrupt -- the guest's handler reads one byte per interrupt and carries `extended` in
-       * a static between them. Without the prefix the arrows land in keyb[0x48] and the game reads
-       * keyb[0xc8], so player one could never jump.
-       */
-      if (dosHost && prog.M.kbd) {
-        const send = (e) => {
-          if (e.extended) { prog.M.kbd.push(0xe0); dosHost.deliver(0x09); }
-          prog.M.kbd.push(e.down ? e.scan : (e.scan | 0x80));
-          dosHost.deliver(0x09);
-        };
-        /*
-         * A RELEASE THAT ARRIVES IN THE SAME DRAIN AS ITS PRESS IS HELD BACK ONE FRAME. This whole
-         * loop runs between two of the guest's own instructions, so a press and a release delivered
-         * together leave no moment at which the program can look and find the key down -- a quick
-         * tap is simply lost. Measured on this page: tapping Escape did nothing at all, while
-         * holding it for 400 ms quit the game as its menu says it should.
-         */
-        for (const e of heldBack) send(e);
-        heldBack.length = 0;
-        const pressedNow = new Set();
-        for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
-          if (!e.down && pressedNow.has(e.scan)) { heldBack.push(e); continue; }
-          if (e.down) pressedNow.add(e.scan);
-          send(e);
-        }
+    };
+
+    /*
+     * THE KEYBOARD IS AN INTERRUPT, so it must not depend on the program drawing.
+     *
+     * An EXTENDED key is sent as the two bytes the hardware sends, 0xE0 then the code, each its own
+     * interrupt -- the guest's handler reads one byte per interrupt and carries `extended` in a
+     * static between them. Without the prefix the arrows land in keyb[0x48] and the game reads
+     * keyb[0xc8], so player one could never jump.
+     *
+     * A RELEASE THAT ARRIVES IN THE SAME DRAIN AS ITS PRESS IS HELD BACK. The drain runs between two
+     * of the guest's own instructions, so delivering both leaves no moment at which the program can
+     * look and find the key down -- a quick tap is simply lost. Measured on this page: tapping
+     * Escape did nothing, holding it 400 ms quit the game as its menu says it should.
+     */
+    const drainKeys = () => {
+      if (!dosHost || !prog.M.kbd) return;
+      const send = (e) => {
+        if (e.extended) { prog.M.kbd.push(0xe0); dosHost.deliver(0x09); }
+        prog.M.kbd.push(e.down ? e.scan : (e.scan | 0x80));
+        dosHost.deliver(0x09);
+      };
+      for (const e of heldBack) send(e);
+      heldBack.length = 0;
+      const pressedNow = new Set();
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        if (!e.down && pressedNow.has(e.scan)) { heldBack.push(e); continue; }
+        if (e.down) pressedNow.add(e.scan);
+        send(e);
       }
+    };
+
+    vga.onFrame = () => {
+      composeFrame();
+      drainKeys();
       reader.endFrame();
       pace();
+    };
+
+    /*
+     * ...AND THE SAME TWO THINGS ON A BACK EDGE, because a screen that never flips pages otherwise
+     * gets neither.
+     *
+     * Jump 'n Bump's scoreboard -- the screen Escape in play leads to -- draws once and then loops on
+     * the palette and the retrace without ever writing the CRTC start address. With the page flip as
+     * the only hook, the picture stopped updating AND the keyboard went dead together: the program
+     * reached `while (key_pressed(1) == 1) dj_mix();` (main.c:656) waiting for Escape to be released,
+     * and the release could never be delivered, because delivering it needed a page flip that would
+     * only happen after the release. tools/find-loop.mjs named that loop; 100% of samples after the
+     * freeze were in it. The real game, under DOSBox-X, unwinds and exits -- so this was ours.
+     *
+     * A back edge is the one thing every loop has, which is why the leash is caught here too
+     * (src/runtime/runtime.js). Throttled by wall time rather than by a count: composing a frame is
+     * real work and a spin loop reaches this far more often than a display changes.
+     */
+    const innerSp = prog.M.sp_;
+    let lastPoll = 0;
+    /*
+     * THE INITIAL BUDGET, which matters as much as the hook. spBudget starts at 1<<30, so the FIRST
+     * safepoint call is about a billion back edges away: measured on the hang this fixes, a 40 s run
+     * reached this handler 0 times and the release was never delivered. The refill below keeps it
+     * responsive; this is what makes the first one arrive at all.
+     */
+    prog.M.spBudget = 1 << 18;
+    prog.M.sp_ = (id) => {
+      innerSp.call(prog.M, id);
+      // AFTER the default handler, which refills with 1<<30 when no leash is armed -- and none is
+      // here. Refilling ourselves is what keeps the hook alive past its first call.
+      prog.M.spBudget = 1 << 18;
+      const t = performance.now();
+      if (t - lastPoll < 16) return;              // ~60 Hz, the rate a display would change anyway
+      lastPoll = t;
+      drainKeys();
+      composeFrame();
     };
 
   } else if (platform === 'svgalib') {

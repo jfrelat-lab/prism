@@ -263,8 +263,18 @@ if (!flag('run')) process.exit(0);
 const args = (opt('args') ?? target.args ?? '').split(/\s+/).filter(Boolean);
 console.log(`\nrunning: ${target.name} ${args.join(' ')}` +
   (leashMs ? ` · leash ${leashMs / 1000}s` : ''));
-// Enforced from the runtime's clock, not from the frame boundary -- see checkLeash in runtime.js.
-if (leashMs) program.M.leashDeadline = performance.now() + leashMs;
+/*
+ * Enforced from the runtime's clock, the port seam and a safepoint back edge -- see checkLeash.
+ *
+ * The BUDGET is armed with the deadline, and it has to be: spBudget starts at 1<<30, so the first
+ * safepoint call is about a billion back edges away. A leashed run whose hang touches no port would
+ * wait that long for its first check, which is not a time limit. Measured that way on a hang here:
+ * 40 s, 0 safepoint calls.
+ */
+if (leashMs) {
+  program.M.leashDeadline = performance.now() + leashMs;
+  program.M.spBudget = 1 << 20;
+}
 /*
  * What the program SAYS. Its stdout goes into an in-memory buffer -- the page reads it there -- so a
  * console run showed nothing at all, which for a program whose whole output is text reads as a
