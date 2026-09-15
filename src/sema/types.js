@@ -29,6 +29,19 @@ export const ULONG = scalar('unsigned long');
 export const LLONG = scalar('long long');
 export const ULLONG = scalar('unsigned long long');
 export const DOUBLE = scalar('double');
+/*
+ * The narrow scalars and float. `scalar()` has always known these spellings; only the named exports
+ * were missing -- and a missing export reads as `undefined` rather than raising anything. Two
+ * environments were already writing T.SHORT, T.USHORT and T.UCHAR in their builtin tables, nine
+ * entries across src/env/sdl2.js and src/env/allegro.js, and every one of them recorded a return
+ * type of `undefined`. Nothing complained until a program used such a result inside an expression:
+ * `SDL_JoystickGetAxis(joys[3], 0) < -3200` reached decay() with no type to decay.
+ */
+export const SHORT = scalar('short');
+export const USHORT = scalar('unsigned short');
+export const SCHAR = scalar('signed char');
+export const UCHAR = scalar('unsigned char');
+export const FLOAT = scalar('float');
 
 export const ptr = (to) => ({ k: 'ptr', to, size: 4, align: 4, signed: false });
 

@@ -585,18 +585,49 @@ export const BUILTINS = new Map(Object.entries({
  * Allegro, SEAL and the DJGPP memory helpers: the libraries MAME 0.1's OWN src/msdos/msdos.c links
  * against. Kept next to their implementation in src/env/allegro.js.
  */
-for (const [k, v] of Object.entries(allegroBuiltins(T))) BUILTINS.set(k, v);
+/*
+ * REGISTERED THROUGH ONE DOOR, so an entry cannot arrive incomplete without saying so.
+ *
+ * A builtin's `ret` is what the emitter gives a call's result (see #call), and an entry that omits
+ * it hands back a value with NO TYPE. Nothing notices while the result is ignored; the moment a
+ * program puts it in an expression, decay() is asked for the kind of `undefined` and the CALLER
+ * becomes unemittable -- pointing at the caller, which is innocent.
+ *
+ * That is not hypothetical. src/sema/types.js exported no SHORT, USHORT or UCHAR, while sdl2.js and
+ * allegro.js were already writing T.SHORT and T.USHORT in their tables: a missing export reads as
+ * `undefined`, so nine entries recorded no return type at all and stayed that way until
+ * `SDL_JoystickGetAxis(joys[3], 0) < -3200` in corpus/jumpnbump-sdl12 tripped over one. Refusing
+ * here turns a silent wrong answer into a loud one at startup, which is the whole trade.
+ */
+function registerBuiltins(env, table) {
+  for (const [name, entry] of Object.entries(table)) {
+    if (!entry || entry.ret === undefined) {
+      // A plain Error, not CompileError: this runs at module scope, above that class's declaration,
+      // and a guard that throws a ReferenceError on the one day it fires is worse than none.
+      throw new Error(`builtin '${name}' from ${env} has no return type. A call to it would ` +
+        `produce a value with no type, and the first expression that used the result would make ` +
+        `its CALLER unemittable. Give the entry a ret — a missing T.<NAME> reads as undefined.`);
+    }
+    BUILTINS.set(name, entry);
+  }
+}
+
+/*
+ * Allegro, SEAL and the DJGPP memory helpers: the libraries MAME 0.1's OWN src/msdos/msdos.c links
+ * against. Kept next to their implementation in src/env/allegro.js.
+ */
+registerBuiltins('allegro', allegroBuiltins(T));
 // dj, Jump n Bump's DOS sound library; see src/env/dj.js.
-for (const [k, v] of Object.entries(djBuiltins(T))) BUILTINS.set(k, v);
+registerBuiltins('dj', djBuiltins(T));
 // The Watcom/DOS4GW runtime Heretic and Hexen call; see src/env/watcom.js.
-for (const [k, v] of Object.entries(watcomBuiltins(T))) BUILTINS.set(k, v);
+registerBuiltins('watcom', watcomBuiltins(T));
 /* The socket thread's six primitives; see src/env/wsock.js. */
-for (const [k, v] of Object.entries(wsockBuiltins(T))) BUILTINS.set(k, v);
+registerBuiltins('wsock', wsockBuiltins(T));
 // DJGPP's DPMI floor, which Quake's dos_v2.c builds all of dosisms.h on; see src/env/go32.js.
-for (const [k, v] of Object.entries(go32Builtins(T))) BUILTINS.set(k, v);
-for (const [k, v] of Object.entries(dlBuiltins(T))) BUILTINS.set(k, v);
-for (const [k, v] of Object.entries(sdl2Builtins(T))) BUILTINS.set(k, v);
-for (const [k, v] of Object.entries(svgalibBuiltins(T))) BUILTINS.set(k, v);
+registerBuiltins('go32', go32Builtins(T));
+registerBuiltins('dl', dlBuiltins(T));
+registerBuiltins('sdl2', sdl2Builtins(T));
+registerBuiltins('svgalib', svgalibBuiltins(T));
 
 export class CompileError extends Error {}
 
