@@ -614,6 +614,14 @@ function makeLibc(M) {
           case 'M': return p2(date.getUTCMinutes());
           case 'S': return p2(date.getUTCSeconds());
           case 'j': return String(g(7) + 1).padStart(3, '0');
+          /*
+           * %w, the weekday as a NUMBER, 0 = Sunday. Missing until Lua's own test suite named it,
+           * and missing loudly rather than quietly: files.lua builds a Lua CHUNK out of a formatted
+           * date -- `D.wday==%w+1` -- so an unexpanded %w does not read oddly, it makes the chunk a
+           * syntax error. load() then returns nil and the failure lands on the call site four lines
+           * later with nothing at all to say why.
+           */
+          case 'w': return String(date.getUTCDay());
           case 'a': return DAYS[date.getUTCDay()].slice(0, 3);
           case 'A': return DAYS[date.getUTCDay()];
           case 'b': return MONS[date.getUTCMonth()].slice(0, 3);
