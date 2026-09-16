@@ -33,8 +33,10 @@ const A_FREQ = 0, A_FORMAT = 4, A_CHANNELS = 6, A_SILENCE = 7, A_SAMPLES = 8, A_
 const bytesPerPixel = (format) => (format === 0x16161804 ? 4 : format === 0x15151002 ? 2 : 1);
 
 import { format } from '../runtime/runtime.js';
+import { freeRunningClock } from './clock.js';
 
-export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboard = null } = {}) {
+export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboard = null,
+                                clock = freeRunningClock() } = {}) {
   const dv = () => M.mod.dv;
   const enc = new TextEncoder();
 
@@ -45,7 +47,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     window: 0, renderer: 0,
     frame: null,             // the last presented texture, as a JS view
     frames: 0,
-    ticks0: performance.now(),
+    clock,                   // SDL_GetTicks and SDL_Delay are two views of THIS, see env/clock.js
     audio: null,             // { callback, userdata, spec, silence }
     events: [],
     error: 0,
@@ -93,13 +95,16 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
      * A clock that actually moves, because OpenTyrian paces itself with it: 29 calls, more than any
      * other SDL function in the program.
      */
-    SDL_GetTicks: () => (performance.now() - state.ticks0) | 0,
+    SDL_GetTicks: () => state.clock.now(),
     /*
-     * Delay does NOT sleep. A guest that asks to wait 16 ms is asking to be slower than the host,
-     * and a harness counting frames wants the opposite; the guest's own clock keeps running, so its
-     * pacing logic still sees time pass. Stated because it IS a deviation.
+     * Delay writes to the SAME clock GetTicks reads, and the host decides what waiting costs.
+     *
+     * This used to return 0 and do nothing, on the argument that the guest's clock keeps running so
+     * its pacing logic still sees time pass. Time did pass; the deadline never arrived any sooner
+     * for it. A limiter written as "sleep a little, ask again" is then a spin, and OpenTyrian's ran
+     * 487 million times over 200 frames -- 96% of the wall clock, against 1.1 s of actual game work.
      */
-    SDL_Delay: () => 0,
+    SDL_Delay: (ms) => { state.clock.delay(ms | 0); return 0; },
     SDL_ShowSimpleMessageBox: (_flags, title, msg) => {
       M.write(`[SDL messagebox] ${cstr(title)}: ${cstr(msg)}\n`);
       return 0;

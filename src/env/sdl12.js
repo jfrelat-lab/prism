@@ -70,7 +70,8 @@ const SDLK = {
 
 import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
 
-export function installSDL12(M, { onPresent = null, onPalette = null, keyboard = null } = {}) {
+export function installSDL12(M, { onPresent = null, onPalette = null, keyboard = null,
+                                 clock = freeRunningClock() } = {}) {
   const dv = () => M.mod.dv;
   const enc = new TextEncoder();
 
@@ -90,7 +91,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     pixels: 0,              // its pixel buffer
     palette: new Uint8Array(768),   // 0..255 per channel, as a host would want it
     error: 0,
-    ticks0: Date.now(),
+    clock,                   // one clock for GetTicks and Delay both, see env/clock.js
     ...MIXER_STATE,          // the mixer's bookkeeping, shared with the SDL 2 environment
   };
 
@@ -165,8 +166,9 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_InitSubSystem: () => 0,
     SDL_Quit: () => 0,
     SDL_GetError: () => state.error,
-    SDL_Delay: () => 0,          // a headless guest must not sleep; the host paces it
-    SDL_GetTicks: () => (Date.now() - state.ticks0) | 0,
+    // A limiter built on sleeping SPINS when the sleep does nothing, so the host answers instead.
+    SDL_Delay: (ms) => { state.clock.delay(ms | 0); return 0; },
+    SDL_GetTicks: () => state.clock.now(),
 
     // ---- video -----------------------------------------------------------------------------
     SDL_SetVideoMode: (w, h, depth, _flags) => {

@@ -40,6 +40,7 @@ import { installDl } from '../src/env/dl.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeMouse, makeParker, SLOT, STATE }
   from '../src/env/webhost.js';
+import { sleepingClock } from '../src/env/clock.js';
 
 const post = (type, data) => self.postMessage({ type, ...data });
 const log = (line, kind = 'info') => post('log', { line, kind });
@@ -966,6 +967,13 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      */
     const env = buildEnv(prog.M, program.env ?? [], {
       stdio: { files, readChar: () => keyboard.read() },
+      /*
+       * The guest's OWN frame limiter, which runs inside a frame and so below anything pace() can
+       * see. Served on the parker's wait channel -- one notify from the page still releases it --
+       * because a limiter written as "sleep a little, ask again" spins when the sleep does nothing,
+       * and this one asked 487 million times over 200 frames of OpenTyrian.
+       */
+      sdl2: { clock: sleepingClock((ms) => { park(ms); }) },
     });
     const sdl = prog.M.sdl;
     if (!sdl) {
@@ -1017,6 +1025,13 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       stdio: { files, readChar: () => keyboard.read() },
       sdl12: {
         onPalette: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
+        /*
+         * The guest's OWN frame limiter, which runs inside a frame and so below anything pace() can
+         * see. Served on the parker's wait channel -- one notify from the page still releases it --
+         * because a limiter written as "sleep a little, ask again" spins when the sleep does
+         * nothing, and this one asked 487 million times over 200 frames of OpenTyrian.
+         */
+        clock: sleepingClock((ms) => { park(ms); }),
       },
     });
     void env;

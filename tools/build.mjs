@@ -21,6 +21,7 @@ import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from '
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
+import { virtualClock, sleepingClock } from '../src/env/clock.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TARGETS = join(ROOT, 'targets');
@@ -113,6 +114,16 @@ if (dateArg) {
 /* Applied to the TARGET, because buildTarget reads its defines from there. */
 if (Object.keys(dateDefines).length) target.defines = { ...(target.defines ?? {}), ...dateDefines };
 
+/*
+ * A run that counts frames is measuring throughput, not a rate a player would see, so the guest's
+ * waits are granted instead of served -- see src/env/clock.js. `nap` is Atomics.wait because Node
+ * has no other way to block without spinning, which is the very thing being fixed.
+ */
+const realClock = flag('realclock');
+const napBuf = new Int32Array(new SharedArrayBuffer(4));
+const sdlClock = realClock
+  ? sleepingClock((ms) => { Atomics.wait(napBuf, 0, 0, Math.min(ms, 50)); })
+  : virtualClock();
 const t0 = performance.now();
 let built;
 try {
@@ -133,6 +144,12 @@ try {
       stdio: { files },
       // A real clock, because a program that times itself with a fake one measures fiction.
       pit: { micros: () => performance.now() * 1000 },
+      /*
+       * SDL's clock is the guest's frame limiter, and headless the harness wants it to stop being
+       * one: a virtual clock grants every SDL_Delay at once, so a run costs the game's work instead
+       * of the wait it asked for. --realclock gets the faithful one back, which sleeps for real.
+       */
+      sdl2: { clock: sdlClock }, sdl12: { clock: sdlClock },
     },
   });
 } catch (e) {
@@ -548,13 +565,15 @@ try {
 }
 const runSecs = (performance.now() - runT0) / 1000;
 /**
- * ` · 1.2 s, 257 rendered frames/s (deterministic clock, unthrottled)` — and it says which, because
- * a bare "fps" here would be read as the rate a player sees. Omitted when nothing counted frames:
- * zero is not a measurement.
+ * ` · 1.2 s, 257 rendered frames/s (virtual clock, unthrottled)` — and it says WHICH CLOCK, because
+ * a bare "fps" here would be read as the rate a player sees. It used to say "deterministic clock"
+ * unconditionally, which asserted a property nothing established: SDL_GetTicks read real time. On a
+ * virtual clock the figure is throughput; on a real one it is the rate the guest paced itself to.
+ * Omitted when nothing counted frames: zero is not a measurement.
  */
 const fpsNote = () => (frames > 0
   ? ` · ${runSecs.toFixed(1)} s, ${(frames / runSecs).toFixed(0)} rendered frames/s ` +
-    `(deterministic clock, unthrottled)`
+    `(${sdlClock.virtual ? 'virtual clock, unthrottled' : 'real clock, guest-paced'})`
   : ` · ${runSecs.toFixed(1)} s`) +
   (leashed ? ` · STOPPED BY --seconds: the run did not finish on its own` : '');
 
