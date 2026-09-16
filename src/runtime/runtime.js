@@ -174,11 +174,32 @@ function makeLibc(M) {
   // Real code casts pointers to integers and relies on distinct allocations not overlapping, which
   // is the only property promised here.
   const blocks = new Map();     // addr -> size
+  /*
+   * AND A REAL FREE LIST, which the comment above used to promise and the code did not have: `free`
+   * only forgot the block, so M.heapEnd never came down and nothing was ever reused. That is
+   * invisible to a program that allocates once at startup and fatal to one that allocates per frame.
+   * Jump 'n Bump's SDL 2 port converts a surface every flip and frees it immediately -- 400 KB a
+   * frame, correctly returned -- and still ran the 64 MB heap out in about 150 frames. It showed up
+   * in the browser and not in Node only because the Node probe stopped at 120.
+   *
+   * Buckets keyed by the ROUNDED size, and reuse only on an exact match. That is deliberately the
+   * simple half of the problem: it serves the pattern that actually occurs -- the same allocation
+   * made and released every frame -- and it cannot hand back a block that overlaps another, which
+   * is the one property this allocator promises.
+   */
+  const freeBySize = new Map();   // rounded size -> [addr, ...]
 
   const malloc = (n) => {
     n = (n | 0) >>> 0;
     if (n === 0) n = 1;
     const size = Math.ceil((n + 8) / 16) * 16;
+    const pool = freeBySize.get(size);
+    if (pool && pool.length) {
+      const addr = pool.pop();
+      dv().setUint32(addr - 8, n, true);
+      blocks.set(addr, n);
+      return addr;
+    }
     if (M.heapEnd + size > M.heapTop) throw new Trap('out of memory in malloc');
     const addr = M.heapEnd + 8;
     M.heapEnd += size;
@@ -187,7 +208,17 @@ function makeLibc(M) {
     return addr;
   };
 
-  const free = (p) => { if (p) blocks.delete(p); };
+  const free = (p) => {
+    if (!p) return;
+    const n = blocks.get(p);
+    blocks.delete(p);
+    // Only a block this allocator handed out goes back on the list; anything else is left alone
+    // rather than guessed at, because a wrong size here would hand out overlapping memory later.
+    if (n === undefined) return;
+    const size = Math.ceil((n + 8) / 16) * 16;
+    const pool = freeBySize.get(size);
+    if (pool) pool.push(p); else freeBySize.set(size, [p]);
+  };
 
   const realloc = (p, n) => {
     if (!p) return malloc(n);
