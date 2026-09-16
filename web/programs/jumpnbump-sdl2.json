@@ -1,0 +1,22 @@
+{
+  "title": "JUMP 'N BUMP",
+  "subtitle": "the SDL 2 port, repository head — the third platform layer over the same game",
+  "target": "jumpnbump-sdl2",
+  "host": "sdl2",
+  "fps": 60,
+  "needsData": {
+    "dir": "jumpnbump",
+    "hint": "jumpbump.dat from the 1998 DOS release — the same file all three builds read, and the same warning: not one repacked from a source tree's data/, whose level map is not the one the game shipped."
+  },
+  "controls": [
+    ["arrows", "player 1: move, ↑ jumps"],
+    ["A / D / W", "player 2: move, W jumps"],
+    ["I / J / L", "player 3"],
+    ["Esc", "quit"]
+  ],
+  "_why": "THE THIRD LAYER, and it is worth less as a demonstration than the second was. What it is for is PRESSURE ON THE SHIM: src/env/sdl2.js was written for OpenTyrian, and a shim exercised by two programs that share no code is worth far more than one exercised by a single program. Fourteen entry points and two libc calls came out of that -- and OpenTyrian still builds unchanged, which is the control.",
+  "_display": "The one thing SDL 2 really changed for a program like this. The SDL 1.2 port asked for an 8-bit surface and the host published it where it lay; this one draws into a surface, converts it, uploads through SDL_UpdateTexture and presents. So the page reads a TEXTURE, already 32-bit B,G,R,A, and the palette stops being something to publish -- the conversion has applied it.",
+  "_telling_them_apart": "BOTH MAKEFILES BUILD A BINARY CALLED jumpnbump, so a real Linux box could not hold both in one directory and the shelf listing them side by side already compresses reality. The second file name is therefore the SHELF's, not the program's, and the things that really distinguish them are recorded instead: this one links -lSDL2 and -lSDL2_mixer where the other links -lSDL and -lSDL_mixer, which is what ldd would show; and each identifies itself on its own credits line, measured on screen rather than read off a tag -- 'Jump 'n Bump 1.51' there, 'Jump 'n Bump 1.80-dev' here.",
+  "_sound": "Silent, as in the SDL 1.2 build and for the same reason: Mix_LoadMUS returns NULL and the program takes its own failure path. This port writes its music to a temporary first, which is why mkstemp and fdopen exist in src/env/stdio.js now.",
+  "_measured": "150 frames in 2.4 s, 63 rendered frames/s on the deterministic clock; 400x256, 32-bit texture. Escape at frame 60 ends the run at frame 121 — the same number the SDL 1.2 build gives, which is the keyboard path agreeing with itself across two shims."
+}

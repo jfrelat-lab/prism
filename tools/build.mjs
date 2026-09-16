@@ -16,7 +16,7 @@
 // do also RUNS here. The rest keep their tool, which now calls buildTarget() instead of restating
 // the build.
 
-import { writeIndexedPng } from './png.mjs';
+import { writeIndexedPng, writeRgbPng } from './png.mjs';
 import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -349,7 +349,14 @@ if (program.M.vga) {
  * wrapper here: src/env/sdl12.js calls onPresent, which is read at call time so this can attach
  * after the build, exactly as the planar device's onFrame is assigned above.
  */
-if (program.M.sdl) {
+/*
+ * KEYED ON THE DECLARED HOST, not on the shape of M.sdl. Both SDL shims publish state under that
+ * one name and they publish DIFFERENT shapes -- sdl12.js a wrapper, sdl2.js the state itself -- so
+ * duck-typing works only by accident and would pick the wrong branch the day the shapes converge.
+ * The target already says which library it was built against, and one env of the two is all a build
+ * can name; that is the answer, and it needs no guessing.
+ */
+if (target.host === 'sdl') {
   program.M.sdl.state.onPresent = () => {
     frames++;
     tapKeys();
@@ -365,6 +372,23 @@ if (program.M.sdl) {
   sdlKey = (code, down) => {
     sdlKeys.push({ scan: code & 0x7f, extended: code >= 0x80, down: !!down, ascii: 0 });
   };
+} else if (target.host === 'sdl2') {
+  /*
+   * SDL 2's boundary is SDL_RenderPresent, and it is WRAPPED rather than hooked: sdl2.js predates
+   * the call-time hooks sdl12.js grew, and wrapping the entry point needs nothing from the shim.
+   * The two arrangements are equivalent here -- what matters is that the PROGRAM says when a frame
+   * is finished, not that the host guesses from a timer.
+   */
+  const inner = program.M.rt.SDL_RenderPresent;
+  program.M.rt.SDL_RenderPresent = function (...a) {
+    const r = inner.apply(this, a);
+    frames++;
+    tapKeys();
+    if (frameCap && frames >= frameCap) throw new Error('__frames_done');
+    return r;
+  };
+  // pushKey is the shim's own door, returned by installSDL2 and reached through the env.
+  if (env.sdl2?.pushKey) sdlKey = (code, down) => env.sdl2.pushKey(code & 0xff, !!down);
 }
 if ((frameCap || pngPath) && dibBase && program.F.BitBlt) {
   const inner = program.F.BitBlt;
@@ -581,7 +605,25 @@ if (mgl) {
     writeIndexedPng(pngPath, { pixels, width, height, palette });
     console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
   }
-} else if (program.M.sdl?.state.surface) {
+} else if (target.host === 'sdl2') {
+  /*
+   * THE SDL 2 PICTURE is the texture the program last presented, not a surface: this port draws in
+   * 8 bits, converts, uploads through SDL_UpdateTexture and presents. So the bytes are already
+   * 32-bit B,G,R,A -- which is the order writeRgbPng reads -- and there is no palette to apply,
+   * because the conversion already did.
+   */
+  const tex = [...(program.M.sdl?.textures?.values() ?? [])].pop() ?? null;
+  const w = tex?.w ?? 0, h = tex?.h ?? 0;
+  console.log(`\nframes ${frames} · display ${w}x${h} · SDL 2, ${(tex?.bpp ?? 0) * 8}-bit texture` +
+    fpsNote());
+  if (pngPath && tex && w > 0 && h > 0) {
+    writeRgbPng(pngPath, {
+      bytes: program.M.u8.subarray(tex.pixels, tex.pixels + tex.pitch * h),
+      width: w, height: h, bpp: tex.bpp, pitch: tex.pitch,
+    });
+    console.log(`  wrote ${pngPath}`);
+  }
+} else if (target.host === 'sdl') {
   /*
    * THE SDL 1.2 PICTURE, which needs no de-interleaving and no stride arithmetic: the program asked
    * for an 8-bit surface and wrote every pixel of it. The palette is the shim's own copy, kept in

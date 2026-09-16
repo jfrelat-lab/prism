@@ -957,6 +957,52 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       composeFrame();
     };
 
+  } else if (platform === 'sdl2') {
+    /*
+     * AN SDL 2 HOST. The same game as the `sdl` branch below, and the difference is the one thing
+     * SDL2 changed for a program like this: it draws into a surface, converts, uploads through
+     * SDL_UpdateTexture and presents. So what the page reads is the TEXTURE, already 32-bit B,G,R,A,
+     * and the palette stops being something to publish -- the conversion has already applied it.
+     */
+    const env = buildEnv(prog.M, program.env ?? [], {
+      stdio: { files, readChar: () => keyboard.read() },
+    });
+    const sdl = prog.M.sdl;
+    if (!sdl) {
+      throw new Error("host 'sdl2' needs the sdl2 environment — it is what supplies the texture " +
+        "the page reads. Name it in the target's env list.");
+    }
+
+    /*
+     * SDL_RenderPresent is where the PROGRAM says a frame is finished, so it is wrapped rather than
+     * timed. Wrapping the entry point needs nothing from the shim, which is why this branch differs
+     * in shape from the SDL 1.2 one without differing in what it means.
+     */
+    const innerPresent = prog.M.rt.SDL_RenderPresent;
+    let published = 0;
+    prog.M.rt.SDL_RenderPresent = function (...a) {
+      const r = innerPresent.apply(this, a);
+      const tex = [...sdl.textures.values()].pop();
+      if (tex && tex.w && tex.h) {
+        if (published !== tex.pixels) {
+          published = tex.pixels;
+          Atomics.store(ctrl, SLOT.WIDTH, tex.w);
+          Atomics.store(ctrl, SLOT.HEIGHT, tex.h);
+          Atomics.store(ctrl, SLOT.PIXELS, tex.pixels);
+          Atomics.store(ctrl, SLOT.PIXFMT, 32);      // B,G,R,A in memory, as the page expects
+          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+          log(`SDL 2 display ${tex.w}x${tex.h}, 32-bit texture`);
+        }
+        // One key event per present, through the shim's own door.
+        for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+          if (env.sdl2?.pushKey) env.sdl2.pushKey(e.scan, e.down);
+        }
+        reader.endFrame();
+        pace();
+      }
+      return r;
+    };
+
   } else if (platform === 'sdl') {
     /*
      * AN SDL 1.2 HOST. The simplest display path in this file, and deliberately so: the program
@@ -1085,7 +1131,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * from a program that was handed the wrong world.
      */
     throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
-      `it presents x11, svgalib, mgl, gdi, dos, planar, sdl, watcom, console and allegro. This build runs in Node: ` +
+      `it presents x11, svgalib, mgl, gdi, dos, planar, sdl, sdl2, watcom, console and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*

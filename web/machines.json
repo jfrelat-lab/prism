@@ -52,9 +52,11 @@
         { "program": "quake-svgalib", "file": "quake.svga", "date": "Aug  1  1996" },
         { "program": "quake2", "file": "quake2", "date": "Dec  9  1997" },
         { "program": "lua", "file": "lua", "date": "May  2  2023" },
-        { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" }
+        { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" },
+        { "program": "jumpnbump-sdl2", "file": "jumpnbump.sdl2", "date": "Sep 16  2025" }
       ],
-      "_jumpnbump": "The SAME GAME as the DOS shelf's JUMPBUMP.EXE, over the other platform layer -- which is why it earns a second slot rather than replacing the first. Its build is a Linux one (the Makefile calls sdl-config and links -lSDL), so this is where it belongs. The date is the tag's own tree, the 2002 CVS import; the game is 1998 and the DOS entry says so."
+      "_jumpnbump": "The SAME GAME as the DOS shelf's JUMPBUMP.EXE, over the other platform layer -- which is why it earns a second slot rather than replacing the first. Its build is a Linux one (the Makefile calls sdl-config and links -lSDL), so this is where it belongs. The date is the tag's own tree, the 2002 CVS import; the game is 1998 and the DOS entry says so.",
+      "_jumpnbump_sdl2": "AND THE THIRD LAYER BESIDE IT, whose file name is the SHELF's and not the program's. Both Makefiles build a binary called `jumpnbump`, so a real Linux box could not hold the two in one directory and a listing showing both already compresses reality; saying so is cheaper than pretending otherwise. The convention is quake.svga's, three rows up. What actually separates them is recorded rather than invented: one links -lSDL and -lSDL_mixer, the other -lSDL2 and -lSDL2_mixer -- which is what ldd would show -- and each prints its own version on its credits line, measured on screen rather than read off a tag: 1.51 there, 1.80-dev here."
     },
     {
       "id": "sun",
