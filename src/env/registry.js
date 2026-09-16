@@ -35,6 +35,7 @@ import { installDl } from './dl.js';
 import { installSDL2, sdl2Builtins } from './sdl2.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
 import { SDL12_HEADERS } from './headers-sdl12.js';
+import { installSDL12, sdl12Builtins } from './sdl12.js';
 import * as T from '../sema/types.js';
 import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
@@ -146,12 +147,20 @@ export const ENV = {
   /*
    * SDL 1.2, for the ports written against it. See src/env/headers-sdl12.js.
    *
-   * HEADERS ONLY, FOR NOW, and deliberately so: with the declarations in place the program parses
-   * and the build reports every function it cannot resolve, which is the shim's work list read off
-   * the program instead of recalled from SDL. Installing an empty shim first would make those names
-   * resolve to nothing and hide exactly the list being sought.
+   * Headers, signatures and shim as one entry, for the reason sdl2 keeps them together: the guest
+   * reads surface->pixels and surface->pitch at offsets the header decides, the signature says what
+   * each call returns, and the shim writes the values. tools/gate-sdl12abi.mjs holds the first two
+   * to the real SDL 1.2 headers.
+   *
+   * The shim's work list was read off the program rather than recalled: with the headers in place
+   * and no implementation, the build named all 40 symbols it could not resolve, and those are what
+   * src/env/sdl12.js implements -- no more.
    */
-  sdl12: { install: () => ({}), headers: SDL12_HEADERS },
+  sdl12: {
+    install: (M, _c, o) => installSDL12(M, o),
+    headers: SDL12_HEADERS,
+    builtins: sdl12Builtins(T),
+  },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
   svgalib: { needs: ['ports'], install: (M, _c, o) => installSvgalib(M, o) },
