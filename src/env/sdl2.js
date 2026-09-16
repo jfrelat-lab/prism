@@ -277,6 +277,99 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return (((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)) >>> 0;
     },
 
+    /*
+     * ------------------------------------------- what Jump 'n Bump's SDL 2 port adds
+     *
+     * Two groups, and the split is the interesting part. SDL_CreateWindowAndRenderer,
+     * SDL_UpdateTexture, SDL_ConvertSurfaceFormat and SDL_SetPaletteColors are SDL2's own; the rest
+     * are names SDL2 KEPT from 1.2, with the same meaning -- which is exactly why the two versions
+     * cannot share one table. Same name, same intent, different structs behind them.
+     */
+    SDL_CreateWindowAndRenderer: (w, h, _flags, winOut, rendOut) => {
+      state.window = handle();
+      state.winW = w | 0; state.winH = h | 0;
+      state.renderer = handle();
+      const d = M.mod.dv;
+      if (winOut) d.setUint32(winOut, state.window, true);
+      if (rendOut) d.setUint32(rendOut, state.renderer, true);
+      return 0;
+    },
+    SDL_RenderSetLogicalSize: () => 0,
+    SDL_SetWindowTitle: () => 0,
+    SDL_SetWindowIcon: () => 0,
+
+    /*
+     * The upload path this port uses instead of locking a texture: it hands over a whole buffer and
+     * a pitch, so the bytes are copied into the texture's own store and RenderCopy/RenderPresent
+     * publish it exactly as they do for the locked path.
+     */
+    SDL_UpdateTexture: (tex, _rect, pixels, pitch) => {
+      const t = state.textures.get(tex);
+      if (!t || !pixels) return -1;
+      const src = pitch | 0, dst = t.pitch, n = Math.min(src, dst);
+      for (let y = 0; y < t.h; y++) {
+        M.u8.copyWithin(t.pixels + y * dst, pixels + y * src, pixels + y * src + n);
+      }
+      return 0;
+    },
+
+    /*
+     * An 8-bit surface converted to a 32-bit one THROUGH ITS PALETTE, which is all this call means
+     * here: the port draws in 8 bits and asks for RGB888 to hand to a texture. Any other conversion
+     * returns NULL rather than being approximated -- a surface that comes back with plausible wrong
+     * pixels is worse than one that comes back missing, because only the second is noticed.
+     */
+    SDL_ConvertSurfaceFormat: (src, _fmt, _flags) => {
+      const s = state.surfaces.get(src);
+      if (!s || s.bpp !== 1) return NULLPTR;
+      const out = api.SDL_CreateRGBSurface(0, s.w, s.h, 32, 0, 0, 0, 0);
+      const o = state.surfaces.get(out);
+      const pal = state.palette ?? null;
+      for (let y = 0; y < s.h; y++) {
+        for (let x = 0; x < s.w; x++) {
+          const i = M.u8[s.pixels + y * s.pitch + x];
+          const r = pal ? pal[i * 3] : i, g = pal ? pal[i * 3 + 1] : i, b = pal ? pal[i * 3 + 2] : i;
+          const at = o.pixels + y * o.pitch + x * 4;
+          M.u8[at] = b; M.u8[at + 1] = g; M.u8[at + 2] = r; M.u8[at + 3] = 0xff;
+        }
+      }
+      return out;
+    },
+
+    /* The palette, kept on the shim so a later conversion and the host both see the same colours. */
+    SDL_SetPaletteColors: (_palPtr, colors, first, n) => {
+      if (!state.palette) state.palette = new Uint8Array(768);
+      for (let i = 0; i < (n | 0); i++) {
+        const idx = (first | 0) + i;
+        if (idx < 0 || idx > 255) continue;
+        const at = colors + i * 4;
+        state.palette[idx * 3] = M.u8[at];
+        state.palette[idx * 3 + 1] = M.u8[at + 1];
+        state.palette[idx * 3 + 2] = M.u8[at + 2];
+      }
+      if (state.onPalette) state.onPalette(state.palette);
+      return 0;
+    },
+
+    SDL_LockSurface: () => 0,          // software surfaces are always addressable
+    SDL_UnlockSurface: () => 0,
+    SDL_SetColorKey: () => 0,
+    SDL_MapRGBA: (fmtPtr, r, g, b, a) => {
+      const f = state.formats.get(fmtPtr);
+      const bpp = f ? f.bpp : (M.u8[fmtPtr + F_BYTES] || 4);
+      if (bpp === 2) return (((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3)) >>> 0;
+      return (((a & 0xff) << 24) | ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)) >>> 0;
+    },
+    SDL_GetMouseState: (xp, yp) => {
+      const d = M.mod.dv;
+      if (xp) d.setInt32(xp, 0, true);
+      if (yp) d.setInt32(yp, 0, true);
+      return 0;
+    },
+    /* No audio thread here, so there is nothing to lock against -- see src/env/sdl12.js. */
+    SDL_LockAudio: () => 0,
+    SDL_UnlockAudio: () => 0,
+
     // ---------------------------------------------------------------- events
     SDL_PollEvent: (evt) => {
       const e = state.events.shift();
@@ -445,6 +538,18 @@ export function sdl2Builtins(T) {
     SDL_CreateTexture: f(P, P, U, I, I, I), SDL_DestroyTexture: f(V, P),
     SDL_QueryTexture: f(I, P, P, P, P, P), SDL_LockTexture: f(I, P, P, P, P),
     SDL_UnlockTexture: f(V, P), SDL_RenderCopy: f(I, P, P, P, P), SDL_RenderPresent: f(V, P),
+    /* What Jump 'n Bump's SDL 2 port adds; signatures read from the real headers, not recalled. */
+    SDL_CreateWindowAndRenderer: f(I, I, I, U, P, P),
+    SDL_RenderSetLogicalSize: f(I, P, I, I),
+    SDL_UpdateTexture: f(I, P, P, P, I),
+    SDL_ConvertSurfaceFormat: f(P, P, U, U),
+    SDL_SetPaletteColors: f(I, P, P, I, I),
+    SDL_SetWindowTitle: f(V, P, P), SDL_SetWindowIcon: f(V, P, P),
+    SDL_LockSurface: f(I, P), SDL_UnlockSurface: f(V, P),
+    SDL_SetColorKey: f(I, P, I, U),
+    SDL_MapRGBA: f(U, P, T.UCHAR, T.UCHAR, T.UCHAR, T.UCHAR),
+    SDL_GetMouseState: f(U, P, P),
+    SDL_LockAudio: f(V), SDL_UnlockAudio: f(V),
     SDL_CreateRGBSurface: f(P, U, I, I, I, U, U, U, U), SDL_FreeSurface: f(V, P),
     SDL_FillRect: f(I, P, P, U), SDL_UpperBlit: f(I, P, P, P, P),
     SDL_AllocFormat: f(P, U), SDL_FreeFormat: f(V, P), SDL_MapRGB: f(U, P, I, I, I),

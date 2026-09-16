@@ -265,6 +265,15 @@ export const BUILTINS = new Map(Object.entries({
   lstat: { ret: I, params: [P, P] },
   fstat: { ret: I, params: [I, P] },
   fileno: { ret: I, params: [P] },
+  /*
+   * mkstemp and fdopen, which go together: the first makes a temporary and the second reopens its
+   * descriptor as a stream. They are one pair because `fileno` above is the identity in this
+   * runtime -- a descriptor and a FILE* are the same number -- so fdopen has nothing to convert.
+   * Jump 'n Bump's SDL 2 port is what asked: it writes its music to a temporary and hands the path
+   * to the mixer.
+   */
+  mkstemp: { ret: I, params: [P] },
+  fdopen: { ret: P, params: [I, P] },
   ftruncate: { ret: I, params: [I, I] },
   fcntl: { ret: I, params: [I, I], variadic: true },
   pread: { ret: I, params: [I, P, U, I] },

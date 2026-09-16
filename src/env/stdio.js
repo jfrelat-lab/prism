@@ -145,6 +145,8 @@ export function installStdio(M, {
    * because `stdout` is not a handle in the store -- it is a token every writer checks for.
    */
   const redirected = new Map();
+  // Counts up rather than randomises: two temporaries must differ, and a run must repeat itself.
+  let mkstempCounter = 1;
 
   const api = {
     /*
@@ -645,6 +647,35 @@ export function installStdio(M, {
      * back to fread when the map is null, which is the program handling its own answer.
      */
     fileno: (fp) => (fileOf(fp) ? (fp | 0) : -1),
+
+    /*
+     * mkstemp, and it is simple here for a reason worth stating rather than relying on: `fileno` is
+     * the IDENTITY above, so a descriptor and a FILE* are the same number in this runtime. Opening
+     * the file and handing back the stream therefore satisfies both the `int` mkstemp promises and
+     * the fdopen that follows it.
+     *
+     * The template's trailing XXXXXX is replaced in the guest's own buffer, because the caller owns
+     * that string and reads the name back -- Jump 'n Bump's SDL 2 port strdups "/tmp/jumpnbump.mod.
+     * XXXXXX", writes its music there and then hands the PATH to the mixer. POSIX requires exactly
+     * six X's at the end and nothing else; anything else is EINVAL, which is -1 here.
+     */
+    mkstemp: (tmplPtr) => {
+      if (!tmplPtr) return -1;
+      const name = M.cstr(tmplPtr);
+      if (!/XXXXXX$/.test(name)) return -1;
+      const suffix = (mkstempCounter++).toString(36).padStart(6, '0').slice(-6);
+      for (let i = 0; i < 6; i++) M.u8[tmplPtr + name.length - 6 + i] = suffix.charCodeAt(i);
+      // Reuse fopen rather than a second way of making a file, so a temporary behaves in every
+      // other respect exactly like any other.
+      return api.fopen(tmplPtr, M.mod.intern([0x77, 0x62, 0]));   // "wb"
+    },
+
+    /*
+     * fdopen has nothing to convert, for the same reason: the descriptor IS the stream here. It
+     * still checks, so a bad descriptor comes back as NULL rather than as a handle that fails later
+     * somewhere less obvious.
+     */
+    fdopen: (fd) => (fileOf(fd) ? (fd | 0) : 0),
 
     ftruncate: (fd, len) => {
       const h = fileOf(fd);

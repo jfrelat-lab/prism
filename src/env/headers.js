@@ -170,6 +170,8 @@ int fflush(FILE *stream);
 /* POSIX, and it lives HERE because its argument is a FILE * -- declaring it in <sys/stat.h>
    broke every program that includes that header without <stdio.h>, Doom among them. */
 int fileno(FILE *stream);
+/* fdopen reopens a descriptor as a stream — trivially, since fileno is the identity here. */
+FILE *fdopen(int fd, const char *mode);
 void perror(const char *s);
 void setbuf(FILE *stream, char *buf);
 int setvbuf(FILE *stream, char *buf, int mode, size_t size);
@@ -208,6 +210,9 @@ double strtod(const char *s, char **end);
 float strtof(const char *s, char **end);
 int system(const char *cmd);
 char *tmpnam(char *buf);
+/* mkstemp fills the template's trailing XXXXXX and opens it; see src/env/stdio.js for why the
+   descriptor it returns is also a usable FILE*. */
+int mkstemp(char *template);
 long random(void);
 void srandom(unsigned seed);
 /*

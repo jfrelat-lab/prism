@@ -321,6 +321,38 @@ void SDL_DestroyTexture(SDL_Texture *texture);
 int SDL_QueryTexture(SDL_Texture *texture, Uint32 *format, int *access, int *w, int *h);
 int SDL_LockTexture(SDL_Texture *texture, const SDL_Rect *rect, void **pixels, int *pitch);
 void SDL_UnlockTexture(SDL_Texture *texture);
+
+/*
+ * What Jump 'n Bump's SDL 2 port asks for beyond OpenTyrian's needs. Two groups, and the split is
+ * worth seeing: SDL_CreateWindowAndRenderer, SDL_RenderSetLogicalSize, SDL_UpdateTexture,
+ * SDL_ConvertSurfaceFormat, SDL_SetPaletteColors, SDL_SetWindowTitle and SDL_SetWindowIcon are
+ * SDL2's own, while SDL_LockSurface, SDL_UnlockSurface, SDL_SetColorKey, SDL_MapRGBA,
+ * SDL_GetMouseState, SDL_LockAudio and SDL_UnlockAudio are names SDL2 KEPT from 1.2 -- which is
+ * exactly why the two versions cannot share one table: same name, and here the same meaning, but
+ * the structs behind them differ.
+ *
+ * Signatures read from the real SDL2 headers in the oracle container, not recalled.
+ */
+int SDL_CreateWindowAndRenderer(int width, int height, Uint32 window_flags,
+                                SDL_Window **window, SDL_Renderer **renderer);
+int SDL_RenderSetLogicalSize(SDL_Renderer *renderer, int w, int h);
+int SDL_UpdateTexture(SDL_Texture *texture, const SDL_Rect *rect, const void *pixels, int pitch);
+void SDL_SetWindowTitle(SDL_Window *window, const char *title);
+void SDL_SetWindowIcon(SDL_Window *window, SDL_Surface *icon);
+SDL_Surface *SDL_ConvertSurfaceFormat(SDL_Surface *src, Uint32 pixel_format, Uint32 flags);
+int SDL_SetPaletteColors(SDL_Palette *palette, const SDL_Color *colors,
+                         int firstcolor, int ncolors);
+
+/* SDL2 keeps SDL_SWSURFACE defined as 0 for source compatibility; this port still passes it. */
+#define SDL_SWSURFACE 0
+
+int SDL_LockSurface(SDL_Surface *surface);
+void SDL_UnlockSurface(SDL_Surface *surface);
+int SDL_SetColorKey(SDL_Surface *surface, int flag, Uint32 key);
+Uint32 SDL_MapRGBA(const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
+Uint32 SDL_GetMouseState(int *x, int *y);
+void SDL_LockAudio(void);
+void SDL_UnlockAudio(void);
 int SDL_ShowCursor(int toggle);
 int SDL_SetRelativeMouseMode(SDL_bool enabled);
 #endif
