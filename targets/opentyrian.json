@@ -18,5 +18,6 @@
     "sdl2"
   ],
   "_units": "The makefile is one line: SRCS := $(wildcard src/*.c). No subdirectories.",
-  "_data": "Tyrian 2.1, released as FREEWARE by its author -- tyrian21.zip, 4,754,048 bytes, 106 files, from camanis.net/tyrian. Like every target, read from a directory the user names and never in the repository."
+  "_data": "Tyrian 2.1, released as FREEWARE by its author -- tyrian21.zip, 4,754,048 bytes, 106 files, from camanis.net/tyrian. Like every target, read from a directory the user names and never in the repository.",
+  "host": "sdl2"
 }
