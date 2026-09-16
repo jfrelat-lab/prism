@@ -1,0 +1,22 @@
+{
+  "title": "OPENTYRIAN",
+  "subtitle": "the 1995 vertical shooter, rewritten in C from the Turbo Pascal original — repository head",
+  "target": "opentyrian",
+  "host": "sdl2",
+  "fps": 70,
+  "needsData": {
+    "dir": "tyrian",
+    "hint": "Tyrian 2.1, released as FREEWARE by its author — tyrian21.zip from camanis.net/tyrian, 106 files. The files must sit DIRECTLY in this root, as jumpbump.dat does in its own: a data root is one directory deep, so an unzipped tyrian21/ folder inside it would reach the game as 'tyrian21/tyrian.hdt' and nothing would open."
+  },
+  "controls": [
+    ["arrows", "fly"],
+    ["Ctrl / space", "fire"],
+    ["Enter", "choose in the menus"],
+    ["Esc", "back, and out of the attract demo"]
+  ],
+  "_why": "A REIMPLEMENTATION, like OpenDUNE, so it says PRISM handles a large modern-C program -- 52 units, 46,037 lines, 1,530 functions -- not that it runs unmodified 1990s source. Its real job here is PRESSURE ON THE SDL 2 SHIM: src/env/sdl2.js was written for this program, and Jump 'n Bump's SDL 2 port then exercised the same shim sharing none of its code. What makes it worth the trip is its DATA -- Tyrian 2.1 is freeware, so unlike Dune II there is nothing to own.",
+  "_emission": "EVERY function emits, as of the flatten fix. One did not, for weeks: JE_itemScreen, on \"'bin' (/) is not an lvalue\". Control-flow flattening hoists nested declarations to function scope, and a `char temp[64]` in a block that had closed then captured a later assignment belonging to the file-scope `JE_byte temp`. Declarations are alpha-renamed before the hoist now.",
+  "_pacing": "IT PACES ITSELF, and the number that looks bad is its own. framePeriod is 0x4300 PIT ticks at 1,193,182 Hz = 14.375 ms, and frameCountMax is 2 at the default detail, so the base is about 35 frames a second -- but over the first 200 frames, which are title, fades and the attract demo, the program ASKED to wait 27.7 s. Measured, not inferred: 4,152 SDL_Delay calls. `fps` here is 70, the base tick, so the page's pacer stays an upper bound and never fights the game's own limiter.",
+  "_sound": "Silent. Not investigated here.",
+  "_measured": "200 frames at 640x400, 32-bit texture. On the harness's virtual clock, 0.3 s; under --realclock, 34.4 s of wall for 2.2 s of CPU -- the difference is the program sleeping, which it could not do until SDL_Delay stopped being a no-op. Frame 200 is byte-identical under both clocks."
+}

@@ -4,7 +4,7 @@
   "dir": "corpus/OpenTyrian/src",
   "fetch": "git clone --depth 1 https://github.com/OpenTyrian/OpenTyrian.git corpus/OpenTyrian",
   "_doc": "A REIMPLEMENTATION, like OpenDUNE -- so it says PRISM handles a large modern-C program, not that it runs unmodified 1990s source. What makes it worth the trip is its DATA: Tyrian 2.1 was released as freeware by its author, so unlike Dune II there is nothing to own.",
-  "_state": "Renders its title menu: 640x400, 202,143 non-black pixels of 256,000. Stops at JE_main, which is one of the six functions tier-0 still cannot emit -- two declarations of the same name in sibling blocks, in a function that needs control-flow flattening.",
+  "_state": "Plays. 52 units, 46,037 lines, 1,530 functions and EVERY ONE EMITS -- the last holdout was JE_itemScreen, which control-flow flattening broke by hoisting a block-scoped `char temp[64]` past the block that owned it, over the file-scope `JE_byte temp`. 640x400, 32-bit texture; the demo runs and renders in colour. It paces ITSELF: over the first 200 frames -- title, fades, attract demo -- it asked to wait 27.7 s across 4,152 SDL_Delay calls, so a low frames/s figure there is the program's own and not a cost.",
   "units": {
     "glob": "*.c"
   },
