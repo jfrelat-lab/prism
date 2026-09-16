@@ -89,31 +89,6 @@ void SDL_KillThread(SDL_Thread *thread);
 #endif
 `;
 
-/*
- * SDL_mixer is a SEPARATE LIBRARY, not part of SDL, and it is declared here only because this
- * environment is what a program linking `-lSDL -lSDL_mixer` expects to find. Thirteen functions,
- * which is what corpus/jumpnbump-sdl12 calls and nothing more.
- */
-const SDL_MIXER_12 = `
-#ifndef _SDL_mixer_h
-#define _SDL_mixer_h
-#define MIX_DEFAULT_FORMAT 0x8010
-#define MIX_MAX_VOLUME 128
-typedef struct _Mix_Music Mix_Music;
-int Mix_OpenAudio(int frequency, Uint16 format, int channels, int chunksize);
-void Mix_CloseAudio(void);
-int Mix_QuerySpec(int *frequency, Uint16 *format, int *channels);
-void Mix_SetPostMix(void (*mix_func)(void *udata, Uint8 *stream, int len), void *arg);
-Mix_Music *Mix_LoadMUS(const char *file);
-void Mix_FreeMusic(Mix_Music *music);
-int Mix_PlayMusic(Mix_Music *music, int loops);
-int Mix_VolumeMusic(int volume);
-int Mix_HaltMusic(void);
-int Mix_FadeOutMusic(int ms);
-int Mix_PlayingMusic(void);
-int Mix_SetMusicCMD(const char *command);
-#endif
-`;
 
 const SDL_MAIN_12 = `
 #ifndef _SDL_H
@@ -309,6 +284,8 @@ void SDL_CloseAudio(void);
 #endif
 `;
 
+/* SDL_mixer is not here: it is its own library and did not change across the two SDL majors for
+   the entry points these programs use, so src/env/sdlmixer.js supplies it to both environments. */
 export const SDL12_HEADERS = {
   'SDL.h': SDL_MAIN_12,
   'SDL/SDL.h': SDL_MAIN_12,
@@ -316,5 +293,4 @@ export const SDL12_HEADERS = {
   'SDL_endian.h': SDL_ENDIAN_12,
   'SDL_mutex.h': SDL_MUTEX_12,
   'SDL_thread.h': SDL_THREAD_12,
-  'SDL_mixer.h': SDL_MIXER_12,
 };

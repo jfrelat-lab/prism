@@ -68,6 +68,8 @@ const SDLK = {
   },
 };
 
+import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
+
 export function installSDL12(M, { onPresent = null, onPalette = null, keyboard = null } = {}) {
   const dv = () => M.mod.dv;
   const enc = new TextEncoder();
@@ -89,11 +91,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     palette: new Uint8Array(768),   // 0..255 per channel, as a host would want it
     error: 0,
     ticks0: Date.now(),
-    postMix: 0,             // the Mix_SetPostMix callback, or 0
-    postMixArg: 0,
-    audioOpen: false,
-    musicPlaying: false,
-    musicVolume: 128,
+    ...MIXER_STATE,          // the mixer's bookkeeping, shared with the SDL 2 environment
   };
 
   const intern = (s) => M.mod.intern([...enc.encode(s), 0]);
@@ -159,12 +157,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     return best;
   };
 
-  /** Pull the recorded mixing callback, the way a host with no audio thread has to. */
-  const pumpAudio = (buffer, bytes) => {
-    if (!state.postMix) return 0;
-    M.icall(state.postMix, [state.postMixArg, buffer, bytes]);
-    return bytes;
-  };
+  const pumpAudio = (buffer, bytes) => pumpMixer(M, state, buffer, bytes);
 
   const api = {
     // ---- lifecycle -------------------------------------------------------------------------
@@ -284,28 +277,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_PauseAudio: () => 0,
     SDL_CloseAudio: () => 0,
 
-    Mix_OpenAudio: () => { state.audioOpen = true; return 0; },
-    Mix_CloseAudio: () => { state.audioOpen = false; },
-    Mix_QuerySpec: (freq, fmt, ch) => {
-      const d = dv();
-      if (freq) d.setInt32(freq, 44100, true);
-      if (fmt) d.setUint16(fmt, 0x8010, true);   // MIX_DEFAULT_FORMAT, as the header defines it
-      if (ch) d.setInt32(ch, 2, true);
-      return state.audioOpen ? 1 : 0;
-    },
-    Mix_SetPostMix: (fn, arg) => { state.postMix = fn | 0; state.postMixArg = arg | 0; },
-    Mix_LoadMUS: () => 0,            // no music file is decoded; the game checks for NULL and copes
-    Mix_FreeMusic: () => 0,
-    Mix_PlayMusic: () => { state.musicPlaying = true; return 0; },
-    Mix_PlayingMusic: () => (state.musicPlaying ? 1 : 0),
-    Mix_HaltMusic: () => { state.musicPlaying = false; return 0; },
-    Mix_FadeOutMusic: () => { state.musicPlaying = false; return 1; },
-    Mix_VolumeMusic: (v) => {
-      const was = state.musicVolume;
-      if ((v | 0) >= 0) state.musicVolume = v | 0;
-      return was;
-    },
-    Mix_SetMusicCMD: () => 0,
+    ...mixerApi(M, state),
   };
 
   Object.assign(M.rt, api);
@@ -365,17 +337,6 @@ export function sdl12Builtins(T) {
     SDL_PauseAudio: f(V, I),
     SDL_CloseAudio: f(V),
 
-    Mix_OpenAudio: f(I, I, T.USHORT, I, I),
-    Mix_CloseAudio: f(V),
-    Mix_QuerySpec: f(I, P, P, P),
-    Mix_SetPostMix: f(V, P, P),
-    Mix_LoadMUS: f(P, P),
-    Mix_FreeMusic: f(V, P),
-    Mix_PlayMusic: f(I, P, I),
-    Mix_PlayingMusic: f(I),
-    Mix_HaltMusic: f(I),
-    Mix_FadeOutMusic: f(I, I),
-    Mix_VolumeMusic: f(I, I),
-    Mix_SetMusicCMD: f(I, P),
+    ...mixerBuiltins(T),
   };
 }

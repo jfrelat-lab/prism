@@ -1,0 +1,36 @@
+{
+  "name": "jumpnbump-sdl2",
+  "title": "Jump 'n Bump (SDL 2 port, repository head)",
+  "dir": "corpus/jumpnbump-sdl2",
+  "fetch": "git clone https://gitlab.com/LibreGames/jumpnbump.git corpus/jumpnbump && mkdir -p corpus/jumpnbump-sdl2 && git -C corpus/jumpnbump archive HEAD | tar -x -C corpus/jumpnbump-sdl2",
+  "_doc": "THE THIRD PLATFORM LAYER OVER THE SAME GAME, after targets/jumpnbump.json (DOS, the 2002 root commit) and targets/jumpnbump-sdl.json (SDL 1.2, tag 1.51). main.c, menu.c and filter.c are the game in all three; dos/ and sdl/ are what changes. A second layer proved the point -- the compatibility frontier sits at the LIBRARY -- and a third is worth less as a demonstration and more as PRESSURE ON THE SHIM: src/env/sdl2.js was written for OpenTyrian, and a shim exercised by two programs that share no code is worth much more than one exercised by a single program.",
+  "units": {
+    "list": [
+      "main.c",
+      "menu.c",
+      "filter.c",
+      "network.c",
+      "sdl/gfx.c",
+      "sdl/input.c",
+      "sdl/interrpt.c",
+      "sdl/sound.c"
+    ]
+  },
+  "_units": "The Makefile's own lists: OBJS = main.o menu.o filter.o network.o, plus sdl.a from sdl/. network.c stays in even without USE_NET, exactly as the Makefile keeps it -- what the switch removes is its contents, not the file. modify/ is excluded as in the other two: gobpack, jnbpack and jnbunpack are separate tools with their own main().",
+  "include": ["."],
+  "defines": {
+    "USE_SDL": "1",
+    "NDEBUG": "1",
+    "stricmp": "strcasecmp",
+    "strnicmp": "strncasecmp"
+  },
+  "_defines": "The Makefile's DEFINES minus three, on the same grounds as the SDL 1.2 target: -DUSE_NET, -DZLIB_SUPPORT and -DBZLIB_SUPPORT are guarded switches the source offers (USE_NET appears 11 times in main.c and 6 in network.c, all inside #ifdef), so leaving them out selects a configuration this tree supports rather than inventing one. The two renames are not options -- the program calls stricmp and strnicmp, the DOS spellings, and the Makefile maps them to the POSIX names.",
+  "compile": {
+    "memory": 64,
+    "collect": true
+  },
+  "host": "sdl2",
+  "env": ["stdio", "getopt", "sdl2"],
+  "_env": "sdl2 rather than sdl12, and naming both is refused: they are two versions of one library and a build links against exactly one. getopt for the same reason as the SDL 1.2 target -- main.c reads optarg and optind directly.",
+  "_texture": "THE DISPLAY IS NOT A PALETTED SURFACE ANY MORE, which is the one real difference from the SDL 1.2 port. That one asked for an 8-bit surface and the host published it as it lay; this one creates a window and a renderer, draws into a surface, and uploads through SDL_UpdateTexture. The palette stops being something to publish and becomes a conversion."
+}

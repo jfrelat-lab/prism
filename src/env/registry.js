@@ -36,6 +36,7 @@ import { installSDL2, sdl2Builtins } from './sdl2.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
 import { SDL12_HEADERS } from './headers-sdl12.js';
 import { installSDL12, sdl12Builtins } from './sdl12.js';
+import { MIXER_HEADERS, mixerApi, mixerBuiltins, MIXER_STATE } from './sdlmixer.js';
 import * as T from '../sema/types.js';
 import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
@@ -139,9 +140,21 @@ export const ENV = {
    * without ever naming this environment.
    */
   sdl2: {
-    install: (M, _c, o) => installSDL2(M, o),
-    headers: SDL2_HEADERS,
-    builtins: sdl2Builtins(T),
+    /*
+     * SDL_mixer rides along, because a program linking -lSDL2 -lSDL2_mixer expects to find it and
+     * the library is the same one the SDL 1.2 environment names. Sharing the declarations is what
+     * envHeaders() allows on purpose: it refuses two environments that supply one header with
+     * DIFFERENT text, and identical text is not a conflict.
+     */
+    install: (M, _c, o) => {
+      const sdl = installSDL2(M, o);
+      const mix = { ...MIXER_STATE };
+      Object.assign(M.rt, mixerApi(M, mix));
+      M.mixer = mix;
+      return sdl;
+    },
+    headers: { ...SDL2_HEADERS, ...MIXER_HEADERS },
+    builtins: { ...sdl2Builtins(T), ...mixerBuiltins(T) },
   },
 
   /*
@@ -158,8 +171,8 @@ export const ENV = {
    */
   sdl12: {
     install: (M, _c, o) => installSDL12(M, o),
-    headers: SDL12_HEADERS,
-    builtins: sdl12Builtins(T),
+    headers: { ...SDL12_HEADERS, ...MIXER_HEADERS },
+    builtins: { ...sdl12Builtins(T), ...mixerBuiltins(T) },
   },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
