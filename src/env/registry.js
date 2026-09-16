@@ -32,9 +32,10 @@ import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
-import { installSDL2 } from './sdl2.js';
+import { installSDL2, sdl2Builtins } from './sdl2.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
 import { SDL12_HEADERS } from './headers-sdl12.js';
+import * as T from '../sema/types.js';
 import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
 import { installVgaFont } from './vgafont.js';
@@ -127,11 +128,20 @@ export const ENV = {
   /*
    * SDL2 for the Open* family. See src/env/sdl2.js.
    *
-   * The headers travel WITH the shim rather than in the global table, and the two must stay one
-   * artifact: the guest reads `surface->pixels` and `surface->pitch` at offsets this header decides,
-   * and the shim writes the values. Split them and they drift silently.
+   * The headers AND the builtin signatures travel with the shim rather than in the global tables,
+   * and all three must stay one artifact: the guest reads `surface->pixels` and `surface->pitch` at
+   * offsets the header decides, the signature says what a call returns, and the shim writes the
+   * values. Split them and they drift silently.
+   *
+   * Registered globally, these answered for SDL 1.2 programs too: corpus/jumpnbump-sdl12 resolved
+   * SDL_Init, SDL_PollEvent, SDL_CreateRGBSurface and SDL_MapRGB against SDL2's implementations
+   * without ever naming this environment.
    */
-  sdl2: { install: (M, _c, o) => installSDL2(M, o), headers: SDL2_HEADERS },
+  sdl2: {
+    install: (M, _c, o) => installSDL2(M, o),
+    headers: SDL2_HEADERS,
+    builtins: sdl2Builtins(T),
+  },
 
   /*
    * SDL 1.2, for the ports written against it. See src/env/headers-sdl12.js.
@@ -209,6 +219,37 @@ export function envHeaders(spec) {
       }
       out[file] = text;
       from.set(file, n);
+    }
+  }
+  return out;
+}
+
+/**
+ * The BUILTIN SIGNATURES an environment supplies -- the third piece that belongs to a library,
+ * beside its headers and its `vars`.
+ *
+ * A signature says what a call takes and what it returns, so it decides the type of the value the
+ * emitter hands back. Two versions of one library disagree there as surely as they disagree about a
+ * struct: SDL 1.2's SDL_PollEvent fills an event whose `type` is a Uint8, SDL2's one whose `type` is
+ * a Uint32, and both are called SDL_PollEvent. Registered in one global table, SDL2's answered for
+ * an SDL 1.2 program that had not named it -- which does not crash, it invents keystrokes.
+ *
+ * Refused on conflict for the same reason envHeaders refuses: two environments claiming one name
+ * are two versions of one library, and a build links against exactly one.
+ */
+export function envBuiltins(spec) {
+  const names = Array.isArray(spec) ? spec : Object.keys(spec ?? {});
+  const out = new Map(), from = new Map();
+  for (const n of names) {
+    for (const [sym, sig] of Object.entries(ENV[n]?.builtins ?? {})) {
+      const held = from.get(sym);
+      if (held !== undefined && out.get(sym) !== sig) {
+        throw new Error(`environments '${held}' and '${n}' both define the builtin '${sym}'. They ` +
+          `are two versions of one library and a build links against exactly one — name the one ` +
+          `this program was written for.`);
+      }
+      out.set(sym, sig);
+      from.set(sym, n);
     }
   }
   return out;

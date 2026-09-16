@@ -17,7 +17,6 @@ import { wsockBuiltins } from './env/wsock.js';
 import { watcomBuiltins } from './env/watcom.js';
 import { go32Builtins } from './env/go32.js';
 import { dlBuiltins } from './env/dl.js';
-import { sdl2Builtins } from './env/sdl2.js';
 import { svgalibBuiltins } from './env/svgalib.js';
 import { installStdio } from './env/stdio.js';
 import { installQuake } from './env/quake.js';
@@ -626,8 +625,32 @@ registerBuiltins('wsock', wsockBuiltins(T));
 // DJGPP's DPMI floor, which Quake's dos_v2.c builds all of dosisms.h on; see src/env/go32.js.
 registerBuiltins('go32', go32Builtins(T));
 registerBuiltins('dl', dlBuiltins(T));
-registerBuiltins('sdl2', sdl2Builtins(T));
 registerBuiltins('svgalib', svgalibBuiltins(T));
+/*
+ * SDL2's builtins are NOT registered here. They travel on the `sdl2` environment instead
+ * (src/env/registry.js), for the reason its headers do: two versions of one library cannot share a
+ * table. Registered globally, they answered for an SDL 1.2 program too -- corpus/jumpnbump-sdl12
+ * resolved SDL_Init, SDL_PollEvent, SDL_CreateRGBSurface, SDL_MapRGB and SDL_JoystickGetAxis
+ * against SDL2's implementations without naming that environment at all. SDL_PollEvent is the one
+ * that would have hurt: it fills an SDL2 event into a buffer the guest reads with 1.2 offsets,
+ * where `type` is a Uint8 rather than a Uint32 and the keysym sits elsewhere. That does not crash,
+ * it invents keystrokes.
+ */
+
+/**
+ * The builtin table an environment's own entries see, layered over the global one.
+ *
+ * Returns BUILTINS itself when nothing is added, so every build that names no such environment
+ * pays nothing and behaves exactly as before.
+ */
+function withEnvBuiltins(extra) {
+  if (!extra || (extra instanceof Map ? extra.size === 0 : Object.keys(extra).length === 0)) {
+    return BUILTINS;
+  }
+  const out = new Map(BUILTINS);
+  for (const [k, v] of (extra instanceof Map ? extra : Object.entries(extra))) out.set(k, v);
+  return out;
+}
 
 export class CompileError extends Error {}
 
@@ -694,7 +717,7 @@ function wireRebind(F, mod, emitted, rebind) {
   }
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
     defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
@@ -744,7 +767,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   }
 
   // Pass 2: emit. Static initialisers are written straight into the image where they are constant.
-  const ctx = { globals, funcs, builtins: BUILTINS, safepoints, directCalls };
+  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls };
   const pieces = [];
   const emitted = [];
   for (const d of unit.decls) {
@@ -817,9 +840,12 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, paged = false, exports: moduleExports = {} } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
+  // The builtins this build sees: the global table, plus whatever its environments add. Computed
+  // once, because it is read per unit.
+  const envTable = withEnvBuiltins(extraBuiltins);
   const failures = [];
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -1095,7 +1121,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       unit: basename(p.file),
       globals: overlay(seen.globals, p.globals),
       funcs: overlay(seen.funcs, p.funcs),
-      builtins: BUILTINS,
+      builtins: envTable,
     };
     for (const d of p.unit.decls) {
       if (d.n === 'vardecl') {

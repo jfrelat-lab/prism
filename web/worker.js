@@ -15,7 +15,7 @@ import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js'
  * TARGET'S OWN env list through buildEnv rather than naming them one by one, which is the same rule
  * the DOS branch's comment states and did not follow.
  */
-import { buildEnv, envHeaders } from '../src/env/registry.js';
+import { buildEnv, envHeaders, envBuiltins } from '../src/env/registry.js';
 import { installAsm } from '../src/asm/link.js';
 import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
@@ -314,6 +314,9 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
        * safepointsNote for why MAME needs them and Doom does not.
        */
       safepoints: !!program.safepoints,
+      // The environments' builtin signatures, as src/target.js passes them -- so a program compiled
+      // in the page links against the same library version it would in Node.
+      extraBuiltins: envBuiltins(program.env ?? []),
       collect: true,                 // report every gap in one build, not the first one
     });
   } catch (err) {

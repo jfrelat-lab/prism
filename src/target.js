@@ -19,7 +19,7 @@ import { join, basename, dirname, resolve as resolvePath } from 'node:path';
 import { compileProgram } from './compile.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
-import { buildEnv, envVars, envHeaders } from './env/registry.js';
+import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
 import { installAsm } from './asm/link.js';
 
 /**
@@ -341,6 +341,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // The environments' own headers, which override the global table for the names they claim --
     // and which refuse rather than resolve when two of them claim one name differently.
     resolve: makeResolver(dir, target, missing, dosPaths, envHeaders(target.env)),
+    // ...and the signatures from the same environments, for the same reason: a call's result type
+    // belongs to the library the program was compiled against, not to a table everyone shares.
+    extraBuiltins: envBuiltins(target.env),
     memory: (c.memory ?? 64) * 1024 * 1024,
     pack: c.pack ?? null,
     collect: c.collect ?? true,
