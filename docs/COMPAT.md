@@ -5,7 +5,7 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 197/219 c-testsuite, 1259/1556 gcc torture |
+| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 213/219 c-testsuite, 1259/1556 gcc torture |
 | nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. Now compiled with **MAME's own DOS platform backend**, `src/msdos/msdos.c`: nothing of MAME is written in JavaScript any more, and what PRISM shims is one level down — Allegro, SEAL and DJGPP's memory helpers. Both of msdos.c's display paths render, 224x288 through the tweaked VGA mode and 640x480 with `-vesa`. | Sound works: SEAL is a real four-voice mixer into a shared ring the page reads (only pengo and ladybug have sound in 0.1).
