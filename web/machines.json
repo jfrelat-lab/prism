@@ -51,8 +51,10 @@
         { "program": "quake", "variant": "x11", "file": "quake", "date": "Aug  1  1996" },
         { "program": "quake-svgalib", "file": "quake.svga", "date": "Aug  1  1996" },
         { "program": "quake2", "file": "quake2", "date": "Dec  9  1997" },
-        { "program": "lua", "file": "lua", "date": "May  2  2023" }
-      ]
+        { "program": "lua", "file": "lua", "date": "May  2  2023" },
+        { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" }
+      ],
+      "_jumpnbump": "The SAME GAME as the DOS shelf's JUMPBUMP.EXE, over the other platform layer -- which is why it earns a second slot rather than replacing the first. Its build is a Linux one (the Makefile calls sdl-config and links -lSDL), so this is where it belongs. The date is the tag's own tree, the 2002 CVS import; the game is 1998 and the DOS entry says so."
     },
     {
       "id": "sun",

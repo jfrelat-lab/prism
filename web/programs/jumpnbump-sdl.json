@@ -1,0 +1,22 @@
+{
+  "title": "JUMP 'N BUMP",
+  "subtitle": "the SDL 1.2 port, tag 1.51 — the same game as the DOS build, over a different platform layer",
+  "target": "jumpnbump-sdl",
+  "host": "sdl",
+  "fps": 60,
+  "needsData": {
+    "dir": "jumpnbump",
+    "hint": "jumpbump.dat from the 1998 DOS release — the same file the DOS build reads, and the same warning applies: not one repacked from the source tree's data/, whose level map is not the one the game shipped."
+  },
+  "controls": [
+    ["arrows", "player 1: move, ↑ jumps"],
+    ["A / D / W", "player 2: move, W jumps"],
+    ["I / J / L", "player 3"],
+    ["Esc", "quit"]
+  ],
+  "_why": "THE POINT OF HAVING IT TWICE. main.c, menu.c, filter.c and fireworks.c are the game; dos/ and sdl/ are two ports of the same floor, and the Makefile chooses between them. Running both is what turns 'the compatibility frontier sits at the library, not at the game' from a claim into a measurement: the two layers draw the same menu through entirely different code, 55,322 non-zero pixels in 101 colours here against 55,481 in 101 there.",
+  "_display": "The simplest path in web/worker.js. The program asks SDL for an 8-bit surface, writes every pixel of it and flips, so the page reads the surface where it lies -- nothing to de-interleave as in the planar branch, no stride to undo as in the DIB one. Same 'publish what the program already writes' move x11.js makes.",
+  "_keys": "The arrows and the numeric keypad share scan code 72, and SDL 1.2 gives them different symbols (SDLK_UP 273, SDLK_KP8 264). This game binds them to DIFFERENT PLAYERS, so the 0xE0 prefix is not a detail: without it two players' controls merge, and nothing reports it. The page's keystroke queue carries that flag beside the code.",
+  "_sound": "Silent. Mix_LoadMUS returns NULL and the program copes -- it prints 'Couldn't load music' and plays on -- which is the library's own failure path rather than an invented switch. The mixing callback registered through Mix_SetPostMix is recorded and can be pulled; nothing pulls it yet.",
+  "_measured": "150 frames in 1.9 s, 63 rendered frames/s on the deterministic clock; 400x256, 8-bit. Escape at frame 60 ends the program at frame 121, which is the keyboard path proving itself."
+}

@@ -67,6 +67,9 @@ const TYPES = {
   /* A program's own assembly, for a target that names it in asmTranslate. src/asm/ is pure JS, so
      the browser translates the same .S file Node does rather than fetching a pre-built artefact. */
   '.s': 'text/plain; charset=utf-8',
+  /* An XPM is C, not an image format the browser should be asked to decode: it is a
+     `char *name[] = { ... }` an X11 program #includes to embed its icon. */
+  '.xpm': 'text/plain; charset=utf-8',
   /* A program's own icon, from its own source tree: the Windows shelf points an <img> straight at
      it, and a browser decodes ICO natively. Without the type it arrives as application/octet-stream
      and Chrome will not decode it -- the desktop then draws four empty labels and looks broken. */

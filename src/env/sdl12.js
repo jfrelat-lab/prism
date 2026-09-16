@@ -72,7 +72,16 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
   const dv = () => M.mod.dv;
   const enc = new TextEncoder();
 
+  /*
+   * The three host hooks live in `state` and are READ AT CALL TIME, not captured here, so a harness
+   * can attach them after the build the way it already assigns M.vga.onFrame. tools/build.mjs has to:
+   * what it wants to do on a flip -- count the frame, tap a key, stop the run -- is not knowable
+   * until the program has been compiled.
+   */
   const state = {
+    onPresent,
+    onPalette,
+    keyboard,
     surface: 0,             // the display surface's guest address
     width: 0,
     height: 0,
@@ -179,8 +188,8 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_FreeSurface: () => 0,    // the guest heap is not reclaimed here; nothing leaks per frame
     SDL_LockSurface: () => 0,    // software surfaces are always addressable
     SDL_UnlockSurface: () => 0,
-    SDL_Flip: (s) => { if (onPresent) onPresent(s || state.surface); return 0; },
-    SDL_UpdateRect: (s) => { if (onPresent) onPresent(s || state.surface); },
+    SDL_Flip: (s) => { if (state.onPresent) state.onPresent(s || state.surface); return 0; },
+    SDL_UpdateRect: (s) => { if (state.onPresent) state.onPresent(s || state.surface); },
     SDL_SetColorKey: () => 0,
     SDL_WM_SetCaption: () => 0,
     SDL_WM_SetIcon: () => 0,
@@ -212,7 +221,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
           M.u8[dst + idx * COLOR_SIZE + 2] = b;
         }
       }
-      if (onPalette) onPalette(state.palette);
+      if (state.onPalette) state.onPalette(state.palette);
       return 1;
     },
 
@@ -242,8 +251,8 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
      * losing that flag would silently merge two players' controls.
      */
     SDL_PollEvent: (ev) => {
-      if (!keyboard) return 0;
-      const e = keyboard.next ? keyboard.next() : null;
+      if (!state.keyboard) return 0;
+      const e = state.keyboard.next ? state.keyboard.next() : null;
       if (!e) return 0;
       if (!ev) return 1;
       const table = e.extended ? SDLK.extended : SDLK.plain;

@@ -331,6 +331,9 @@ const dibBase = dibSym('prism_dib_surface');
  * counts that. Without it a planar target crosses no boundary this tool knows, so --frames can
  * never be reached and the run never ends -- which is exactly what happened on the first attempt.
  */
+// Filled in by the SDL branch below, and read by pressKey further down: the host's key door differs
+// per platform, and only one of them exists in any build.
+let sdlKey = null;
 if (program.M.vga) {
   program.M.vga.onFrame = () => {
     frames++;
@@ -339,6 +342,28 @@ if (program.M.vga) {
     // the run came back byte-identical to a keyless one and printed no [key] line to say why.
     tapKeys();
     if (frameCap && frames >= frameCap) throw new Error('__frames_done');
+  };
+}
+/*
+ * AN SDL 1.2 HOST'S FRAME BOUNDARY IS SDL_Flip, and it comes from the shim rather than from a
+ * wrapper here: src/env/sdl12.js calls onPresent, which is read at call time so this can attach
+ * after the build, exactly as the planar device's onFrame is assigned above.
+ */
+if (program.M.sdl) {
+  program.M.sdl.state.onPresent = () => {
+    frames++;
+    tapKeys();
+    if (frameCap && frames >= frameCap) throw new Error('__frames_done');
+  };
+  /*
+   * And the key door for this host. The shim reads one event per SDL_PollEvent and wants a scan
+   * code plus the 0xE0 flag -- the arrows and the keypad share code 72, and this game gives them to
+   * two different players, so dropping the flag would merge their controls without a word.
+   */
+  const sdlKeys = [];
+  program.M.sdl.state.keyboard = { next: () => sdlKeys.shift() ?? null };
+  sdlKey = (code, down) => {
+    sdlKeys.push({ scan: code & 0x7f, extended: code >= 0x80, down: !!down, ascii: 0 });
   };
 }
 if ((frameCap || pngPath) && dibBase && program.F.BitBlt) {
@@ -427,7 +452,7 @@ const dosKey = (program.M.kbd && env.go32?.deliver)
     send(down ? (code & 0x7f) : ((code & 0x7f) | 0x80));
   }
   : null;
-const pressKey = program.F.prism_win32_key ?? dosKey;
+const pressKey = program.F.prism_win32_key ?? sdlKey ?? dosKey;
 if (keyScript.length && !pressKey) {
   // A flag that quietly does nothing is worse than one that is missing: say so.
   console.log(`  --keys: this target has no key door here. A Win32 program needs prism_win32_key ` +
@@ -555,6 +580,21 @@ if (mgl) {
     for (const b of pixels) if (b) nz++;
     writeIndexedPng(pngPath, { pixels, width, height, palette });
     console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
+  }
+} else if (program.M.sdl?.state.surface) {
+  /*
+   * THE SDL 1.2 PICTURE, which needs no de-interleaving and no stride arithmetic: the program asked
+   * for an 8-bit surface and wrote every pixel of it. The palette is the shim's own copy, kept in
+   * the 0..255 form SDL_SetColors hands over rather than the DAC's six bits.
+   */
+  const { width: w, height: h, pixels, palette } = program.M.sdl.state;
+  console.log(`\nframes ${frames} · display ${w}x${h} · SDL 1.2, 8-bit` + fpsNote());
+  if (pngPath && w > 0 && h > 0) {
+    const px = new Uint8Array(program.M.u8.subarray(pixels, pixels + w * h));
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    writeIndexedPng(pngPath, { pixels: px, width: w, height: h, palette });
+    console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
   }
 } else if (program.M.vga && !program.M.vga.chained) {
   /*

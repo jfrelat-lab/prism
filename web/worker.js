@@ -169,7 +169,14 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
   // and a resolver that never fetched it stubbed it silently — which surfaced 20 lines later as
   // "progs.h:46: expected ';' but found 'v'", the typedef it defines having vanished. Node reads
   // whatever the include names off the disk, so the failure existed only in the browser.
-  const SOURCE_EXT = /\.(c|h|q1|q2|inc|def)$/i;
+  /*
+   * `.xpm` is in this list because an XPM file IS C -- a `char *name[] = { ... }` an X11 program
+   * #includes to embed an image. sdl/gfx.c does exactly that for its window icon, and leaving the
+   * extension out cost a whole function: the include resolved to an empty stub, `jumpnbump64_xpm`
+   * was never declared, and open_screen could not be emitted. Node reads the tree off disk and so
+   * never met this filter at all -- which is how the two hosts disagreed about the same program.
+   */
+  const SOURCE_EXT = /\.(c|h|q1|q2|inc|def|xpm)$/i;
   const wanted = listing.files.filter(f => SOURCE_EXT.test(f));
   const tree = new Map();
   /* Both keys: units are named relative to the root, includes are searched by repo path. */
@@ -950,6 +957,58 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       composeFrame();
     };
 
+  } else if (platform === 'sdl') {
+    /*
+     * AN SDL 1.2 HOST. The simplest display path in this file, and deliberately so: the program
+     * asks for an 8-bit surface, writes every pixel of it, and flips. There is nothing to
+     * de-interleave as in the planar branch and no stride to undo as in the DIB one -- the page can
+     * read the surface where it lies, which is the same "publish what the program already writes"
+     * move x11.js makes.
+     *
+     * Devices come from the target's own env list, so this branch names none of them.
+     */
+    const env = buildEnv(prog.M, program.env ?? [], {
+      stdio: { files, readChar: () => keyboard.read() },
+      sdl12: {
+        onPalette: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
+      },
+    });
+    void env;
+    const sdl = prog.M.sdl;
+    if (!sdl) {
+      throw new Error("host 'sdl' needs the sdl12 environment — it is what supplies the surface " +
+        "the page reads. Name it in the target's env list.");
+    }
+
+    /*
+     * One page event becomes one SDL event, and `extended` has to survive the trip: the arrows and
+     * the numeric keypad share scan code 72, SDL 1.2 gives them different symbols, and this game
+     * binds them to two different players. Dropping the flag would merge their controls silently.
+     */
+    sdl.state.keyboard = {
+      next: () => {
+        const e = keyboard.nextEvent();
+        return e ? { scan: e.scan, extended: !!e.extended, down: e.down, ascii: 0 } : null;
+      },
+    };
+
+    let published = 0;
+    sdl.state.onPresent = () => {
+      const { width: w, height: h, pixels } = sdl.state;
+      if (!w || !h || !pixels) return;
+      // Republished only when the mode actually changes; the surface does not move per frame.
+      if (published !== pixels) {
+        published = pixels;
+        Atomics.store(ctrl, SLOT.WIDTH, w);
+        Atomics.store(ctrl, SLOT.HEIGHT, h);
+        Atomics.store(ctrl, SLOT.PIXELS, pixels);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        log(`SDL 1.2 display ${w}x${h}, 8-bit`);
+      }
+      reader.endFrame();
+      pace();
+    };
+
   } else if (platform === 'svgalib') {
     /*
      * A LINUX CONSOLE host: the same machine as x11, the other display path. svgalib is shimmed at
@@ -1026,7 +1085,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * from a program that was handed the wrong world.
      */
     throw new Error(`the shell has no branch for platform '${platform}' yet -- ` +
-      `it presents x11, svgalib, mgl, gdi, dos, planar, watcom, console and allegro. This build runs in Node: ` +
+      `it presents x11, svgalib, mgl, gdi, dos, planar, sdl, watcom, console and allegro. This build runs in Node: ` +
       `node tools/build.mjs targets/<name>.json:<variant> --run`);
   } else {
     /*
