@@ -128,7 +128,80 @@ export function needsFlattening(body) {
  * whose discriminant needs a temporary the emitter would have to allocate, and a name declared twice
  * in sibling blocks that would collide once both are hoisted to function scope.
  */
+/**
+ * Give every declaration below the function's own block a name no other scope uses.
+ *
+ * Hoisting was justified by program order: a use between two declarations sees the one that
+ * precedes it. That holds between two LOCALS and fails against anything declared further out. In
+ * OpenTyrian's JE_itemScreen a `char temp[64]` lives in a block that closes, and a later
+ * `temp = yLoc / 12` belongs to the file-scope `JE_byte temp` -- but once the array is hoisted it
+ * precedes that assignment, so the assignment became an array store and the function stopped being
+ * emittable ("'bin' (/) is not an lvalue"). Renaming first means a hoisted name can capture nothing.
+ *
+ * Types are shared and are passed through untouched; `extern` is left alone because inside a block
+ * it REFERS to the file-scope object rather than declaring one.
+ */
+function uniquifyLocals(body) {
+  let n = 0;
+  const stack = [new Map()];                 // [0] is the function body's own scope: never renamed
+  const lookup = (name) => {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const to = stack[i].get(name);
+      if (to !== undefined) return to;
+    }
+    return null;
+  };
+
+  /*
+   * A VLA's length is an EXPRESSION that lives on the type, so `int a[k]` reads `k` from a place the
+   * statement walk never visits. Types are otherwise shared and must not be copied; an array type
+   * carrying a `vla` was built for its one declarator, so rewriting that chain is safe.
+   */
+  const cloneType = (t) => {
+    if (!t || typeof t !== 'object' || t.k !== 'array') return t;
+    const of = cloneType(t.of);
+    const vla = t.vla ? clone(t.vla) : t.vla;
+    return of === t.of && vla === t.vla ? t : { ...t, of, vla };
+  };
+
+  const clone = (node) => {
+    if (Array.isArray(node)) return node.map(clone);
+    if (!node || typeof node !== 'object' || typeof node.n !== 'string') return node;
+
+    if (node.n === 'block') {
+      stack.push(new Map());
+      try { return { ...node, items: node.items.map(clone) }; } finally { stack.pop(); }
+    }
+    if (node.n === 'for') {
+      // The init clause declares into a scope of its own, which the body sees and its siblings do not.
+      stack.push(new Map());
+      try {
+        return { ...node, init: clone(node.init), cond: clone(node.cond),
+                 step: clone(node.step), body: clone(node.body) };
+      } finally { stack.pop(); }
+    }
+    if (node.n === 'vardecl') {
+      const rename = stack.length > 1 && node.storage !== 'extern';
+      const name = rename ? `${node.name}$b${n++}` : node.name;
+      if (rename) stack[stack.length - 1].set(node.name, name);
+      // C puts the name in scope at its declarator, so `int x = x;` reads the new one: declare first.
+      return { ...node, name, type: cloneType(node.type), init: clone(node.init) };
+    }
+    if (node.n === 'ident') {
+      const to = lookup(node.name);
+      return to ? { ...node, name: to } : node;
+    }
+
+    const out = {};
+    for (const k of Object.keys(node)) out[k] = k === 'type' ? node[k] : clone(node[k]);
+    return out;
+  };
+
+  return { ...body, items: body.items.map(clone) };
+}
+
 export function flattenGotos(body, { unsup, newTemp }) {
+  body = uniquifyLocals(body);
   const out = [];
   const declared = new Map();          // name -> the declaration it came from, to catch collisions
   /*
