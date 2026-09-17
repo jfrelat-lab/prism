@@ -1,0 +1,29 @@
+{
+  "name": "keendreams",
+  "title": "Keen Dreams (id Software / Softdisk, Borland C++ / DOS)",
+  "dir": "corpus/KeenDreams",
+  "fetch": "git clone --depth 1 https://github.com/keendreams/keen.git corpus/KeenDreams",
+
+  "_doc": "THE FIRST 16-BIT TARGET, and it is not expected to build yet. PRISM emits for i386 and only for i386; this program is Borland C++ real mode, with 242 `far` declarations and 141 uses of MK_FP/FP_SEG/FP_OFF/_seg/int86 across its C. It is here to be a MEASUREMENT: a build that fails loudly names what a 16-bit backend has to supply, which is cheaper and truer than estimating it. gate-abi16 and gate-bits16 already pin the layout rules against Open Watcom for exactly this day.",
+
+  "_why_this_one": "Chosen over Wolf3D, Catacomb 3D and Hovertank 3D by measuring both halves of the work. Hovertank has the least C (9,391 lines) and is the worst candidate: its engine IS assembly -- 14,685 lines and 202 entry points the C names. Wolf3D has the least assembly (1,951 lines, 18 entry points) but three of those are timer INTERRUPT HANDLERS, one exists only to fix DS inside an ISR, and two are self-modifying 386 detection -- none of which is a callable routine. Keen Dreams' 25 entry points are, without exception, ordinary routines and shared variables: VW_Plot, VW_Vlin, VW_DrawTile8, VW_MaskBlock, VW_ScreenToScreen, VW_MemToScreen, RFL_NewTile, RFL_UpdateTiles, plus px/py/pdrawmode/bufferwidth. That is the same SHAPE as Jump 'n Bump's get_block/put_block, the one piece of game assembly PRISM has already translated and checked against Unicorn.",
+
+  "_units": "The program's OWN list, read out of kdreams.prj -- a binary Borland project whose file names sit in it as plain text. Worth the trouble: the tree also carries lscr/loadscn2.c and static/makeobj.c, and the project names neither, so a *.c glob would have compiled files the game never built.",
+  "units": {
+    "list": [
+      "kd_main.c", "kd_demo.c", "kd_play.c", "kd_keen.c", "kd_act1.c", "kd_act2.c",
+      "gelib.c", "jam_io.c", "soft.c", "lzhuf.c",
+      "id_mm.c", "id_ca.c", "id_vw.c", "id_rf.c", "id_in.c", "id_sd.c", "id_us.c", "id_us_s.c"
+    ]
+  },
+
+  "_asm": "FOUR assembly objects the project builds and this target does not: id_vw_a.asm, id_vw_ae.asm, id_rf_a.asm, id_us_a.asm. They are MASM/TASM, and PRISM's assembler front end reads NASM (src/asm/nasm.js), so there is nothing to bind them with yet -- the build will report their symbols as undefined, which IS the survey. id_vw_ac.asm is in the tree and NOT in the project: it is the CGA variant, and GRMODE in id_heads.h ships as EGAGR. Selecting neither: EGA is what the tree already says.",
+
+  "_static_data": "make.bat runs static/makeobj.c over the .KDR files in static/ to produce KDREDICT.OBJ and KDREHEAD.OBJ, which the project LINKS. PRISM links no object files, so that data has no route in today. Named here rather than discovered later.",
+
+  "_first_gap": "BUILT AND MEASURED: it stops at ID_MM.H:43, `typedef void _seg * memptr;`. Not `far` -- parser.js:60 already tolerates far and near as bare model qualifiers, which is why the first stop is past them. `_seg` is Borland's SEGMENT POINTER: a pointer holding only a segment, so it is a distinct pointer kind and not a qualifier to skip. Counted across this program's C and headers: far 214, _seg 65, huge 30, near 7. The parser knows far and near, and knows none of _seg, huge, cdecl, pascal or interrupt.",
+  "_compile": "No compiler identity macro is tested anywhere in the source and no #pragma pack or option appears, so the memory model is entirely a Borland project setting rather than anything the C states. That is itself a finding: nothing in the source tells a reader which model it wants.",
+  "compile": { "memory": 16, "collect": true },
+
+  "env": ["stdio"]
+}
