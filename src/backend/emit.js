@@ -308,6 +308,9 @@ export class FunctionEmitter {
     // give would be right, because there is no segmented model to give it in. Refused whole, by name.
     const seg = T.segModel(d.type) ?? segModelIn(d.body);
     if (seg) unsup(`a 16-bit ${seg} pointer (Borland segmented model)`);
+    // Borland inline assembly shares registers with code only Borland's generator produced; there
+    // is no translating one statement of it apart from the function around it.
+    if (hasNode(d.body, 'asmborland')) unsup('Borland inline assembly');
 
     // Which locals escape? A scalar that is never `&`-taken can live in a JS var. Everything with
     // an address, and every aggregate, needs a slot. This single decision is the difference between
@@ -3006,6 +3009,23 @@ function segModelIn(root) {
       if (m) return m;
     }
     return null;
+  };
+  return walk(root);
+}
+
+/** Does any node under `root` have kind `n`? Types are not walked: they hold no statements. */
+function hasNode(root, n) {
+  const seen = new Set();
+  const walk = (x) => {
+    if (!x || typeof x !== 'object' || seen.has(x)) return false;
+    seen.add(x);
+    if (Array.isArray(x)) return x.some(walk);
+    if (x.n === n) return true;
+    for (const k of Object.keys(x)) {
+      if (k === 'type' || k === 'target' || k === 'sym' || k === 'loc') continue;
+      if (walk(x[k])) return true;
+    }
+    return false;
   };
   return walk(root);
 }

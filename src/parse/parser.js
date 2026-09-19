@@ -214,7 +214,10 @@ export class Parser {
    * no outputs is faithfully a no-op that still evaluates its inputs.
    */
   #topLevelAsm() {
-    this.next();
+    const kw = this.next();
+    if (kw.v === 'asm' && !this.isP('(') && !/^_*(volatile|inline|goto|const)_*$/.test(this.peek().v)) {
+      return this.#borlandAsm(kw);
+    }
     while (this.peek().k === ID &&
            /^_*(volatile|inline|goto|const)_*$/.test(this.peek().v)) this.i++;
     this.#skipAttributeLike();
@@ -251,6 +254,43 @@ export class Parser {
     this.expectP(')');
     this.eatP(';');
     return { n: 'asm', template, outputs, inputs, clobbers };
+  }
+
+  /**
+   * Borland's inline assembly: `asm mov es,[WORD PTR mapsegs+4]` -- one instruction running to the
+   * end of its SOURCE LINE or to a `;` -- or `asm { ... }` around several. Keen Dreams has 640 of
+   * them in 11 of its 20 C files.
+   *
+   * Kept as TEXT and never translated: it reads and writes registers the C compiler is also using,
+   * segment registers included, and names C variables whose storage only Borland's code generator
+   * knew. A function containing one is refused whole by the emitter. What this buys is the rest of
+   * the survey -- the build no longer stops at the first one.
+   */
+  #borlandAsm(kw) {
+    const text = [];
+    if (this.isP('{')) {
+      this.i++;
+      for (let depth = 1; ;) {
+        const t = this.next();
+        if (t.k === EOF) throw new ParseError('unterminated asm { block', kw);
+        if (t.k === PUNCT && t.v === '{') depth++;
+        if (t.k === PUNCT && t.v === '}' && --depth === 0) break;
+        text.push(t.v);
+      }
+    } else {
+      // The statement ends at the end of the LINE the keyword is on, because that is the only
+      // terminator Borland requires; `;` and a closing brace on the same line end it too.
+      const line = kw.loc?.line, file = kw.loc?.file;
+      while (this.peek().k !== EOF) {
+        const t = this.peek();
+        if (t.loc?.line !== line || t.loc?.file !== file) break;
+        if (t.k === PUNCT && t.v === '}') break;
+        this.i++;
+        if (t.k === PUNCT && t.v === ';') break;
+        text.push(t.v);
+      }
+    }
+    return { n: 'asmborland', text: text.join(' ') };
   }
 
   /** A declaration, or a function definition if a `{` follows the first declarator. */
