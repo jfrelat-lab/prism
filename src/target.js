@@ -116,8 +116,32 @@ function exportsFromDef(path) {
 }
 
 /** An #include resolver over one source tree plus PRISM's own headers. */
-function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing, dosPaths,
-  envTable = {}) {
+export function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing, dosPaths,
+  envTable = {}, casePaths = null) {
+  /*
+   * PRISM's OWN headers, by lower-cased name, for a caseInsensitive target.
+   *
+   * caseInsensitive used to reach the program's tree and stop there. Keen Dreams' id_heads.h writes
+   * <STDIO.H>, <STDLIB.H>, <STRING.H>, <DOS.H> in capitals, PRISM supplies every one of them in lower
+   * case, and so all eleven were stubbed empty: NULL went undeclared in three units, two of which
+   * stopped on it. Only <ctype.h>, written in lower case, resolved. DOS never distinguished the two
+   * spellings, and a target that says it is a DOS tree is saying so about its system headers too.
+   *
+   * Two spellings that fold to one name are never chosen between: that include stays missing and is
+   * reported, which is a gap; picking one would be a guess.
+   */
+  const folded = new Map();
+  if (caseInsensitive) {
+    for (const k of new Set([...Object.keys(envTable), ...Object.keys(HEADERS)])) {
+      const low = k.toLowerCase();
+      folded.set(low, [...(folded.get(low) ?? []), k]);
+    }
+  }
+  const foldBuiltin = (n) => {
+    const keys = folded.get(n.toLowerCase());
+    if (!keys || keys.length !== 1) return null;
+    return { key: keys[0], text: envTable[keys[0]] ?? HEADERS[keys[0]] };
+  };
   // Where to look, in order. `include` exists because MAME's tree is not flat: its makefile passes
   // -Isrc -Isrc/Z80 -Isrc/msdos and its units live in per-driver subdirectories.
   const dirs = [dir, ...(include ?? []).map(d => join(dir, d))];
@@ -159,6 +183,11 @@ function makeResolver(dir, { caseInsensitive = false, include = null } = {}, mis
     if (loose) return { path: loose, text: readFileSync(loose, 'latin1') };
     const std = envTable[want] ?? HEADERS[want];
     if (std !== undefined) return { path: `<${name}>`, text: std };
+    // LAST, like the backslash retry below: running only after every exact spelling has failed, it
+    // cannot change an include that resolves today. It DOES change a unit whose include was missing
+    // and stubbed empty -- that header now arrives with real declarations -- which is the point.
+    const byCase = caseInsensitive ? (foldBuiltin(name) ?? foldBuiltin(want)) : null;
+    if (byCase) { casePaths?.add(name); return { path: `<${byCase.key}>`, text: byCase.text }; }
     return null;
   };
 
@@ -332,6 +361,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const { units, dir, asm } = targetUnits(target, root);
   const missing = new Set();
   const dosPaths = new Set();
+  const casePaths = new Set();
   const c = { ...(target.compile ?? {}), ...overrides };
   // What each extra module makes visible to the main one, from the program's own .def file.
   const moduleExports = moduleExportsOf(target, dir);
@@ -340,7 +370,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     defines: target.defines ?? {},
     // The environments' own headers, which override the global table for the names they claim --
     // and which refuse rather than resolve when two of them claim one name differently.
-    resolve: makeResolver(dir, target, missing, dosPaths, envHeaders(target.env)),
+    resolve: makeResolver(dir, target, missing, dosPaths, envHeaders(target.env), casePaths),
     // ...and the signatures from the same environments, for the same reason: a call's result type
     // belongs to the library the program was compiled against, not to a table everyone shares.
     extraBuiltins: envBuiltins(target.env),
@@ -401,7 +431,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     for (const n of f.names) if (undef.has(n)) asmWanted.push({ name: n, file: f.file });
   }
   return {
-    program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing], dosPaths: [...dosPaths],
+    program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing], dosPaths: [...dosPaths], casePaths: [...casePaths],
     win32Exports, asmBound,
   };
 }

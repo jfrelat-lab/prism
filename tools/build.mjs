@@ -156,7 +156,7 @@ try {
   console.error(`${target.name}: ${e.message}`);
   process.exit(1);
 }
-const { program, env, units, asm, missingHeaders, dosPaths, asmExports, asmWanted } = built;
+const { program, env, units, asm, missingHeaders, dosPaths, casePaths, asmExports, asmWanted } = built;
 const secs = ((performance.now() - t0) / 1000).toFixed(1);
 
 const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
@@ -166,6 +166,10 @@ if (asm?.length) console.log(`  ${asm.length} assembly objects skipped: ${asm.jo
 if (missingHeaders.length) console.log(`  headers stubbed: ${missingHeaders.join(' ')}`);
 /* A resolution that needed an extra rule is reported, never silent: these includes were written
    the DOS way and only resolved once a backslash was read as a path separator. */
+if (casePaths?.length) {
+  console.log(`  ${casePaths.length} include${casePaths.length === 1 ? '' : 's'} resolved to PRISM's own ` +
+    `headers by ignoring case, as DOS did: ${casePaths.join(' ')}`);
+}
 if (dosPaths?.length) {
   console.log(`  ${dosPaths.length} include${dosPaths.length === 1 ? '' : 's'} resolved by reading ` +
     `a backslash as a path separator: ${dosPaths.join(' ')}`);
