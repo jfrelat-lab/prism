@@ -45,6 +45,34 @@ export const FLOAT = scalar('float');
 
 export const ptr = (to) => ({ k: 'ptr', to, size: 4, align: 4, signed: false });
 
+/**
+ * A pointer that only has a meaning in a 16-bit SEGMENTED model: Borland's `_seg` (a segment and
+ * nothing else) and `huge` (a normalised segment:offset). The parser accepts them so a 16-bit
+ * program can be surveyed, and marks the pointer with `model`; it keeps the flat size of 4 only
+ * because every existing path expects a pointer to have one.
+ *
+ * That size is a placeholder and must never reach an answer. It is not left undefined, because
+ * struct layout reads an undefined size as a FLEXIBLE member of size 0 (abi.js) and would shift
+ * every later field without a word. Instead, anything that would compute with it asks segModel()
+ * first and refuses by name.
+ */
+export const segPtr = (to, model) => ({ ...ptr(to), model });
+
+/** The first segmented-model pointer reachable from `t`, or null. Follows members and signatures. */
+export function segModel(t, seen = new Set()) {
+  if (!t || typeof t !== 'object' || seen.has(t)) return null;
+  seen.add(t);
+  switch (t.k) {
+    case 'ptr': return t.model ?? segModel(t.to, seen);
+    case 'array': return segModel(t.of, seen);
+    case 'func':
+      return segModel(t.ret, seen) ?? (t.params ?? []).reduce((m, p) => m ?? segModel(p.type, seen), null);
+    case 'struct': case 'union':
+      return (t.fields ?? []).reduce((m, f) => m ?? segModel(f.type, seen), null);
+    default: return null;
+  }
+}
+
 export const array = (of, n) => ({
   k: 'array', of, n,
   // An incomplete array (`[]`) has no size. Callers that need one must complete it first.

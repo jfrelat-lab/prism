@@ -58,6 +58,15 @@ const QUALS = new Set(['const', 'volatile', 'restrict', '__const', '__const__', 
   '__export', '_export']);
 const FUNCSPEC = new Set(['inline', '__inline', '__inline__']);
 const BARE_MODEL = new Set(['far', 'near']);
+/*
+ * Borland's segmented pointer kinds. Unlike far and near these are NOT skipped: `void _seg *` is a
+ * pointer that holds only a segment and `char huge *` a normalised segment:offset, and treating
+ * either as a flat pointer would be a wrong answer waiting to happen. Recognised only immediately
+ * before a star -- `huge` is an ordinary identifier anywhere else -- and recorded on the pointer as
+ * `model`, which T.segModel() makes every size-dependent path refuse. See types.js segPtr.
+ */
+const SEG_MODEL = new Map([['_seg', 'seg'], ['__seg', 'seg'],
+  ['huge', 'huge'], ['_huge', 'huge'], ['__huge', 'huge']]);
 /** The subset of QUALS that Watcom also allows INSIDE a declarator; see #declarator. */
 const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
   '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '_loadds', '__saveregs', '_saveregs',
@@ -653,8 +662,13 @@ export class Parser {
      * and nothing goes in front of it. Skipped rather than modelled, for the reason the keyword list
      * gives: in the flat model these games target, they describe nothing.
      */
-    while (this.peek().k === ID
-      && (WATCOM_QUALS.has(this.peek().v) || this.#bareModelKeyword())) this.i++;
+    let segModel = null;
+    while (this.peek().k === ID) {
+      const v = this.peek().v;
+      if (SEG_MODEL.has(v) && this.isP('*', 1)) { segModel = SEG_MODEL.get(v); this.i++; continue; }
+      if (WATCOM_QUALS.has(v) || this.#bareModelKeyword()) { this.i++; continue; }
+      break;
+    }
 
     // Pointers bind tightest to the left, so they wrap the base first.
     while (this.isP('*')) {
@@ -664,7 +678,9 @@ export class Parser {
         cv[this.next().v.replace(/^__|__$/g, '')] = true;
       }
       this.#skipAttributeLike();
-      base = T.qualify(T.ptr(base), Object.keys(cv).length ? cv : null);
+      const p = segModel ? T.segPtr(base, segModel) : T.ptr(base);
+      segModel = null;                 // the keyword qualified the star it stood before, no other
+      base = T.qualify(p, Object.keys(cv).length ? cv : null);
     }
 
     // `int (*fp)(void)` — a parenthesized declarator is parsed against a placeholder and the real
@@ -1521,6 +1537,16 @@ export const stringLiteralLength = (text) => literalUnits(text).length;
 export class ConstError extends Error {}
 
 /**
+ * A size, alignment or offset that depends on a 16-bit segmented pointer has no answer here: the
+ * pointer carries the flat placeholder size of 4 (types.js segPtr), and folding that into a
+ * constant would bake a wrong number into the program where nothing could see it later.
+ */
+function refuseSegModel(t, what) {
+  const m = T.segModel(t);
+  if (m) throw new ConstError(`${what} of a type holding a 16-bit ${m} pointer (no segmented model)`);
+}
+
+/**
  * Wrap a folded value to its expression's type. A constant expression is evaluated IN its type:
  * `(0x1234567876543210LL << 32) >> 32` must lose the shifted-out bits, and without this the static
  * initialiser kept them and disagreed with the same expression evaluated at run time
@@ -1633,15 +1659,18 @@ function ce(e) {
     }
     case 'sizeoftype': {
       if (e.target.size == null) throw new ConstError('sizeof an incomplete type');
+      refuseSegModel(e.target, 'sizeof');
       return BigInt(e.target.size);
     }
     case 'sizeofexpr': {
       const t = e.expr.type;
       if (!t || t.size == null) throw new ConstError('sizeof an expression of unknown type');
+      refuseSegModel(t, 'sizeof');
       return BigInt(t.size);
     }
-    case 'alignoftype': return BigInt(e.target.align ?? 1);
+    case 'alignoftype': refuseSegModel(e.target, '_Alignof'); return BigInt(e.target.align ?? 1);
     case 'offsetof': {
+      refuseSegModel(e.target, 'offsetof');
       let t = e.target, off = 0;
       for (const step of e.path) {
         if (step.field !== undefined) {

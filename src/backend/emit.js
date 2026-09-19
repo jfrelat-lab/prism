@@ -304,6 +304,11 @@ export class FunctionEmitter {
     this.variadic = !!d.type.variadic;
     if (this.variadic) params.push('_va');
 
+    // A 16-bit segmented pointer anywhere in the signature or the body: no answer this emitter could
+    // give would be right, because there is no segmented model to give it in. Refused whole, by name.
+    const seg = T.segModel(d.type) ?? segModelIn(d.body);
+    if (seg) unsup(`a 16-bit ${seg} pointer (Borland segmented model)`);
+
     // Which locals escape? A scalar that is never `&`-taken can live in a JS var. Everything with
     // an address, and every aggregate, needs a slot. This single decision is the difference between
     // "a few times slower than native" and "tens of times".
@@ -2974,6 +2979,35 @@ function escapingJump(body) {
     }
   };
   walk(body, 0, false);
+}
+
+/**
+ * The first 16-bit segmented pointer model any node in a function body mentions, or null.
+ *
+ * Types are checked wherever a node carries one -- a declaration, an expression's type, a cast's
+ * or a sizeof's target -- because a use can reach the pointer without declaring it: a call through
+ * a function whose parameter is a `memptr`, a member of a struct that holds one.
+ */
+function segModelIn(root) {
+  const seen = new Set();
+  const walk = (n) => {
+    if (!n || typeof n !== 'object' || seen.has(n)) return null;
+    seen.add(n);
+    if (Array.isArray(n)) { for (const x of n) { const m = walk(x); if (m) return m; } return null; }
+    for (const k of ['type', 'target']) {
+      if (n[k] && typeof n[k] === 'object' && typeof n[k].k === 'string') {
+        const m = T.segModel(n[k]);
+        if (m) return m;
+      }
+    }
+    for (const k of Object.keys(n)) {
+      if (k === 'type' || k === 'target' || k === 'sym' || k === 'loc') continue;
+      const m = walk(n[k]);
+      if (m) return m;
+    }
+    return null;
+  };
+  return walk(root);
 }
 
 export function collectAddressTaken(node, out) {
