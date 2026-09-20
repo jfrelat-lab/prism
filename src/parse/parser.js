@@ -1009,6 +1009,19 @@ export class Parser {
   }
 
   statement() {
+    /*
+     * A directive may sit between ANY two tokens, needing only a line of its own -- including
+     * between `else` and the statement it governs, which is where Keen Dreams puts one:
+     *
+     *     else
+     *     #pragma warn -pro
+     *         state->think(ob);
+     *
+     * The preprocessor passes pragmas through to be read here, the file-scope loop skips them and
+     * so does the one between a block's items; this is the third place a statement can begin, and
+     * the only one that was missing. Not a Borland matter -- the same C allows it anywhere.
+     */
+    while (this.isP('#')) this.#pragma();
     const t = this.peek();
     if (t.k === PUNCT && t.v === '{') return this.#compound();
     if (this.eatP(';')) return { n: 'empty' };
