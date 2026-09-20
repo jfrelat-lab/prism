@@ -1,4 +1,4 @@
-// gate-borland16.mjs — Borland 16-bit constructs are parsed, and never answered.
+// gate-borland16.mjs — Borland 16-bit constructs: parsed and never answered, or refused by name.
 //
 // PRISM emits for i386 and only for i386. To SURVEY a 16-bit program (targets/keendreams.json) the
 // parser accepts two Borland constructs it cannot give meaning to, and this gate is what keeps that
@@ -105,7 +105,28 @@ try {
   bad++;
 }
 
-const total = Object.keys(want).length + 1;              // the second program contributes calls_fn
+// A THIRD program, for a construct that is refused rather than parsed: sizeof inside a #if. It is
+// Borland's, not C's -- that compiler preprocessed and parsed in one pass and could ask its own
+// type table -- and a standalone preprocessor has none. What the gate holds is that the refusal
+// NAMES it: the standard turns a leftover identifier into 0, so the message used to be "unexpected
+// '('", a syntax error pointing at a parenthesis for a construct that was entirely deliberate.
+const third = `#if 4096 < sizeof(struct s)
+this line is prose, and is meant to be skipped
+#endif
+int f(void) { return 0; }`;
+let msg = '(it compiled)';
+try {
+  compileProgram([{ file: 'ppif.c', source: third }], {
+    resolve: builtinHeaderResolver({}), memory: 8 * 1024 * 1024, collect: true,
+  });
+} catch (e) { msg = e.message; }
+{
+  const ok = msg.includes("'sizeof' in a #if condition");
+  if (!ok) bad++;
+  console.log(`${ok ? '  ok ' : ' BAD '} ${'sizeof in #if'.padEnd(14)}${ok ? 'refused by name' : `${msg}`}`);
+}
+
+const total = Object.keys(want).length + 2;              // calls_fn and the #if, from their own programs
 console.log(bad ? `\n${bad} of ${total} WRONG`
-  : `\nBorland 16-bit constructs are parsed and never answered: ${total}/${total}`);
+  : `\nBorland 16-bit constructs: parsed and never answered, or refused by name: ${total}/${total}`);
 process.exit(bad ? 1 : 0);

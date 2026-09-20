@@ -52,6 +52,21 @@ class Parser {
     if (t.k === 'num') return number(t.v);
     if (t.k === 'chr') return val(charValue(t.v), false);
     if (t.k === 'id') {
+      /*
+       * `sizeof` is named before it dissolves. The rule below turns it into 0 like any other
+       * leftover identifier, so `#if BUFFERSIZE < sizeof(maptype)` becomes `4096 < 0 (0)` and comes
+       * out as "unexpected '('" -- a syntax error pointing at a parenthesis, for a construct that
+       * was perfectly deliberate. Keen Dreams' id_ca.c has one, guarding a compile-time assertion.
+       *
+       * It is Borland's, not C's: that compiler preprocessed and parsed in one pass and could ask
+       * its own type table. A standalone preprocessor has no types, and every conforming compiler
+       * rejects this file too -- so the answer is a refusal, and what is worth getting right is
+       * that the refusal says what it refused.
+       */
+      if (t.v === 'sizeof') {
+        throw new ExprError("'sizeof' in a #if condition: a Borland extension, not standard C — "
+          + 'the preprocessor has no types to measure');
+      }
       // Any identifier still standing after expansion is 0 — including `true`/`false` in C89,
       // which is why <stdbool.h> defines them as macros.
       return val(0n, false);
