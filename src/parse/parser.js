@@ -74,11 +74,24 @@ const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt',
 
 export class Parser {
   /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
-  constructor(tokens, { scope = new T.Scope(), file = '<input>', pack = null } = {}) {
+  constructor(tokens, { scope = new T.Scope(), file = '<input>', pack = null, c89 = false } = {}) {
     this.ts = tokens.filter(t => t.k !== 'pm');
     this.i = 0;
     this.scope = scope;
     this.file = file;
+    /*
+     * C89, as the target declares it. Keen Dreams was compiled by Borland C++ 2.0, where `inline`
+     * was not a keyword and a program was free to use the word: kd_act2.c declares
+     * `boolean inline = false;`, assigns to it and tests it. Quake ships one too, in the gas2masm
+     * tool beside the game -- `int inline, outline;` -- which is why that file is not a unit.
+     *
+     * ONLY `inline` is given back, and that is the rule this flag follows rather than an oversight:
+     * nothing in the corpus uses `restrict` or `_Bool` as an identifier, and taking a keyword out
+     * on the chance that something might is how a mode grows into a second language. The GNU
+     * spellings `__inline` and `__inline__` stay keywords in either mode -- the underscores exist
+     * exactly so they cannot collide with a program's own names.
+     */
+    this.c89 = c89;
     /*
      * #pragma pack state: the current maximum member alignment, and the stack push/pop use.
      *
@@ -101,12 +114,20 @@ export class Parser {
   isKw(v, k = 0) { const t = this.peek(k); return t.k === ID && t.v === v; }
   eatP(v) { if (this.isP(v)) { this.i++; return true; } return false; }
   eatKw(v) { if (this.isKw(v)) { this.i++; return true; } return false; }
+
+  /*
+   * Is this word a keyword HERE? Every test goes through these two, so that the C89 mode above has
+   * one place to take `inline` out of: as a specifier, and as the thing that stops an identifier
+   * from being a name -- a declaration, a label, a struct tag, a parameter, `&&label`.
+   */
+  #kw(v) { return KEYWORDS.has(v) && !(this.c89 && v === 'inline'); }
+  #funcspec(v) { return FUNCSPEC.has(v) && !(this.c89 && v === 'inline'); }
   expectP(v) {
     if (!this.eatP(v)) throw new ParseError(`expected '${v}' but found '${this.peek().v || 'end of file'}'`, this.peek());
   }
   expectId() {
     const t = this.peek();
-    if (t.k !== ID || KEYWORDS.has(t.v)) throw new ParseError(`expected an identifier, found '${t.v}'`, t);
+    if (t.k !== ID || this.#kw(t.v)) throw new ParseError(`expected an identifier, found '${t.v}'`, t);
     this.i++;
     return t.v;
   }
@@ -420,7 +441,7 @@ export class Parser {
       if (v === 'interrupt' && sawTypeSpec && (this.peek(1).k === ID || this.isP('*', 1))) {
         this.i++; cv.interrupt = true; continue;
       }
-      if (FUNCSPEC.has(v)) { this.i++; inlineFn = true; continue; }
+      if (this.#funcspec(v)) { this.i++; inlineFn = true; continue; }
       if (v === '__extension__') { this.i++; continue; }
       /*
        * GCC's thread-local storage class. PRISM's target has exactly one thread, and the meaning of
@@ -504,7 +525,7 @@ export class Parser {
     this.next();
     this.#skipAttributeLike();
     let tag = null;
-    if (this.peek().k === ID && !KEYWORDS.has(this.peek().v)) tag = this.expectId();
+    if (this.peek().k === ID && !this.#kw(this.peek().v)) tag = this.expectId();
 
     if (!this.isP('{')) {
       // A reference. An existing tag anywhere up the chain wins; otherwise it is incomplete.
@@ -592,7 +613,7 @@ export class Parser {
     this.next();
     this.#skipAttributeLike();
     let tag = null;
-    if (this.peek().k === ID && !KEYWORDS.has(this.peek().v)) tag = this.expectId();
+    if (this.peek().k === ID && !this.#kw(this.peek().v)) tag = this.expectId();
     if (!this.isP('{')) {
       if (!tag) throw new ParseError('enum with neither tag nor body', this.peek());
       const found = this.scope.lookupTag(tag);
@@ -747,8 +768,8 @@ export class Parser {
     }
 
     let name = null;
-    if (!abstract || (this.peek().k === ID && !KEYWORDS.has(this.peek().v))) {
-      if (this.peek().k === ID && !KEYWORDS.has(this.peek().v)) name = this.expectId();
+    if (!abstract || (this.peek().k === ID && !this.#kw(this.peek().v))) {
+      if (this.peek().k === ID && !this.#kw(this.peek().v)) name = this.expectId();
       else if (!abstract) throw new ParseError(`expected a declarator, found '${this.peek().v}'`, this.peek());
     }
     return { name, type: this.#declaratorSuffix(base) };
@@ -810,7 +831,7 @@ export class Parser {
     if (this.isKw('void') && this.isP(')', 1)) { this.i++; return { kind: 'func', params: [], variadic: false, oldStyle: false }; }
 
     // An identifier list with no types is a K&R declarator: `int f(a, b)`.
-    if (this.peek().k === ID && !KEYWORDS.has(this.peek().v) && !this.scope.isTypedef(this.peek().v)
+    if (this.peek().k === ID && !this.#kw(this.peek().v) && !this.scope.isTypedef(this.peek().v)
         && (this.isP(',', 1) || this.isP(')', 1))) {
       const params = [];
       for (;;) {
@@ -870,7 +891,7 @@ export class Parser {
      * declaration of x with type far.
      */
     const next = this.peek(1);
-    return next.k === ID && !KEYWORDS.has(next.v) && !this.scope.isTypedef(next.v);
+    return next.k === ID && !this.#kw(next.v) && !this.scope.isTypedef(next.v);
   }
 
   #parenIsParamList() {
@@ -886,7 +907,7 @@ export class Parser {
      */
     if (WATCOM_QUALS.has(t.v)) return false;
     if (BARE_MODEL.has(t.v) && this.isP('*', 2)) return false;   // `(far *fp)()`
-    if (KEYWORDS.has(t.v)) return true;                      // a type specifier starts a param list
+    if (this.#kw(t.v)) return true;                      // a type specifier starts a param list
     return this.scope.isTypedef(t.v);
   }
 
@@ -900,7 +921,7 @@ export class Parser {
   #looksLikeTypeName() {
     const t = this.peek();
     if (t.k !== ID) return false;
-    if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
+    if (STORAGE.has(t.v) || QUALS.has(t.v) || this.#funcspec(t.v)) return true;
     if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     return this.scope.isTypedef(t.v);
   }
@@ -981,7 +1002,7 @@ export class Parser {
     const t = this.peek();
     if (t.k !== ID) return false;
     if (t.v === '__extension__') return true;
-    if (STORAGE.has(t.v) || QUALS.has(t.v) || FUNCSPEC.has(t.v)) return true;
+    if (STORAGE.has(t.v) || QUALS.has(t.v) || this.#funcspec(t.v)) return true;
     if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     // `T x;` is a declaration; `T;` and `T:` are not, and neither is `T = 1` (T as a variable).
     return this.scope.isTypedef(t.v) && !this.isP(':', 1);
@@ -1056,7 +1077,7 @@ export class Parser {
         case 'asm': case '__asm__': case '__asm': return this.#topLevelAsm();
       }
       // A label: an identifier followed by ':'.
-      if (!KEYWORDS.has(t.v) && this.isP(':', 1)) {
+      if (!this.#kw(t.v) && this.isP(':', 1)) {
         this.i += 2;
         return { n: 'label', name: t.v, body: this.statement() };
       }
@@ -1116,7 +1137,7 @@ export class Parser {
     if (t.k === PUNCT) {
       // GNU label address. The lexer produces `&&` as one punctuator, so this must be checked
       // before the unary operators.
-      if (t.v === '&&' && this.peek(1).k === ID && !KEYWORDS.has(this.peek(1).v)) {
+      if (t.v === '&&' && this.peek(1).k === ID && !this.#kw(this.peek(1).v)) {
         this.i++;
         const name = this.expectId();
         return { n: 'labeladdr', name, type: T.ptr(T.VOID) };
@@ -1324,7 +1345,7 @@ export class Parser {
       this.expectP(')');
       return e;
     }
-    if (t.k === ID && !KEYWORDS.has(t.v)) {
+    if (t.k === ID && !this.#kw(t.v)) {
       const sym = this.scope.lookup(t.v);
       if (sym?.kind === 'enumconst') return { n: 'num', value: sym.value, type: T.INT };
       return { n: 'ident', name: t.v, type: sym?.type ?? null, sym };

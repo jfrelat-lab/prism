@@ -726,13 +726,13 @@ function wireRebind(F, mod, emitted, rebind) {
   }
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, extraBuiltins = null } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
     defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
-  const { unit, scope } = parse(tokens, { file, pack });
+  const { unit, scope } = parse(tokens, { file, pack, c89 });
 
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -849,7 +849,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -879,7 +879,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       resolve: resolver,
     });
     const tokens = pp.run(u.source, u.file);
-    const { unit, scope } = parse(tokens, { file: u.file, pack });
+    const { unit, scope } = parse(tokens, { file: u.file, pack, c89 });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
   }
 

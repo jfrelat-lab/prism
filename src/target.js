@@ -37,7 +37,7 @@ import { installAsm } from './asm/link.js';
  *                                  R_DRAW.C is the whole reason this exists: its C rendering loops
  *                                  live behind `#ifndef __WATCOMC__`, and nothing else in the
  *                                  program may have that macro undefined.
- * @property {object=} compile    { memory, pack, collect, safepoints, directCalls }.
+ * @property {object=} compile    { memory, pack, c89, collect, safepoints, directCalls }.
  * @property {boolean=} caseInsensitive  resolve #includes case-insensitively. Raven's trees write
  *                                       `DoomDef.h` for `DOOMDEF.H`; DOS never had to care.
  * @property {(string[]|object)=} env  the environment, by the names in src/env/registry.js.
@@ -376,6 +376,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     extraBuiltins: envBuiltins(target.env),
     memory: (c.memory ?? 64) * 1024 * 1024,
     pack: c.pack ?? null,
+    // The language the program was written in, which is a compiler option and not a source change:
+    // `inline` is a C99 keyword, and a C89 program is free to call a variable that.
+    c89: !!c.c89,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*
