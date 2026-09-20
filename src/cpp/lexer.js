@@ -19,6 +19,24 @@ const TRIGRAPHS = {
  * diagnostics still point at the line the programmer wrote.
  */
 export function splice(text, { trigraphs = false } = {}) {
+  /*
+   * 0x1A ENDS THE FILE, before anything else looks at it.
+   *
+   * CP/M counted a file's length in 128-byte records, so the last record needed a byte saying where
+   * the text stopped; DOS kept the convention and its compilers stopped reading there. Keen Dreams'
+   * ID_US_S.c ends with one on a line of its own, and this lexer turned it into a token with an
+   * empty name, which surfaced as "unexpected '' in expression" at line 188 of a file that had, as
+   * far as its own compiler was concerned, already ended.
+   *
+   * Applied to every source and not to DOS targets alone, because 0x1A is not in C's source
+   * character set: a file holding one is already outside what the standard describes, and this is
+   * what the compilers that read these files did. Measured over the corpus first -- 429 files carry
+   * a marker, 430 in all, and not one has a non-whitespace character after it, so there is nothing
+   * here for the cut to eat. A 0x1A inside a string literal would be cut too; none exists here.
+   */
+  const dosEof = text.indexOf('\x1a');
+  if (dosEof >= 0) text = text.slice(0, dosEof);
+
   // Normalize line endings first: a CRLF file must splice on `\` + CRLF too.
   text = text.replace(/\r\n?/g, '\n');
 
