@@ -8,6 +8,11 @@
 //                           pointer to have one (types.js segPtr says why it cannot be left out)
 //   asm <instruction>       Borland's statement form of inline assembly, kept as text
 //
+// and one it CAN give meaning to, listed here because accepting it must not cost anything:
+//
+//   interrupt               Borland's bare spelling of Watcom's __interrupt, a qualifier only
+//                           where a type specifier has been seen and a declarator follows
+//
 // Every way a function can reach either must come back REFUSED BY NAME: sizeof, a parameter, a
 // struct member, a local, a call to a function that takes one, an asm line, an asm block. And the
 // refusal must not be too eager: a plain function still emits, `huge` is still an ordinary
@@ -20,6 +25,7 @@ typedef void _seg *memptr;
 typedef char huge *hptr;
 struct S { memptr a; int b; };
 int huge;                                   /* an ordinary variable called huge */
+int interrupt;                              /* ...and one called interrupt */
 
 int by_sizeof(void)          { return sizeof(memptr); }
 int by_param(memptr m)       { return 0; }
@@ -40,6 +46,9 @@ int by_asmblock(void)        {
 int gnu_asm(void)            { asm(""); return 1; }
 int gnu_volatile(void)       { asm volatile(""); return 1; }
 int plain(void)              { return huge + 1; }
+void interrupt isr(void)     { }                          /* the qualifier, Borland-spelled */
+void __interrupt wisr(void)  { }                          /* and Watcom-spelled */
+int uses_var(void)           { return interrupt; }        /* the variable is still reachable */
 `;
 
 // A refusal must be the NAMED one, not merely a refusal: with the emitter's asm check disabled,
@@ -51,6 +60,7 @@ const want = {
   by_sizeof: SEG, by_param: SEG, by_member: SEG, by_local: SEG, by_call: SEG,
   by_asmline: ASM, by_asmblock: ASM,
   gnu_asm: 'emits', gnu_volatile: 'emits', plain: 'emits',
+  isr: 'emits', wisr: 'emits', uses_var: 'emits',
 };
 
 let p;
@@ -68,7 +78,7 @@ if (!(p.failures ?? []).every(f => 'fn' in f)) {
   console.log('failure records carry no `fn` -- this gate cannot tell refused from emitted');
   process.exit(1);
 }
-let bad = 0;
+let bad = 0;   // eslint-disable-line prefer-const -- the second program adds to it
 for (const [fn, expect] of Object.entries(want)) {
   const msg = failed.get(fn);
   const got = msg === undefined ? 'emits' : 'refused';
@@ -77,6 +87,25 @@ for (const [fn, expect] of Object.entries(want)) {
   console.log(`${ok ? '  ok ' : ' BAD '} ${fn.padEnd(13)} ${got}` +
     (failed.has(fn) ? `  — ${failed.get(fn).replace('tier-0 does not support ', '')}` : ''));
 }
-console.log(bad ? `\n${bad} of ${Object.keys(want).length} WRONG`
-  : `\nBorland 16-bit constructs are parsed and never answered: ${Object.keys(want).length}/${Object.keys(want).length}`);
+// A FUNCTION called interrupt, which cannot sit in the program above: one identifier cannot be both
+// a variable and a function in one translation unit, and writing it that way made this gate report a
+// JavaScript TypeError -- PRISM diagnoses that redeclaration with an internal error rather than a
+// message, for any name, which is a separate defect this gate is not about.
+const second = `void interrupt(void);
+int calls_fn(void) { interrupt(); return 0; }`;
+try {
+  const q = compileProgram([{ file: 'fn.c', source: second }], {
+    resolve: builtinHeaderResolver({}), memory: 8 * 1024 * 1024, collect: true,
+  });
+  const f2 = (q.failures ?? []).find(x => x.fn === 'calls_fn');
+  console.log(`${f2 ? ' BAD ' : '  ok '} ${'calls_fn'.padEnd(13)}${f2 ? `refused  — ${f2.message}` : 'emits'}`);
+  if (f2) bad++;
+} catch (e) {
+  console.log(` BAD  calls_fn      the compile stopped: ${e.message}`);
+  bad++;
+}
+
+const total = Object.keys(want).length + 1;              // the second program contributes calls_fn
+console.log(bad ? `\n${bad} of ${total} WRONG`
+  : `\nBorland 16-bit constructs are parsed and never answered: ${total}/${total}`);
 process.exit(bad ? 1 : 0);

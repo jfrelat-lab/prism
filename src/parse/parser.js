@@ -409,6 +409,17 @@ export class Parser {
 
       if (STORAGE.has(v)) { this.i++; storage = v === 'typedef' ? 'typedef' : v; continue; }
       if (QUALS.has(v)) { this.i++; cv[v.replace(/^__|__$/g, '')] = true; continue; }
+      /*
+       * Borland's BARE `interrupt`: `static void interrupt INL_KeyService(void)`. Watcom's spellings
+       * are in QUALS above and reduce to this same name once the underscores come off, so the two
+       * end up identical -- what differs is that this one is also an ordinary identifier. Taken as a
+       * qualifier only where nothing else can be meant: a type specifier already seen, and a
+       * declarator following. `int interrupt;` and `void interrupt(void);` still declare something
+       * called interrupt.
+       */
+      if (v === 'interrupt' && sawTypeSpec && (this.peek(1).k === ID || this.isP('*', 1))) {
+        this.i++; cv.interrupt = true; continue;
+      }
       if (FUNCSPEC.has(v)) { this.i++; inlineFn = true; continue; }
       if (v === '__extension__') { this.i++; continue; }
       /*
