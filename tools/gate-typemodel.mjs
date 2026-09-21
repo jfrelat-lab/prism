@@ -12,7 +12,7 @@
 // What this does NOT do is check layout: gate-abi16 already holds ~4,970 of those against Open
 // Watcom, and duplicating them here would be a second opinion from the same source. This is the
 // seam only.
-import { makeTypes, INT, ptr, LONG, enumType } from '../src/sema/types.js';
+import { makeTypes, INT, ptr, LONG, enumType, promote } from '../src/sema/types.js';
 
 const i386 = makeTypes('i386');
 const dos16 = makeTypes('dos16');
@@ -31,6 +31,16 @@ const cases = [
   ['the module export is i386: pointer', ptr(INT).size, 4],
   ['the module export is i386: long', LONG.size, 4],
   ['the module export is i386: enum', enumType('e', []).size, 4],
+  /*
+   * The promotion rule, the one place this is more than plumbing. "Anything narrower than int
+   * becomes int (unsigned int if it cannot fit)" -- on i386 everything fits, so the body returned
+   * int outright and the second half of the rule never ran. dos16's int is 2 bytes, so an unsigned
+   * short is 16 bits going into a 16-bit SIGNED int, and does not fit.
+   */
+  ['i386 promotes unsigned short to int', i386.promote(i386.USHORT).name, 'int'],
+  ['dos16 promotes unsigned short to UNSIGNED int', dos16.promote(dos16.USHORT).name, 'unsigned int'],
+  ['dos16 still promotes short to int', dos16.promote(dos16.SHORT).name, 'int'],
+  ['the module export is i386: promote', promote(i386.USHORT).name, 'int'],
 ];
 
 let bad = 0;

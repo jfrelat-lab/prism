@@ -47,6 +47,36 @@ export function makeTypes(model = 'i386') {
       k: 'enum', tag, consts, ...table.enum,
       signed: (consts ?? []).some(c => BigInt(c.value) < 0n),
     }),
+    promote: (t) => {
+      if (t.k === 'enum') return T.INT;
+      if (!isInteger(t)) return t;
+      if (rank(t) >= 3) return t;
+      /*
+       * A sub-int type promotes to `int` when int can hold every one of its values, and to
+       * `unsigned int` when it cannot. The old body returned int outright with the note "on i386
+       * every sub-int type fits" -- true there, and exactly what dos16 breaks: its int is 2 bytes,
+       * so `unsigned short` is 16 bits going into a 16-bit signed int and does not fit.
+       */
+      return t.size < T.INT.size || t.signed ? T.INT : T.UINT;
+    },
+    usualArith: (a, b) => {
+      if (isFloat(a) || isFloat(b)) return rank(a) >= rank(b) ? (isFloat(a) ? a : b) : (isFloat(b) ? b : a);
+      a = T.promote(a); b = T.promote(b);
+      if (a.name === b.name) return a;
+      if (rank(a) === rank(b)) return isUnsigned(a) ? a : b;
+      const [hi, lo] = rank(a) > rank(b) ? [a, b] : [b, a];
+      if (isUnsigned(hi)) return hi;
+      if (!isUnsigned(lo)) return hi;
+      // A signed type wins only if it can represent every value of the smaller unsigned one; on
+      // i386 `long` and `int` are both 32 bits, so `long` cannot hold all of `unsigned int`.
+      if (hi.size > lo.size) return hi;
+      return scalar('unsigned ' + hi.name.replace('unsigned ', ''));
+    },
+    decay: (t) => {
+      if (t.k === 'array') return ptr(t.of);
+      if (t.k === 'func') return ptr(t);
+      return t;
+    },
     INT: scalar('int'), CHAR: scalar('char'), UINT: scalar('unsigned int'),
     LONG: scalar('long'), ULONG: scalar('unsigned long'), DOUBLE: scalar('double'),
     SHORT: scalar('short'), USHORT: scalar('unsigned short'),
@@ -208,36 +238,13 @@ const RANK = {
 export const rank = (t) => (t.k === 'enum' ? 3 : RANK[t.name] ?? 3);
 export const isUnsigned = (t) => t.k === 'scalar' && !t.signed && !isFloat(t);
 
-/** Integer promotions: anything narrower than int becomes int (unsigned int if it cannot fit). */
-export function promote(t) {
-  if (t.k === 'enum') return INT;
-  if (!isInteger(t)) return t;
-  if (rank(t) >= 3) return t;
-  // On i386 every sub-int type fits in int, including `unsigned short` (16 bits into 32).
-  return INT;
-}
-
-/** Usual arithmetic conversions, the i386 instance. */
-export function usualArith(a, b) {
-  if (isFloat(a) || isFloat(b)) return rank(a) >= rank(b) ? (isFloat(a) ? a : b) : (isFloat(b) ? b : a);
-  a = promote(a); b = promote(b);
-  if (a.name === b.name) return a;
-  if (rank(a) === rank(b)) return isUnsigned(a) ? a : b;
-  const [hi, lo] = rank(a) > rank(b) ? [a, b] : [b, a];
-  if (isUnsigned(hi)) return hi;
-  if (!isUnsigned(lo)) return hi;
-  // A signed type wins only if it can represent every value of the smaller unsigned one; on i386
-  // `long` and `int` are both 32 bits, so `long` cannot hold all of `unsigned int`.
-  if (hi.size > lo.size) return hi;
-  return scalar('unsigned ' + hi.name.replace('unsigned ', ''));
-}
-
-/** Array-to-pointer and function-to-pointer decay, applied wherever a value is used. */
-export function decay(t) {
-  if (t.k === 'array') return ptr(t.of);
-  if (t.k === 'func') return ptr(t);
-  return t;
-}
+/*
+ * promote, usualArith and decay live in the factory above: they are the three helpers that READ the
+ * model rather than merely passing types around, and a caller holding a dos16 instance has to get
+ * dos16 answers from them. These names stay exported as the i386 instance's, which is what every
+ * call site outside this file still means.
+ */
+export const { promote, usualArith, decay } = I386;
 
 export function typeName(t) {
   if (!t) return '<none>';
