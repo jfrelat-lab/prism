@@ -4,31 +4,65 @@
 // (`cv`) rather than in a wrapper, because C's qualifiers do not affect layout and a wrapper would
 // have to be unwrapped at every use site.
 
-import { SCALARS, layoutStruct, layoutUnion } from './abi.js';
+import { MODELS, layoutStruct, layoutUnion } from './abi.js';
 
 export const VOID = { k: 'void', name: 'void', size: 1, align: 1 };
 
-const scalarCache = new Map();
-export function scalar(name) {
-  if (name === 'void') return VOID;
-  let t = scalarCache.get(name);
-  if (!t) {
-    const s = SCALARS[name];
-    if (!s) throw new Error(`types: unknown scalar '${name}'`);
-    t = { k: 'scalar', name, size: s.size, align: s.align, signed: !!s.signed };
-    scalarCache.set(name, t);
+/**
+ * One ABI model's type constructors, as a VALUE rather than a module binding.
+ *
+ * abi.js has held both tables for a long time -- i386, and dos16 measured against Open Watcom and
+ * pinned by gate-abi16 -- but this file bound i386 at module scope and fixed a pointer at 4 bytes,
+ * so nothing could ask for the other. ARCHITECTURE.md names threading a model through here as what
+ * the 16-bit backend IS.
+ *
+ * This is the first half of that and it changes no behaviour: the module still exports the i386
+ * instance under the names everything already uses -- 262 of them across 15 files -- and the second
+ * half is teaching those call sites to ask a model instead. Splitting it keeps the mechanical change
+ * apart from the one that can be wrong.
+ *
+ * `long long` is in i386 and NOT in dos16, which is right: Borland's C89 had no such type. It is
+ * absent from the object rather than quietly aliased, so asking for it under dos16 raises.
+ */
+export function makeTypes(model = 'i386') {
+  const table = MODELS[model];
+  if (!table) throw new Error(`types: unknown ABI model '${model}'`);
+  const cache = new Map();
+  const scalar = (name) => {
+    if (name === 'void') return VOID;
+    let t = cache.get(name);
+    if (!t) {
+      const s = table[name];
+      if (!s) throw new Error(`types: model '${model}' has no scalar '${name}'`);
+      t = { k: 'scalar', name, size: s.size, align: s.align, signed: !!s.signed };
+      cache.set(name, t);
+    }
+    return t;
+  };
+  const ptr = (to) => ({ k: 'ptr', to, ...table.pointer, signed: false });
+  const T = {
+    model, VOID, scalar, ptr,
+    segPtr: (to, m) => ({ ...ptr(to), model: m }),
+    enumType: (tag, consts) => ({
+      k: 'enum', tag, consts, ...table.enum,
+      signed: (consts ?? []).some(c => BigInt(c.value) < 0n),
+    }),
+    INT: scalar('int'), CHAR: scalar('char'), UINT: scalar('unsigned int'),
+    LONG: scalar('long'), ULONG: scalar('unsigned long'), DOUBLE: scalar('double'),
+    SHORT: scalar('short'), USHORT: scalar('unsigned short'),
+    SCHAR: scalar('signed char'), UCHAR: scalar('unsigned char'), FLOAT: scalar('float'),
+  };
+  if (table['long long']) {
+    T.LLONG = scalar('long long');
+    T.ULLONG = scalar('unsigned long long');
   }
-  return t;
+  return T;
 }
 
-export const INT = scalar('int');
-export const CHAR = scalar('char');
-export const UINT = scalar('unsigned int');
-export const LONG = scalar('long');
-export const ULONG = scalar('unsigned long');
-export const LLONG = scalar('long long');
-export const ULLONG = scalar('unsigned long long');
-export const DOUBLE = scalar('double');
+/** The one every call site still reaches for, until the second half threads a model to them. */
+const I386 = makeTypes('i386');
+
+export const { scalar, INT, CHAR, UINT, LONG, ULONG, LLONG, ULLONG, DOUBLE } = I386;
 /*
  * The narrow scalars and float. `scalar()` has always known these spellings; only the named exports
  * were missing -- and a missing export reads as `undefined` rather than raising anything. Two
@@ -37,13 +71,9 @@ export const DOUBLE = scalar('double');
  * type of `undefined`. Nothing complained until a program used such a result inside an expression:
  * `SDL_JoystickGetAxis(joys[3], 0) < -3200` reached decay() with no type to decay.
  */
-export const SHORT = scalar('short');
-export const USHORT = scalar('unsigned short');
-export const SCHAR = scalar('signed char');
-export const UCHAR = scalar('unsigned char');
-export const FLOAT = scalar('float');
+export const { SHORT, USHORT, SCHAR, UCHAR, FLOAT } = I386;
 
-export const ptr = (to) => ({ k: 'ptr', to, size: 4, align: 4, signed: false });
+export const { ptr } = I386;
 
 /**
  * A pointer that only has a meaning in a 16-bit SEGMENTED model: Borland's `_seg` (a segment and
@@ -56,7 +86,7 @@ export const ptr = (to) => ({ k: 'ptr', to, size: 4, align: 4, signed: false });
  * every later field without a word. Instead, anything that would compute with it asks segModel()
  * first and refuses by name.
  */
-export const segPtr = (to, model) => ({ ...ptr(to), model });
+export const { segPtr } = I386;
 
 /** The first segmented-model pointer reachable from `t`, or null. Follows members and signatures. */
 export function segModel(t, seen = new Set()) {
@@ -90,8 +120,7 @@ export const func = (ret, params, { variadic = false, oldStyle = false } = {}) =
  * to the implementation and gcc chooses unsigned, so a program switching on such a field depends on
  * it (c-testsuite 00218).
  */
-export const enumType = (tag, consts) =>
-  ({ k: 'enum', tag, consts, size: 4, align: 4, signed: (consts ?? []).some(c => BigInt(c.value) < 0n) });
+export const { enumType } = I386;
 
 /**
  * Build a struct or union type. `members` are {name, type, bits?}; layout comes straight from
