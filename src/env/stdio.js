@@ -148,6 +148,26 @@ export function installStdio(M, {
   // Counts up rather than randomises: two temporaries must differ, and a run must repeat itself.
   let mkstempCounter = 1;
 
+  /*
+   * A SHAPE written at i386 offsets is not a smaller thing under a 16-bit model, it is a wrong one.
+   *
+   * `struct stat` is the clearest case, and the comment beside its offsets already says why: they
+   * and PRISM's own sys/stat.h "are one thing in two places". Under dos16 that header's ints become
+   * two bytes and every offset below ST_MODE moves, while these constants do not -- so writing
+   * anyway puts real bytes in the wrong fields, which is a wrong answer and a silent one. The same
+   * holds for struct tm (nine ints, strided by four here) and for fd_set.
+   *
+   * Refused by name until a program needs one of them badly enough to earn a model-aware layout.
+   * `time` is deliberately NOT guarded: it writes a time_t, which is a long, which is four bytes in
+   * both models. Keen Dreams calls time and none of the others -- measured, one of nine.
+   */
+  const flatShapeOnly = (what) => {
+    const m = M.mod.model ?? 'i386';
+    if (m !== 'i386') {
+      throw new Error(`${what}: its fields are laid out for i386 and this is ${m}`);
+    }
+  };
+
   const api = {
     /*
      * The four modes, each doing what it says. The comment here used to describe them correctly and
@@ -545,6 +565,7 @@ export function installStdio(M, {
         dv.setFloat32(dst, Math.fround(parseFloat(tok)), true);
       } else {
         const radix = 'xX'.includes(conv) ? 16 : conv === 'o' ? 8 : conv === 'i' ? 0 : 10;
+        flatShapeOnly('scanf into an int');            // %d is an int, and an int is not always four
         dv.setInt32(dst, (radix === 0 ? Number(tok) : parseInt(tok, radix)) | 0, true);
       }
       assigned++;
@@ -596,6 +617,7 @@ export function installStdio(M, {
   api.select = (_n, rd, _wr, _ex, _tv) => {
     if (!rd) return 0;
     const ready = stdinPending() ? 1 : 0;
+    flatShapeOnly('select');
     const dv = M.mod.dv;
     if (!ready) { dv.setUint32(rd, 0, true); return 0; }
     dv.setUint32(rd, 1, true);                       // fd 0 is bit 0 of the first word
@@ -618,6 +640,7 @@ export function installStdio(M, {
   const S_IFREG = 0o100000;
 
   function fillStat(st, bytes) {
+    flatShapeOnly('struct stat');
     M.u8.fill(0, st, st + ST_SIZE_BYTES);
     const dv = M.mod.dv;
     dv.setUint32(st + ST_MODE, S_IFREG | 0o644, true);
@@ -853,6 +876,7 @@ export function installStdio(M, {
      * zone here, so localtime and gmtime are the same function -- said rather than implied.
      */
     localtime: (tp) => {
+      flatShapeOnly('struct tm');
       const secs = tp ? (M.mod.dv.getInt32(tp, true) >>> 0) : Math.floor(M.rt.time(0));
       if (!M.__tm) { M.__tm = M.rt.malloc(9 * 4); }
       const d = new Date(secs * 1000);
