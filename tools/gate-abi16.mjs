@@ -120,6 +120,11 @@ console.log(version());
 console.log(`gate-abi16: ${cases.length} cases (${cases.length - COUNT} hand, ${COUNT} generated, ` +
   `seed ${SEED}), ${queries.length} checks — Open Watcom, 8086, small model\n`);
 
+// Signedness, which nothing here tested until the table turned out to be wrong about it.
+queries.push('(char)-1 < 0');
+expect.push(T.scalar('char').signed ? 1 : 0);
+labels.push('char: signed');
+
 const got = watcom16(prelude, queries);
 let bad = 0;
 for (let i = 0; i < queries.length; i++) {

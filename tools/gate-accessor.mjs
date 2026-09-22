@@ -31,7 +31,7 @@ const I386 = {
 };
 
 const DOS16 = {
-  'char': ['getInt8', 'setInt8'],
+  'char': ['getUint8', 'setInt8'],                 // unsigned in this model, measured
   'short': ['getInt16', 'setInt16'],
   'unsigned short': ['getUint16', 'setUint16'],
   'int': ['getInt16', 'setInt16'],                 // 2 bytes, and signed

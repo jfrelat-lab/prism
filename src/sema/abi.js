@@ -52,7 +52,10 @@ export const SCALARS = {
 export const SCALARS_DOS16 = {
   'void':                 { size: 1,  align: 1 },
   '_Bool':                { size: 1,  align: 1 },
-  'char':                 { size: 1,  align: 1, signed: true },
+  // UNSIGNED, measured: `(char)-1 < 0` is false under wcc -bt=dos -0. This entry said signed until
+  // it was checked -- nothing tested signedness, so nothing contradicted it -- and Borland's default
+  // being signed is a property of a different compiler. A program that needs it says compile.signedChar.
+  'char':                 { size: 1,  align: 1 },
   'signed char':          { size: 1,  align: 1, signed: true },
   'unsigned char':        { size: 1,  align: 1 },
   'short':                { size: 2,  align: 2, signed: true },
@@ -88,18 +91,15 @@ export const SCALARS_DOS16 = {
  * is the rule the small table's header already calls out as unguessable, and it applies to `long`,
  * `float` and `double` here too -- an eight-byte double on a two-byte boundary.
  *
- * ONE ENTRY DISAGREES WITH THE SMALL TABLE ABOVE, and it is recorded rather than reconciled: the
- * oracle says `(char)-1 < 0` is FALSE under both -ms and -ml, so Watcom's 16-bit char is UNSIGNED,
- * while SCALARS_DOS16 records `signed: true`. Nothing measures that entry -- gate-abi16 checks
- * sizes, offsets and bitfields, never signedness -- so it has never been contradicted. Both can be
- * defended: Watcom's default char is unsigned, BORLAND's is signed, and the corpus program this is
- * for is a Borland one. Which compiler the tables are meant to describe is the question to settle,
- * and settling it by editing one line quietly is how a measured table stops being one.
+ * char is unsigned here as in the small table, both measured. The two tables once disagreed on it --
+ * the small one said signed with nothing behind it -- and the resolution was to make each table say
+ * what its oracle says and move Borland's signed default out of the tables altogether: it is a
+ * property of the COMPILER a program was built with, declared as compile.signedChar and measured
+ * against Watcom's -j (tools/gate-signedchar.mjs).
  */
 export const SCALARS_DOS16_LARGE = {
   ...SCALARS_DOS16,
   'pointer':              { size: 4,  align: 2 },
-  'char':                 { size: 1,  align: 1 },   // unsigned, as this oracle builds it
 };
 
 /** The type tables, by target. `i386` is what the compiler emits for; the dos16 pair is measured. */

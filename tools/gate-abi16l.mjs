@@ -46,7 +46,7 @@ for (const [n, fs] of Object.entries(CASES)) {
 }
 // The two entries that make this model a different one.
 queries.push('sizeof(void*)'); expect.push(4); labels.push('sizeof(void*)');
-queries.push('(char)-1 < 0'); expect.push(0); labels.push('char is unsigned');
+queries.push('(char)-1 < 0'); expect.push(T.scalar('char').signed ? 1 : 0); labels.push('char: signed');
 
 console.log(version());
 console.log(`gate-abi16l: ${Object.keys(CASES).length} structs, ${queries.length} checks ` +
