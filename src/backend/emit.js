@@ -111,26 +111,55 @@ const unsup = (what) => { throw new EmitError(`tier-0 does not support ${what} y
 // ---------------------------------------------------------------- load / store
 
 /** The DataView accessor for a scalar type, and whether the loaded value needs no fixup. */
+/*
+ * Which DataView call reaches a value of this type, chosen by its WIDTH.
+ *
+ * It used to switch on the type's NAME, which fixed i386 into the one place every load and store
+ * passes through: a pointer was getInt32, and so were `int`, `long` and an enum. Under a model
+ * where an int is 2 bytes and an enum is 1, that reads and writes the wrong number of bytes -- the
+ * deepest place the ABI was baked in, and the reason the backend looked like more work than it is.
+ *
+ * TWO CHOICES HERE ARE CONVENTIONS RATHER THAN CONSEQUENCES, and both are kept exactly as they were:
+ *
+ *   A 4-byte integer is getInt32 whether or not it is signed, because JavaScript's bitwise operators
+ *   produce signed 32-bit values and the rest of the emitter is written to that. Narrower integers
+ *   follow their own signedness, which is why `unsigned short` is getUint16.
+ *
+ *   `char` reads through its own signedness but always writes with setInt8. Writing is the same byte
+ *   either way; the asymmetry is preserved because the emitted text is hashed by gates that compare
+ *   whole programs, and a cosmetic difference there is noise nobody wants to re-verify.
+ *
+ * A 2-byte pointer is getUint16, not getInt16: an address is unsigned, and an offset at or above
+ * 0x8000 read as a negative number would be a wrong answer rather than a narrower one.
+ */
 function accessor(t) {
-  if (t.k === 'ptr' || t.k === 'func') return { get: 'getInt32', set: 'setInt32', endian: true };
-  if (t.k === 'enum') return { get: 'getInt32', set: 'setInt32', endian: true };
+  if (t.k === 'ptr' || t.k === 'func' || t.k === 'enum') {
+    const size = t.k === 'func' ? 4 : t.size;
+    const signed = t.k === 'enum' && t.signed;
+    if (size === 4) return { get: 'getInt32', set: 'setInt32', endian: true };
+    if (size === 2) return { get: signed ? 'getInt16' : 'getUint16', set: signed ? 'setInt16' : 'setUint16', endian: true };
+    if (size === 1) return { get: signed ? 'getInt8' : 'getUint8', set: signed ? 'setInt8' : 'setUint8', endian: false };
+    return null;
+  }
   if (t.k !== 'scalar') return null;
   switch (t.name) {
-    case '_Bool': case 'unsigned char': return { get: 'getUint8', set: 'setUint8', endian: false };
-    case 'char': return { get: T.CHAR.signed ? 'getInt8' : 'getUint8', set: 'setInt8', endian: false };
-    case 'signed char': return { get: 'getInt8', set: 'setInt8', endian: false };
-    case 'short': return { get: 'getInt16', set: 'setInt16', endian: true };
-    case 'unsigned short': return { get: 'getUint16', set: 'setUint16', endian: true };
-    case 'int': case 'long': return { get: 'getInt32', set: 'setInt32', endian: true };
-    case 'unsigned int': case 'unsigned long': return { get: 'getInt32', set: 'setInt32', endian: true };
     case 'float': return { get: 'getFloat32', set: 'setFloat32', endian: true };
     case 'double': return { get: 'getFloat64', set: 'setFloat64', endian: true };
-    case 'long long': return { get: 'getBigInt64', set: 'setBigInt64', endian: true };
-    case 'unsigned long long': return { get: 'getBigUint64', set: 'setBigUint64', endian: true };
     case 'long double': return unsup('long double');
+    // char's write side is setInt8 whatever its signedness; see above.
+    case 'char': return { get: t.signed ? 'getInt8' : 'getUint8', set: 'setInt8', endian: false };
+  }
+  switch (t.size) {
+    case 1: return { get: t.signed ? 'getInt8' : 'getUint8', set: t.signed ? 'setInt8' : 'setUint8', endian: false };
+    case 2: return { get: t.signed ? 'getInt16' : 'getUint16', set: t.signed ? 'setInt16' : 'setUint16', endian: true };
+    case 4: return { get: 'getInt32', set: 'setInt32', endian: true };
+    case 8: return { get: t.signed ? 'getBigInt64' : 'getBigUint64', set: t.signed ? 'setBigInt64' : 'setBigUint64', endian: true };
   }
   return null;
 }
+
+/** Exported for tools/gate-accessor.mjs, which freezes the i386 answers and checks the dos16 ones. */
+export { accessor as accessorFor };
 
 /*
  * PAGED MEMORY, off by default and off for every target that does not ask.
