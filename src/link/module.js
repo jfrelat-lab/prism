@@ -47,12 +47,17 @@ export const LAYOUTS = {
    */
   dos16: { space: 0x10000, staticBase: 0x100, stringGap: 2 * 1024, stack: 4 * 1024 },
   /*
-   * The LARGE model has four-byte pointers, so it is not confined to 64K and takes the i386 map: the
-   * whole image is addressable. What it does NOT get is real segmentation -- a pointer here is a
-   * linear byte offset, not seg:off -- so a program doing its own segment arithmetic is refused by
-   * name (gate-borland16) rather than quietly given a number that looks like one.
+   * The LARGE model: four-byte pointers, and CONVENTIONAL MEMORY. A far pointer here is the linear
+   * address seg*16+off, and a real-mode segment tops out at 0xFFFF, so every byte a program can name
+   * through FP_SEG has to sit below the first megabyte -- and in practice below 0xA0000, where video
+   * memory begins. An earlier version gave this model the i386 map, statics at 0x100000: every
+   * FP_SEG of program data would have come out above 0xFFFF and been truncated into a 16-bit
+   * `unsigned`, silently. That is the 640K of DOS, stated as numbers.
+   *
+   * The image is the whole first megabyte so the device windows keep their real addresses --
+   * MK_FP(0xB800, 0) IS 0xB8000 -- and data runs from 64K up to `dataEnd`, with the stack at its top.
    */
-  dos16l: { space: null, staticBase: LOW_MEMORY, stringGap: 64 * 1024, stack: 1024 * 1024 },
+  dos16l: { space: 0x100000, staticBase: 0x10000, dataEnd: 0xA0000, stringGap: 16 * 1024, stack: 16 * 1024 },
 };
 
 export class Module {
@@ -74,8 +79,11 @@ export class Module {
     this.size = memory;
 
     this.brk = layout.staticBase;       // next free static address; i386 keeps the low megabyte
-    this.stackTop = memory - 16;        // the shadow stack grows down from here
-    this.stackLimit = memory - stack;
+    // The stack sits at the top of the program's data, which is the top of the image unless the
+    // model ends data earlier -- conventional memory stops at 0xA0000, below the video windows.
+    const dataEnd = layout.dataEnd ?? memory;
+    this.stackTop = dataEnd - 16;       // the shadow stack grows down from here
+    this.stackLimit = dataEnd - stack;
 
     this.symbols = new Map();           // name -> {addr, size, type, kind}
     this.funcs = new Map();             // name -> {addr, fn|null, type}

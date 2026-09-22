@@ -728,7 +728,7 @@ function wireRebind(F, mod, emitted, rebind) {
 
 export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
-    defines: mergeDefines(mergeDefines(TARGET_DEFINES, charDefines(model, signedChar)), defines),
+    defines: mergeDefines(mergeDefines(TARGET_DEFINES, modelDefines(model, signedChar)), defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
@@ -875,7 +875,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
      * where the compiler's own identity macro selects assembly.
      */
     const pp = new Preprocessor({
-      defines: mergeDefines(mergeDefines(mergeDefines(TARGET_DEFINES, charDefines(model, signedChar)),
+      defines: mergeDefines(mergeDefines(mergeDefines(TARGET_DEFINES, modelDefines(model, signedChar)),
         defines), u.defines ?? {}),
       resolve: resolver,
     });
@@ -1294,6 +1294,17 @@ function staticInit(mod, addr, type, init, ctx) {
  */
 export function charDefines(model = 'i386', signedChar) {
   return T.makeTypes(model, { signedChar }).CHAR.signed ? {} : { __CHAR_UNSIGNED__: '1' };
+}
+
+/**
+ * Everything a compiler predefines about the ABI it targets: its char, and whether a far pointer is
+ * a real-mode seg*16+off. dos.h reads __PRISM_REALMODE__ to choose between the flat DJGPP meaning of
+ * FP_SEG/FP_OFF/MK_FP, which Heretic's DPMI calls rely on, and the real-mode one a 16-bit program
+ * computes paragraphs with.
+ */
+export function modelDefines(model = 'i386', signedChar) {
+  const realMode = model === 'dos16' || model === 'dos16l';
+  return { ...charDefines(model, signedChar), ...(realMode ? { __PRISM_REALMODE__: '1' } : {}) };
 }
 
 export function builtinHeaderResolver(extra = {}) {
