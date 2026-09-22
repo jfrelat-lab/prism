@@ -726,13 +726,13 @@ function wireRebind(F, mod, emitted, rebind) {
   }
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', extraBuiltins = null } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
-    defines: mergeDefines(TARGET_DEFINES, defines),
+    defines: mergeDefines(mergeDefines(TARGET_DEFINES, charDefines(model, signedChar)), defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
-  const { unit, scope } = parse(tokens, { file, pack, c89, model });
+  const { unit, scope } = parse(tokens, { file, pack, c89, model, signedChar });
 
   const mod = new Module({ ...(memory ? { memory } : {}), shared, model });
   const M = makeMachine(mod);
@@ -776,7 +776,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   }
 
   // Pass 2: emit. Static initialisers are written straight into the image where they are constant.
-  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls, model };
+  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls, model, signedChar };
   const pieces = [];
   const emitted = [];
   for (const d of unit.decls) {
@@ -849,7 +849,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -875,11 +875,12 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
      * where the compiler's own identity macro selects assembly.
      */
     const pp = new Preprocessor({
-      defines: mergeDefines(mergeDefines(TARGET_DEFINES, defines), u.defines ?? {}),
+      defines: mergeDefines(mergeDefines(mergeDefines(TARGET_DEFINES, charDefines(model, signedChar)),
+        defines), u.defines ?? {}),
       resolve: resolver,
     });
     const tokens = pp.run(u.source, u.file);
-    const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model });
+    const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model, signedChar });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
   }
 
@@ -1125,6 +1126,8 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
     const ctx = {
       safepoints,
       directCalls,
+      model,              // this ctx carried neither, so every target's emitter typed for i386
+      signedChar,
       builtinRefs,
       undefinedCalls,
       unit: basename(p.file),
@@ -1282,6 +1285,15 @@ function makeRunner(M, F, mod, model = 'i386') {
 function staticInit(mod, addr, type, init, ctx) {
   const fe = new FunctionEmitter(mod, { name: '__static', type: T.func(T.VOID, []), body: { n: 'block', items: [] } }, ctx);
   fe.initStatic(addr, type, init);
+}
+
+/**
+ * What a compiler predefines about its own char, which is how <limits.h> knows. gcc defines
+ * __CHAR_UNSIGNED__ when char is unsigned and nothing when it is signed; PRISM's limits.h reads it,
+ * so CHAR_MIN and CHAR_MAX follow compile.signedChar instead of being a second copy of the answer.
+ */
+export function charDefines(model = 'i386', signedChar) {
+  return T.makeTypes(model, { signedChar }).CHAR.signed ? {} : { __CHAR_UNSIGNED__: '1' };
 }
 
 export function builtinHeaderResolver(extra = {}) {

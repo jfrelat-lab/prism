@@ -24,9 +24,17 @@ export const VOID = { k: 'void', name: 'void', size: 1, align: 1 };
  * `long long` is in i386 and NOT in dos16, which is right: Borland's C89 had no such type. It is
  * absent from the object rather than quietly aliased, so asking for it under dos16 raises.
  */
-export function makeTypes(model = 'i386') {
-  const table = MODELS[model];
-  if (!table) throw new Error(`types: unknown ABI model '${model}'`);
+export function makeTypes(model = 'i386', { signedChar } = {}) {
+  const base = MODELS[model];
+  if (!base) throw new Error(`types: unknown ABI model '${model}'`);
+  /*
+   * Whether plain char is signed belongs to the COMPILER, not to the model: Watcom's 16-bit char is
+   * unsigned, Borland's is signed, and both lay memory out the same way. So the table carries the
+   * default its oracle measured, and a program built by another compiler overrides it -- the way
+   * gcc's -fsigned-char, Watcom's -j and Borland's -K do.
+   */
+  const table = signedChar === undefined ? base
+    : { ...base, char: { ...base.char, signed: !!signedChar } };
   const cache = new Map();
   const scalar = (name) => {
     if (name === 'void') return VOID;

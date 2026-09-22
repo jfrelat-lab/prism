@@ -260,7 +260,14 @@ export class FunctionEmitter {
      * than from constants baked in here, which is what makes the refusal the only thing left to
      * lift when the rest of P11.1 lands.
      */
-    this.ty = T.makeTypes(ctx.model ?? 'i386');
+    this.ty = T.makeTypes(ctx.model ?? 'i386', { signedChar: ctx.signedChar });
+    /*
+     * Which model each emitted function was actually emitted for. A set that holds anything but the
+     * one the program was compiled for means some path built an emitter without the model -- which
+     * is not hypothetical: compileProgram's ctx carried none, so under dos16l the parser typed for
+     * 16 bits while this emitter quietly typed for i386. tools/gate-signedchar.mjs reads it.
+     */
+    (mod.emitModels ??= new Set()).add(`${this.ty.model}/${this.ty.CHAR.signed ? 'signed' : 'unsigned'}`);
     this.locals = new Map();        // name -> {kind:'var'|'slot', js?, off?, type}
     this.nameSeq = new Map();       // how many times a name has been declared in this function
     this.frameSize = 0;

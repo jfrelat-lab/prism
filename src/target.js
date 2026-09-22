@@ -37,7 +37,7 @@ import { installAsm } from './asm/link.js';
  *                                  R_DRAW.C is the whole reason this exists: its C rendering loops
  *                                  live behind `#ifndef __WATCOMC__`, and nothing else in the
  *                                  program may have that macro undefined.
- * @property {object=} compile    { memory, pack, c89, model, collect, safepoints, directCalls }.
+ * @property {object=} compile    { memory, pack, c89, model, signedChar, collect, safepoints, directCalls }.
  * @property {boolean=} caseInsensitive  resolve #includes case-insensitively. Raven's trees write
  *                                       `DoomDef.h` for `DOOMDEF.H`; DOS never had to care.
  * @property {(string[]|object)=} env  the environment, by the names in src/env/registry.js.
@@ -382,6 +382,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // ...and the ABI it was compiled for. 'i386' or 'dos16'; the second parses and cannot yet be
     // emitted, which compile.js says in as many words.
     model: c.model ?? 'i386',
+    // ...and whether its compiler made plain char signed. Absent means "what the model's oracle
+    // measured"; see types.js makeTypes.
+    signedChar: c.signedChar,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*

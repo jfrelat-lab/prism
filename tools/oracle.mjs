@@ -153,12 +153,12 @@ function omfData(buf) {
  * `prelude` is C pasted above the probes -- the struct definitions the queries ask about.
  * `queries` are constant expressions. Returns an array of numbers, in the order given.
  */
-export function watcom16(prelude, queries, { model = 'ms' } = {}) {
+export function watcom16(prelude, queries, { model = 'ms', flags = '' } = {}) {
   const D = "#define D(v) ('0'+(((v)/1000)%10)), ('0'+(((v)/100)%10)), ('0'+(((v)/10)%10)), ('0'+((v)%10))\n" +
     "#define PROBE(i, v) char info_##i[] = { 'I','N','F','O',':', D(i), '=', D(v), ';', 0 };\n";
   const body = queries.map((q, i) => `PROBE(${i}, (int)(${q}))`).join('\n');
   put('probe16.c', `${D}\n${prelude}\n${body}\n`);
-  const r = watcom(`cd /work && rm -f probe16.o && wcc -bt=dos -0 -${model} -q probe16.c`,
+  const r = watcom(`cd /work && rm -f probe16.o && wcc -bt=dos -0 -${model} ${flags} -q probe16.c`,
     { target: 'dos16' });
   if (r.code !== 0) throw new Error(`watcom16: ${r.stderr || r.stdout}`);
   const bytes = omfData(readFileSync(join(SCRATCH, 'probe16.o')));
