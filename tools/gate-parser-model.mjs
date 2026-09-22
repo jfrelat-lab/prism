@@ -6,10 +6,11 @@
 // negative array size at all -- `char x[-1];` compiles today, which is a separate gap and is noted
 // rather than relied upon.
 //
-// The other half matters more: parsing under dos16 must NOT lead to emitting under it. A front end
-// that says int is 2 bytes, handing work to a back end that assumes 4, is how a compiler produces
-// confident wrong answers -- so everything past the parse is refused BY NAME until the backend
-// exists (ROADMAP P11.1), and the door is checked in its message, not merely in its failure.
+// The other half is where the door sits, and it moved: COMPILING for dos16 is allowed, because the
+// survey is the only thing that says what is still missing, and RUNNING one is refused. The risk was
+// never in compiling -- it is in executing code whose backend is half-built, and makeRunner itself
+// builds argv with 4-byte pointers written by hand. The refusal is checked in its message rather
+// than merely in its failure.
 import { Preprocessor } from '../src/cpp/cpp.js';
 import { parse } from '../src/parse/parser.js';
 import { compileProgram, builtinHeaderResolver } from '../src/compile.js';
@@ -51,22 +52,28 @@ for (const [what, got, want] of cases) {
   console.log(`${ok ? '  ok ' : ' BAD '} ${'dos16 long long'.padEnd(16)} ${msg.slice(0, 58)}`);
 }
 
-/** And the door. */
+/** And the door, which is now at run() rather than at emission. */
 const build = (model) => {
   try {
-    compileProgram([{ file: 'pm.c', source: 'int f(void) { return 0; }' }],
+    const p = compileProgram([{ file: 'pm.c', source: 'int main(void) { return 0; }' }],
       { resolve: builtinHeaderResolver({}), memory: 8 * 1024 * 1024, collect: true, model });
-    return 'compiles';
-  } catch (e) { return e.message.split('\n')[0]; }
+    return { state: 'compiles', run: p.run };
+  } catch (e) { return { state: e.message.split('\n')[0], run: null }; }
 };
-for (const [model, want] of [['i386', 'compiles'], ['dos16', 'emits for i386 only']]) {
-  const got = build(model);
-  const ok = want === 'compiles' ? got === 'compiles' : got.includes(want);
-  if (!ok) bad++;
-  console.log(`${ok ? '  ok ' : ' BAD '} ${`emitting ${model}`.padEnd(16)} ${got.slice(0, 58)}`);
+for (const model of ['i386', 'dos16']) {
+  const b = build(model);
+  const okC = b.state === 'compiles';
+  if (!okC) bad++;
+  console.log(`${okC ? '  ok ' : ' BAD '} ${`compiling ${model}`.padEnd(16)} ${b.state.slice(0, 58)}`);
+
+  let ran = '(not built)';
+  if (b.run) { try { b.run(['pm']); ran = 'ran'; } catch (e) { ran = e.message.split('\n')[0]; } }
+  const okR = model === 'i386' ? ran === 'ran' : ran.includes('cannot be run yet');
+  if (!okR) bad++;
+  console.log(`${okR ? '  ok ' : ' BAD '} ${`running ${model}`.padEnd(16)} ${ran.slice(0, 58)}`);
 }
 
-const total = cases.length + 3;
+const total = cases.length + 5;
 console.log(bad ? `\n${bad} of ${total} WRONG`
   : `\nthe front end compiles for the model it is given, and stops at the backend: ${total}/${total}`);
 process.exit(bad ? 1 : 0);

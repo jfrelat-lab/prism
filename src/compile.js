@@ -814,7 +814,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   installStdio(M);
   installPIT(installPorts(M), M);
 
-  return { M, F, src, mod, run: makeRunner(M, F, mod) };
+  return { M, F, src, mod, run: makeRunner(M, F, mod, model) };
 }
 
 
@@ -881,20 +881,6 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
     const tokens = pp.run(u.source, u.file);
     const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
-  }
-
-  /*
-   * THE FRONT END KNOWS THE MODEL; THE BACK END DOES NOT YET.
-   *
-   * Parsing under dos16 is worth having on its own -- it is how a 16-bit program is surveyed, and
-   * how its sizes and promotions get checked against a real table. Emitting under it is a different
-   * matter: a 2-byte pointer is not a constant to swap but an addressing model, and this emitter
-   * indexes one flat ArrayBuffer. Rather than let a front end that says int is 2 bytes hand work to
-   * a back end that assumes 4, everything past this line is refused by name (ROADMAP P11.1).
-   */
-  if (model !== 'i386') {
-    throw new Error(`tier-0 emits for i386 only: '${model}' parses, but nothing can be emitted ` +
-      'from it yet — the backend is P11.1');
   }
 
   /*
@@ -1237,7 +1223,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
   const undefinedVars = [...undefinedData].map(([name, units]) => ({ name, units: [...units].sort() }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return { M, F, src, mod, failures, duplicates, undefined: undefined_, undefinedVars,
-           run: makeRunner(M, F, mod) };
+           run: makeRunner(M, F, mod, model) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */
@@ -1251,8 +1237,23 @@ function overlay(shared, own) {
 const tagOf = (file) => file.replace(/\.[cC]$/, '').replace(/[^A-Za-z0-9_]/g, '_');
 
 /** The entry point, shared by compile() and compileProgram(). */
-function makeRunner(M, F, mod) {
+function makeRunner(M, F, mod, model = 'i386') {
   return function run(argv = ['prog']) {
+    /*
+     * COMPILING FOR A 16-BIT MODEL IS ALLOWED; RUNNING ONE IS NOT, YET.
+     *
+     * The refusal used to sit at emission, which also refused the survey -- and the survey is the
+     * only thing that says what is still missing. The risk was never in compiling: it is in
+     * executing code whose backend is half-built. Three lines below this one are a case in point,
+     * building argv with `4 * (ptrs.length + 1)` and setInt32, which is a 4-byte pointer written
+     * by hand. Every other unfinished piece is guarded where it lives -- segmented pointers
+     * (gate-borland16), i386-shaped structs in stdio (gate-stdio-model), the 64K space
+     * (gate-layout) -- and this is the door for everything not yet found.
+     */
+    if (model !== 'i386') {
+      throw new CompileError(`compiled for '${model}', which cannot be run yet: tier-0 executes ` +
+        'i386 only (ROADMAP P11.1). Compiling is allowed so the program can be surveyed.');
+    }
     M.stdout.length = 0;
     const main = F.main;
     if (!main) throw new CompileError('no main()');
