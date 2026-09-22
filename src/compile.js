@@ -734,7 +734,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   const tokens = pp.run(source, file);
   const { unit, scope } = parse(tokens, { file, pack, c89, model });
 
-  const mod = new Module({ ...(memory ? { memory } : {}), shared });
+  const mod = new Module({ ...(memory ? { memory } : {}), shared, model });
   const M = makeMachine(mod);
   // A text console in guest memory from the start, so stdout has somewhere real to land. The host
   // replaces `readChar` with a blocking one; headless, stdin is simply at EOF.
@@ -856,7 +856,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
   // once, because it is read per unit.
   const envTable = withEnvBuiltins(extraBuiltins);
   const failures = [];
-  const mod = new Module({ ...(memory ? { memory } : {}), shared });
+  const mod = new Module({ ...(memory ? { memory } : {}), shared, model });
   const M = makeMachine(mod);
   // A text console in guest memory from the start, so stdout has somewhere real to land. The host
   // replaces `readChar` with a blocking one; headless, stdin is simply at EOF.

@@ -25,19 +25,48 @@ export const VRAM_TEXT = 0xb8000;        // 80x25, two bytes per cell: character
 export const VRAM_GFX = 0xa0000;         // mode 13h and the EGA/VGA planar window
 export const TEXT_COLS = 80, TEXT_ROWS = 25;
 
+/**
+ * Where things sit, per ABI model. Every number below was an i386 constant in this file or in
+ * runtime.js; naming them is what lets a second model exist at all.
+ *
+ * dos16 is the SMALL model: a near pointer is 2 bytes, so the whole address space a program can name
+ * is 64K and every region has to fit inside it. That is not a smaller version of the i386 map, it is
+ * a different one -- the low megabyte cannot be reserved, because 0xA0000 is not a number a 16-bit
+ * pointer can hold. A 16-bit program reaches video memory through a FAR pointer instead, which is
+ * refused by name today (gate-borland16), so nothing is lost here that was reachable.
+ *
+ * `space: null` means "whatever memory the target asked for", which is the i386 behaviour.
+ */
+export const LAYOUTS = {
+  i386: { space: null, staticBase: LOW_MEMORY, stringGap: 64 * 1024, stack: 1024 * 1024 },
+  /*
+   * 64K in four parts. The string gap is 2K rather than 64K for the obvious reason -- a 64K gap IS
+   * the address space -- and the stack is 4K, which is what a DOS program of this era asked its
+   * linker for. Exceeding any of it is refused by name: a 2-byte pointer that wrapped would be a
+   * wrong answer, and a silent one.
+   */
+  dos16: { space: 0x10000, staticBase: 0x100, stringGap: 2 * 1024, stack: 4 * 1024 },
+};
+
 export class Module {
   /**
    * `shared` backs the image with a SharedArrayBuffer instead. The image is then visible to another
    * thread with no copy, which is what lets a browser display a frame while the guest's own main
    * loop — synchronous C that never yields — keeps running in a worker.
    */
-  constructor({ memory = 64 * 1024 * 1024, stack = 1 * 1024 * 1024, shared = false } = {}) {
+  constructor({ memory = 64 * 1024 * 1024, stack = null, shared = false, model = 'i386' } = {}) {
+    const layout = LAYOUTS[model];
+    if (!layout) throw new Error(`module: unknown ABI model '${model}'`);
+    this.layout = layout;
+    this.model = model;
+    if (layout.space !== null) memory = layout.space;      // a model with a bounded space sets it
+    stack = stack ?? layout.stack;
     this.buffer = shared ? new SharedArrayBuffer(memory) : new ArrayBuffer(memory);
     this.u8 = new Uint8Array(this.buffer);
     this.dv = new DataView(this.buffer);
     this.size = memory;
 
-    this.brk = LOW_MEMORY;              // next free static address, above the PC's low megabyte
+    this.brk = layout.staticBase;       // next free static address; i386 keeps the low megabyte
     this.stackTop = memory - 16;        // the shadow stack grows down from here
     this.stackLimit = memory - stack;
 
@@ -71,7 +100,8 @@ export class Module {
     this.brk = a + Math.max(size, 0);
     if (this.brk >= (this.staticLimit ?? this.stackLimit)) {
       throw new Error('static storage exhausted' +
-        (this.staticLimit ? ' (the reserved gap below the heap is full)' : ''));
+        (this.staticLimit ? ' (the reserved gap below the heap is full)' : '') +
+        (this.layout.space ? `; the ${this.model} address space is ${this.layout.space} bytes` : ''));
     }
     return a;
   }

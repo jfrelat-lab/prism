@@ -145,7 +145,9 @@ export function makeMachine(mod = new Module()) {
  * bytes landed inside memory malloc had handed out.
  */
 export function finalizeHeap(M) {
-  const GAP = 64 * 1024;                    // room for every string a shim may intern while running
+  // Room for every string a shim may intern while running. From the model, because on a 64K
+  // address space a 64K gap would BE the address space.
+  const GAP = M.mod.layout?.stringGap ?? 64 * 1024;
   M.heap = Math.ceil((M.mod.brk + GAP) / 16) * 16;
   M.mod.staticLimit = M.heap;               // Module.alloc refuses to cross this
   /*
