@@ -82,8 +82,8 @@ export const paramIdent = (n) => `_p_${jsIdent(n)}`;
  * and other types" — loudly, which is the point of the BigInt choice, and it surfaced only when
  * SQLite indexed a buffer with an i64 length.
  */
-function indexJs(v) {
-  return is64(T.decay(v.type ?? T.INT)) ? `Number(BigInt.asIntN(32,${v.js}))` : `${v.js}|0`;
+function indexJs(ty, v) {
+  return is64(ty.decay(v.type ?? ty.INT)) ? `Number(BigInt.asIntN(32,${v.js}))` : `${v.js}|0`;
 }
 
 
@@ -209,7 +209,7 @@ const mask64 = (js, t) => `BigInt.as${t.signed ? 'Int' : 'Uint'}N(64,${js})`;
 const checkWide = (t) => { if (t && t.k === 'scalar' && WIDE.has(t.name)) unsup(t.name); };
 
 /** Truncate/extend a 32-bit value to a narrower type, as an assignment or cast must. */
-function coerce(js, from, to) {
+function coerce(ty, js, from, to) {
   checkWide(from); checkWide(to);
 
   // 64-bit conversions come first: nothing below may see a BigInt on one side and a Number on the
@@ -222,7 +222,7 @@ function coerce(js, from, to) {
   if (is64(from)) {
     if (T.isFloat(to)) return to.name === 'float' ? `Math.fround(Number(${js}))` : `Number(${js})`;
     // Narrowing to 32 bits or less: truncate in BigInt, then leave the BigInt world exactly once.
-    return coerce(`Number(BigInt.asIntN(32,${js}))`, T.INT, to);
+    return coerce(ty, `Number(BigInt.asIntN(32,${js}))`, ty.INT, to);
   }
   if (T.isFloat(to)) {
     const v = T.isFloat(from) ? js : (T.isUnsigned(from) ? `(${js}>>>0)` : `(${js}|0)`);
@@ -237,7 +237,7 @@ function coerce(js, from, to) {
   if (to.k === 'void') return `(${js})`;
   switch (to.name) {
     case '_Bool': return `((${js})!==0?1:0)`;
-    case 'char': return T.CHAR.signed ? `((${js})<<24>>24)` : `((${js})&255)`;
+    case 'char': return ty.CHAR.signed ? `((${js})<<24>>24)` : `((${js})&255)`;
     case 'signed char': return `((${js})<<24>>24)`;
     case 'unsigned char': return `((${js})&255)`;
     case 'short': return `((${js})<<16>>16)`;
@@ -254,6 +254,13 @@ export class FunctionEmitter {
     this.mod = mod;
     this.decl = decl;
     this.ctx = ctx;                 // {globals: Map, funcs: Map, builtins: Set}
+    /*
+     * The ABI this function is emitted for. Only i386 reaches emission today -- compile.js refuses
+     * anything else by name -- but the sizes and the integer promotions come from the table rather
+     * than from constants baked in here, which is what makes the refusal the only thing left to
+     * lift when the rest of P11.1 lands.
+     */
+    this.ty = T.makeTypes(ctx.model ?? 'i386');
     this.locals = new Map();        // name -> {kind:'var'|'slot', js?, off?, type}
     this.nameSeq = new Map();       // how many times a name has been declared in this function
     this.frameSize = 0;
@@ -311,8 +318,8 @@ export class FunctionEmitter {
         const name = `_sw${sw++}$${d.name}`;
         // The temp keeps the discriminant's OWN type. Forcing it to int truncated a `switch` on a
         // long long to 32 bits -- silently, because the case values were being truncated to match.
-        const dt = disc?.type ? T.promote(T.decay(disc.type)) : T.INT;
-        const type = T.isInteger(dt) ? dt : T.INT;
+        const dt = disc?.type ? this.ty.promote(this.ty.decay(disc.type)) : this.ty.INT;
+        const type = T.isInteger(dt) ? dt : this.ty.INT;
         return {
           decl: { n: 'decls', decls: [{ n: 'vardecl', name, type, storage: null, init: { expr: disc } }] },
           ref: { n: 'ident', name, type },
@@ -387,7 +394,7 @@ export class FunctionEmitter {
         // The registration runs at the END of the previous segment, which is where a fall-through
         // arrives from — so a setjmp is recorded before its own case is ever entered.
         if (seg.pre) {
-          const env = this.#rvalForCall(seg.pre.args[0], T.ptr(T.INT));
+          const env = this.#rvalForCall(seg.pre.args[0], this.ty.ptr(this.ty.INT));
           this.out.push(`_sjv=0; M.rt.__prism_setjmp(${env},_fp,${k});`);
         }
         this.out.push(`case ${k}:`);
@@ -410,7 +417,7 @@ export class FunctionEmitter {
       ? `var _fp=(M.sp-${this.frameSize})&${~(this.frameAlign - 1)}|0;`
       : `var _fp=M.sp-${this.frameSize}|0;`);
     if (this.frameSize) body.push(`M.sp=_fp;`);
-    for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(p.from, p.type, p.type)) + ';');
+    for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
     body.push(`  return ${d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
@@ -930,7 +937,7 @@ export class FunctionEmitter {
     if (a !== null) { writeConst(this.mod, addr, type, a); return true; }
 
     try {
-      writeConst(this.mod, addr, type, evalConstNumber(expr));
+      writeConst(this.mod, addr, type, evalConstNumber(this.ty, expr));
       return true;
     } catch { return false; }
   }
@@ -978,10 +985,10 @@ export class FunctionEmitter {
         const base = this.#addrConst(e.a);
         if (base === null) return null;
         // The offset scales by the pointee, exactly as at run time.
-        const elem = T.decay(e.a.type ?? T.INT);
+        const elem = this.ty.decay(e.a.type ?? this.ty.INT);
         const step = elem.k === 'ptr' ? (elem.to.size ?? 1) : 1;
         let n;
-        try { n = evalConstNumber(e.b); } catch { return null; }
+        try { n = evalConstNumber(this.ty, e.b); } catch { return null; }
         return e.op === '+' ? base + n * step : base - n * step;
       }
     }
@@ -1055,8 +1062,8 @@ export class FunctionEmitter {
          */
         if (e.arrow) {
           let base = this.#addrConst(e.base);
-          if (base === null) { try { base = evalConstNumber(e.base); } catch { return null; } }
-          const pt = T.decay(e.base.type ?? T.INT);
+          if (base === null) { try { base = evalConstNumber(this.ty, e.base); } catch { return null; } }
+          const pt = this.ty.decay(e.base.type ?? this.ty.INT);
           const rec = pt.k === 'ptr' ? pt.to : null;
           if (!rec || !T.isRecord(rec)) return null;
           const f = findField(rec, e.field);
@@ -1078,14 +1085,14 @@ export class FunctionEmitter {
          * sound table pointing at its own entries -- arrived here with no type and was refused.
          * The declaration knows, so ask it.
          */
-        let bt = T.decay(e.base.type ?? T.INT);
+        let bt = this.ty.decay(e.base.type ?? this.ty.INT);
         if (bt.k !== 'ptr' && e.base.n === 'ident') {
           const g = this.ctx.globals?.get(e.base.name) ?? this.locals?.get(e.base.name);
-          if (g?.type) bt = T.decay(g.type);
+          if (g?.type) bt = this.ty.decay(g.type);
         }
         if (bt.k !== 'ptr') return null;
         let n;
-        try { n = evalConstNumber(e.index); } catch { return null; }
+        try { n = evalConstNumber(this.ty, e.index); } catch { return null; }
         return base + n * (bt.to.size ?? 1);
       }
       case 'str': return this.#stringAddr(e);
@@ -1184,7 +1191,7 @@ export class FunctionEmitter {
         const ft = t.field.flexible ? flexibleArrayType(t.type, it.value) : t.type;
         if (t.field.bits !== undefined) {
           let v;
-          try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
+          try { v = evalConstNumber(this.ty, it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
           writeStaticBitfield(this.mod, addr, { ...t.field, offset: t.off }, v);
         } else if (it.value.n === 'initlist') {
           this.#staticList(addr + t.off, ft, it.value);
@@ -1281,7 +1288,7 @@ export class FunctionEmitter {
       const ft = f.flexible ? flexibleArrayType(f.type, it.value) : f.type;
       if (f.bits !== undefined) {
         let v;
-        try { v = evalConstNumber(it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
+        try { v = evalConstNumber(this.ty, it.value.expr); } catch { unsup('a non-constant bitfield initialiser'); }
         writeStaticBitfield(this.mod, addr, f, v);
         i++;
       } else if (it.value.n === 'initlist') { this.#staticList(addr + f.offset, ft, it.value); i++; }
@@ -1496,7 +1503,7 @@ export class FunctionEmitter {
   #storeAt(place, js, fromType) {
     if (!place) return;
     if (place.bitfield) { this.#initBitfield(place.addr, place.bitfield, js); return; }
-    const v = coerce(js, fromType ?? place.type, place.type);
+    const v = coerce(this.ty, js, fromType ?? place.type, place.type);
     if (place.varJs) { this.out.push(`${place.varJs}=${v};`); return; }
     this.out.push(storeExpr(place.addr, place.type, v) + ';');
   }
@@ -1504,12 +1511,12 @@ export class FunctionEmitter {
   #truth(e) {
     const v = this.#rval(e);
     // A complex value is true when EITHER half is non-zero.
-    if (T.isComplex(T.decay(v.type ?? T.INT))) {
+    if (T.isComplex(this.ty.decay(v.type ?? this.ty.INT))) {
       const p = this.#cxParts(v, v.type.complexOf);
       return `(${p.pin},((${p.re})!==0||(${p.im})!==0))`;
     }
     // A BigInt is never `!== 0` in the Number sense — the comparison has to use 0n.
-    return is64(T.decay(v.type ?? T.INT)) ? `(${v.js})!==0n` : `(${v.js})!==0`;
+    return is64(this.ty.decay(v.type ?? this.ty.INT)) ? `(${v.js})!==0n` : `(${v.js})!==0`;
   }
 
   // ------------------------------------------------------------- expressions
@@ -1546,7 +1553,7 @@ export class FunctionEmitter {
         const b = this.ctx.builtins?.get(e.name);
         if (b) {
           const addr = this.#builtinAddr(e.name);
-          if (addr !== null) return { addr: String(addr), type: T.func(b.ret ?? T.INT, []), isFunc: true };
+          if (addr !== null) return { addr: String(addr), type: T.func(b.ret ?? this.ty.INT, []), isFunc: true };
         }
         /*
          * `__func__` is not a variable a program declares -- C99 6.4.2.2 says the compiler provides
@@ -1555,7 +1562,7 @@ export class FunctionEmitter {
          */
         if (/^(__func__|__FUNCTION__|__PRETTY_FUNCTION__)$/.test(e.name)) {
           const bytes = [...this.decl.name].map(c => c.charCodeAt(0) & 0xff);
-          return { addr: String(this.mod.intern(bytes)), type: T.array(T.CHAR, bytes.length + 1) };
+          return { addr: String(this.mod.intern(bytes)), type: T.array(this.ty.CHAR, bytes.length + 1) };
         }
         throw new EmitError(`undeclared identifier '${e.name}'`);
       }
@@ -1577,10 +1584,10 @@ export class FunctionEmitter {
       case 'index': {
         const b = this.#rval(e.base);
         const i = this.#rval(e.index);
-        const bt = T.decay(b.type);
+        const bt = this.ty.decay(b.type);
         if (bt.k !== 'ptr') throw new EmitError('subscripting a non-pointer');
         const es = bt.to.size ?? 1;
-        return { addr: `((${b.js})+Math.imul(${indexJs(i)},${es})|0)`, type: bt.to };
+        return { addr: `((${b.js})+Math.imul(${indexJs(this.ty, i)},${es})|0)`, type: bt.to };
       }
       case 'member': {
         let recAddr, rec;
@@ -1610,7 +1617,7 @@ export class FunctionEmitter {
       }
       case 'str': {
         const addr = this.#stringAddr(e);
-        return { addr: String(addr), type: e.type ?? T.array(T.CHAR, null), isString: true };
+        return { addr: String(addr), type: e.type ?? T.array(this.ty.CHAR, null), isString: true };
       }
       case 'call': {
         // The call evaluates to the address of the sret buffer, so `f().field` and `x = f()` both
@@ -1639,13 +1646,13 @@ export class FunctionEmitter {
        */
       case 'comma': {
         // The parser leaves a comma's own type null, so the type is the RIGHT operand's.
-        if (!T.isRecord(e.type ?? e.b?.type ?? T.INT)) break;
+        if (!T.isRecord(e.type ?? e.b?.type ?? this.ty.INT)) break;
         const left = this.#rval(e.a);
         const l = this.#lval(e.b);
         return { ...l, addr: `(${left.js},${l.addr})` };
       }
       case 'assign': {
-        if (!T.isRecord(e.type ?? T.INT)) break;
+        if (!T.isRecord(e.type ?? this.ty.INT)) break;
         const done = this.#rval(e);          // performs the assignment
         const l = this.#lval(e.lhs);         // then the object it wrote to
         return { ...l, addr: `(${done.js},${l.addr})` };
@@ -1674,12 +1681,12 @@ export class FunctionEmitter {
        * ordinary GNU C.
        */
       case 'stmtexpr': {
-        if (!T.isRecord(e.type ?? T.INT)) break;
+        if (!T.isRecord(e.type ?? this.ty.INT)) break;
         const v = this.#stmtExpr(e);
         return { addr: v.js, type: v.type };
       }
       case 'cond': {
-        if (!T.isRecord(e.type ?? T.INT)) break;
+        if (!T.isRecord(e.type ?? this.ty.INT)) break;
         const off = this.slot(e.type.size, e.type.align);
         const at = `(_fp+${off}|0)`;
         const a2 = this.#lval(e.then ?? e.cond);
@@ -1696,7 +1703,7 @@ export class FunctionEmitter {
      * still has an address, because that is how a complex value travels here. Every caller that
      * asks for an lvalue wants somewhere to copy FROM, and this is it.
      */
-    if (T.isComplex(e.type ?? T.INT)) {
+    if (T.isComplex(e.type ?? this.ty.INT)) {
       const v = this.#rval(e);
       return { addr: v.js, type: v.type };
     }
@@ -1750,24 +1757,24 @@ export class FunctionEmitter {
       case 'num': return is64(e.type)
         ? { js: `${e.type.signed ? BigInt.asIntN(64, e.value) : BigInt.asUintN(64, e.value)}n`, type: e.type }
         : { js: String(BigInt.asIntN(32, e.value)), type: e.type };
-      case 'char': return { js: String(Number(e.value)), type: T.INT };
+      case 'char': return { js: String(Number(e.value)), type: this.ty.INT };
       /*
        * offsetof is a constant, and constEval already knows how to walk the member path — including
        * through arrays and nested structs. It reached the emitter unhandled only because nothing had
        * used it in an ordinary expression before; SQLite uses it in 38 functions.
        */
-      case 'offsetof': return { js: String(constEval(e)), type: T.UINT };
+      case 'offsetof': return { js: String(constEval(e)), type: this.ty.UINT };
       case 'float': return { js: e.type.name === 'float' ? `Math.fround(${e.value})` : String(e.value), type: e.type };
       // The element type comes from the literal, not from `char`: indexing `L"ab"` must read a
       // wchar_t. Hardcoding char here made `L"a" "b"[1]` read one byte (20010325-1.c).
-      case 'str': return { js: String(this.#stringAddr(e)), type: T.ptr(e.type?.of ?? T.CHAR) };
+      case 'str': return { js: String(this.#stringAddr(e)), type: this.ty.ptr(e.type?.of ?? this.ty.CHAR) };
 
       case 'ident': {
         const l = this.#lval(e);
-        if (l.isFunc) return { js: l.addr, type: T.ptr(l.type) };
+        if (l.isFunc) return { js: l.addr, type: this.ty.ptr(l.type) };
         if (l.varJs) return { js: l.varJs, type: l.type };
-        if (l.type.k === 'array') return { js: l.addr, type: T.ptr(l.type.of) };
-        if (l.type.k === 'func') return { js: l.addr, type: T.ptr(l.type) };
+        if (l.type.k === 'array') return { js: l.addr, type: this.ty.ptr(l.type.of) };
+        if (l.type.k === 'func') return { js: l.addr, type: this.ty.ptr(l.type) };
         // A struct's "value" in tier-0 IS its address, exactly as an array's is: every legal
         // consumer of a struct rvalue -- assignment, an argument, a return, a member access,
         // sizeof -- wants the address and copies from it. Refusing here made `(void)tok;` fail,
@@ -1782,8 +1789,8 @@ export class FunctionEmitter {
         // declared one: `unsigned int u:7` becomes `int`, because an int represents every value a
         // 7-bit unsigned field can hold. Returning the declared type made `bit.u % 61` unsigned and
         // gcc's bitfld-1.c exists precisely to catch that.
-        if (l.bitfield) return { js: this.#loadBitfield(l), type: bitfieldPromoted(l.bitfield) };
-        if (l.type.k === 'array') return { js: l.addr, type: T.ptr(l.type.of) };
+        if (l.bitfield) return { js: this.#loadBitfield(l), type: bitfieldPromoted(this.ty, l.bitfield) };
+        if (l.type.k === 'array') return { js: l.addr, type: this.ty.ptr(l.type.of) };
         if (T.isRecord(l.type)) return { js: l.addr, type: l.type };
         return { js: loadExpr(l.addr, l.type), type: l.type };
       }
@@ -1795,15 +1802,15 @@ export class FunctionEmitter {
         const v = this.#rval(e.expr);
         if (e.type.k === 'void') return { js: `(${v.js},0)`, type: T.VOID };
         if (T.isComplex(e.type) || T.isComplex(v.type)) return this.#cxConvert(v, e.type);
-        return { js: coerce(v.js, T.decay(v.type), e.type), type: e.type };
+        return { js: coerce(this.ty, v.js, this.ty.decay(v.type), e.type), type: e.type };
       }
       case 'cond': {
         const c = this.#truth(e.cond);
         const a = e.then ? this.#rval(e.then) : null;
         const b = this.#rval(e.els);
-        const type = a ? unifyCond(a.type, b.type) : b.type;
+        const type = a ? unifyCond(this.ty, a.type, b.type) : b.type;
         if (!a) { const t = this.newTmp(); return { js: `((${t}=${this.#rval(e.cond).js}),${t}!==0?${t}:${b.js})`, type, needsTmp: t }; }
-        return { js: `(${c}?${coerceTo(a, type)}:${coerceTo(b, type)})`, type };
+        return { js: `(${c}?${coerceTo(this.ty, a, type)}:${coerceTo(this.ty, b, type)})`, type };
       }
       case 'comma': {
         const a = this.#rval(e.a), b = this.#rval(e.b);
@@ -1814,7 +1821,7 @@ export class FunctionEmitter {
       case 'labeladdr': {
         const k = this.labels?.index.get(e.name);
         if (k === undefined) unsup(`the address of label '${e.name}'`);
-        return { js: String(k), type: T.ptr(T.VOID) };
+        return { js: String(k), type: this.ty.ptr(T.VOID) };
       }
       // `2.0i`: the constant IS the imaginary half.
       case 'imaginary':
@@ -1823,19 +1830,19 @@ export class FunctionEmitter {
         const v = this.#rval(e.expr);
         if (!T.isComplex(v.type)) {
           // On a real operand: __real__ is the value, __imag__ is a zero of the same type.
-          return e.part === 0 ? v : { js: `(${v.js},0)`, type: T.decay(v.type) };
+          return e.part === 0 ? v : { js: `(${v.js},0)`, type: this.ty.decay(v.type) };
         }
         const of = v.type.complexOf;
         const t = this.newTmp(); this.#declareTmp(t);
         return { js: `(${t}=${v.js},${loadExpr(e.part ? `(${t}+${of.size}|0)` : t, of)})`, type: of };
       }
-      case 'sizeoftype': return { js: String(e.target.size), type: T.UINT };
+      case 'sizeoftype': return { js: String(e.target.size), type: this.ty.UINT };
       case 'sizeofexpr': {
         const t = e.expr.type;
         if (!t || t.size == null) throw new EmitError('sizeof an expression of unknown type');
-        return { js: String(t.size), type: T.UINT };
+        return { js: String(t.size), type: this.ty.UINT };
       }
-      case 'alignoftype': return { js: String(e.target.align), type: T.UINT };
+      case 'alignoftype': return { js: String(e.target.align), type: this.ty.UINT };
       // `__alignof__ x` -- the alignment of the EXPRESSION's type, and like sizeof it does not
       // evaluate x.
       case 'alignofexpr': {
@@ -1844,7 +1851,7 @@ export class FunctionEmitter {
         // could only ever be a plausible-looking wrong number (gcc's align-3.c asks for 256).
         if (t?.k === 'func') unsup('__alignof__ of a function');
         if (!t || t.align == null) throw new EmitError('__alignof__ of an expression of unknown type');
-        return { js: String(t.align), type: T.UINT };
+        return { js: String(t.align), type: this.ty.UINT };
       }
       /*
        * As an rvalue. A record IS its address here -- that is how every record-valued expression
@@ -1867,12 +1874,12 @@ export class FunctionEmitter {
     if (e.op === '&') {
       const l = this.#lval(e.expr);
       if (l.varJs) throw new EmitError(`internal: '&' on a variable that was not given a slot`);
-      return { js: l.addr, type: T.ptr(l.type) };
+      return { js: l.addr, type: this.ty.ptr(l.type) };
     }
     if (e.op === '*') {
       const l = this.#lval(e);
-      if (l.type.k === 'array') return { js: l.addr, type: T.ptr(l.type.of) };
-      if (l.type.k === 'func') return { js: l.addr, type: T.ptr(l.type) };
+      if (l.type.k === 'array') return { js: l.addr, type: this.ty.ptr(l.type.of) };
+      if (l.type.k === 'func') return { js: l.addr, type: this.ty.ptr(l.type) };
       // A record rvalue IS its address in tier-0, the same rule as an array's -- and `*p` on a
       // struct or union pointer is a place that rule was missing. csmith reaches it constantly
       // because it passes unions by value through pointers; the two sibling sites above already
@@ -1881,7 +1888,7 @@ export class FunctionEmitter {
       return { js: loadExpr(l.addr, l.type), type: l.type };
     }
     const v = this.#rval(e.expr);
-    if (T.isComplex(T.decay(v.type))) {
+    if (T.isComplex(this.ty.decay(v.type))) {
       // `-z` negates both halves; `~z` is the CONJUGATE, which is what gcc makes it mean on a
       // complex value rather than a bitwise complement.
       const of = v.type.complexOf;
@@ -1889,35 +1896,35 @@ export class FunctionEmitter {
       if (e.op === '+') return { js: `(${p.pin},${this.#cxMake(v.type, p.re, p.im).js})`, type: v.type };
       if (e.op === '-') return { js: `(${p.pin},${this.#cxMake(v.type, `-(${p.re})`, `-(${p.im})`).js})`, type: v.type };
       if (e.op === '~') return { js: `(${p.pin},${this.#cxMake(v.type, p.re, `-(${p.im})`).js})`, type: v.type };
-      if (e.op === '!') return { js: `(${p.pin},((${p.re})===0&&(${p.im})===0)?1:0)`, type: T.INT };
+      if (e.op === '!') return { js: `(${p.pin},((${p.re})===0&&(${p.im})===0)?1:0)`, type: this.ty.INT };
       unsup(`unary '${e.op}' on a complex value`);
     }
-    const t = T.promote(T.decay(v.type));
-    const V = coerce(v.js, T.decay(v.type), t);
+    const t = this.ty.promote(this.ty.decay(v.type));
+    const V = coerce(this.ty, v.js, this.ty.decay(v.type), t);
     if (is64(t)) {
       switch (e.op) {
         case '+': return { js: V, type: t };
         case '-': return { js: mask64(`-(${V})`, t), type: t };
         case '~': return { js: mask64(`~(${V})`, t), type: t };
-        case '!': return { js: `((${V})===0n?1:0)`, type: T.INT };
+        case '!': return { js: `((${V})===0n?1:0)`, type: this.ty.INT };
       }
     }
     switch (e.op) {
       case '+': return { js: V, type: t };
       case '-': return T.isFloat(t) ? { js: `(-(${v.js}))`, type: t } : { js: `((0-(${v.js}))|0)`, type: t };
       case '~': return { js: `(~(${v.js}))`, type: t };
-      case '!': return { js: `((${v.js})===0?1:0)`, type: T.INT };
+      case '!': return { js: `((${v.js})===0?1:0)`, type: this.ty.INT };
     }
     throw new EmitError(`unary '${e.op}'`);
   }
 
   #binary(e) {
     const a = this.#rval(e.a), b = this.#rval(e.b);
-    const at = T.decay(a.type), bt = T.decay(b.type);
+    const at = this.ty.decay(a.type), bt = this.ty.decay(b.type);
     const op = e.op;
 
-    if (op === '&&') return { js: `((${this.#truth(e.a)}&&${this.#truth(e.b)})?1:0)`, type: T.INT };
-    if (op === '||') return { js: `((${this.#truth(e.a)}||${this.#truth(e.b)})?1:0)`, type: T.INT };
+    if (op === '&&') return { js: `((${this.#truth(e.a)}&&${this.#truth(e.b)})?1:0)`, type: this.ty.INT };
+    if (op === '||') return { js: `((${this.#truth(e.a)}||${this.#truth(e.b)})?1:0)`, type: this.ty.INT };
 
     // Complex arithmetic works on the halves, so it cannot share the scalar paths below.
     if (T.isComplex(at) || T.isComplex(bt)) {
@@ -1928,50 +1935,50 @@ export class FunctionEmitter {
     // Pointer arithmetic scales by the pointee, and p - q divides by it.
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
-      return { js: `((${a.js})${op}Math.imul(${indexJs(b)},${s})|0)`, type: at };
+      return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };
     }
     if (bt.k === 'ptr' && T.isInteger(at) && op === '+') {
       const s = bt.to.size ?? 1;
-      return { js: `((${b.js})+Math.imul(${indexJs(a)},${s})|0)`, type: bt };
+      return { js: `((${b.js})+Math.imul(${indexJs(this.ty, a)},${s})|0)`, type: bt };
     }
     if (at.k === 'ptr' && bt.k === 'ptr' && op === '-') {
       const s = at.to.size ?? 1;
-      return { js: `((((${a.js})-(${b.js}))|0)/${s}|0)`, type: T.INT };
+      return { js: `((((${a.js})-(${b.js}))|0)/${s}|0)`, type: this.ty.INT };
     }
 
     const CMP = { '==': '===', '!=': '!==', '<': '<', '>': '>', '<=': '<=', '>=': '>=' };
     if (op in CMP) {
       if (at.k === 'ptr' || bt.k === 'ptr') {
-        return { js: `(((${a.js})>>>0)${CMP[op]}((${b.js})>>>0)?1:0)`, type: T.INT };
+        return { js: `(((${a.js})>>>0)${CMP[op]}((${b.js})>>>0)?1:0)`, type: this.ty.INT };
       }
-      const c = T.usualArith(at, bt);
-      const A = coerce(a.js, at, c), B = coerce(b.js, bt, c);
-      if (T.isFloat(c)) return { js: `((${A})${CMP[op]}(${B})?1:0)`, type: T.INT };
+      const c = this.ty.usualArith(at, bt);
+      const A = coerce(this.ty, a.js, at, c), B = coerce(this.ty, b.js, bt, c);
+      if (T.isFloat(c)) return { js: `((${A})${CMP[op]}(${B})?1:0)`, type: this.ty.INT };
       // Both sides are already masked to the same 64-bit signedness, so a plain BigInt comparison
       // is correct — `>>>0` would throw on a BigInt.
-      if (is64(c)) return { js: `((${A})${CMP[op]}(${B})?1:0)`, type: T.INT };
-      if (T.isUnsigned(c)) return { js: `(((${A})>>>0)${CMP[op]}((${B})>>>0)?1:0)`, type: T.INT };
-      return { js: `((${A})${CMP[op]}(${B})?1:0)`, type: T.INT };
+      if (is64(c)) return { js: `((${A})${CMP[op]}(${B})?1:0)`, type: this.ty.INT };
+      if (T.isUnsigned(c)) return { js: `(((${A})>>>0)${CMP[op]}((${B})>>>0)?1:0)`, type: this.ty.INT };
+      return { js: `((${A})${CMP[op]}(${B})?1:0)`, type: this.ty.INT };
     }
 
     if (op === '<<' || op === '>>') {
-      const t = T.promote(at);
-      const A = coerce(a.js, at, t);
+      const t = this.ty.promote(at);
+      const A = coerce(this.ty, a.js, at, t);
       if (is64(t)) {
         // The count is an ordinary integer and must be converted; the result is masked back to 64.
-        const shb = `BigInt(${coerce(b.js, bt, T.INT)}&63)`;
+        const shb = `BigInt(${coerce(this.ty, b.js, bt, this.ty.INT)}&63)`;
         return { js: mask64(`((${A})${op === '<<' ? '<<' : '>>'}${shb})`, t), type: t };
       }
       // The COUNT is converted on its own -- a shift has no common type, C99 6.5.7p3 -- so a 64-bit
       // count on a 32-bit value becomes an ordinary number. Left as a BigInt, `&31` threw
       // "Cannot mix BigInt and other types" out of `(unsigned)a >> 3ULL` (gcc's pr82192.c).
-      const sh = `((${coerce(b.js, bt, T.INT)})&31)`;
+      const sh = `((${coerce(this.ty, b.js, bt, this.ty.INT)})&31)`;
       if (op === '<<') return { js: `((${A})<<${sh})`, type: t };
       return { js: T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`, type: t };
     }
 
-    const c = T.usualArith(at, bt);
-    const A = coerce(a.js, at, c), B = coerce(b.js, bt, c);
+    const c = this.ty.usualArith(at, bt);
+    const A = coerce(this.ty, a.js, at, c), B = coerce(this.ty, b.js, bt, c);
     if (T.isFloat(c)) {
       const raw = `((${A})${op}(${B}))`;
       return { js: c.name === 'float' ? `Math.fround(${raw})` : raw, type: c };
@@ -2046,7 +2053,7 @@ export class FunctionEmitter {
     if (l.varJs) {
       const combined = this.#binaryWithValue({ js: l.varJs, type: l.type }, rhsVal, op);
       return {
-        js: `(${rt}=${rv.js},${l.varJs}=${coerce(combined.js, combined.type, rhsType)})`,
+        js: `(${rt}=${rv.js},${l.varJs}=${coerce(this.ty, combined.js, combined.type, rhsType)})`,
         type: rhsType,
       };
     }
@@ -2055,7 +2062,7 @@ export class FunctionEmitter {
     const combined = this.#binaryWithValue({ js: loadExpr(at, l.type), type: l.type }, rhsVal, op);
     // The address is computed once, before the right-hand side, so the lvalue is designated once.
     return {
-      js: `(${at}=${l.addr},${rt}=${rv.js},${t}=${coerce(combined.js, combined.type, rhsType)},` +
+      js: `(${at}=${l.addr},${rt}=${rv.js},${t}=${coerce(this.ty, combined.js, combined.type, rhsType)},` +
         `${storeExpr(at, rhsType, t)},${t})`,
       type: rhsType,
     };
@@ -2068,27 +2075,27 @@ export class FunctionEmitter {
 
   /** Like #binaryWith but with BOTH sides already evaluated, so the caller controls the order. */
   #binaryWithValue(a, b, op) {
-    const at = T.decay(a.type), bt = T.decay(b.type);
+    const at = this.ty.decay(a.type), bt = this.ty.decay(b.type);
     if (T.isComplex(at) || T.isComplex(bt)) {
       if (op === '==' || op === '!=') return this.#cxCompare(a, b, op);
       return this.#cxBinary(a, b, op);
     }
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
-      return { js: `((${a.js})${op}Math.imul(${indexJs(b)},${s})|0)`, type: at };
+      return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };
     }
     if (op === '<<' || op === '>>') {
-      const t = T.promote(at);
-      const A = coerce(a.js, at, t);
+      const t = this.ty.promote(at);
+      const A = coerce(this.ty, a.js, at, t);
       if (is64(t)) {
-        const shb = `BigInt(${coerce(b.js, bt, T.INT)}&63)`;
+        const shb = `BigInt(${coerce(this.ty, b.js, bt, this.ty.INT)}&63)`;
         return { js: mask64(`((${A})${op}${shb})`, t), type: t };
       }
-      const sh = `((${coerce(b.js, bt, T.INT)})&31)`;
+      const sh = `((${coerce(this.ty, b.js, bt, this.ty.INT)})&31)`;
       return { js: op === '<<' ? `((${A})<<${sh})` : (T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`), type: t };
     }
-    const c = T.usualArith(at, bt);
-    const A = coerce(a.js, at, c), B = coerce(b.js, bt, c);
+    const c = this.ty.usualArith(at, bt);
+    const A = coerce(this.ty, a.js, at, c), B = coerce(this.ty, b.js, bt, c);
     if (T.isFloat(c)) {
       const raw = `((${A})${op}(${B}))`;
       return { js: c.name === 'float' ? `Math.fround(${raw})` : raw, type: c };
@@ -2116,22 +2123,22 @@ export class FunctionEmitter {
       const { unitOff, poke } = bitfieldPoke(f, at, v);
       const cur = this.#loadBitfield({ addr: l.addr, bitfield: f });
       const old = this.newTmp(); this.#declareTmp(old);
-      const one = { n: 'num', value: 1n, type: T.INT };
-      const nv = coerce(this.#binaryWith({ js: old, type: bitfieldPromoted(f) }, one,
-        e.op === '++' ? '+' : '-').js, bitfieldPromoted(f), f.type);
+      const one = { n: 'num', value: 1n, type: this.ty.INT };
+      const nv = coerce(this.ty, this.#binaryWith({ js: old, type: bitfieldPromoted(this.ty, f) }, one,
+        e.op === '++' ? '+' : '-').js, bitfieldPromoted(this.ty, f), f.type);
       const readBack = this.#loadBitfield({ addr: l.addr, bitfield: f });
       return {
         js: `(${at}=(${l.addr}+${unitOff}|0),${old}=${cur},${v}=${nv},${poke},` +
           `${e.n === 'preinc' ? readBack : old})`,
-        type: bitfieldPromoted(f),
+        type: bitfieldPromoted(this.ty, f),
       };
     }
-    const one = { n: 'num', value: 1n, type: T.INT };
+    const one = { n: 'num', value: 1n, type: this.ty.INT };
     const op = e.op === '++' ? '+' : '-';
     const cur = l.varJs ? { js: l.varJs, type: l.type } : null;
 
     if (l.varJs) {
-      const nv = coerce(this.#binaryWith(cur, one, op).js, l.type, l.type);
+      const nv = coerce(this.ty, this.#binaryWith(cur, one, op).js, l.type, l.type);
       if (e.n === 'preinc') return { js: `(${l.varJs}=${nv})`, type: l.type };
       const t = this.newTmp(); this.#declareTmp(t);
       return { js: `(${t}=${l.varJs},${l.varJs}=${nv},${t})`, type: l.type };
@@ -2139,7 +2146,7 @@ export class FunctionEmitter {
     const at = this.newTmp(); this.#declareTmp(at);
     const old = this.newTmp(); this.#declareTmp(old);
     const loaded = loadExpr(at, l.type);
-    const nv = coerce(this.#binaryWith({ js: old, type: l.type }, one, op).js, l.type, l.type);
+    const nv = coerce(this.ty, this.#binaryWith({ js: old, type: l.type }, one, op).js, l.type, l.type);
     if (e.n === 'preinc') {
       const nt = this.newTmp(); this.#declareTmp(nt);
       return { js: `(${at}=${l.addr},${old}=${loaded},${nt}=${nv},${storeExpr(at, l.type, nt)},${nt})`, type: l.type };
@@ -2231,11 +2238,11 @@ export class FunctionEmitter {
       if (rt?.setjmp) {
         // The registration was emitted by the planner; here the call is just its return value.
         if (!this.hasSetjmp) unsup('setjmp outside a statement the planner could lift');
-        return { js: '_sjv', type: T.INT };
+        return { js: '_sjv', type: this.ty.INT };
       }
       if (rt?.vaStart) {
         if (!this.variadic) throw new EmitError('va_start outside a variadic function');
-        return { js: '_va', type: T.ptr(T.CHAR) };
+        return { js: '_va', type: this.ty.ptr(this.ty.CHAR) };
       }
       /*
        * `__builtin_classify_type(x)` is a constant naming the CLASS of x's type, and gcc does not
@@ -2251,7 +2258,7 @@ export class FunctionEmitter {
       if (rt?.cx) {
         if (e.args.length !== 1) throw new EmitError(`${name} takes one argument`);
         const v = this.#rval(e.args[0]);
-        if (!T.isComplex(T.decay(v.type))) unsup(`${name} of a ${T.typeName(v.type)}`);
+        if (!T.isComplex(this.ty.decay(v.type))) unsup(`${name} of a ${T.typeName(v.type)}`);
         const of = v.type.complexOf;
         if (rt.cx === 'conj') {
           const p = this.#cxParts(v, of);
@@ -2265,14 +2272,14 @@ export class FunctionEmitter {
       }
       if (rt?.classify) {
         if (e.args.length !== 1) throw new EmitError(`${name} takes one argument`);
-        const t = T.decay(e.args[0].type ?? T.INT);
+        const t = this.ty.decay(e.args[0].type ?? this.ty.INT);
         const code = t.k === 'ptr' ? 5
           : t.k === 'struct' ? 12
           : t.k === 'union' ? 13
           : t.k === 'void' ? 0
           : (t.k === 'scalar' && /float|double/.test(t.name ?? '')) ? 8
           : 1;
-        return { js: String(code), type: T.INT };
+        return { js: String(code), type: this.ty.INT };
       }
       /*
        * The overflow builtins are TYPE-GENERIC, which is why they cannot be an ordinary table entry:
@@ -2285,7 +2292,7 @@ export class FunctionEmitter {
         if (e.args.length !== 3) throw new EmitError(`${name} takes three arguments`);
         const a = this.#rval(e.args[0]), b = this.#rval(e.args[1]), dst = this.#rval(e.args[2]);
         const to = dst.type?.k === 'ptr' ? dst.type.to : null;   /* a pointer's target is `to`; `of` is an array's */
-        if (!to || to.k !== 'scalar') unsup(`${name} into a ${T.typeName(dst.type ?? T.INT)}`);
+        if (!to || to.k !== 'scalar') unsup(`${name} into a ${T.typeName(dst.type ?? this.ty.INT)}`);
         const isUnsigned = (t) => !!t && /^unsigned|^_Bool/.test(t.name ?? '');
         /*
          * Each operand carries ITS OWN type into the infinite-precision arithmetic -- there is no
@@ -2299,7 +2306,7 @@ export class FunctionEmitter {
         return {
           js: `M.rt.__prism_overflow(${JSON.stringify(rt.overflow)},${operand(a)},${operand(b)},` +
               `${dst.js},${to.size},${isUnsigned(to) ? 0 : 1})`,
-          type: T.INT,
+          type: this.ty.INT,
         };
       }
       if (rt) {
@@ -2360,19 +2367,19 @@ export class FunctionEmitter {
          * instruments a program by rebinding prog.F, and a direct call cannot see that.
          */
         if (this.ctx.directCalls && f.defined) {
-          return { js: `${jsIdent(f.name)}(${args.join(',')})`, type: ft?.ret ?? T.INT };
+          return { js: `${jsIdent(f.name)}(${args.join(',')})`, type: ft?.ret ?? this.ty.INT };
         }
         // The LINKAGE name, not the source name: a file-scope `static` is mangled per translation
         // unit, and using the source name here called a function that was never bound.
-        return { js: `F[${JSON.stringify(f.name)}](${args.join(',')})`, type: ft?.ret ?? T.INT };
+        return { js: `F[${JSON.stringify(f.name)}](${args.join(',')})`, type: ft?.ret ?? this.ty.INT };
       }
       throw new EmitError(`call to undeclared function '${name}'`);
     }
     const p = this.#rval(e.fn);
-    let ft = T.decay(p.type);
+    let ft = this.ty.decay(p.type);
     if (ft.k === 'ptr' && ft.to.k === 'func') ft = ft.to;
     const args = this.#callArgs(e, ft);
-    return { js: `M.icall(${p.js},[${args.join(',')}])`, type: ft?.ret ?? T.INT };
+    return { js: `M.icall(${p.js},[${args.join(',')}])`, type: ft?.ret ?? this.ty.INT };
   }
 
   /**
@@ -2416,9 +2423,9 @@ export class FunctionEmitter {
       // The TYPE comes from the parser's annotation, not from emitting the expression: calling
       // #rval here and again below would evaluate each argument twice, so `f(2, i++, i++)` would
       // increment four times.
-      let t = T.decay(node.type ?? T.INT);
-      if (T.isFloat(t) && t.name === 'float') t = T.DOUBLE;          // default promotion
-      else if (T.isInteger(t) && T.rank(t) < 3) t = T.promote(t);
+      let t = this.ty.decay(node.type ?? this.ty.INT);
+      if (T.isFloat(t) && t.name === 'float') t = this.ty.DOUBLE;          // default promotion
+      else if (T.isInteger(t) && T.rank(t) < 3) t = this.ty.promote(t);
       const size = T.isRecord(t) ? t.size : (t.size ?? 4);
       items.push({ node, type: t, off: total });
       total += Math.ceil(size / 4) * 4;
@@ -2445,7 +2452,7 @@ export class FunctionEmitter {
     const off = this.slot(type.size, type.align);
     // A REAL argument for a complex parameter converts first: `foo(2)` where foo takes a
     // `_Complex unsigned` has no object to copy from until one is made.
-    const src = T.isComplex(type) && !T.isComplex(T.decay(node.type ?? T.INT))
+    const src = T.isComplex(type) && !T.isComplex(this.ty.decay(node.type ?? this.ty.INT))
       ? { addr: this.#cxConvert(this.#rval(node), type).js }
       : this.#lval(node);
     const t = this.newTmp(); this.#declareTmp(t);
@@ -2454,14 +2461,14 @@ export class FunctionEmitter {
 
   #rvalForCall(node, want) {
     const v = this.#rval(node);
-    const from = T.decay(v.type);
+    const from = this.ty.decay(v.type);
     if (!want) {
       // No prototype for this parameter: the default argument promotions apply.
       if (T.isFloat(from) && from.name === 'float') return `+(${v.js})`;
-      if (T.isInteger(from) && T.rank(from) < 3) return coerce(v.js, from, T.INT);
+      if (T.isInteger(from) && T.rank(from) < 3) return coerce(this.ty, v.js, from, this.ty.INT);
       return v.js;
     }
-    return coerce(v.js, from, T.decay(want));
+    return coerce(this.ty, v.js, from, this.ty.decay(want));
   }
 
   // ------------------------------------------------------------- complex
@@ -2494,18 +2501,18 @@ export class FunctionEmitter {
     this.#declareTmp(t);
     if (T.isComplex(v.type)) {
       const src = v.type.complexOf;
-      const re = coerce(loadExpr(t, src), src, of);
-      const im = coerce(loadExpr(`(${t}+${src.size}|0)`, src, src), src, of);
+      const re = coerce(this.ty, loadExpr(t, src), src, of);
+      const im = coerce(this.ty, loadExpr(`(${t}+${src.size}|0)`, src, src), src, of);
       return { pin: `${t}=${v.js}`, re, im };
     }
-    return { pin: `${t}=${coerce(v.js, T.decay(v.type), of)}`, re: t, im: T.isFloat(of) ? '0' : '0' };
+    return { pin: `${t}=${coerce(this.ty, v.js, this.ty.decay(v.type), of)}`, re: t, im: T.isFloat(of) ? '0' : '0' };
   }
 
   /** The arithmetic type the two halves are computed in. */
   #cxCommon(a, b) {
     const ab = T.isComplex(a) ? a.complexOf : a;
     const bb = T.isComplex(b) ? b.complexOf : b;
-    const of = T.usualArith(T.promote(ab), T.promote(bb));
+    const of = this.ty.usualArith(this.ty.promote(ab), this.ty.promote(bb));
     if (is64(of)) unsup('a complex type as wide as long long');
     return of;
   }
@@ -2514,7 +2521,7 @@ export class FunctionEmitter {
   #cxRound(js, of) { return of.name === 'float' ? `Math.fround(${js})` : js; }
 
   #cxBinary(a, b, op) {
-    const of = this.#cxCommon(T.decay(a.type), T.decay(b.type));
+    const of = this.#cxCommon(this.ty.decay(a.type), this.ty.decay(b.type));
     const cx = T.complex(of);
     const A = this.#cxParts(a, of), B = this.#cxParts(b, of);
     const pins = `${A.pin},${B.pin}`;
@@ -2551,10 +2558,10 @@ export class FunctionEmitter {
 
   /** `==` and `!=`: both halves, and nothing else compares. */
   #cxCompare(a, b, op) {
-    const of = this.#cxCommon(T.decay(a.type), T.decay(b.type));
+    const of = this.#cxCommon(this.ty.decay(a.type), this.ty.decay(b.type));
     const A = this.#cxParts(a, of), B = this.#cxParts(b, of);
     const eq = `((${A.re})===(${B.re})&&(${A.im})===(${B.im}))`;
-    return { js: `(${A.pin},${B.pin},${op === '==' ? eq : `!${eq}`}?1:0)`, type: T.INT };
+    return { js: `(${A.pin},${B.pin},${op === '==' ? eq : `!${eq}`}?1:0)`, type: this.ty.INT };
   }
 
   /** A conversion INTO a complex type, and out of one. */
@@ -2568,18 +2575,18 @@ export class FunctionEmitter {
         return { js: `(${p.pin},${this.#cxMake(want, p.re, p.im).js})`, type: want };
       }
       // A real becomes a complex with a zero imaginary part.
-      return this.#cxMake(want, coerce(v.js, T.decay(v.type), of), T.isFloat(of) ? '0' : '0');
+      return this.#cxMake(want, coerce(this.ty, v.js, this.ty.decay(v.type), of), T.isFloat(of) ? '0' : '0');
     }
     // Out of a complex: the REAL part, which is what a cast to a real type takes.
     const of = v.type.complexOf;
     const t = this.newTmp(); this.#declareTmp(t);
-    return { js: `(${t}=${v.js},${coerce(loadExpr(t, of), of, want)})`, type: want };
+    return { js: `(${t}=${v.js},${coerce(this.ty, loadExpr(t, of), of, want)})`, type: want };
   }
 
   #rvalCoerced(node, want) {
     const v = this.#rval(node);
     if (T.isComplex(want) || T.isComplex(v.type)) return this.#cxConvert(v, want).js;
-    return coerce(v.js, T.decay(v.type), want);
+    return coerce(this.ty, v.js, this.ty.decay(v.type), want);
   }
 
   // ------------------------------------------------------------- bitfields
@@ -2624,7 +2631,7 @@ export class FunctionEmitter {
       if (f.width > 32) unsup('a bitfield wider than 32 bits');
       const get = `M.rt.__prism_bf_get64((${l.addr}|0),${f.bitOffset},${f.width},${f.type.signed ? 1 : 0})`;
       // Narrow fields promote to int or unsigned int, so their value must arrive as a Number.
-      return is64(bitfieldPromoted(f)) ? get : `Number(${get})`;
+      return is64(bitfieldPromoted(this.ty, f)) ? get : `Number(${get})`;
     }
     const shift = f.bitOffset & 31;
     if (shift + f.width <= 32) {
@@ -2662,19 +2669,19 @@ export class FunctionEmitter {
      */
     const rhs = e.op === '='
       ? this.#rvalCoerced(e.rhs, f.type)
-      : coerce(
+      : coerce(this.ty, 
           this.#binaryWithValue(
-            { js: this.#loadBitfield(l), type: bitfieldPromoted(f) },
+            { js: this.#loadBitfield(l), type: bitfieldPromoted(this.ty, f) },
             this.#rval(e.rhs), e.op.slice(0, -1),
           ).js,
-          bitfieldPromoted(f), f.type);
+          bitfieldPromoted(this.ty, f), f.type);
     const { unitOff, poke } = bitfieldPoke(f, at, v);
     // The result is the field READ BACK, not `v`: assigning 1081 to a `signed int m:11` yields -967,
     // and `(l.m = j) == j` must therefore be false (gcc's 921016-1.c).
     const readBack = this.#loadBitfield({ addr: l.addr, bitfield: f });
     return {
       js: `(${at}=(${l.addr}+${unitOff}|0),${v}=${rhs},${poke},${readBack})`,
-      type: bitfieldPromoted(f),
+      type: bitfieldPromoted(this.ty, f),
     };
   }
 
@@ -2689,7 +2696,7 @@ export class FunctionEmitter {
 
 // ---------------------------------------------------------------- helpers
 
-const coerceTo = (v, t) => coerce(v.js, T.decay(v.type), t);
+const coerceTo = (ty, v, t) => coerce(ty, v.js, ty.decay(v.type), t);
 
 /** Write one bitfield straight into the image, for a file-scope initialiser. */
 function writeStaticBitfield(mod, base, f, value) {
@@ -2723,8 +2730,8 @@ function writeStaticBitfield(mod, base, f, value) {
  * a:40` cannot fit in an int, so it stays 64-bit and its arithmetic stays BigInt; saying INT here
  * made every read mix a BigInt with a Number on the next operation.
  */
-function bitfieldPromoted(f) {
-  if (f.type.k !== 'scalar') return T.INT;
+function bitfieldPromoted(ty, f) {
+  if (f.type.k !== 'scalar') return ty.INT;
   /*
    * The rule is about VALUES, not about the declared type: int if int can represent every value the
    * field can hold, otherwise unsigned int, otherwise the field's own type. So a `long long a:8`
@@ -2736,12 +2743,12 @@ function bitfieldPromoted(f) {
    * the representation follows the type rather than deciding it.
    */
   if (is64(f.type)) {
-    if (f.width < 32) return T.INT;
-    if (f.width === 32) return f.type.signed ? T.INT : T.UINT;
+    if (f.width < 32) return ty.INT;
+    if (f.width === 32) return f.type.signed ? ty.INT : ty.UINT;
     return f.type;
   }
-  if (f.type.signed) return T.INT;
-  return f.width < 32 ? T.INT : T.UINT;
+  if (f.type.signed) return ty.INT;
+  return f.width < 32 ? ty.INT : ty.UINT;
 }
 
 /**
@@ -2782,11 +2789,11 @@ function bitfieldPoke(f, atVar, valVar) {
   return { unitOff: f.bitOffset >> 3, poke: `(${steps.join(',')})` };
 }
 
-function unifyCond(a, b) {
-  const at = T.decay(a), bt = T.decay(b);
+function unifyCond(ty, a, b) {
+  const at = ty.decay(a), bt = ty.decay(b);
   if (at.k === 'ptr') return at;
   if (bt.k === 'ptr') return bt;
-  if (T.isArith(at) && T.isArith(bt)) return T.usualArith(at, bt);
+  if (T.isArith(at) && T.isArith(bt)) return ty.usualArith(at, bt);
   return at;
 }
 
@@ -3074,31 +3081,31 @@ export function collectAddressTaken(node, out) {
   }
 }
 
-function evalConstNumber(e) {
+function evalConstNumber(ty, e) {
   switch (e.n) {
     case 'num': return Number(BigInt.asIntN(64, e.value));
     case 'char': return Number(e.value);
     case 'float': return e.value;
     case 'unary':
-      if (e.op === '-') return -evalConstNumber(e.expr);
-      if (e.op === '+') return evalConstNumber(e.expr);
-      if (e.op === '~') return ~evalConstNumber(e.expr);
-      if (e.op === '!') return evalConstNumber(e.expr) === 0 ? 1 : 0;
+      if (e.op === '-') return -evalConstNumber(ty, e.expr);
+      if (e.op === '+') return evalConstNumber(ty, e.expr);
+      if (e.op === '~') return ~evalConstNumber(ty, e.expr);
+      if (e.op === '!') return evalConstNumber(ty, e.expr) === 0 ? 1 : 0;
       break;
     case 'cast': {
       // The cast's TYPE is the whole point: `(unsigned short) -4` is 65532, not -4. Dropping it made
       // `volatile unsigned long l2 = (unsigned short int) -4;` hold 0xFFFFFFFC (gcc's pr39240.c).
-      const v = evalConstNumber(e.expr);
-      return castConst(v, e.type);
+      const v = evalConstNumber(ty, e.expr);
+      return castConst(ty, v, e.type);
     }
     case 'bin': {
-      const a = evalConstNumber(e.a);
+      const a = evalConstNumber(ty, e.a);
       // `b` is deliberately not evaluated for && and || — see below.
-      const b = (e.op === '&&' || e.op === '||') ? 0 : evalConstNumber(e.b);
+      const b = (e.op === '&&' || e.op === '||') ? 0 : evalConstNumber(ty, e.b);
       // `1.0 / 32768.0` is NOT integer division. Folding it with `|0` made
       // `double d = 1024.0 - 1.0/32768.0;` equal 1024.0 exactly, which is what gcc's float-floor.c
       // catches. The node's own type decides, not the shape of the operands.
-      const isFP = T.isFloat(e.type ?? T.INT) || T.isFloat(e.a.type ?? T.INT) || T.isFloat(e.b.type ?? T.INT);
+      const isFP = T.isFloat(e.type ?? ty.INT) || T.isFloat(e.a.type ?? ty.INT) || T.isFloat(e.b.type ?? ty.INT);
       switch (e.op) {
         case '+': return a + b; case '-': return a - b; case '*': return a * b;
         case '/': return isFP ? a / b : (a / b) | 0;
@@ -3118,16 +3125,16 @@ function evalConstNumber(e) {
         case '>=': return a >= b ? 1 : 0;
         // Short-circuit for real: the unevaluated side may not be constant at all, and C does not
         // require it to be.
-        case '&&': return a !== 0 && evalConstNumber(e.b) !== 0 ? 1 : 0;
-        case '||': return a !== 0 || evalConstNumber(e.b) !== 0 ? 1 : 0;
+        case '&&': return a !== 0 && evalConstNumber(ty, e.b) !== 0 ? 1 : 0;
+        case '||': return a !== 0 || evalConstNumber(ty, e.b) !== 0 ? 1 : 0;
       }
       break;
     }
     // Also short-circuiting: only the taken branch has to be a constant.
     case 'cond':
-      return evalConstNumber(e.cond) !== 0
-        ? evalConstNumber(e.then ?? e.cond)
-        : evalConstNumber(e.els);
+      return evalConstNumber(ty, e.cond) !== 0
+        ? evalConstNumber(ty, e.then ?? e.cond)
+        : evalConstNumber(ty, e.els);
     case 'sizeoftype': return e.target.size;
     case 'sizeofexpr': return e.expr.type?.size ?? 0;
   }
@@ -3152,14 +3159,14 @@ function bin64(op, A, B, t) {
 }
 
 /** Apply a cast's truncation to a folded constant, matching `coerce`'s run-time behaviour. */
-function castConst(v, t) {
+function castConst(ty, v, t) {
   if (!t) return v;
   if (T.isFloat(t)) return t.name === 'float' ? Math.fround(v) : v;
   if (t.k === 'ptr' || t.k === 'func' || t.k === 'enum') return v | 0;
   if (t.k !== 'scalar') return v;
   switch (t.name) {
     case '_Bool': return v !== 0 ? 1 : 0;
-    case 'char': return T.CHAR.signed ? (v << 24 >> 24) : (v & 255);
+    case 'char': return ty.CHAR.signed ? (v << 24 >> 24) : (v & 255);
     case 'signed char': return v << 24 >> 24;
     case 'unsigned char': return v & 255;
     case 'short': return v << 16 >> 16;
