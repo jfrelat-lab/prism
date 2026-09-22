@@ -75,10 +75,12 @@ export const SCALARS_DOS16 = {
  * The 16-bit DOS LARGE model, as Open Watcom lays it out (`wcc -bt=dos -0 -ml`). Measured the same
  * way as the small table above, with the same probe.
  *
- * It differs from small in ONE entry -- a pointer is four bytes -- and that one entry is why it
- * exists. Keen Dreams declares 113,967 bytes of statics, about 75,386 of them not marked far, in a
- * model whose whole data segment is 64K: it cannot have been built small or medium, so its default
- * data pointers are far. The four models Watcom builds, measured:
+ * It differs from small in ONE entry -- a pointer is four bytes. It was added on a deduction that
+ * turned out wrong: Keen Dreams' statics were measured at 113,967 bytes and judged too big for one
+ * 64K data segment -- but that measurement used i386 type sizes. With 16-bit sizes the near data is
+ * 50,403 bytes and fits, and the program's own assembly declares `MODEL MEDIUM,C` (id_rf_a.asm,
+ * id_us_a.asm). So Keen Dreams is MEDIUM, not large. The table remains a correct measurement of
+ * Watcom -ml; it is not that program's model. The four models Watcom builds, measured:
  *
  *   -ms small    data* 2  code* 2      -mc compact  data* 4  code* 2
  *   -mm medium   data* 2  code* 4      -ml large    data* 4  code* 4
