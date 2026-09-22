@@ -68,8 +68,42 @@ export const SCALARS_DOS16 = {
   'enum':                 { size: 1,  align: 1, signed: true },
 };
 
-/** The type tables, by target. `i386` is what the compiler emits for; `dos16` is measured only. */
-export const MODELS = { i386: SCALARS, dos16: SCALARS_DOS16 };
+/**
+ * The 16-bit DOS LARGE model, as Open Watcom lays it out (`wcc -bt=dos -0 -ml`). Measured the same
+ * way as the small table above, with the same probe.
+ *
+ * It differs from small in ONE entry -- a pointer is four bytes -- and that one entry is why it
+ * exists. Keen Dreams declares 113,967 bytes of statics, about 75,386 of them not marked far, in a
+ * model whose whole data segment is 64K: it cannot have been built small or medium, so its default
+ * data pointers are far. The four models Watcom builds, measured:
+ *
+ *   -ms small    data* 2  code* 2      -mc compact  data* 4  code* 2
+ *   -mm medium   data* 2  code* 4      -ml large    data* 4  code* 4
+ *
+ * Large rather than compact because large makes both pointers four bytes, and a single `pointer`
+ * entry can then say so; compact would need the type system to tell a code pointer from a data one,
+ * which is a change of shape rather than a table.
+ *
+ * NOTE THE ALIGNMENT: a four-byte pointer aligns to TWO. Alignment stops at 2 in 16-bit DOS, which
+ * is the rule the small table's header already calls out as unguessable, and it applies to `long`,
+ * `float` and `double` here too -- an eight-byte double on a two-byte boundary.
+ *
+ * ONE ENTRY DISAGREES WITH THE SMALL TABLE ABOVE, and it is recorded rather than reconciled: the
+ * oracle says `(char)-1 < 0` is FALSE under both -ms and -ml, so Watcom's 16-bit char is UNSIGNED,
+ * while SCALARS_DOS16 records `signed: true`. Nothing measures that entry -- gate-abi16 checks
+ * sizes, offsets and bitfields, never signedness -- so it has never been contradicted. Both can be
+ * defended: Watcom's default char is unsigned, BORLAND's is signed, and the corpus program this is
+ * for is a Borland one. Which compiler the tables are meant to describe is the question to settle,
+ * and settling it by editing one line quietly is how a measured table stops being one.
+ */
+export const SCALARS_DOS16_LARGE = {
+  ...SCALARS_DOS16,
+  'pointer':              { size: 4,  align: 2 },
+  'char':                 { size: 1,  align: 1 },   // unsigned, as this oracle builds it
+};
+
+/** The type tables, by target. `i386` is what the compiler emits for; the dos16 pair is measured. */
+export const MODELS = { i386: SCALARS, dos16: SCALARS_DOS16, dos16l: SCALARS_DOS16_LARGE };
 
 /** Scalar/pointer/array constructors bound to one model, for a gate that checks another target. */
 export function modelTypes(name) {

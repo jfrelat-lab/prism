@@ -46,6 +46,13 @@ export const LAYOUTS = {
    * wrong answer, and a silent one.
    */
   dos16: { space: 0x10000, staticBase: 0x100, stringGap: 2 * 1024, stack: 4 * 1024 },
+  /*
+   * The LARGE model has four-byte pointers, so it is not confined to 64K and takes the i386 map: the
+   * whole image is addressable. What it does NOT get is real segmentation -- a pointer here is a
+   * linear byte offset, not seg:off -- so a program doing its own segment arithmetic is refused by
+   * name (gate-borland16) rather than quietly given a number that looks like one.
+   */
+  dos16l: { space: null, staticBase: LOW_MEMORY, stringGap: 64 * 1024, stack: 1024 * 1024 },
 };
 
 export class Module {
