@@ -726,13 +726,13 @@ function wireRebind(F, mod, emitted, rebind) {
   }
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, extraBuiltins = null } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
     defines: mergeDefines(TARGET_DEFINES, defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
-  const { unit, scope } = parse(tokens, { file, pack, c89 });
+  const { unit, scope } = parse(tokens, { file, pack, c89, model });
 
   const mod = new Module({ ...(memory ? { memory } : {}), shared });
   const M = makeMachine(mod);
@@ -849,7 +849,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -879,8 +879,22 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       resolve: resolver,
     });
     const tokens = pp.run(u.source, u.file);
-    const { unit, scope } = parse(tokens, { file: u.file, pack, c89 });
+    const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
+  }
+
+  /*
+   * THE FRONT END KNOWS THE MODEL; THE BACK END DOES NOT YET.
+   *
+   * Parsing under dos16 is worth having on its own -- it is how a 16-bit program is surveyed, and
+   * how its sizes and promotions get checked against a real table. Emitting under it is a different
+   * matter: a 2-byte pointer is not a constant to swap but an addressing model, and this emitter
+   * indexes one flat ArrayBuffer. Rather than let a front end that says int is 2 bytes hand work to
+   * a back end that assumes 4, everything past this line is refused by name (ROADMAP P11.1).
+   */
+  if (model !== 'i386') {
+    throw new Error(`tier-0 emits for i386 only: '${model}' parses, but nothing can be emitted ` +
+      'from it yet — the backend is P11.1');
   }
 
   /*

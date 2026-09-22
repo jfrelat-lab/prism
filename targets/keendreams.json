@@ -29,6 +29,7 @@
 
   "_compile": "No compiler identity macro is tested anywhere in the source and no #pragma pack or option appears, so the memory model is entirely a Borland project setting rather than anything the C states. That is itself a finding: nothing in the source tells a reader which model it wants.",
   "_c89": "Borland C++ 2.0 predates C99, and kd_act2.c:1404 uses the word: `boolean inline = false;`, then assigns to it and tests it. The flag gives `inline` back as an identifier and nothing else -- the GNU spellings __inline and __inline__ stay keywords, and no program here uses restrict or _Bool as a name.",
+  "_model": "compile.model stays i386 although this program is dos16, and the reason is that the two are not yet the same question. The front end compiles for whichever model it is told (tools/gate-parser-model.mjs), but compile.js refuses to EMIT from anything but i386 until the backend exists, so declaring dos16 here would stop the build outright and lose the unit-by-unit survey, which is what this target is for today. The label becomes true the day ROADMAP P11.1 finishes emit.js.",
   "compile": { "memory": 16, "c89": true, "collect": true },
 
   "env": ["stdio"]

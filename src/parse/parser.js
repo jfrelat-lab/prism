@@ -74,7 +74,14 @@ const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt',
 
 export class Parser {
   /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
-  constructor(tokens, { scope = new T.Scope(), file = '<input>', pack = null, c89 = false } = {}) {
+  constructor(tokens, { scope = new T.Scope(), file = '<input>', pack = null, c89 = false,
+    model = 'i386' } = {}) {
+    /*
+     * The ABI this translation unit is compiled for. i386 unless a target says otherwise, and the
+     * only thing that reads it here is the type system: sizes, the integer promotions and the
+     * literal types all follow from the table, not from constants baked into this file.
+     */
+    this.ty = T.makeTypes(model);
     this.ts = tokens.filter(t => t.k !== 'pm');
     this.i = 0;
     this.scope = scope;
@@ -329,7 +336,7 @@ export class Parser {
       const d = this.#declarator(specs.type);
       const datt = this.#skipAttributeLike();
       if (!datt.alias && this.lastAlias) datt.alias = this.lastAlias;
-      if (datt.mode) d.type = applyMode(d.type, datt.mode, this.peek());
+      if (datt.mode) d.type = applyMode(this.ty, d.type, datt.mode, this.peek());
       if (datt.aligned) d.type = T.withAlign(d.type, datt.aligned);
 
       // K&R parameter declarations sit between the declarator and the body.
@@ -393,7 +400,7 @@ export class Parser {
         }
       }
       d.type = T.func(d.type.ret,
-        d.type.params.map(p => ({ name: p.name, type: byName.get(p.name) ?? T.INT })),
+        d.type.params.map(p => ({ name: p.name, type: byName.get(p.name) ?? this.ty.INT })),
         { variadic: false, oldStyle: true });
     }
 
@@ -482,7 +489,7 @@ export class Parser {
       type = this.#buildArithmetic({ base: base ?? (isComplex ? 'double' : base), signed, unsigned, longs, shorts },
         sawTypeSpec, allowNone);
     }
-    if (modeAttr) type = applyMode(type ?? T.INT, modeAttr, this.peek());
+    if (modeAttr) type = applyMode(type ?? this.ty.INT, modeAttr, this.peek());
     if (isComplex) {
       if (!type || !T.isArith(type)) throw new ParseError('_Complex needs an arithmetic type', this.peek());
       type = T.complex(type);
@@ -495,17 +502,17 @@ export class Parser {
     if (!sawTypeSpec) {
       // Implicit int — legal C89 (`static x;`, `f() { }`), and real DOS-era code uses it.
       if (allowNone) return null;
-      return T.INT;
+      return this.ty.INT;
     }
     if (base === 'void') return T.VOID;
-    if (base === '_Bool') return T.scalar('_Bool');
-    if (base === 'float') return T.scalar('float');
-    if (base === 'double') return T.scalar(longs ? 'long double' : 'double');
-    if (base === 'char') return T.scalar(unsigned ? 'unsigned char' : signed ? 'signed char' : 'char');
-    if (shorts) return T.scalar(unsigned ? 'unsigned short' : 'short');
-    if (longs >= 2) return T.scalar(unsigned ? 'unsigned long long' : 'long long');
-    if (longs === 1) return T.scalar(unsigned ? 'unsigned long' : 'long');
-    return T.scalar(unsigned ? 'unsigned int' : 'int');
+    if (base === '_Bool') return this.ty.scalar('_Bool');
+    if (base === 'float') return this.ty.scalar('float');
+    if (base === 'double') return this.ty.scalar(longs ? 'long double' : 'double');
+    if (base === 'char') return this.ty.scalar(unsigned ? 'unsigned char' : signed ? 'signed char' : 'char');
+    if (shorts) return this.ty.scalar(unsigned ? 'unsigned short' : 'short');
+    if (longs >= 2) return this.ty.scalar(unsigned ? 'unsigned long long' : 'long long');
+    if (longs === 1) return this.ty.scalar(unsigned ? 'unsigned long' : 'long');
+    return this.ty.scalar(unsigned ? 'unsigned int' : 'int');
   }
 
   #typeofSpecifier() {
@@ -518,7 +525,7 @@ export class Parser {
     }
     const e = this.expression();
     this.expectP(')');
-    return e.type ?? T.INT;
+    return e.type ?? this.ty.INT;
   }
 
   #recordSpecifier(kind) {
@@ -581,7 +588,7 @@ export class Parser {
           if (this.eatP(':')) bits = Number(this.#constExpr());
         }
         const matt = this.#skipAttributeLike();
-        if (matt.mode) mtype = applyMode(mtype, matt.mode, this.peek());
+        if (matt.mode) mtype = applyMode(this.ty, mtype, matt.mode, this.peek());
         // Order matters and is observable: `packed` drops the member's alignment to 1, and a
         // following `aligned(N)` raises it to N. Applying only `aligned` put
         // `double d __attribute__((aligned(2),packed))` at offset 4 instead of 2.
@@ -618,7 +625,7 @@ export class Parser {
       if (!tag) throw new ParseError('enum with neither tag nor body', this.peek());
       const found = this.scope.lookupTag(tag);
       if (found) return found;
-      return this.scope.declareTag(tag, T.enumType(tag, []));
+      return this.scope.declareTag(tag, this.ty.enumType(tag, []));
     }
     this.expectP('{');
     const consts = [];
@@ -630,13 +637,13 @@ export class Parser {
       consts.push({ name, value: nextVal });
       // An enum constant is an ordinary identifier, visible immediately — the next initializer
       // may refer to it (`enum { A = 1, B = A + 1 }`).
-      this.scope.declare(name, { kind: 'enumconst', type: T.INT, value: nextVal });
+      this.scope.declare(name, { kind: 'enumconst', type: this.ty.INT, value: nextVal });
       nextVal = nextVal + 1n;
       if (!this.eatP(',')) break;
     }
     this.expectP('}');
     this.#skipAttributeLike();
-    const t = T.enumType(tag, consts);
+    const t = this.ty.enumType(tag, consts);
     if (tag) this.scope.declareTag(tag, t);
     return t;
   }
@@ -750,7 +757,7 @@ export class Parser {
         cv[this.next().v.replace(/^__|__$/g, '')] = true;
       }
       this.#skipAttributeLike();
-      const p = segModel ? T.segPtr(base, segModel) : T.ptr(base);
+      const p = segModel ? this.ty.segPtr(base, segModel) : this.ty.ptr(base);
       segModel = null;                 // the keyword qualified the star it stood before, no other
       base = T.qualify(p, Object.keys(cv).length ? cv : null);
     }
@@ -835,7 +842,7 @@ export class Parser {
         && (this.isP(',', 1) || this.isP(')', 1))) {
       const params = [];
       for (;;) {
-        params.push({ name: this.expectId(), type: T.INT });
+        params.push({ name: this.expectId(), type: this.ty.INT });
         if (this.eatP(',')) continue;
         break;
       }
@@ -865,7 +872,7 @@ export class Parser {
       while (this.isKw('__attribute__') || this.isKw('__attribute')) this.#skipAttributeLike();
       // A parameter of array or function type decays immediately, and that is observable through
       // sizeof inside the function body.
-      params.push({ name: d.name, type: T.decay(d.type) });
+      params.push({ name: d.name, type: this.ty.decay(d.type) });
       if (this.eatP(',')) continue;
       break;
     }
@@ -1140,7 +1147,7 @@ export class Parser {
       if (prec === undefined || prec < minPrec) break;
       this.i++;
       const rhs = this.#binary(prec + 1);
-      lhs = { n: 'bin', op: t.v, a: lhs, b: rhs, type: binType(t.v, lhs, rhs) };
+      lhs = { n: 'bin', op: t.v, a: lhs, b: rhs, type: binType(this.ty, t.v, lhs, rhs) };
     }
     return lhs;
   }
@@ -1153,17 +1160,17 @@ export class Parser {
       if (t.v === '&&' && this.peek(1).k === ID && !this.#kw(this.peek(1).v)) {
         this.i++;
         const name = this.expectId();
-        return { n: 'labeladdr', name, type: T.ptr(T.VOID) };
+        return { n: 'labeladdr', name, type: this.ty.ptr(T.VOID) };
       }
       const U = ['&', '*', '+', '-', '~', '!'];
       if (U.includes(t.v)) {
         this.i++;
         const e = this.unary();
         let type = e.type;
-        if (t.v === '&') type = T.ptr(e.type ?? T.INT);
-        else if (t.v === '*') type = e.type?.k === 'ptr' ? e.type.to : (e.type?.k === 'array' ? e.type.of : T.INT);
-        else if (t.v === '!') type = T.INT;
-        else if (e.type) type = T.promote(T.decay(e.type));
+        if (t.v === '&') type = this.ty.ptr(e.type ?? this.ty.INT);
+        else if (t.v === '*') type = e.type?.k === 'ptr' ? e.type.to : (e.type?.k === 'array' ? e.type.of : this.ty.INT);
+        else if (t.v === '!') type = this.ty.INT;
+        else if (e.type) type = this.ty.promote(this.ty.decay(e.type));
         return { n: 'unary', op: t.v, expr: e, type };
       }
       if (t.v === '++' || t.v === '--') {
@@ -1201,11 +1208,11 @@ export class Parser {
           this.expectP(')');
           if (this.isP('{')) {
             const lit = { n: 'compound', type, init: this.#initializer(type) };
-            return { n: 'sizeofexpr', expr: lit, type: T.UINT };
+            return { n: 'sizeofexpr', expr: lit, type: this.ty.UINT };
           }
-          return { n: 'sizeoftype', target: type, type: T.UINT };
+          return { n: 'sizeoftype', target: type, type: this.ty.UINT };
         }
-        return { n: 'sizeofexpr', expr: this.unary(), type: T.UINT };
+        return { n: 'sizeofexpr', expr: this.unary(), type: this.ty.UINT };
       }
       /*
        * `__real__ z` and `__imag__ z` are unary OPERATORS, and they are lvalues: `__real__ x = 5;`
@@ -1216,15 +1223,15 @@ export class Parser {
         this.i++;
         const e = this.unary();
         const part = /imag/.test(t.v) ? 1 : 0;
-        return { n: 'cxpart', part, expr: e, type: e.type?.complexOf ?? e.type ?? T.DOUBLE };
+        return { n: 'cxpart', part, expr: e, type: e.type?.complexOf ?? e.type ?? this.ty.DOUBLE };
       }
       if (t.v === '__alignof__' || t.v === '__alignof') {
         this.i++;
         if (this.isP('(') && this.#isTypeNameAhead()) {
           this.i++; const type = this.#typeName(); this.expectP(')');
-          return { n: 'alignoftype', target: type, type: T.UINT };
+          return { n: 'alignoftype', target: type, type: this.ty.UINT };
         }
-        return { n: 'alignofexpr', expr: this.unary(), type: T.UINT };
+        return { n: 'alignofexpr', expr: this.unary(), type: this.ty.UINT };
       }
       if (t.v === '__builtin_offsetof') {
         this.i++;
@@ -1233,7 +1240,7 @@ export class Parser {
         this.expectP(',');
         const path = this.#offsetofPath();
         this.expectP(')');
-        return { n: 'offsetof', target: type, path, type: T.UINT };
+        return { n: 'offsetof', target: type, path, type: this.ty.UINT };
       }
       if (t.v === '__extension__') { this.i++; return this.unary(); }
     }
@@ -1274,8 +1281,8 @@ export class Parser {
         this.i++;
         const idx = this.expression();
         this.expectP(']');
-        const base = e.type ? T.decay(e.type) : null;
-        e = { n: 'index', base: e, index: idx, type: base?.k === 'ptr' ? base.to : T.INT };
+        const base = e.type ? this.ty.decay(e.type) : null;
+        e = { n: 'index', base: e, index: idx, type: base?.k === 'ptr' ? base.to : this.ty.INT };
         continue;
       }
       if (this.isP('(')) {
@@ -1283,9 +1290,9 @@ export class Parser {
         const args = [];
         if (!this.isP(')')) for (;;) { args.push(this.assignment()); if (!this.eatP(',')) break; }
         this.expectP(')');
-        let ft = e.type ? T.decay(e.type) : null;
+        let ft = e.type ? this.ty.decay(e.type) : null;
         if (ft?.k === 'ptr' && ft.to.k === 'func') ft = ft.to;
-        e = { n: 'call', fn: e, args, type: ft?.k === 'func' ? ft.ret : T.INT };
+        e = { n: 'call', fn: e, args, type: ft?.k === 'func' ? ft.ret : this.ty.INT };
         continue;
       }
       if (this.isP('.') || this.isP('->')) {
@@ -1299,7 +1306,7 @@ export class Parser {
          * became `int` -- so `sizeof(cases->c)` answered 4 instead of 32, and c-testsuite's 00205
          * (a snippet of the J interpreter) printed one array element instead of four.
          */
-        if (arrow && rec) rec = T.decay(rec);
+        if (arrow && rec) rec = this.ty.decay(rec);
         if (arrow && rec?.k === 'ptr') rec = rec.to;
         const f = rec && T.isRecord(rec) ? findField(rec, field) : null;
         /*
@@ -1310,10 +1317,10 @@ export class Parser {
          * never showed for an ordinary bitfield, whose declared type is already 4 bytes; a
          * `long long a:8` made `sizeof(a + 0)` eight where gcc says four.
          */
-        let mtype = f?.type ?? T.INT;
+        let mtype = f?.type ?? this.ty.INT;
         if (f && f.bits !== undefined && mtype.k === 'scalar' && T.isInteger(mtype)) {
-          if (f.width < 32) mtype = T.INT;
-          else if (f.width === 32) mtype = mtype.signed ? T.INT : T.UINT;
+          if (f.width < 32) mtype = this.ty.INT;
+          else if (f.width === 32) mtype = mtype.signed ? this.ty.INT : this.ty.UINT;
         }
         e = { n: 'member', base: e, field, arrow, type: mtype, offset: f?.offset ?? null };
         continue;
@@ -1329,7 +1336,7 @@ export class Parser {
 
   #primary() {
     const t = this.next();
-    if (t.k === NUM) return numberLiteral(t);
+    if (t.k === NUM) return numberLiteral(this.ty, t);
     if (t.k === STR) {
       const parts = [t];
       while (this.peek().k === STR) parts.push(this.next());       // adjacent literals concatenate
@@ -1340,9 +1347,9 @@ export class Parser {
       // length here rather than being left incomplete.
       let n = 0;
       for (const p of parts) n += stringLiteralLength(p.v);
-      return { n: 'str', parts, wide, type: T.array(wide ? T.INT : T.CHAR, n + 1) };
+      return { n: 'str', parts, wide, type: T.array(wide ? this.ty.INT : this.ty.CHAR, n + 1) };
     }
-    if (t.k === CHR) return { n: 'char', value: charValue(t.v), type: T.INT };
+    if (t.k === CHR) return { n: 'char', value: charValue(t.v), type: this.ty.INT };
     if (t.k === PUNCT && t.v === '(') {
       // GNU statement expression: `({ ... })`
       if (this.isP('{')) {
@@ -1351,7 +1358,7 @@ export class Parser {
         // The value of a statement expression is its LAST statement, so that is where its type
         // comes from; anything else -- a declaration, a loop -- makes it void, as gcc does.
         const tail = body.items[body.items.length - 1];
-        const type = tail?.n === 'exprstmt' ? (tail.expr.type ?? T.INT) : T.VOID;
+        const type = tail?.n === 'exprstmt' ? (tail.expr.type ?? this.ty.INT) : T.VOID;
         return { n: 'stmtexpr', body, type };
       }
       const e = this.expression();
@@ -1360,7 +1367,7 @@ export class Parser {
     }
     if (t.k === ID && !this.#kw(t.v)) {
       const sym = this.scope.lookup(t.v);
-      if (sym?.kind === 'enumconst') return { n: 'num', value: sym.value, type: T.INT };
+      if (sym?.kind === 'enumconst') return { n: 'num', value: sym.value, type: this.ty.INT };
       return { n: 'ident', name: t.v, type: sym?.type ?? null, sym };
     }
     throw new ParseError(`unexpected '${t.v || 'end of file'}' in expression`, t);
@@ -1387,25 +1394,25 @@ const BINPREC = {
 
 const CMP = new Set(['==', '!=', '<', '>', '<=', '>=', '&&', '||']);
 
-function binType(op, a, b) {
-  if (CMP.has(op)) return T.INT;
-  const at = a.type ? T.decay(a.type) : null;
-  const bt = b.type ? T.decay(b.type) : null;
-  if (!at || !bt) return at ?? bt ?? T.INT;
+function binType(ty, op, a, b) {
+  if (CMP.has(op)) return ty.INT;
+  const at = a.type ? ty.decay(a.type) : null;
+  const bt = b.type ? ty.decay(b.type) : null;
+  if (!at || !bt) return at ?? bt ?? ty.INT;
   // Pointer arithmetic: p+n and p-n keep the pointer type; p-q is an integer.
   if (at.k === 'ptr' && T.isInteger(bt)) return at;
   if (bt.k === 'ptr' && T.isInteger(at)) return bt;
-  if (at.k === 'ptr' && bt.k === 'ptr') return T.INT;
-  if (op === '<<' || op === '>>') return T.promote(at);
+  if (at.k === 'ptr' && bt.k === 'ptr') return ty.INT;
+  if (op === '<<' || op === '>>') return ty.promote(at);
   /*
    * COMPLEX wins: `z * 2.0` is complex, and its parts are computed in the common type of the two
    * bases. Without this the expression was typed `double`, and the emitter -- which decides by TYPE
    * -- refused it as "not an lvalue" the moment it was returned or passed.
    */
   if (T.isComplex(at) || T.isComplex(bt)) {
-    return T.complex(T.usualArith(T.isComplex(at) ? at.complexOf : at, T.isComplex(bt) ? bt.complexOf : bt));
+    return T.complex(ty.usualArith(T.isComplex(at) ? at.complexOf : at, T.isComplex(bt) ? bt.complexOf : bt));
   }
-  return T.usualArith(at, bt);
+  return ty.usualArith(at, bt);
 }
 
 /** Replace the placeholder left by a parenthesized declarator with the real outer type. */
@@ -1456,7 +1463,7 @@ function hexFloat(text) {
   return mantissa * Math.pow(2, parseInt(expPart, 10) - 4 * fracPart.length);
 }
 
-function numberLiteral(t) {
+function numberLiteral(ty, t) {
   let text = t.v;
   /*
    * An IMAGINARY constant: `2.0i`, `1.0fi`, `3j`. gcc's own extension, and its complex tests are
@@ -1465,18 +1472,18 @@ function numberLiteral(t) {
    */
   const im = /^(.*?)([ij])([fFlL]?)$/.exec(text);
   if (im && /[0-9.]/.test(im[1])) {
-    const inner = numberLiteral({ ...t, v: im[1] + im[3] });
-    const of = T.isFloat(inner.type) ? inner.type : T.DOUBLE;
+    const inner = numberLiteral(ty, { ...t, v: im[1] + im[3] });
+    const of = T.isFloat(inner.type) ? inner.type : ty.DOUBLE;
     return { n: 'imaginary', value: Number(inner.value), type: T.complex(of) };
   }
   const hf = hexFloat(text.replace(/[fFlL]+$/, ''));
   if (hf !== null) {
-    return { n: 'float', value: hf, type: /[fF]$/.test(text) ? T.scalar('float') : T.DOUBLE };
+    return { n: 'float', value: hf, type: /[fF]$/.test(text) ? ty.scalar('float') : ty.DOUBLE };
   }
   if (/^[0-9]*\.|[0-9][0-9a-fA-F]*[pP][-+]|^\.[0-9]/.test(text) || /^[0-9.]+[eE][-+]?[0-9]/.test(text)
       || (/^[0-9]/.test(text) && /[fF]$/.test(text) && !/^0[xX]/.test(text))) {
     const v = parseFloat(text.replace(/[fFlL]+$/, ''));
-    return { n: 'float', value: v, type: /[fF]$/.test(text) ? T.scalar('float') : T.DOUBLE };
+    return { n: 'float', value: v, type: /[fF]$/.test(text) ? ty.scalar('float') : ty.DOUBLE };
   }
   const m = text.match(/^(.*?)([uUlL]*)$/);
   const body = m[1], suffix = m[2];
@@ -1504,17 +1511,24 @@ function numberLiteral(t) {
    */
   const decimal = !/^0[xXbB]/.test(body) && !/^0[0-7]/.test(body);
   const fits = (t) => (t.signed ? v <= (1n << BigInt(t.size * 8 - 1)) - 1n : v <= (1n << BigInt(t.size * 8)) - 1n);
-  let candidates;
-  if (uns && longs >= 2) candidates = [T.ULLONG];
-  else if (uns && longs === 1) candidates = [T.ULONG, T.ULLONG];
-  else if (uns) candidates = [T.UINT, T.ULONG, T.ULLONG];
-  else if (longs >= 2) candidates = decimal ? [T.LLONG] : [T.LLONG, T.ULLONG];
-  else if (longs === 1) candidates = decimal ? [T.LONG, T.LLONG] : [T.LONG, T.ULONG, T.LLONG, T.ULLONG];
-  else if (decimal) candidates = [T.INT, T.LONG, T.LLONG];
-  else candidates = [T.INT, T.UINT, T.LONG, T.ULONG, T.LLONG, T.ULLONG];
+  /*
+   * Written in NAMES and filtered, because a model need not have them all: dos16 has no
+   * `long long`, Borland's C89 having had none, so under it the list is SHORTER rather than holed
+   * with undefined -- and `fits` would read undefined.size as NaN and silently accept nothing.
+   */
+  let names;
+  if (uns && longs >= 2) names = ['ULLONG'];
+  else if (uns && longs === 1) names = ['ULONG', 'ULLONG'];
+  else if (uns) names = ['UINT', 'ULONG', 'ULLONG'];
+  else if (longs >= 2) names = decimal ? ['LLONG'] : ['LLONG', 'ULLONG'];
+  else if (longs === 1) names = decimal ? ['LONG', 'LLONG'] : ['LONG', 'ULONG', 'LLONG', 'ULLONG'];
+  else if (decimal) names = ['INT', 'LONG', 'LLONG'];
+  else names = ['INT', 'UINT', 'LONG', 'ULONG', 'LLONG', 'ULLONG'];
+  const candidates = names.map((n) => ty[n]).filter(Boolean);
   // Nothing fits only for a decimal constant too large for long long; gcc takes unsigned long long
   // there too, with a warning nobody reads.
-  const type = candidates.find(fits) ?? T.ULLONG;
+  // Nothing fitting means a constant too wide for the widest type this model has.
+  const type = candidates.find(fits) ?? candidates[candidates.length - 1] ?? ty.UINT;
   return { n: 'num', value: v, type };
 }
 
@@ -1593,7 +1607,7 @@ function consumeElided(type, items, i) {
  * A mode this does not know is refused rather than guessed: getting a width wrong is a wrong
  * answer, and these types are used precisely where the width is the whole point.
  */
-function applyMode(type, mode, at) {
+function applyMode(ty, type, mode, at) {
   const uns = T.isInteger(type) && T.isUnsigned(type);
   const INT_MODES = {
     QI: ['signed char', 'unsigned char'],
@@ -1605,9 +1619,9 @@ function applyMode(type, mode, at) {
     word: ['int', 'unsigned int'],
     pointer: ['int', 'unsigned int'],
   };
-  if (INT_MODES[mode]) return T.scalar(INT_MODES[mode][uns ? 1 : 0]);
-  if (mode === 'SF') return T.scalar('float');
-  if (mode === 'DF') return T.scalar('double');
+  if (INT_MODES[mode]) return ty.scalar(INT_MODES[mode][uns ? 1 : 0]);
+  if (mode === 'SF') return ty.scalar('float');
+  if (mode === 'DF') return ty.scalar('double');
   throw new ParseError(`__attribute__((mode(${mode}))) is not a mode tier-0 knows`, at);
 }
 
