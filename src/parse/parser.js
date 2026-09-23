@@ -466,8 +466,15 @@ export class Parser {
        * qualifier only where nothing else can be meant: a type specifier already seen, and a
        * declarator following. `int interrupt;` and `void interrupt(void);` still declare something
        * called interrupt.
+       *
+       * A parenthesised declarator follows too: `static void interrupt (*OldKeyVect)(void);` is a
+       * pointer to an interrupt function (id_in.c:145). A parameter list cannot open with `*` or
+       * with `far *`, so `interrupt (*` and `interrupt (far *` are the qualifier; read as a function
+       * named interrupt, the pointer silently never got declared.
        */
-      if (v === 'interrupt' && sawTypeSpec && (this.peek(1).k === ID || this.isP('*', 1))) {
+      const parenDecl = this.isP('(', 1) && (this.isP('*', 2)
+        || (this.peek(2).k === ID && FAR_NEAR.has(this.peek(2).v) && this.isP('*', 3)));
+      if (v === 'interrupt' && sawTypeSpec && (this.peek(1).k === ID || this.isP('*', 1) || parenDecl)) {
         this.i++; cv.interrupt = true; continue;
       }
       if (this.#funcspec(v)) { this.i++; inlineFn = true; continue; }

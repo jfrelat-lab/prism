@@ -22,7 +22,8 @@ import { findField, constEval } from '../parse/parser.js';
 import { FUNC_TAG } from '../link/module.js';
 import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
 import { needsFlattening, flattenGotos } from './flatten.js';
-import { lowerBorlandAsm, emitInstruction, REGISTER_DECLS, BorlandAsmError } from '../asm/borland.js';
+import { lowerBorlandAsm, emitInstruction, REGISTER_DECLS, BorlandAsmError, PSEUDO, PSEUDO_REFUSED,
+  firstUndefinedRead, interruptJs } from '../asm/borland.js';
 
 /*
  * The frame epilogue, emitted as a MARKER and resolved once the function's final frame size is known.
@@ -346,6 +347,23 @@ export class FunctionEmitter {
     }
 
     /*
+     * THE REGISTER FILE -- one per invocation, shared by the asm, Borland's pseudo-registers (_AX,
+     * _AL, _ES...) and geninterrupt -- exists in a real-mode model only, and only in a function that
+     * touches it. Whoever touches it is held to one rule first: a register is read only after this
+     * function wrote it, and not across a C call (src/asm/borland.js firstUndefinedRead).
+     */
+    const realMode = ['dos16', 'dos16m', 'dos16l'].includes(this.ctx.model ?? 'i386');
+    const declared = new Set();
+    collectDeclNames(d.body, declared);
+    for (const p of d.type.params) if (p.name) declared.add(p.name);
+    this.isPseudo = (name) => realMode && PSEUDO.has(name) && !declared.has(name) && !this.ctx.globals.has(name);
+    if (realMode && (this.asm || mentionsPseudo(d.body, this.isPseudo) || callsName(d.body, 'geninterrupt'))) {
+      this.usesRegs = true;
+      const why = firstUndefinedRead(d.body, { isPseudo: this.isPseudo });
+      if (why) unsup(`a register value only Borland's code could supply: ${why}`);
+    }
+
+    /*
      * A label below the top level means the state machine cannot see it, so lower the whole body to
      * labels and gotos first — see flatten.js. Only functions that need it pay: everything else keeps
      * its structured emission, which is both faster and readable.
@@ -461,7 +479,7 @@ export class FunctionEmitter {
       ? `var _fp=(M.sp-${this.frameSize})&${~(this.frameAlign - 1)}|0;`
       : `var _fp=M.sp-${this.frameSize}|0;`);
     if (this.frameSize) body.push(`M.sp=_fp;`);
-    if (this.asm) body.push(REGISTER_DECLS);
+    if (this.usesRegs) body.push(REGISTER_DECLS);
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
@@ -1603,10 +1621,10 @@ export class FunctionEmitter {
   #axReturn(t) {
     if (T.isInteger(t) && !is64(t) && t.size <= 2) {
       const sh = 32 - t.size * 8;
-      return t.signed ? `(($ax<<${sh})>>${sh})` : `($ax&${t.size === 1 ? 255 : 65535})`;
+      return t.signed ? `(($r.ax<<${sh})>>${sh})` : `($r.ax&${t.size === 1 ? 255 : 65535})`;
     }
-    if (T.isInteger(t) && !is64(t) && t.size === 4) return t.signed ? '(($dx<<16)|$ax)' : '((($dx<<16)|$ax)>>>0)';
-    if (t.k === 'ptr' && t.size === 2) return '$ax';
+    if (T.isInteger(t) && !is64(t) && t.size === 4) return t.signed ? '(($r.dx<<16)|$r.ax)' : '((($r.dx<<16)|$r.ax)>>>0)';
+    if (t.k === 'ptr' && t.size === 2) return '$r.ax';
     return unsup(`Borland inline assembly returning a ${T.typeName(t)} in registers`);
   }
 
@@ -1648,6 +1666,18 @@ export class FunctionEmitter {
          * it, as a static array holding the function's name. gcc's `__FUNCTION__` is the same thing
          * spelled older, and `__PRETTY_FUNCTION__` is too in C.
          */
+        /*
+         * Borland's pseudo-registers: `_AX = 3; geninterrupt(0x10);`. A name of the register file,
+         * unsigned int for a word and unsigned char for a byte, as Borland types them. Only where the
+         * program has not declared the name itself.
+         */
+        if (this.isPseudo?.(e.name)) {
+          const r = PSEUDO.get(e.name);
+          return { varJs: `$r.${r.acc}`, type: r.size === 2 ? this.ty.UINT : this.ty.UCHAR };
+        }
+        if (PSEUDO_REFUSED.has(e.name) && ['dos16', 'dos16m', 'dos16l'].includes(this.ctx.model ?? 'i386')) {
+          unsup(`the pseudo-register ${e.name}, ${PSEUDO_REFUSED.get(e.name)}`);
+        }
         if (/^(__func__|__FUNCTION__|__PRETTY_FUNCTION__)$/.test(e.name)) {
           const bytes = [...this.decl.name].map(c => c.charCodeAt(0) & 0xff);
           return { addr: String(this.mod.intern(bytes)), type: T.array(this.ty.CHAR, bytes.length + 1) };
@@ -2314,6 +2344,15 @@ export class FunctionEmitter {
   }
 
   #call(e) {
+    /*
+     * Borland's geninterrupt(n): `int n` with the registers the program loaded through _AX and
+     * friends, answered by whatever the environment installed for that vector (interruptJs).
+     */
+    if (e.fn.n === 'ident' && e.fn.name === 'geninterrupt' && this.usesRegs && !this.locals.has('geninterrupt')) {
+      const n = e.args?.length === 1 ? evalConstNumber(this.ty, e.args[0]) : null;
+      if (n === null) unsup('geninterrupt with a vector that is not a constant');
+      return { js: `(${interruptJs(Number(n) & 255)},0)`, type: T.VOID };
+    }
     // A direct call by name; anything else goes through the function table.
     //
     // A global VARIABLE of function-pointer type is not a direct call: Quake's byte-order helpers are
@@ -2416,6 +2455,18 @@ export class FunctionEmitter {
               `${dst.js},${to.size},${isUnsigned(to) ? 0 : 1})`,
           type: this.ty.INT,
         };
+      }
+      if (rt?.proto) {
+        /*
+         * A builtin whose types are the PROTOTYPE's: an environment for a 16-bit model cannot write
+         * its signatures in the shared i386 types, where an int is four bytes, so it declares the
+         * functions in its own header and lets the model the program was compiled for type them.
+         */
+        if (!f?.type?.params) unsup(`calling ${name} with no prototype in scope`);
+        const args = e.args.map((a, i) => this.#rvalForCall(a, f.type.params[i]?.type));
+        // The runtime returns a plain number, fitted here to the prototype's width: the 16-bit
+        // conversions are not yet truncated anywhere else, and an int that reads 0xBEEF must be -16657.
+        return { js: fitToWidth(f.type.ret, `M.rt.${rt.impl ?? name}(${args.join(',')})`), type: f.type.ret };
       }
       if (rt) {
         const args = e.args.map((a, i) => this.#rvalForCall(a, rt.params?.[i]));
@@ -2919,6 +2970,57 @@ function findSetjmpCall(node, builtins) {
     if (r) return r;
   }
   return null;
+}
+
+/** A runtime's number, as a value of type t: truncated and sign-extended to t's own width. */
+function fitToWidth(t, js) {
+  if (!t || t.k === 'void') return js;
+  const size = t.size ?? 4;
+  const signed = t.k !== 'ptr' && t.signed;
+  if (size === 4) return signed ? `((${js})|0)` : `((${js})>>>0)`;
+  if (size === 1 || size === 2) {
+    const sh = 32 - size * 8;
+    return signed ? `(((${js})<<${sh})>>${sh})` : `((${js})&${size === 1 ? 255 : 65535})`;
+  }
+  return js;
+}
+
+/** Every name a declaration in this subtree introduces. */
+function collectDeclNames(node, out) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const x of node) collectDeclNames(x, out); return; }
+  if (node.n === 'vardecl' && node.name) out.add(node.name);
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'loc' || k === 'sym') continue;
+    const v = node[k];
+    if (v && typeof v === 'object') collectDeclNames(v, out);
+  }
+}
+
+/** Does this subtree name a pseudo-register? */
+function mentionsPseudo(node, isPseudo) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some((x) => mentionsPseudo(x, isPseudo));
+  if (node.n === 'ident' && isPseudo(node.name)) return true;
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'loc' || k === 'sym') continue;
+    const v = node[k];
+    if (v && typeof v === 'object' && mentionsPseudo(v, isPseudo)) return true;
+  }
+  return false;
+}
+
+/** Does this subtree call a function by this name? */
+function callsName(node, name) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node)) return node.some((x) => callsName(x, name));
+  if (node.n === 'call' && node.fn?.n === 'ident' && node.fn.name === name) return true;
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'loc' || k === 'sym') continue;
+    const v = node[k];
+    if (v && typeof v === 'object' && callsName(v, name)) return true;
+  }
+  return false;
 }
 
 /** Does this subtree contain a goto? */

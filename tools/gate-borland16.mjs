@@ -50,6 +50,9 @@ int plain(void)              { return huge + 1; }
 void interrupt isr(void)     { }                          /* the qualifier, Borland-spelled */
 void __interrupt wisr(void)  { }                          /* and Watcom-spelled */
 int uses_var(void)           { return interrupt; }        /* the variable is still reachable */
+static void interrupt (*OldKeyVect)(void);                /* a POINTER to one: id_in.c:145 */
+static void interrupt (far *OldFar)(void);
+int uses_vect(void)          { return OldKeyVect == 0 && OldFar == 0; }
 `;
 
 // A refusal must be the NAMED one, not merely a refusal: with the emitter's asm check disabled,
@@ -61,7 +64,7 @@ const want = {
   by_sizeof: SEG, by_param: SEG, by_member: SEG, by_local: SEG, by_call: SEG,
   by_asmline: ASM, by_asmblock: ASM,
   gnu_asm: 'emits', gnu_volatile: 'emits', plain: 'emits',
-  isr: 'emits', wisr: 'emits', uses_var: 'emits',
+  isr: 'emits', wisr: 'emits', uses_var: 'emits', uses_vect: 'emits',
 };
 
 let p;

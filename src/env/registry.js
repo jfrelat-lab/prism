@@ -24,6 +24,7 @@ import { installVgaPlanar } from './vgaplanar.js';
 import { installKbd8042 } from './kbd8042.js';
 import { installGo32, GO32_VARS } from './go32.js';
 import { installWatcom } from './watcom.js';
+import { installBorland, BORLAND_DOS_H, BORLAND_VARS, BORLAND_BUILTINS } from './borland.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
 import { installDj } from './dj.js';
@@ -100,6 +101,9 @@ export const ENV = {
   // globals, which is why no target file has to remember them.
   watcom: { install: (M, _c, o) => installWatcom(M, o), vars: WATCOM_VARS },
   allegro: { install: (M, _c, o) => installAllegro(M, o), vars: ALLEGRO_VARS },
+  // Borland C++ real mode: its <dos.h>, the vector table, and the seam `int n` is answered through.
+  borland: { install: (M, _c, o) => installBorland(M, o), vars: BORLAND_VARS,
+    headers: { 'dos.h': BORLAND_DOS_H }, builtins: BORLAND_BUILTINS },
   // dj: Jump n Bump s DOS sound library, source-less and therefore answered rather than built.
   dj: { install: (M, _c, o) => installDj(M, o) },
 

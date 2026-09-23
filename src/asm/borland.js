@@ -57,8 +57,26 @@ const MASK = { 1: 0xff, 2: 0xffff };
 const SIGN = { 1: 0x80, 2: 0x8000 };
 
 /** The registers a translated function declares. */
-export const REGISTER_DECLS = 'var $ax=0,$bx=0,$cx=0,$dx=0,$si=0,$di=0,$bp=0,$ds=0,$es=0,'
-  + '$cf=0,$zf=0,$sf=0,$if=1,$df=0,$t=0,$u=0,$v=0,$stk=[];';
+/**
+ * The register file: ONE object per function invocation, shared by the asm and by Borland's
+ * pseudo-registers. The asm reads and writes the plain fields (ax, bx, ...), which it keeps
+ * masked itself; C reaches the same machine through accessors named as Borland spells them --
+ * `_AX` is `$r.AX`, `_AL` is `$r.AL` -- which mask on the way in, and which make `_AL = 3` and
+ * `_AH = 0` two halves of the ax that `mov dx,ax` or a BIOS service then reads.
+ */
+const W16 = ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'ds', 'es'];
+const H8 = [['al', 'ax', 0], ['ah', 'ax', 8], ['bl', 'bx', 0], ['bh', 'bx', 8],
+  ['cl', 'cx', 0], ['ch', 'cx', 8], ['dl', 'dx', 0], ['dh', 'dx', 8]];
+export const REGISTER_FILE = '{' + [
+  ...W16.map((r) => `${r}:0`), 'cf:0', 'zf:0', 'sf:0', 'if:1', 'df:0',
+  ...W16.map((r) => `get ${r.toUpperCase()}(){return this.${r}},set ${r.toUpperCase()}(v){this.${r}=v&65535}`),
+  ...H8.map(([h, r, sh]) => (sh
+    ? `get ${h.toUpperCase()}(){return this.${r}>>>8},set ${h.toUpperCase()}(v){this.${r}=(this.${r}&255)|((v&255)<<8)}`
+    : `get ${h.toUpperCase()}(){return this.${r}&255},set ${h.toUpperCase()}(v){this.${r}=(this.${r}&65280)|(v&255)}`)),
+].join(',') + '}';
+
+/** The locals a function using the register file declares. */
+export const REGISTER_DECLS = `var $r=${REGISTER_FILE},$t=0,$u=0,$v=0,$stk=[];`;
 
 /**
  * Conditions, as JavaScript over the flags this file computes. A flag holding 2 is UNKNOWN: set by
@@ -67,15 +85,15 @@ export const REGISTER_DECLS = 'var $ax=0,$bx=0,$cx=0,$dx=0,$si=0,$di=0,$bp=0,$ds
  * on a guess.
  */
 const CC = {
-  jz: '$zf', je: '$zf', jnz: '!$zf', jne: '!$zf',
-  jc: '$cf', jb: '$cf', jnae: '$cf', jnc: '!$cf', jnb: '!$cf', jae: '!$cf',
-  js: '$sf', jns: '!$sf',
-  jbe: '($cf||$zf)', jna: '($cf||$zf)', ja: '(!$cf&&!$zf)', jnbe: '(!$cf&&!$zf)',
-  jcxz: '($cx===0)',
+  jz: '$r.zf', je: '$r.zf', jnz: '!$r.zf', jne: '!$r.zf',
+  jc: '$r.cf', jb: '$r.cf', jnae: '$r.cf', jnc: '!$r.cf', jnb: '!$r.cf', jae: '!$r.cf',
+  js: '$r.sf', jns: '!$r.sf',
+  jbe: '($r.cf||$r.zf)', jna: '($r.cf||$r.zf)', ja: '(!$r.cf&&!$r.zf)', jnbe: '(!$r.cf&&!$r.zf)',
+  jcxz: '($r.cx===0)',
 };
-const FLAGS_OF = (js) => ['$cf', '$zf', '$sf'].filter((f) => js.includes(f));
+const FLAGS_OF = (js) => ['$r.cf', '$r.zf', '$r.sf'].filter((f) => js.includes(f));
 export function conditionJs(op) {
-  const js = op === 'loop' ? '($cx!==0)' : CC[op];
+  const js = op === 'loop' ? '($r.cx!==0)' : CC[op];
   const fl = FLAGS_OF(js);
   if (!fl.length) return js;
   return `(${fl.map((f) => `${f}>1`).join('||')}?${THROW('a flag whose value is undefined here (arithmetic on half of a far pointer, or a shift by the full width)')}:${js})`;
@@ -87,7 +105,7 @@ const ALU = new Set(['add', 'sub', 'and', 'or', 'xor', 'cmp', 'test']);
 const STRING = { stosb: 1, stosw: 2, lodsb: 1, lodsw: 2, movsb: 1, movsw: 2 };
 const NOARG = new Set(['cli', 'sti', 'cld', 'clc', 'stc', 'cmc', 'nop', 'pushf', 'popf', 'std']);
 const KNOWN = new Set([...ALU, ...Object.keys(STRING), ...NOARG, 'mov', 'xchg', 'inc', 'dec', 'not',
-  'neg', 'shl', 'sal', 'shr', 'sar', 'push', 'pop', 'in', 'out', 'les', 'lds', 'jmp', 'loop',
+  'neg', 'shl', 'sal', 'shr', 'sar', 'push', 'pop', 'in', 'out', 'les', 'lds', 'jmp', 'loop', 'int',
   ...Object.keys(CC)]);
 
 /** MASM numbers: 0x3CE, 0ch, 43h, 255. */
@@ -213,7 +231,6 @@ export function parseInstruction(toks) {
     if (['rep', 'repe', 'repz', 'repne', 'repnz'].includes(op)) { rep = op; op = lc(toks[i++]); }
     if (!op) fail('rep with no instruction');
     if (isP(toks[i], ':')) fail('a label inside asm (Borland labels are C labels)');
-    if (op === 'int') fail(`int ${toks.slice(i).map((t) => t.v).join('')} (a BIOS or DOS call)`);
     if (op === 'call') fail('call');
     if (NEEDS_OF_PF.has(op)) fail(`${op}, which reads OF or PF`);
     if (!KNOWN.has(op)) fail(`the instruction '${op}'`);
@@ -309,7 +326,14 @@ function endsInAsm(s) {
 //   env.store(addr, size, v) -> js statement
 // --------------------------------------------------------------------------------------------------
 
-const POISON = '$cf=2;$zf=2;$sf=2;';
+const POISON = '$r.cf=2;$r.zf=2;$r.sf=2;';
+
+/**
+ * `int n` -- from asm or from geninterrupt -- as one call into the environment: M.interrupt(n, $r)
+ * reads the registers the program loaded and writes back what the service returns, flags included.
+ * With no environment to answer, it throws by name rather than returning the registers unchanged.
+ */
+export const interruptJs = (n) => `(M.interrupt??${THROW('int with no interrupt dispatcher installed (the borland environment)')})(${n},$r)`;
 const THROW = (msg) => `(()=>{throw new Error(${JSON.stringify(`Borland inline assembly: ${msg}`)})})()`;
 
 /** The C scalars an access [off, off+size) of `type` covers, with their offsets. */
@@ -367,13 +391,13 @@ class Translator {
   /** Resolve a memory operand to an accessor for `size` bytes: { get, set(v) }. */
   mem(o, size) {
     const env = this.env;
-    const regsum = o.regs.map((r) => `$${r}`).join('+');
+    const regsum = o.regs.map((r) => `$r.${r}`).join('+');
     let segJs, near;
     if (o.sym) {
       const s = env.symbol(o.sym);
       if (s.isFunc) fail(`'${o.sym}', a function`);
       if (s.near === null) fail(`'${o.sym}', which lives outside DGROUP`);
-      segJs = o.seg ? this.segRead(o.seg) : (s.local ? '0' : '$ds');
+      segJs = o.seg ? this.segRead(o.seg) : (s.local ? '0' : '$r.ds');
       near = s.addr;
       if (o.regs.length) {
         if (holdsFarPointer(s.type)) fail(`'${o.sym}' indexed by a register while it holds far pointers`);
@@ -387,7 +411,7 @@ class Translator {
         }
       }
     } else {
-      segJs = o.seg ? this.segRead(o.seg) : '$ds';
+      segJs = o.seg ? this.segRead(o.seg) : '$r.ds';
       near = '0';
     }
     const off = `(((${near})+${regsum ? `${regsum}+` : ''}${o.c})&65535)`;
@@ -412,7 +436,7 @@ class Translator {
   segRead(s) {
     if (s === 'ss') return '0';
     if (s === 'cs') fail('cs, which PRISM has no value for');
-    return `$${s}`;
+    return `$r.${s}`;
   }
 
   /** An accessor for any operand at a known size. */
@@ -420,16 +444,16 @@ class Translator {
     switch (o.kind) {
       case 'reg':
         if (o.reg === 'sp') fail('sp');
-        return { get: `$${o.reg}`, set: (v) => `$${o.reg}=(${v})&65535;` };
+        return { get: `$r.${o.reg}`, set: (v) => `$r.${o.reg}=(${v})&65535;` };
       case 'reg8': {
         const [r, sh] = REG8[o.reg];
         return sh
-          ? { get: `($${r}>>>8)`, set: (v) => `$${r}=($${r}&255)|(((${v})&255)<<8);` }
-          : { get: `($${r}&255)`, set: (v) => `$${r}=($${r}&65280)|((${v})&255);` };
+          ? { get: `($r.${r}>>>8)`, set: (v) => `$r.${r}=($r.${r}&255)|(((${v})&255)<<8);` }
+          : { get: `($r.${r}&255)`, set: (v) => `$r.${r}=($r.${r}&65280)|((${v})&255);` };
       }
       case 'sreg':
         if (o.reg === 'cs') fail('cs, which PRISM has no value for');
-        return { get: this.segRead(o.reg), set: (v) => (o.reg === 'ss' ? fail('writing ss') : `$${o.reg}=(${v})&65535;`) };
+        return { get: this.segRead(o.reg), set: (v) => (o.reg === 'ss' ? fail('writing ss') : `$r.${o.reg}=(${v})&65535;`) };
       case 'imm': return { get: String(o.value & (size === 1 ? 0xff : 0xffff)), set: () => fail('writing to an immediate') };
       case 'offset': {
         const s = this.env.symbol(o.sym);
@@ -467,20 +491,20 @@ class Translator {
     return size;
   }
 
-  flagsZS(r, w) { return `$zf=(${r})===0?1:0;$sf=(${r})&${SIGN[w]}?1:0;`; }
+  flagsZS(r, w) { return `$r.zf=(${r})===0?1:0;$r.sf=(${r})&${SIGN[w]}?1:0;`; }
 
   ins(ins) {
     const { op, ops } = ins;
     const need = (n) => { if (ops.length !== n) fail(`${op} with ${ops.length} operand(s)`); };
     switch (op) {
       case 'nop': return '';
-      case 'cli': return '$if=0;';
-      case 'sti': return '$if=1;';
-      case 'cld': return '$df=0;';
-      case 'clc': return '$cf=0;';
-      case 'stc': return '$cf=1;';
-      case 'cmc': return '$cf^=1;';
-      case 'loopdec': return '$cx=($cx-1)&65535;';
+      case 'cli': return '$r.if=0;';
+      case 'sti': return '$r.if=1;';
+      case 'cld': return '$r.df=0;';
+      case 'clc': return '$r.cf=0;';
+      case 'stc': return '$r.cf=1;';
+      case 'cmc': return '$r.cf^=1;';
+      case 'loopdec': return '$r.cx=($r.cx-1)&65535;';
       case 'mov': {
         need(2);
         const w = this.width(ops);
@@ -503,9 +527,9 @@ class Translator {
         const d = this.acc(ops[0], w), s = this.acc(ops[1], w);
         const M = MASK[w];
         let code = `$t=${d.get};$u=${s.get};`;
-        if (op === 'add') code += `$v=$t+$u;$cf=$v>${M}?1:0;$v&=${M};`;
-        else if (op === 'sub' || op === 'cmp') code += `$cf=$t<$u?1:0;$v=($t-$u)&${M};`;
-        else code += `$cf=0;$v=$t${op === 'or' ? '|' : op === 'xor' ? '^' : '&'}$u;`;
+        if (op === 'add') code += `$v=$t+$u;$r.cf=$v>${M}?1:0;$v&=${M};`;
+        else if (op === 'sub' || op === 'cmp') code += `$r.cf=$t<$u?1:0;$v=($t-$u)&${M};`;
+        else code += `$r.cf=0;$v=$t${op === 'or' ? '|' : op === 'xor' ? '^' : '&'}$u;`;
         code += this.flagsZS('$v', w);
         if (d.view || s.view) code += POISON;
         if (op !== 'cmp' && op !== 'test') code += d.set('$v');
@@ -518,7 +542,7 @@ class Translator {
         const M = MASK[w];
         if (op === 'not') return d.set(`(~${d.get})&${M}`);
         const p = d.view ? POISON : '';
-        if (op === 'neg') return `$t=${d.get};$cf=$t!==0?1:0;$v=(-$t)&${M};${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
+        if (op === 'neg') return `$t=${d.get};$r.cf=$t!==0?1:0;$v=(-$t)&${M};${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
         return `$v=(${d.get}${op === 'inc' ? '+' : '-'}1)&${M};${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
       }
       case 'shl': case 'sal': case 'shr': case 'sar': {
@@ -528,20 +552,20 @@ class Translator {
         const c = ops[1];
         let n;
         if (c.kind === 'imm') n = String(c.value & 31);
-        else if (c.kind === 'reg8' && c.reg === 'cl') n = '($cx&31)';
+        else if (c.kind === 'reg8' && c.reg === 'cl') n = '($r.cx&31)';
         else fail(`${op} by something other than a constant or cl`);
         const bits = w * 8, M = MASK[w];
         // A count of 0 changes nothing, flags included.
         let body;
         if (op === 'shl' || op === 'sal') {
-          body = `$v=$u>${bits}?0:($t<<$u);$cf=$u>${bits}?0:($v>>>${bits})&1;$v&=${M};`;
+          body = `$v=$u>${bits}?0:($t<<$u);$r.cf=$u>${bits}?0:($v>>>${bits})&1;$v&=${M};`;
         } else if (op === 'shr') {
-          body = `$cf=$u>${bits}?0:($t>>>($u-1))&1;$v=$u>=${bits}?0:$t>>>$u;`;
+          body = `$r.cf=$u>${bits}?0:($t>>>($u-1))&1;$v=$u>=${bits}?0:$t>>>$u;`;
         } else {
-          body = `$t=($t<<${32 - bits})>>${32 - bits};$cf=($t>>(Math.min($u,${bits})-1))&1;$v=($t>>Math.min($u,${bits}-1))&${M};`;
+          body = `$t=($t<<${32 - bits})>>${32 - bits};$r.cf=($t>>(Math.min($u,${bits})-1))&1;$v=($t>>Math.min($u,${bits}-1))&${M};`;
         }
         // CF is undefined once the count reaches the operand's width (Intel SDM, SHL/SHR/SAR).
-        return `$u=${n};if($u){$t=${d.get};${body}${this.flagsZS('$v', w)}if($u>=${bits})$cf=2;`
+        return `$u=${n};if($u){$t=${d.get};${body}${this.flagsZS('$v', w)}if($u>=${bits})$r.cf=2;`
           + `${d.view ? POISON : ''}${d.set('$v')}}`;
       }
       case 'push': {
@@ -554,11 +578,11 @@ class Translator {
         const d = this.acc(ops[0], 2);
         return `$t=$stk.pop();if(typeof $t!=="number")${THROW('pop of a pushf word, or of nothing pushed in this function')};${d.set('$t')}`;
       }
-      case 'pushf': return '$stk.push({cf:$cf,zf:$zf,sf:$sf,if:$if,df:$df});';
+      case 'pushf': return '$stk.push({cf:$r.cf,zf:$r.zf,sf:$r.sf,if:$r.if,df:$r.df});';
       case 'popf':
         return `$t=$stk.pop();if($t===undefined)${THROW('popf with nothing pushed in this function')};`
           + 'if(typeof $t==="number"){$t={cf:$t&1,zf:($t>>6)&1,sf:($t>>7)&1,if:($t>>9)&1,df:($t>>10)&1};}'
-          + `if($t.df)${THROW('popf setting DF')};$cf=$t.cf;$zf=$t.zf;$sf=$t.sf;$if=$t.if;$df=$t.df;`;
+          + `if($t.df)${THROW('popf setting DF')};$r.cf=$t.cf;$r.zf=$t.zf;$r.sf=$t.sf;$r.if=$t.if;$r.df=$t.df;`;
       case 'in': {
         need(2);
         const d = ops[0];
@@ -575,18 +599,23 @@ class Translator {
         const port = this.port(ops[0]);
         return `${this.io()}.write(${port},${w},${this.acc(s, w).get});`;
       }
+      case 'int': {
+        need(1);
+        if (ops[0].kind !== 'imm' || ops[0].value < 0 || ops[0].value > 255) fail('int with a vector that is not a constant');
+        return `${interruptJs(ops[0].value)};`;
+      }
       case 'les': case 'lds': {
         need(2);
         const d = ops[0], m = ops[1];
         if (d.kind !== 'reg' || d.reg === 'sp' || d.reg === 'bp') fail(`${op} into ${d.reg ?? d.kind}`);
         if (m.kind !== 'mem') fail(`${op} from something other than memory`);
-        const seg = op === 'les' ? '$es' : '$ds';
+        const seg = op === 'les' ? '$r.es' : '$r.ds';
         const a = this.mem(m, 4);
-        if (a.far) return `$t=${a.L};$${d.reg}=$t&15;${seg}=($t>>>4)&65535;`;
+        if (a.far) return `$t=${a.L};$r.${d.reg}=$t&15;${seg}=($t>>>4)&65535;`;
         const e = this.env;
         const hi = `((${a.segJs}<<4)+((${a.off}+2)&65535))`;
         // Both words read before either register is written: `les bx,[bx]` addresses with the old bx.
-        return `$t=${e.load(a.addr, 2)};$u=${e.load(hi, 2)};$${d.reg}=$t;${seg}=$u;`;
+        return `$t=${e.load(a.addr, 2)};$u=${e.load(hi, 2)};$r.${d.reg}=$t;${seg}=$u;`;
       }
       default:
         if (op in STRING) return this.string(ins);
@@ -595,7 +624,7 @@ class Translator {
   }
 
   port(o) {
-    if (o.kind === 'reg' && o.reg === 'dx') return '$dx';
+    if (o.kind === 'reg' && o.reg === 'dx') return '$r.dx';
     if (o.kind === 'imm') {
       if (o.value < 0 || o.value > 255) fail(`the port ${o.value} as an immediate`);
       return String(o.value);
@@ -609,14 +638,165 @@ class Translator {
     const { op, rep } = ins;
     if (ins.ops.length) fail(`${op} with operands`);
     const w = STRING[op], e = this.env;
-    const di = `(($es<<4)+$di)`, si = `(($ds<<4)+$si)`;
-    const acc = w === 1 ? '($ax&255)' : '$ax';
+    const di = `(($r.es<<4)+$r.di)`, si = `(($r.ds<<4)+$r.si)`;
+    const acc = w === 1 ? '($r.ax&255)' : '$r.ax';
     let one;
-    if (op.startsWith('stos')) one = `${e.store(di, w, acc)};$di=($di+${w})&65535;`;
+    if (op.startsWith('stos')) one = `${e.store(di, w, acc)};$r.di=($r.di+${w})&65535;`;
     else if (op.startsWith('lods')) {
-      one = (w === 1 ? `$ax=($ax&65280)|${e.load(si, 1)};` : `$ax=${e.load(si, 2)};`) + `$si=($si+${w})&65535;`;
-    } else one = `${e.store(di, w, e.load(si, w))};$di=($di+${w})&65535;$si=($si+${w})&65535;`;
+      one = (w === 1 ? `$r.ax=($r.ax&65280)|${e.load(si, 1)};` : `$r.ax=${e.load(si, 2)};`) + `$r.si=($r.si+${w})&65535;`;
+    } else one = `${e.store(di, w, e.load(si, w))};$r.di=($r.di+${w})&65535;$r.si=($r.si+${w})&65535;`;
     // DF is clear by construction: cld is the only direction write accepted.
-    return rep ? `while($cx!==0){${one}$cx=($cx-1)&65535;}` : one;
+    return rep ? `while($r.cx!==0){${one}$r.cx=($r.cx-1)&65535;}` : one;
   }
+}
+
+// --------------------------------------------------------------------------------------------------
+// Borland's pseudo-registers, and the rule that keeps them and the asm honest.
+// --------------------------------------------------------------------------------------------------
+
+/** `_AX` and friends, as Borland spells them, with their register-file accessor and width. */
+export const PSEUDO = new Map([
+  ...['AX', 'BX', 'CX', 'DX', 'SI', 'DI', 'ES', 'DS'].map((r) => [`_${r}`, { acc: r, size: 2 }]),
+  ...['AL', 'AH', 'BL', 'BH', 'CL', 'CH', 'DL', 'DH'].map((r) => [`_${r}`, { acc: r, size: 1 }]),
+]);
+/** The ones that name something PRISM has no value for. */
+export const PSEUDO_REFUSED = new Map([
+  ['_BP', 'Borland\'s frame pointer'], ['_SP', 'the stack pointer'], ['_SS', 'the stack segment'],
+  ['_CS', 'the code segment'], ['_FLAGS', 'the flags word'],
+]);
+
+const UNITS = { ax: ['al', 'ah'], bx: ['bl', 'bh'], cx: ['cl', 'ch'], dx: ['dl', 'dh'],
+  si: ['si'], di: ['di'], bp: ['bp'], ds: ['ds'], es: ['es'],
+  al: ['al'], ah: ['ah'], bl: ['bl'], bh: ['bh'], cl: ['cl'], ch: ['ch'], dl: ['dl'], dh: ['dh'] };
+const GENERAL = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'si', 'di', 'bp', 'es'];
+/** What a C call leaves undefined: the registers Borland's code does not preserve across one. */
+const CLOBBERED = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'es'];
+
+/** Which register units one asm instruction reads and writes. */
+function insEffect(ins) {
+  const r = [], w = [];
+  const regOf = (o) => (o.kind === 'reg' || o.kind === 'reg8' || o.kind === 'sreg' ? o.reg : null);
+  const addr = (o) => {
+    if (o.kind !== 'mem') return;
+    r.push(...o.regs);
+    if (o.seg && o.seg !== 'ss' && o.seg !== 'cs') r.push(o.seg);
+  };
+  const read = (o) => { addr(o); const g = regOf(o); if (g) r.push(g); };
+  const write = (o) => { addr(o); const g = regOf(o); if (g) w.push(g); };
+  const [a, b] = ins.ops ?? [];
+  const same = a && b && regOf(a) && regOf(a) === regOf(b);
+  switch (ins.op) {
+    case 'mov': read(b); write(a); break;
+    case 'xchg': read(a); read(b); write(a); write(b); break;
+    case 'xor': case 'sub':
+      if (same) { write(a); break; }            // the zeroing idiom reads nothing
+      read(a); read(b); write(a); break;
+    case 'add': case 'and': case 'or': read(a); read(b); write(a); break;
+    case 'cmp': case 'test': read(a); read(b); break;
+    case 'inc': case 'dec': case 'not': case 'neg': read(a); write(a); break;
+    case 'shl': case 'sal': case 'shr': case 'sar': read(a); read(b); write(a); break;
+    case 'push': addr(a); break;                // save/restore of a caller's value moves it, uses nothing
+    case 'pop': write(a); break;
+    case 'in': if (regOf(b)) r.push('dx'); write(a); break;
+    case 'out': if (regOf(a)) r.push('dx'); read(b); break;
+    case 'les': case 'lds': addr(b); w.push(regOf(a), ins.op === 'les' ? 'es' : 'ds'); break;
+    case 'loopdec': r.push('cx'); w.push('cx'); break;
+    case 'int': w.push(...GENERAL); break;
+    default:
+      if (ins.op in STRING) {
+        const acc = STRING[ins.op] === 1 ? 'al' : 'ax';
+        if (ins.op.startsWith('stos')) { r.push(acc, 'di', 'es'); w.push('di'); }
+        else if (ins.op.startsWith('lods')) { r.push('si'); w.push(acc, 'si'); }
+        else { r.push('si', 'di', 'es'); w.push('si', 'di'); }
+        if (ins.rep) { r.push('cx'); w.push('cx'); }
+      }
+  }
+  const u = (list) => list.filter(Boolean).flatMap((x) => UNITS[x] ?? []);
+  return { reads: u(r), writes: u(w) };
+}
+
+/**
+ * THE RULE: a register is read only after this function wrote it, and not across a C call.
+ *
+ * A register holds what the function's own code put there, or else whatever its caller, Borland's
+ * code generator or an interrupt left -- and the second kind is the one value PRISM cannot know.
+ * USL_HardError's `di = _DI` reads what DOS passed a critical-error handler; `errno = _AX` after a
+ * library call reads the call's return value out of Borland's AX. Both are REFUSED BY NAME here
+ * rather than answered with the 0 a fresh register file holds.
+ *
+ * Checked in source order, which is how such a read is written; a jump that skips a write is a
+ * program reading junk in Borland too. Two exemptions, each an idiom that moves a value without
+ * using it: `push` (save, later popped back), and `xor r,r` / `sub r,r` (zeroing). DS starts
+ * written: it holds DGROUP at every entry. A C call -- any but geninterrupt, which is the service
+ * the registers were loaded for -- undoes AX, BX, CX, DX and ES, the registers Borland's calling
+ * convention does not preserve; `int` and geninterrupt leave every register defined.
+ *
+ * Returns null, or a sentence naming the first offending read.
+ */
+export function firstUndefinedRead(body, { isPseudo }) {
+  const written = new Set(['ds']);
+  let clobberedBy = null;
+  const check = (units, what) => {
+    for (const u of units) {
+      if (!written.has(u)) {
+        return clobberedBy
+          ? `${what} reads ${u} after the call to ${clobberedBy}, which leaves in it only what Borland's code put there`
+          : `${what} reads ${u} before this function wrote it -- a value only its caller or an interrupt could have left`;
+      }
+    }
+    return null;
+  };
+  const pseudoUnits = (n) => UNITS[PSEUDO.get(n).acc.toLowerCase()];
+  let found = null;
+  const expr = (e) => {
+    if (found || !e || typeof e !== 'object') return;
+    if (Array.isArray(e)) { e.forEach(expr); return; }
+    switch (e.n) {
+      case 'asmins': {
+        const { reads, writes } = insEffect(e.ins);
+        found = check(reads, `\`${e.ins.text}\``);
+        for (const u of writes) written.add(u);
+        if (e.ins.op === 'int') clobberedBy = null;
+        return;
+      }
+      case 'ident':
+        if (isPseudo(e.name)) found = check(pseudoUnits(e.name), `\`${e.name}\``);
+        return;
+      case 'assign':
+        expr(e.rhs);
+        if (e.lhs?.n === 'ident' && isPseudo(e.lhs.name)) {
+          if (e.op !== '=') expr(e.lhs);
+          for (const u of pseudoUnits(e.lhs.name)) written.add(u);
+          return;
+        }
+        expr(e.lhs);
+        return;
+      case 'preinc': case 'postinc':
+        expr(e.expr);
+        if (e.expr?.n === 'ident' && isPseudo(e.expr.name)) for (const u of pseudoUnits(e.expr.name)) written.add(u);
+        return;
+      case 'call': {
+        for (const a of e.args ?? []) expr(a);
+        if (found) return;
+        const callee = e.fn?.n === 'ident' ? e.fn.name : 'a function pointer';
+        if (callee === 'geninterrupt') { for (const u of GENERAL) written.add(u); return; }
+        expr(e.fn);
+        for (const u of CLOBBERED) written.delete(u);
+        clobberedBy = `${callee}()`;
+        return;
+      }
+      case 'asmcc':
+        if (e.js.includes('$r.cx')) found = check(['cl', 'ch'], '`jcxz`');
+        return;
+      default:
+        for (const k of Object.keys(e)) {
+          if (k === 'type' || k === 'loc' || k === 'sym') continue;
+          const v = e[k];
+          if (Array.isArray(v)) v.forEach(expr); else if (v && typeof v === 'object') expr(v);
+        }
+    }
+  };
+  // Statements and expressions are walked alike, in source order.
+  expr(body);
+  return found;
 }

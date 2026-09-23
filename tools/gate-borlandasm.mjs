@@ -174,7 +174,10 @@ function nasmSource(lines) {
 
 /** The C function PRISM runs for a case: the snippet, then the machine state written to globals. */
 function cFunction(k, lines) {
-  const body = [...SEGSET, ...lines].map((l) => (l.label ? `${l.label}_${k}:` : `asm ${l.b.replace(/\b(L\d+)\b/, `$1_${k}`)}`));
+  // Unicorn starts every register at 0; PRISM refuses to read a register the function never wrote
+  // (firstUndefinedRead), so the same zeros are written explicitly, with mov, which sets no flag.
+  const zero = ['ax', 'bx', 'cx', 'dx', 'si', 'di'].map((r) => ({ b: `mov ${r},0` }));
+  const body = [...zero, ...SEGSET, ...lines].map((l) => (l.label ? `${l.label}_${k}:` : `asm ${l.b.replace(/\b(L\d+)\b/, `$1_${k}`)}`));
   const save = ['ax', 'bx', 'cx', 'dx', 'si', 'di'].map((r) => `asm mov [WORD PTR ss:g_${r}],${r}`);
   const segs = ['asm mov [WORD PTR ss:g_ax2],ax', 'asm mov ax,ds', 'asm mov [WORD PTR ss:g_ds],ax',
     'asm mov ax,es', 'asm mov [WORD PTR ss:g_es],ax'];
@@ -420,13 +423,37 @@ int b_pushf_data(void) {
 }
 
 int b_far_object(void) { asm mov al,[BYTE PTR farbuf] ; return 0; }
-int r_int(void)   { asm int 21h ; return 0; }
+int b_int(void) {
+  asm mov ax,0x4400
+  asm mov bx,5
+  asm int 21h
+  asm jc failed
+  asm mov [counter],dx
+  return counter;
+failed:
+  return -1;
+}
+int b_genint(void) {
+  _AH = 0x0f;
+  geninterrupt(0x10);
+  return _BH * 256 + _AL;
+}
+int b_bytes(void) {
+  _AX = 0x1234;
+  _AL = 0x99;
+  _AH += 1;
+  return _AX;
+}
+unsigned b_mask16(void) { _AX = 0x12345L; return _AX; }
+int b_mask8(void) { _AX = 0x1234; _AL = 0x1ff; return _AX; }
+int r_undef(void) { return _DI; }
+int r_clobber(void) { _AX = 5; b_ret16(); return _AX; }
 int r_call(void)  { asm call b_ret16 ; return 0; }
 int r_bp(void)    { asm mov ax,[bp+4] ; return 0; }
 int r_std(void)   { asm std ; return 0; }
 int r_jl(void)    { asm jl here ; here: return 0; }
 int r_label(void) { asm jz nowhere ; return 0; }
-int r_nosize(void){ asm mov [bx],0 ; return 0; }
+int r_nosize(void){ asm xor bx,bx ; asm mov [bx],0 ; return 0; }
 `;
 
 function partB() {
@@ -472,15 +499,33 @@ function partB() {
     report(got === 0xa5 && log.join(' ') === want, 'B. in/out through the machine seam', `${got} ${log.join(' ')}`);
     delete p.M.machine;
   }
+  {
+    const seen = [];
+    p.M.interrupt = (n, r) => {
+      seen.push(`${n.toString(16)}:${r.ax.toString(16)}/${r.bx}`);
+      if (n === 0x21) { r.dx = 0x80; r.cf = 0; }
+      if (n === 0x10) { r.ax = 0x0f03; r.bx = 0x0100; }
+    };
+    eq('b_int', 0x80, [], 'asm int 21h through the dispatcher, CF read back');
+    eq('b_genint', 0x0103, [], 'geninterrupt with _AH, answer in _AL and _BH');
+    report(seen.join(' ') === '21:4400/5 10:f00/0', 'B. the service saw the registers the program loaded', seen.join(' '));
+    delete p.M.interrupt;
+    const none = call('b_genint');
+    report(typeof none === 'string' && none.includes('no interrupt dispatcher'), 'B. no dispatcher: throws by name', String(none).slice(0, 60));
+  }
+  eq('b_bytes', 0x1399, [], '_AL and _AH are the halves of _AX');
+  eq('b_mask16', 0x2345, [], '_AX keeps 16 bits of what is stored in it');
+  eq('b_mask8', 0x12ff, [], '_AL keeps 8 bits and leaves _AH alone');
   const pf = call('b_pushf_data');
   report(typeof pf === 'string' && pf.includes('pushf word'), 'B. a pushf word popped as data throws by name', String(pf).slice(0, 60));
   const named = {
-    b_far_object: 'outside DGROUP', r_int: 'int 21h', r_call: 'call', r_bp: 'bp', r_std: 'std',
+    b_far_object: 'outside DGROUP', r_call: 'call', r_bp: 'bp', r_std: 'std',
     r_jl: 'OF or PF', r_label: 'not a label', r_nosize: 'size nothing states',
+    r_undef: 'reads di before this function wrote it', r_clobber: 'after the call to b_ret16()',
   };
   for (const [fn, want] of Object.entries(named)) {
     const m = failed.get(fn) ?? '';
-    report(m.includes('Borland inline assembly') && m.includes(want), `B. ${fn} refused by name`, m ? m.replace('tier-0 does not support ', '').slice(0, 60) : 'emitted');
+    report((m.includes('Borland inline assembly') || m.includes('only Borland')) && m.includes(want), `B. ${fn} refused by name`, m ? m.replace('tier-0 does not support ', '').slice(0, 60) : 'emitted');
   }
   // Only where DGROUP is at linear 0.
   for (const model of ['i386', 'dos16l']) {
