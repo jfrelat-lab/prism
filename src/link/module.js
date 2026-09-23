@@ -66,7 +66,9 @@ export const LAYOUTS = {
    * 0x10000, and running over is refused by name rather than truncated. The image is still the first
    * megabyte, so far pointers reach the device windows at their real addresses.
    */
-  dos16m: { space: 0x100000, staticBase: 0x1000, dataEnd: 0x10000, stringGap: 2 * 1024, stack: 4 * 1024 },
+  dos16m: { space: 0x100000, staticBase: 0x1000, dataEnd: 0x10000, stringGap: 2 * 1024, stack: 4 * 1024,
+    // Far data -- objects declared `far` -- from the end of DGROUP up to the video windows.
+    farBase: 0x10000, farEnd: 0xA0000 },
 };
 
 export class Module {
@@ -88,6 +90,7 @@ export class Module {
     this.size = memory;
 
     this.brk = layout.staticBase;       // next free static address; i386 keeps the low megabyte
+    this.farBrk = layout.farBase ?? null; // next free FAR static address, for a model that has them
     // The stack sits at the top of the program's data, which is the top of the image unless the
     // model ends data earlier -- conventional memory stops at 0xA0000, below the video windows.
     const dataEnd = layout.dataEnd ?? memory;
@@ -135,10 +138,25 @@ export class Module {
    * `size` overrides the type's, for the one case where an object is bigger than its type: a struct
    * whose flexible array member the initialiser fills.
    */
-  defineGlobal(name, type, size = type.size ?? 4) {
+  /**
+   * Storage for an object declared `far`: outside the near data, in a model that has a far segment,
+   * and simply static storage in one that does not -- i386 has no such thing, and `far` there says
+   * nothing.
+   */
+  allocFar(size, align = 4) {
+    if (this.farBrk === null) return this.alloc(size, align);
+    const a = Math.ceil(this.farBrk / align) * align;
+    this.farBrk = a + Math.max(size, 0);
+    if (this.farBrk > this.layout.farEnd) {
+      throw new Error(`far storage exhausted; ${this.model} far data ends at ${this.layout.farEnd} bytes`);
+    }
+    return a;
+  }
+
+  defineGlobal(name, type, size = type.size ?? 4, { far = false } = {}) {
     const existing = this.symbols.get(name);
     if (existing) return existing;
-    const addr = this.alloc(size, type.align ?? 4);
+    const addr = far ? this.allocFar(size, type.align ?? 4) : this.alloc(size, type.align ?? 4);
     const sym = { name, addr, size, type, kind: 'var' };
     this.symbols.set(name, sym);
     return sym;

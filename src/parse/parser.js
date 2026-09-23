@@ -380,7 +380,8 @@ export class Parser {
           }
         }
         this.scope.declare(d.name, { kind: type.k === 'func' ? 'func' : 'var', type });
-        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init, alias: datt.alias });
+        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init, alias: datt.alias,
+          ...(d.far ? { far: true } : {}) });
       }
       if (this.eatP(',')) continue;
       this.expectP(';');
@@ -753,10 +754,18 @@ export class Parser {
      */
     const sized = this.ty.model !== 'i386';
     let ptrQual = null;
+    /*
+     * `far` before a NAME rather than a star is about the object, not a pointer: `mmblocktype far
+     * mmblocks[MAXBLOCKS]` puts the array in a far data segment, outside DGROUP, and every access to it
+     * goes through a far address. Under a 16-bit model that is where it has to be PLACED -- Keen
+     * Dreams' twelve far objects are its biggest buffers, and inside DGROUP they overflow it.
+     */
+    let objFar = false;
     while (this.peek().k === ID) {
       const v = this.peek().v;
       if (SEG_MODEL.has(v) && this.isP('*', 1)) { segModel = SEG_MODEL.get(v); this.i++; continue; }
       if (sized && this.isP('*', 1) && FAR_NEAR.has(v)) { ptrQual = FAR_NEAR.get(v); this.i++; continue; }
+      if (sized && FAR_NEAR.get(v) === 'far' && this.peek(1).k === ID) { objFar = true; this.i++; continue; }
       if (WATCOM_QUALS.has(v) || this.#bareModelKeyword()) { this.i++; continue; }
       break;
     }
@@ -784,7 +793,7 @@ export class Parser {
       this.expectP(')');
       const outer = this.#declaratorSuffix(base);
       substHole(this.ty, innerD.type, hole, outer);
-      return { name: innerD.name, type: innerD.type === hole ? outer : innerD.type };
+      return { name: innerD.name, type: innerD.type === hole ? outer : innerD.type, far: objFar || innerD.far };
     }
 
     let name = null;
@@ -792,7 +801,7 @@ export class Parser {
       if (this.peek().k === ID && !this.#kw(this.peek().v)) name = this.expectId();
       else if (!abstract) throw new ParseError(`expected a declarator, found '${this.peek().v}'`, this.peek());
     }
-    return { name, type: this.#declaratorSuffix(base) };
+    return { name, type: this.#declaratorSuffix(base), far: objFar };
   }
 
   /** `[...]` and `(...)` suffixes. Applied left to right but wrap outside-in. */

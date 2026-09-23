@@ -754,7 +754,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
       if (d.storage === 'extern' && !d.init) continue;
       // A definition that fills a flexible array member is LARGER than its type says; the extra
       // storage has to be reserved here, before the next global takes the address after it.
-      const sym = mod.defineGlobal(d.name, d.type, d.type.size + flexibleExtra(d.type, d.init));
+      const sym = mod.defineGlobal(d.name, d.type, d.type.size + flexibleExtra(d.type, d.init), { far: !!d.far });
       globals.set(d.name, { addr: sym.addr, type: d.type });
     } else if (d.n === 'func') {
       const f0 = mod.defineFunc(d.name, d.type);
@@ -946,7 +946,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
          * access fail in the unit that could see the members.
          */
         if (d.storage === 'extern' && !d.init) { (p.externDecls ??= []).push(d); continue; }
-        const sym = mod.defineGlobal(link, d.type, d.type.size + flexibleExtra(d.type, d.init));
+        const sym = mod.defineGlobal(link, d.type, d.type.size + flexibleExtra(d.type, d.init), { far: !!d.far });
         (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type: d.type });
       } else if (d.n === 'func') {
         /*
