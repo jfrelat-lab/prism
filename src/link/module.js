@@ -58,6 +58,15 @@ export const LAYOUTS = {
    * MK_FP(0xB800, 0) IS 0xB8000 -- and data runs from 64K up to `dataEnd`, with the stack at its top.
    */
   dos16l: { space: 0x100000, staticBase: 0x10000, dataEnd: 0xA0000, stringGap: 16 * 1024, stack: 16 * 1024 },
+  /*
+   * MEDIUM: near data. A near pointer is an offset in DGROUP, and DGROUP is placed at linear 0, so a
+   * near pointer and its linear address are the same number and widening one to far changes nothing
+   * -- which is what makes two-byte and four-byte pointers to the same object agree. The price is
+   * that everything a near pointer can reach -- statics, the near heap, the stack -- fits below
+   * 0x10000, and running over is refused by name rather than truncated. The image is still the first
+   * megabyte, so far pointers reach the device windows at their real addresses.
+   */
+  dos16m: { space: 0x100000, staticBase: 0x1000, dataEnd: 0x10000, stringGap: 2 * 1024, stack: 4 * 1024 },
 };
 
 export class Module {
@@ -116,7 +125,8 @@ export class Module {
     if (this.brk >= (this.staticLimit ?? this.stackLimit)) {
       throw new Error('static storage exhausted' +
         (this.staticLimit ? ' (the reserved gap below the heap is full)' : '') +
-        (this.layout.space ? `; the ${this.model} address space is ${this.layout.space} bytes` : ''));
+        (this.layout.dataEnd ? `; ${this.model} data ends at ${this.layout.dataEnd} bytes`
+          : this.layout.space ? `; the ${this.model} address space is ${this.layout.space} bytes` : ''));
     }
     return a;
   }

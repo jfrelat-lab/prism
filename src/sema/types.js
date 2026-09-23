@@ -47,7 +47,20 @@ export function makeTypes(model = 'i386', { signedChar } = {}) {
     }
     return t;
   };
-  const ptr = (to) => ({ k: 'ptr', to, ...table.pointer, signed: false });
+  /*
+   * Which pointer: an explicit `far` or `near` first, then a function's default, then data's. i386
+   * has none of the three extra entries, so every branch lands on `pointer` there and nothing moves.
+   * The qualifier is kept on the type only when the model gives it a size of its own.
+   */
+  const ptr = (to, qual) => {
+    const entry = qual === 'far' ? (table.farPointer ?? table.pointer)
+      : qual === 'near' ? (table.nearPointer ?? table.pointer)
+      : to && to.k === 'func' ? (table.codePointer ?? table.pointer)
+      : table.pointer;
+    const p = { k: 'ptr', to, ...entry, signed: false };
+    if (qual && table.farPointer) p.qual = qual;
+    return p;
+  };
   const T = {
     model, VOID, scalar, ptr,
     segPtr: (to, m) => ({ ...ptr(to), model: m }),

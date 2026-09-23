@@ -1303,7 +1303,7 @@ export function charDefines(model = 'i386', signedChar) {
  * computes paragraphs with.
  */
 export function modelDefines(model = 'i386', signedChar) {
-  const realMode = model === 'dos16' || model === 'dos16l';
+  const realMode = model === 'dos16' || model === 'dos16m' || model === 'dos16l';
   return { ...charDefines(model, signedChar), ...(realMode ? { __PRISM_REALMODE__: '1' } : {}) };
 }
 

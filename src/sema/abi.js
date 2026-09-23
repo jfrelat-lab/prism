@@ -68,6 +68,12 @@ export const SCALARS_DOS16 = {
   'double':               { size: 8,  align: 2 },
   'long double':          { size: 8,  align: 2 },   // Watcom's long double IS a double
   'pointer':              { size: 2,  align: 2 },
+  // The pointer KINDS, measured in every 16-bit model alike: a far pointer is four bytes, a near one
+  // two, both aligned to two. `pointer` above is the model's DEFAULT data pointer and `codePointer`
+  // its default function pointer; which of near or far each default is, is what a memory model IS.
+  'codePointer':          { size: 2,  align: 2 },
+  'farPointer':           { size: 4,  align: 2 },
+  'nearPointer':          { size: 2,  align: 2 },
   'enum':                 { size: 1,  align: 1, signed: true },
 };
 
@@ -102,10 +108,27 @@ export const SCALARS_DOS16 = {
 export const SCALARS_DOS16_LARGE = {
   ...SCALARS_DOS16,
   'pointer':              { size: 4,  align: 2 },
+  'codePointer':          { size: 4,  align: 2 },
+};
+
+/**
+ * The 16-bit DOS MEDIUM model, as Open Watcom lays it out (`wcc -bt=dos -0 -mm`): far code, near data.
+ * Default data pointers are two bytes and default function pointers four -- the one model of the four
+ * where the two differ in a way a program's structs can see: `struct { char c; void (*f)(void); }`
+ * is 6 bytes here and 4 in small. Keen Dreams is medium; its own assembly says `MODEL MEDIUM,C`.
+ *
+ *   -ms small    data* 2  code* 2      -mc compact  data* 4  code* 2
+ *   -mm medium   data* 2  code* 4      -ml large    data* 4  code* 4
+ *   and in all four: `far` * 4, `near` * 2, every pointer aligned to 2.
+ */
+export const SCALARS_DOS16_MEDIUM = {
+  ...SCALARS_DOS16,
+  'codePointer':          { size: 4,  align: 2 },
 };
 
 /** The type tables, by target. `i386` is what the compiler emits for; the dos16 pair is measured. */
-export const MODELS = { i386: SCALARS, dos16: SCALARS_DOS16, dos16l: SCALARS_DOS16_LARGE };
+export const MODELS = { i386: SCALARS, dos16: SCALARS_DOS16, dos16m: SCALARS_DOS16_MEDIUM,
+  dos16l: SCALARS_DOS16_LARGE };
 
 /** Scalar/pointer/array constructors bound to one model, for a gate that checks another target. */
 export function modelTypes(name) {

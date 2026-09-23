@@ -65,6 +65,9 @@ const BARE_MODEL = new Set(['far', 'near']);
  * before a star -- `huge` is an ordinary identifier anywhere else -- and recorded on the pointer as
  * `model`, which T.segModel() makes every size-dependent path refuse. See types.js segPtr.
  */
+/** far/near in every spelling Borland and Watcom accept, to the pointer kind each names. */
+const FAR_NEAR = new Map([['far', 'far'], ['_far', 'far'], ['__far', 'far'],
+  ['near', 'near'], ['_near', 'near'], ['__near', 'near']]);
 const SEG_MODEL = new Map([['_seg', 'seg'], ['__seg', 'seg'],
   ['huge', 'huge'], ['_huge', 'huge'], ['__huge', 'huge']]);
 /** The subset of QUALS that Watcom also allows INSIDE a declarator; see #declarator. */
@@ -742,9 +745,18 @@ export class Parser {
      * gives: in the flat model these games target, they describe nothing.
      */
     let segModel = null;
+    /*
+     * `far` and `near` before a star. Skipped under i386, where they describe nothing -- that is still
+     * true, and Heretic and Hexen compile unchanged. Under a 16-bit model they ARE the pointer's size:
+     * `char far *` is four bytes and `char near *` two whatever the default, and ignoring them would
+     * lay out every struct holding one wrongly. Keen Dreams writes `far` 214 times.
+     */
+    const sized = this.ty.model !== 'i386';
+    let ptrQual = null;
     while (this.peek().k === ID) {
       const v = this.peek().v;
       if (SEG_MODEL.has(v) && this.isP('*', 1)) { segModel = SEG_MODEL.get(v); this.i++; continue; }
+      if (sized && this.isP('*', 1) && FAR_NEAR.has(v)) { ptrQual = FAR_NEAR.get(v); this.i++; continue; }
       if (WATCOM_QUALS.has(v) || this.#bareModelKeyword()) { this.i++; continue; }
       break;
     }
@@ -757,8 +769,9 @@ export class Parser {
         cv[this.next().v.replace(/^__|__$/g, '')] = true;
       }
       this.#skipAttributeLike();
-      const p = segModel ? this.ty.segPtr(base, segModel) : this.ty.ptr(base);
+      const p = segModel ? this.ty.segPtr(base, segModel) : this.ty.ptr(base, ptrQual ?? undefined);
       segModel = null;                 // the keyword qualified the star it stood before, no other
+      ptrQual = null;
       base = T.qualify(p, Object.keys(cv).length ? cv : null);
     }
 
@@ -770,7 +783,7 @@ export class Parser {
       const innerD = this.#declarator(hole, { abstract });
       this.expectP(')');
       const outer = this.#declaratorSuffix(base);
-      substHole(innerD.type, hole, outer);
+      substHole(this.ty, innerD.type, hole, outer);
       return { name: innerD.name, type: innerD.type === hole ? outer : innerD.type };
     }
 
@@ -1416,18 +1429,29 @@ function binType(ty, op, a, b) {
 }
 
 /** Replace the placeholder left by a parenthesized declarator with the real outer type. */
-function substHole(type, hole, real) {
+function substHole(ty, type, hole, real) {
   if (!type || typeof type !== 'object') return;
   for (const key of ['to', 'of', 'ret']) {
-    if (type[key] === hole) { type[key] = real; recomputeSize(type); return; }
-    if (type[key]) { substHole(type[key], hole, real); recomputeSize(type); }
+    if (type[key] === hole) { type[key] = real; recomputeSize(ty, type); return; }
+    if (type[key]) { substHole(ty, type[key], hole, real); recomputeSize(ty, type); }
   }
 }
 
-function recomputeSize(t) {
+function recomputeSize(ty, t) {
   if (t.k === 'array' && t.of && t.n !== null && t.of.size != null) {
     t.size = t.of.size * t.n;
     t.align = t.of.align;
+  }
+  /*
+   * A pointer's size can depend on what it points to: under medium a pointer to data is two bytes
+   * and a pointer to code four. `void (*f)(void)` builds its pointer against the placeholder, before
+   * anyone knows the target is a function, so the size is settled HERE, once it is. An explicit
+   * far/near has already decided it, and a _seg/huge pointer is refused anyway; both are left alone.
+   */
+  if (t.k === 'ptr' && !t.qual && !t.model) {
+    const fresh = ty.ptr(t.to);
+    t.size = fresh.size;
+    t.align = fresh.align;
   }
 }
 
