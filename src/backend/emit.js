@@ -22,6 +22,7 @@ import { findField, constEval } from '../parse/parser.js';
 import { FUNC_TAG } from '../link/module.js';
 import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
 import { needsFlattening, flattenGotos } from './flatten.js';
+import { lowerBorlandAsm, emitInstruction, REGISTER_DECLS, BorlandAsmError } from '../asm/borland.js';
 
 /*
  * The frame epilogue, emitted as a MARKER and resolved once the function's final frame size is known.
@@ -324,6 +325,27 @@ export class FunctionEmitter {
     let d = this.decl;
 
     /*
+     * Borland inline assembly is lowered FIRST, into instructions and `if (flag) goto label`, so
+     * that everything after this -- the escape analysis, flatten.js, the goto state machine -- sees
+     * ordinary statements. Only in a model whose DGROUP sits at linear 0: there DS = SS = 0 and a near
+     * address is its own linear address, which is what src/asm/borland.js is built on.
+     */
+    if (hasNode(d.body, 'asmborland')) {
+      const model = this.ctx.model ?? 'i386';
+      if (model !== 'dos16' && model !== 'dos16m') {
+        unsup('Borland inline assembly outside a model with DGROUP at linear 0 (dos16, dos16m)');
+      }
+      let low;
+      try { low = lowerBorlandAsm(d.body, { INT: this.ty.INT }); } catch (e) {
+        if (e instanceof BorlandAsmError) unsup(`Borland inline assembly: ${e.message}`);
+        throw e;
+      }
+      d = { ...d, body: low.body };
+      this.decl = d;
+      this.asm = low;
+    }
+
+    /*
      * A label below the top level means the state machine cannot see it, so lower the whole body to
      * labels and gotos first — see flatten.js. Only functions that need it pay: everything else keeps
      * its structured emission, which is both faster and readable.
@@ -365,8 +387,7 @@ export class FunctionEmitter {
     // give would be right, because there is no segmented model to give it in. Refused whole, by name.
     const seg = T.segModel(d.type) ?? segModelIn(d.body);
     if (seg) unsup(`a 16-bit ${seg} pointer (Borland segmented model)`);
-    // Borland inline assembly shares registers with code only Borland's generator produced; there
-    // is no translating one statement of it apart from the function around it.
+    // Every Borland asm statement was lowered at the top of emit(); one left here is a lowering bug.
     if (hasNode(d.body, 'asmborland')) unsup('Borland inline assembly');
 
     // Which locals escape? A scalar that is never `&`-taken can live in a JS var. Everything with
@@ -374,6 +395,8 @@ export class FunctionEmitter {
     // "a few times slower than native" and "tens of times".
     const escaped = new Set();
     collectAddressTaken(d.body, escaped);
+    // A local the asm names is addressed, SS-relative, exactly as Borland addressed it.
+    if (this.asm) for (const n of this.asm.names) escaped.add(n);
     this.escaped = escaped;
     /*
      * A nested function reaches the enclosing frame through MEMORY and nothing else, so every name
@@ -438,10 +461,12 @@ export class FunctionEmitter {
       ? `var _fp=(M.sp-${this.frameSize})&${~(this.frameAlign - 1)}|0;`
       : `var _fp=M.sp-${this.frameSize}|0;`);
     if (this.frameSize) body.push(`M.sp=_fp;`);
+    if (this.asm) body.push(REGISTER_DECLS);
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
-    body.push(`  return ${d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
+    body.push(`  return ${this.asm?.endsInAsm && d.type.ret.k !== 'void' ? this.#axReturn(d.type.ret)
+      : d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
 
     // Now the frame's final size is known, so every epilogue marker becomes the one right value.
     // With no frame at all the restore is a no-op assignment and is dropped rather than emitted.
@@ -1429,6 +1454,15 @@ export class FunctionEmitter {
         this.#stmt(s.body, escaped);
         return;
       }
+      case 'asmins': {
+        let js;
+        try { js = emitInstruction(s.ins, this.#asmEnv()); } catch (e) {
+          if (e instanceof BorlandAsmError) unsup(`Borland inline assembly: ${e.message}`);
+          throw e;
+        }
+        if (js) this.out.push(js);
+        return;
+      }
       case 'goto': {
         const k = this.labels?.index.get(s.label);
         if (k === undefined) unsup(`goto '${s.label}'`);
@@ -1543,6 +1577,39 @@ export class FunctionEmitter {
   // ------------------------------------------------------------- expressions
 
   /** An lvalue: an address expression plus its type. */
+  /** What src/asm/borland.js needs from this function: its names, and its memory. */
+  #asmEnv() {
+    const U = { 1: this.ty.UCHAR, 2: this.ty.USHORT, 4: this.ty.ULONG };
+    const nearOf = (a) => (a >= 0 && a < 0x10000 ? a : null);
+    return this._asmEnv ??= {
+      symbol: (name) => {
+        const l = this.locals.get(name);
+        if (l) {
+          if (l.kind === 'slot') return { addr: `(_fp+${l.off}|0)`, type: l.type, local: true, near: 0 };
+          if (l.kind === 'global') return { addr: String(l.addr), type: l.type, local: false, near: nearOf(l.addr) };
+          throw new BorlandAsmError(`the local '${name}', which has no stack slot`);
+        }
+        const g = this.ctx.globals.get(name);
+        if (g) return { addr: String(g.addr), type: g.type, local: false, near: nearOf(g.addr) };
+        if (this.ctx.funcs.get(name)) return { isFunc: true };
+        throw new BorlandAsmError(`'${name}', which is not a variable in scope`);
+      },
+      load: (addr, size) => loadExpr(addr, U[size]),
+      store: (addr, size, v) => storeExpr(addr, U[size], v),
+    };
+  }
+
+  /** Falling off the end after an asm statement returns AX -- DX:AX for four bytes -- as Borland does. */
+  #axReturn(t) {
+    if (T.isInteger(t) && !is64(t) && t.size <= 2) {
+      const sh = 32 - t.size * 8;
+      return t.signed ? `(($ax<<${sh})>>${sh})` : `($ax&${t.size === 1 ? 255 : 65535})`;
+    }
+    if (T.isInteger(t) && !is64(t) && t.size === 4) return t.signed ? '(($dx<<16)|$ax)' : '((($dx<<16)|$ax)>>>0)';
+    if (t.k === 'ptr' && t.size === 2) return '$ax';
+    return unsup(`Borland inline assembly returning a ${T.typeName(t)} in registers`);
+  }
+
   #lval(e) {
     switch (e.n) {
       case 'ident': {
@@ -1857,6 +1924,7 @@ export class FunctionEmitter {
         const t = this.newTmp(); this.#declareTmp(t);
         return { js: `(${t}=${v.js},${loadExpr(e.part ? `(${t}+${of.size}|0)` : t, of)})`, type: of };
       }
+      case 'asmcc': return { js: `(${e.js}?1:0)`, type: this.ty.INT };
       case 'sizeoftype': return { js: String(e.target.size), type: this.ty.UINT };
       case 'sizeofexpr': {
         const t = e.expr.type;

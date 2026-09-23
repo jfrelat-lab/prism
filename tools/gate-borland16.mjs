@@ -6,7 +6,8 @@
 //
 //   _seg / huge pointers    given the flat placeholder size of 4, because every path expects a
 //                           pointer to have one (types.js segPtr says why it cannot be left out)
-//   asm <instruction>       Borland's statement form of inline assembly, kept as text
+//   asm <instruction>       Borland's statement form of inline assembly -- translated under dos16
+//                           and dos16m (gate-borlandasm), refused by name here, under i386
 //
 // and one it CAN give meaning to, listed here because accepting it must not cost anything:
 //

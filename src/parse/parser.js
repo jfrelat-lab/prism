@@ -292,13 +292,31 @@ export class Parser {
    * end of its SOURCE LINE or to a `;` -- or `asm { ... }` around several. Keen Dreams has 640 of
    * them in 11 of its 20 C files.
    *
-   * Kept as TEXT and never translated: it reads and writes registers the C compiler is also using,
-   * segment registers included, and names C variables whose storage only Borland's code generator
-   * knew. A function containing one is refused whole by the emitter. What this buys is the rest of
-   * the survey -- the build no longer stops at the first one.
+   * Kept as TOKENS, one list per instruction, for src/asm/borland.js to translate. An instruction
+   * ends at a `;` or at the end of a source line -- inside a block too, which is why each token's
+   * line is looked at: `asm { mov ax,1 <newline> mov bx,2 }` is two instructions with nothing
+   * between them. `text` is the same thing as one string, for diagnostics.
+   *
+   * An identifier naming an ENUM constant becomes its value here, because this is the last place its
+   * scope exists: the emitter resolves names to storage, and an enum constant has none.
    */
   #borlandAsm(kw) {
     const text = [];
+    const lines = [[]];
+    let lastLine = null;
+    const take = (t) => {
+      text.push(t.v);
+      const line = t.loc ? `${t.loc.file}:${t.loc.line}` : null;
+      if (t.k === PUNCT && t.v === ';') { if (lines.at(-1).length) lines.push([]); lastLine = line; return; }
+      if (lastLine !== null && line !== null && line !== lastLine && lines.at(-1).length) lines.push([]);
+      lastLine = line;
+      let tk = { k: t.k, v: t.v };
+      if (t.k === ID) {
+        const sym = this.scope.lookup(t.v);
+        if (sym?.kind === 'enumconst') tk = { k: NUM, v: String(sym.value), enumOf: t.v };
+      }
+      lines.at(-1).push(tk);
+    };
     if (this.isP('{')) {
       this.i++;
       for (let depth = 1; ;) {
@@ -306,7 +324,7 @@ export class Parser {
         if (t.k === EOF) throw new ParseError('unterminated asm { block', kw);
         if (t.k === PUNCT && t.v === '{') depth++;
         if (t.k === PUNCT && t.v === '}' && --depth === 0) break;
-        text.push(t.v);
+        take(t);
       }
     } else {
       // The statement ends at the end of the LINE the keyword is on, because that is the only
@@ -318,10 +336,10 @@ export class Parser {
         if (t.k === PUNCT && t.v === '}') break;
         this.i++;
         if (t.k === PUNCT && t.v === ';') break;
-        text.push(t.v);
+        take(t);
       }
     }
-    return { n: 'asmborland', text: text.join(' ') };
+    return { n: 'asmborland', text: text.join(' '), lines: lines.filter((l) => l.length), loc: kw.loc };
   }
 
   /** A declaration, or a function definition if a `{` follows the first declarator. */
