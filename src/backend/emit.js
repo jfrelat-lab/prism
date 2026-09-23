@@ -209,6 +209,11 @@ const mask64 = (js, t) => `BigInt.as${t.signed ? 'Int' : 'Uint'}N(64,${js})`;
 const checkWide = (t) => { if (t && t.k === 'scalar' && WIDE.has(t.name)) unsup(t.name); };
 
 /** Truncate/extend a 32-bit value to a narrower type, as an assignment or cast must. */
+/** A `_seg` pointer with a real meaning: its value is a paragraph, and seg*16 is the address. */
+const isSeg = (t) => t?.k === 'ptr' && t.model === 'seg' && t.real === true;
+/** The byte address a pointer VALUE names: itself, or seg*16 for a _seg pointer. */
+const addrOfPtr = (js, t) => (isSeg(t) ? `((${js})<<4)` : `(${js})`);
+
 function coerce(ty, js, from, to) {
   checkWide(from); checkWide(to);
 
@@ -232,6 +237,15 @@ function coerce(ty, js, from, to) {
     // C truncates toward zero. `|0` does exactly that for the in-range case, which is all C defines.
     return T.isUnsigned(to) ? `((${js})>>>0)` : `((${js})|0)`;
   }
+  /*
+   * Between a _seg pointer and any other pointer, the number changes: a paragraph becomes an address
+   * by *16, and an address becomes a paragraph by /16 (exact for the paragraph-aligned blocks a
+   * memory manager hands out, which is where _seg values come from). To and from an INTEGER nothing
+   * changes -- `(memptr)segstart` stores a paragraph number and `(unsigned)grsegs[i]` reads one.
+   */
+  const fromPtr = from.k === 'ptr' || from.k === 'array' || from.k === 'func';
+  if (isSeg(to) && fromPtr && !isSeg(from)) return `((${js})>>>4)`;
+  if (isSeg(from) && (to.k === 'ptr' || to.k === 'func') && !isSeg(to)) return `((${js})<<4)`;
   if (to.k === 'ptr' || to.k === 'func') return `(${js}|0)`;
   if (to.k === 'enum') return `(${js}|0)`;
   if (to.k === 'void') return `(${js})`;
@@ -1585,7 +1599,7 @@ export class FunctionEmitter {
           const p = this.#rval(e.expr);
           const to = p.type.k === 'ptr' ? p.type.to : (p.type.k === 'array' ? p.type.of : null);
           if (!to) throw new EmitError('dereferencing a non-pointer');
-          return { addr: `((${p.js})|0)`, type: to };
+          return { addr: `(${addrOfPtr(p.js, p.type)}|0)`, type: to };
         }
         break;
       case 'index': {
@@ -1594,14 +1608,14 @@ export class FunctionEmitter {
         const bt = this.ty.decay(b.type);
         if (bt.k !== 'ptr') throw new EmitError('subscripting a non-pointer');
         const es = bt.to.size ?? 1;
-        return { addr: `((${b.js})+Math.imul(${indexJs(this.ty, i)},${es})|0)`, type: bt.to };
+        return { addr: `(${addrOfPtr(b.js, bt)}+Math.imul(${indexJs(this.ty, i)},${es})|0)`, type: bt.to };
       }
       case 'member': {
         let recAddr, rec;
         if (e.arrow) {
           const p = this.#rval(e.base);
           rec = p.type.k === 'ptr' ? p.type.to : p.type;
-          recAddr = `((${p.js})|0)`;
+          recAddr = `(${addrOfPtr(p.js, p.type)}|0)`;
         } else {
           const l = this.#lval(e.base);
           if (l.varJs) throw new EmitError('member access on a value with no address');
@@ -1926,8 +1940,8 @@ export class FunctionEmitter {
   }
 
   #binary(e) {
-    const a = this.#rval(e.a), b = this.#rval(e.b);
-    const at = this.ty.decay(a.type), bt = this.ty.decay(b.type);
+    let a = this.#rval(e.a), b = this.#rval(e.b);
+    let at = this.ty.decay(a.type), bt = this.ty.decay(b.type);
     const op = e.op;
 
     if (op === '&&') return { js: `((${this.#truth(e.a)}&&${this.#truth(e.b)})?1:0)`, type: this.ty.INT };
@@ -1939,6 +1953,18 @@ export class FunctionEmitter {
       return this.#cxBinary(a, b, op);
     }
 
+    /*
+     * A _seg pointer plus or minus an integer is Borland's one arithmetic on it, and its result is a
+     * FAR pointer, seg:n*sizeof -- `map = mapsegs[0]+offset` is how Keen Dreams reaches a map cell.
+     * So the paragraph becomes its address and the rest is ordinary far arithmetic. The difference of
+     * two _seg pointers is not given a meaning here, and nothing in the corpus takes one.
+     */
+    if (isSeg(at) && isSeg(bt) && op === '-') unsup('arithmetic on a _seg pointer');
+    if (isSeg(at) && T.isInteger(bt) && (op === '+' || op === '-')) {
+      a = { js: addrOfPtr(a.js, at), type: at = this.ty.ptr(at.to, 'far') };
+    } else if (isSeg(bt) && T.isInteger(at) && op === '+') {
+      b = { js: addrOfPtr(b.js, bt), type: bt = this.ty.ptr(bt.to, 'far') };
+    }
     // Pointer arithmetic scales by the pointee, and p - q divides by it.
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
@@ -1955,6 +1981,10 @@ export class FunctionEmitter {
 
     const CMP = { '==': '===', '!=': '!==', '<': '<', '>': '>', '<=': '<=', '>=': '>=' };
     if (op in CMP) {
+      // A _seg pointer against another KIND of pointer compares addresses, so the paragraph is scaled;
+      // against a _seg pointer or against 0 both sides are already paragraphs.
+      if (isSeg(at) && bt.k === 'ptr' && !isSeg(bt)) a = { js: addrOfPtr(a.js, at), type: at };
+      if (isSeg(bt) && at.k === 'ptr' && !isSeg(at)) b = { js: addrOfPtr(b.js, bt), type: bt };
       if (at.k === 'ptr' || bt.k === 'ptr') {
         return { js: `(((${a.js})>>>0)${CMP[op]}((${b.js})>>>0)?1:0)`, type: this.ty.INT };
       }
@@ -2087,6 +2117,9 @@ export class FunctionEmitter {
       if (op === '==' || op === '!=') return this.#cxCompare(a, b, op);
       return this.#cxBinary(a, b, op);
     }
+    // ++, -- and += come through here, and their result would have to go back INTO the _seg pointer:
+    // a far pointer at seg:n*sizeof is a paragraph again only when n*sizeof is a multiple of 16.
+    if (isSeg(at) && (op === '+' || op === '-')) unsup('arithmetic on a _seg pointer');
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = at.to.size ?? 1;
       return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };

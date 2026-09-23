@@ -63,7 +63,16 @@ export function makeTypes(model = 'i386', { signedChar } = {}) {
   };
   const T = {
     model, VOID, scalar, ptr,
-    segPtr: (to, m) => ({ ...ptr(to), model: m }),
+    /*
+     * Borland's `_seg`: a pointer that holds only a SEGMENT -- a paragraph number, two bytes -- and
+     * names the object at seg*16. Under a 16-bit model that is a real type with a real size, and
+     * `real` says so: segModel() no longer reports it, so nothing refuses it for being one. Under i386
+     * it still has no meaning and keeps the flat placeholder, refused as before. `huge` is not done
+     * here and stays refused in every model.
+     */
+    segPtr: (to, m) => (m === 'seg' && table.nearPointer
+      ? { k: 'ptr', to, size: 2, align: 2, signed: false, model: 'seg', real: true }
+      : { ...ptr(to), model: m }),
     enumType: (tag, consts) => ({
       k: 'enum', tag, consts, ...table.enum,
       signed: (consts ?? []).some(c => BigInt(c.value) < 0n),
@@ -144,7 +153,7 @@ export function segModel(t, seen = new Set()) {
   if (!t || typeof t !== 'object' || seen.has(t)) return null;
   seen.add(t);
   switch (t.k) {
-    case 'ptr': return t.model ?? segModel(t.to, seen);
+    case 'ptr': return (t.real ? null : t.model) ?? segModel(t.to, seen);
     case 'array': return segModel(t.of, seen);
     case 'func':
       return segModel(t.ret, seen) ?? (t.params ?? []).reduce((m, p) => m ?? segModel(p.type, seen), null);

@@ -1421,9 +1421,11 @@ function binType(ty, op, a, b) {
   const at = a.type ? ty.decay(a.type) : null;
   const bt = b.type ? ty.decay(b.type) : null;
   if (!at || !bt) return at ?? bt ?? ty.INT;
-  // Pointer arithmetic: p+n and p-n keep the pointer type; p-q is an integer.
-  if (at.k === 'ptr' && T.isInteger(bt)) return at;
-  if (bt.k === 'ptr' && T.isInteger(at)) return bt;
+  // Pointer arithmetic: p+n and p-n keep the pointer type; p-q is an integer. A real _seg pointer
+  // is the exception: seg+n is a FAR pointer, seg:n*sizeof (emit.js #binary does the same).
+  const segPlus = (p) => (p.model === 'seg' && p.real ? ty.ptr(p.to, 'far') : p);
+  if (at.k === 'ptr' && T.isInteger(bt)) return segPlus(at);
+  if (bt.k === 'ptr' && T.isInteger(at)) return segPlus(bt);
   if (at.k === 'ptr' && bt.k === 'ptr') return ty.INT;
   if (op === '<<' || op === '>>') return ty.promote(at);
   /*
