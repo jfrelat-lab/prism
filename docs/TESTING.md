@@ -2766,3 +2766,77 @@ pacman     ok
 wow        CHANGED — golden 0000000000000000, now 6f785550cf5a3846
 1 match, 1 changed
 ```
+
+## The TASM front end, held to Turbo Assembler itself (`tools/gate-tasm-front.mjs`)
+
+Keen Dreams links against three Turbo Assembler modules: `id_us_a`, `id_rf_a` and `id_vw_a`, where
+`id_vw_a` includes `id_vw_ae` (EGA). They supply the 26 symbols the C link lacks. `src/asm/tasm.js`
+reads them the way TASM does, handling both IDEAL and MASM syntax: INCLUDE, `=`/EQU (numeric and text),
+IF/IFE/IFDEF/ELSE, MACRO with parameters, REPT, `@@` local scopes, PROC with arguments and USES, the
+generated prologue and epilogue, DB/DW/DD with DUP and `?`, STRUC and its instances, and LABEL.
+Its output is not an encoding. It is the module as a translator needs it: the data segment as bytes
+with fixups, the code segment as instruction tokens with the data that sits between them, and the
+labels, publics and externs.
+
+**The oracle is TASM 2.5 itself.** It comes from the Borland C++ 2.0 floppies (Keen's own toolchain),
+run in DOSBox-X by `--capture` on the unmodified sources with `tasm /mx /zi /la`. The golden
+(`goldens/tasm-keen.json`) keeps these, per module:
+
+* from the OBJ: the publics, the `_DATA` bytes with the linker's fields masked, and the fixup positions;
+* from the listing: every instruction's mnemonic, in order, and its bytes, which ndisasm decodes into
+  operand signatures;
+* the near-jump destinations, as the ordinal of the instruction they land on. ndisasm reads the
+  instructions without the data between them, so each of its addresses is moved back to the listing's
+  offsets before it is looked up;
+* what lies between the instructions in the code segment (data and EVEN pads), at its real offset.
+  The front end does not know instruction lengths, so it rebuilds each run from its data items. It places
+  an EVEN pad from the real offset TASM reports.
+
+Result: all three modules agree on everything. That covers 2001 instructions with their operands,
+136 of 140 jump destinations (the other 4 are indirect or far), 13 runs of code-segment data, 6148 data
+bytes, 37 data fixups and every public.
+
+### Two faults of ndisasm 3.01, stepped round and named
+
+* It cannot decode the register forms of opcode FF in 16-bit code. `call ax` (FF D0) comes out as
+  `db 0xff`, and the next byte starts a bogus instruction. The gate decodes those two-byte forms by
+  their ModR/M reg field.
+* It prints a shift or rotate by one (D0/D1) as `,0x0`, so `D1 E7` reads as `shl di,0x0`, while `D3 E7`
+  correctly reads as `shl di,cl`.
+
+### What TASM does that the front end had to learn
+
+* `x.field` is x plus the field's offset.
+* OFFSET inside brackets adds nothing.
+* `($-TestSequence)/3` is a constant, because the table sits in CODESEG with only data between its ends.
+  A distance across instructions is refused, because their lengths are unknown here.
+* `jmp $+2` (the I/O delay) is a jump to the next instruction. Any other `$` in an instruction is
+  refused.
+* LEA of a plain address is assembled as MOV of its offset.
+* A default segment override (`ss:` beside bp) is dropped.
+* An operand that is wholly constant, written with MASM's AND/OR/SHL, is folded.
+* EVEN outside CODESEG is refused. Keen never aligns data, so TASM's pad byte there has never been
+  observed.
+
+### Mutations, all red (15)
+
+| mutation | first red check |
+|---|---|
+| REPT expands once | id_rf_a instruction order |
+| no generated epilogue | id_us_a instruction order |
+| IFE taken as IF | id_rf_a instruction order |
+| text equates not substituted | id_vw_a operands |
+| `?` read as a symbol | id_us_a data fixups |
+| EVEN in code forgotten | id_rf_a code-segment data runs |
+| DW stored big-endian | id_us_a data bytes |
+| macro parameters not substituted | id_vw_a jump destinations (`loop addr`) |
+| no frame for arguments | id_us_a instruction order |
+| field dot kept, OFFSET in brackets kept, constant operands not folded | the operand parse refuses |
+| label distance one entry long | id_vw_a operands |
+| `$+2` lands one further | id_vw_a instruction order |
+| equate masked to a byte | id_rf_a operands |
+
+The macro-parameter mutation was **green** until jump destinations were compared. `loop addr` is the only
+place a parameter is used, and a destination compared as just "a target" cannot tell `mask1E` from
+`addr`. The EVEN mutation was green until the code-segment data was compared, because nothing looked at
+those bytes, and phase 2 will read them.

@@ -116,6 +116,7 @@ function number(v) {
   const t = String(v).toLowerCase();
   let m = /^0x([0-9a-f]+)$/.exec(t) ?? /^([0-9][0-9a-f]*)h$/.exec(t);
   if (m) return parseInt(m[1], 16);
+  if ((m = /^([01]+)b$/.exec(t))) return parseInt(m[1], 2);    // TASM's binary, as in its equates
   if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
   return fail(`the number '${v}'`);
 }
@@ -180,6 +181,8 @@ function operand(toks) {
   for (let i = 0; i < toks.length; i++) {
     const t = toks[i], w = lc(t);
     if (w && PTR_SIZE[w] && lc(toks[i + 1]) === 'ptr') { size = PTR_SIZE[w]; i++; continue; }
+    // TASM's IDEAL mode writes the size without PTR: `[BYTE bx+di]`, `[WORD es:di]`.
+    if (w && PTR_SIZE[w] && toks[i + 1] && !isP(toks[i + 1], ',') && !isP(toks[i + 1], ']')) { size = PTR_SIZE[w]; continue; }
     if (w === 'offset') { offset = true; continue; }
     if (w && SREG.has(w) && isP(toks[i + 1], ':')) { seg = w; i++; continue; }
     // Brackets are addition: `x[bx]` and `[bx][si]` are x+bx and bx+si.
@@ -209,6 +212,8 @@ function operand(toks) {
   return { kind: 'mem', size, seg, regs, sym: e.sym, c: e.c };
 }
 
+export { operand as parseOperand };
+
 /** Split an instruction's tokens into operands on top-level commas. */
 function splitOperands(toks) {
   const ops = [[]];
@@ -221,6 +226,8 @@ function splitOperands(toks) {
   }
   return ops.filter((o) => o.length);
 }
+
+export { splitOperands };
 
 /** Parse one instruction line (a token list) into { op, rep, ops, label }. */
 export function parseInstruction(toks) {
