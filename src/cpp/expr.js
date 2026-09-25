@@ -26,8 +26,8 @@ export class ExprError extends Error {}
  * @param tokens pp-tokens of the controlling expression, already macro-expanded, `defined` resolved.
  * @returns boolean
  */
-export function evalCondition(tokens) {
-  const p = new Parser(tokens.filter(t => t.k !== 'eof'));
+export function evalCondition(tokens, { sizeofs = null } = {}) {
+  const p = new Parser(tokens.filter(t => t.k !== 'eof'), sizeofs);
   const r = p.conditional();
   p.expectEnd();
   return r.v !== 0n;
@@ -37,7 +37,7 @@ class Parser {
   // `live` is false inside a branch that cannot be reached. gcc evaluates the whole expression but
   // does NOT diagnose a dead `1/0`: `#if (0 ? 1/0 : 5) == 5` and `#if 1 || 1/0` both compile.
   // Observed, and the reason division-by-zero is suppressed rather than deferred.
-  constructor(ts) { this.ts = ts; this.i = 0; this.live = true; }
+  constructor(ts, sizeofs = null) { this.ts = ts; this.i = 0; this.live = true; this.sizeofs = sizeofs; }
   peek() { return this.ts[this.i]; }
   next() { return this.ts[this.i++]; }
   at(v) { const t = this.peek(); return t && t.k === 'punct' && t.v === v; }
@@ -63,7 +63,27 @@ class Parser {
        * rejects this file too -- so the answer is a refusal, and what is worth getting right is
        * that the refusal says what it refused.
        */
+      /*
+       * ...unless the build STATES the answer. compile.ppSizeof maps a type's spelling to its size,
+       * which is what Borland's one-pass compiler knew and a standalone preprocessor cannot: an
+       * option, like -D, and not a change to the source. Each entry is checked against PRISM's own
+       * layout of that type and Borland's (tools/gate-pp-sizeof.mjs), so a wrong number cannot stand.
+       * `sizeof(T)` only, with T spelled as the table spells it; anything else keeps the refusal.
+       */
       if (t.v === 'sizeof') {
+        if (this.sizeofs && this.at('(')) {
+          const save = this.i;
+          this.i++;
+          const words = [];
+          while (this.peek() && !this.at(')') && this.peek().k === 'id') words.push(this.next().v);
+          const spelled = words.join(' ');
+          if (this.eat(')') && words.length && Object.hasOwn(this.sizeofs, spelled)) {
+            return val(BigInt(this.sizeofs[spelled]), true);
+          }
+          this.i = save;
+          throw new ExprError(`'sizeof' in a #if condition, for a type compile.ppSizeof does not state`
+            + (words.length ? ` ('${spelled}')` : ''));
+        }
         throw new ExprError("'sizeof' in a #if condition: a Borland extension, not standard C — "
           + 'the preprocessor has no types to measure');
       }

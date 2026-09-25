@@ -387,6 +387,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     signedChar: c.signedChar,
     // ...and whether it sized enums as ints (Borland's -b) or by their constants (the model's rule).
     enums: c.enums,
+    // ...and, for a compiler that could answer sizeof inside #if, the sizes it would have given.
+    ppSizeof: c.ppSizeof ?? null,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*

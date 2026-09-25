@@ -38,6 +38,8 @@ export class Preprocessor {
     this.macros = new Map();
     this.resolve = opts.resolve ?? (() => null);
     this.trigraphs = opts.trigraphs ?? false;
+    // sizeof(T) in #if, answered from the build's own statement of the size (see expr.js).
+    this.ppSizeof = opts.ppSizeof ?? null;
     this.diagnostics = [];
     this.counter = 0;
     this.includeDepth = 0;
@@ -310,7 +312,7 @@ export class Preprocessor {
     const resolved = this.#resolveDefined(rest);
     const expanded = this.#expand(resolved);
     try {
-      return evalCondition(expanded);
+      return evalCondition(expanded, { sizeofs: this.ppSizeof });
     } catch (e) {
       if (e instanceof ExprError) throw new CppError(e.message, loc);
       throw e;

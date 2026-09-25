@@ -416,6 +416,24 @@ wide:
   return 2;
 }
 
+unsigned char shiftt[8] = { 10, 11, 12, 13, 14, 15, 16, 17 };
+unsigned tbl[4];
+int b_bp(void) {
+  tbl[2] = (unsigned)shiftt;
+  asm push bp
+  asm mov bp,2
+  asm shl bp,1
+  asm mov bp,[WORD PTR tbl+bp]
+  asm mov si,3
+  asm mov ax,0x2000
+  asm mov ds,ax
+  asm mov al,[BYTE PTR bp+si]
+  asm mov bx,ss
+  asm mov ds,bx
+  asm pop bp
+  asm xor ah,ah
+}
+
 int b_pushf_data(void) {
   asm pushf
   asm pop ax
@@ -481,6 +499,7 @@ function partB() {
   const pz = call('b_poison');
   report(typeof pz === 'string' && pz.includes('value is undefined'), 'B. a flag from far-pointer arithmetic is not read', String(pz).slice(0, 60));
   eq('b_ds_local', 0x4321, [], 'a local is SS-relative while DS is elsewhere');
+  eq('b_bp', 13, [], 'memory through a loaded bp is SS-relative, even with DS moved');
   const sw = call('b_shift_wide');
   report(typeof sw === 'string' && sw.includes('value is undefined'), 'B. CF after a shift by the full width is not read', String(sw).slice(0, 60));
   eq('b_ret16', 0xfffe, [], 'unsigned returned in AX');
@@ -519,7 +538,7 @@ function partB() {
   const pf = call('b_pushf_data');
   report(typeof pf === 'string' && pf.includes('pushf word'), 'B. a pushf word popped as data throws by name', String(pf).slice(0, 60));
   const named = {
-    b_far_object: 'outside DGROUP', r_call: 'call', r_bp: 'bp', r_std: 'std',
+    b_far_object: 'outside DGROUP', r_call: 'call', r_bp: 'reads bp before this function wrote it', r_std: 'std',
     r_jl: 'OF or PF', r_label: 'not a label', r_nosize: 'size nothing states',
     r_undef: 'reads di before this function wrote it', r_clobber: 'after the call to b_ret16()',
   };

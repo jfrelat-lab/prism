@@ -41,7 +41,7 @@ function scan(unitList) {
   for (const u of unitList) {
     let unit;
     try {
-      const pp = new Preprocessor({ defines: { ...(t.defines ?? {}), ...modelDefines(c.model, c.signedChar) },
+      const pp = new Preprocessor({ ppSizeof: c.ppSizeof ?? null, defines: { ...(t.defines ?? {}), ...modelDefines(c.model, c.signedChar) },
         resolve: makeResolver(dir, t, new Set(), new Set(), envHeaders(t.env), new Set()) });
       ({ unit } = parse(pp.run(u.source, u.file), { model: c.model, c89: true, file: u.file, signedChar: c.signedChar, enums: c.enums }));
     } catch { unparsed.push(u.file.split(/[\\/]/).pop()); continue; }
@@ -87,7 +87,7 @@ const report = (ok, what, detail = '') => {
   report(JSON.stringify(hits) === JSON.stringify(want),
     `Keen Dreams: only the two plane loops of UnpackEGAShapeToScreen`, `${hits.length} hit(s) in ${ops} operations`);
   for (const h of hits) console.log(`       ${h}`);
-  report(unparsed.join() === 'id_ca.c', 'every unit scanned but id_ca.c (sizeof in #if, refused by name)', unparsed.join(', '));
+  report(unparsed.length === 0, 'every unit scanned, id_ca.c included (compile.ppSizeof)', unparsed.join(', ') || 'all');
 }
 
 console.log(bad ? `\n${bad} WRONG` : '\nwhere Borland C++ 2.0 departs from C, Keen Dreams goes only where the two agree.');

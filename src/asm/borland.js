@@ -36,9 +36,12 @@
 // translator accepts. A jump that needs OF or PF (jl, jg, jo, jp...) is refused by name rather than
 // answered from a flag nobody computed. DF must stay clear (cld is honoured, std refused).
 //
-// Everything outside this subset is REFUSED BY NAME at compile time -- int, call, bp-relative
-// memory, sp, cs/ss writes -- and the two things only knowable at run time throw by name: a pushf
-// word popped into a register, and a pop with nothing pushed.
+// Everything outside this subset is REFUSED BY NAME at compile time -- call, sp, cs/ss writes, and
+// any read of a register the function never wrote, which is how Borland's own frame pointer is
+// kept out: `[bp+4]` in a function that has not loaded bp reads what Borland's prologue put there.
+// Memory through a bp the function DID load is ordinary, and SS-relative as the 8086 makes it
+// (CAL_ShiftSprite points bp at a shift table). The two things only knowable at run time throw by
+// name: a pushf word popped into a register, and a pop with nothing pushed.
 //
 // There is no Borland compiler to diff against. The instruction semantics are checked against
 // Unicorn running the same instructions in real mode (tools/gate-borlandasm.mjs); the C-facing
@@ -200,7 +203,6 @@ function operand(toks) {
   if (!bracket && !seg && !e.sym && !e.regs.length) return { kind: 'imm', value: e.c, size };
   const regs = e.regs;
   const bases = regs.filter((r) => r === 'bx' || r === 'bp'), idx = regs.filter((r) => r === 'si' || r === 'di');
-  if (regs.includes('bp')) fail('memory through bp, which is Borland\'s own frame pointer');
   if (bases.length + idx.length !== regs.length || bases.length > 1 || idx.length > 1) {
     fail(`the address [${regs.join('+')}], which the 8086 cannot form`);
   }
@@ -397,7 +399,8 @@ class Translator {
       const s = env.symbol(o.sym);
       if (s.isFunc) fail(`'${o.sym}', a function`);
       if (s.near === null) fail(`'${o.sym}', which lives outside DGROUP`);
-      segJs = o.seg ? this.segRead(o.seg) : (s.local ? '0' : '$r.ds');
+      // SS for a local, and for any address based on bp -- the 8086's rule; DS otherwise.
+      segJs = o.seg ? this.segRead(o.seg) : (s.local || o.regs.includes('bp') ? '0' : '$r.ds');
       near = s.addr;
       if (o.regs.length) {
         if (holdsFarPointer(s.type)) fail(`'${o.sym}' indexed by a register while it holds far pointers`);
@@ -411,7 +414,7 @@ class Translator {
         }
       }
     } else {
-      segJs = o.seg ? this.segRead(o.seg) : '$r.ds';
+      segJs = o.seg ? this.segRead(o.seg) : (o.regs.includes('bp') ? '0' : '$r.ds');
       near = '0';
     }
     const off = `(((${near})+${regsum ? `${regsum}+` : ''}${o.c})&65535)`;
