@@ -1840,6 +1840,28 @@ export class FunctionEmitter {
       }
     }
     /*
+     * A CAST AS AN LVALUE, Borland's extension (and gcc's before 4.0): `(long)pcSound = 0;`
+     * (id_sd.c), `*((char far *)*(char far **)outfile)++ = data;` (jam_io.c). It means
+     * `*(T *)&obj` -- the object's own bytes, read and written as T -- so it is allowed only where
+     * that says something: an integer, enum or pointer of the SAME size, and refused by name
+     * otherwise. A local under such a cast is pinned to memory (collectAddressTaken), so the bytes
+     * exist. Under PRISM's linear far pointers, `(long)farptr` read this way is the same number the
+     * rvalue cast gives, which keeps the two consistent.
+     */
+    if (e.n === 'cast') {
+      const inner = this.#lval(e.expr);
+      const to = e.type, from = inner.type;
+      const scalar = (t) => t && (T.isInteger(t) || t.k === 'enum' || t.k === 'ptr');
+      if (inner.bitfield || !scalar(to) || !scalar(from)) {
+        unsup(`a cast as an lvalue from ${T.typeName(from)} to ${T.typeName(to)}`);
+      }
+      if (to.size !== from.size) {
+        unsup(`a cast as an lvalue from ${T.typeName(from)} to ${T.typeName(to)}, which differ in size`);
+      }
+      if (inner.varJs) throw new EmitError('internal: a cast lvalue on a variable that was not given a slot');
+      return { ...inner, type: to };
+    }
+    /*
      * A COMPLEX value that is not a place -- `f(z * w)`, `return z + 1.0`, `(_Complex double)1` --
      * still has an address, because that is how a complex value travels here. Every caller that
      * asks for an lvalue wants somewhere to copy FROM, and this is it.
@@ -3308,6 +3330,14 @@ export function collectAddressTaken(node, out) {
     let e = node.expr;
     // `&a`, `&a.b`, `&a[i]` all pin `a` in memory.
     while (e && (e.n === 'member' || e.n === 'index')) e = e.base;
+    if (e?.n === 'ident') out.add(e.name);
+  }
+  // A cast ASSIGNED THROUGH -- `(unsigned)i = x`, `((int)u)++` -- reinterprets the object's bytes,
+  // so the object must have bytes: pinned like `&i`.
+  const target = node.n === 'assign' ? node.lhs : (node.n === 'preinc' || node.n === 'postinc') ? node.expr : null;
+  if (target?.n === 'cast') {
+    let e = target;
+    while (e?.n === 'cast') e = e.expr;
     if (e?.n === 'ident') out.add(e.name);
   }
   for (const k of Object.keys(node)) {
