@@ -55,10 +55,13 @@ check('i386 enum', accessorFor(i386.enumType('e', [])), ['getInt32', 'setInt32']
 for (const [n, want] of Object.entries(DOS16)) check(`dos16 ${n}`, accessorFor(dos16.scalar(n)), want);
 // An address is unsigned: an offset at or above 0x8000 read back negative would be a wrong answer.
 check('dos16 pointer', accessorFor(dos16.ptr(dos16.INT)), ['getUint16', 'setUint16']);
-// One byte, and unsigned because no enumerator here is negative -- the rule types.js already had.
-check('dos16 enum', accessorFor(dos16.enumType('e', [])), ['getUint8', 'setUint8']);
+// One byte and SIGNED when the constants fit a signed char -- measured, wcc -mm: `(enum {m = 127})200`
+// is -56. This line used to want unsigned, on a rule that was never measured.
+check('dos16 enum', accessorFor(dos16.enumType('e', [])), ['getInt8', 'setInt8']);
+// ...and an unsigned byte when they fit only that: `(enum {w = 200})300` is 44.
+check('dos16 enum {200}', accessorFor(dos16.enumType('e', [{ value: 200 }])), ['getUint8', 'setUint8']);
 
-const total = Object.keys(I386).length + Object.keys(DOS16).length + 4;
+const total = Object.keys(I386).length + Object.keys(DOS16).length + 5;
 console.log(bad ? `\n${bad} of ${total} WRONG`
   : `\nevery load and store follows the type's width: ${total}/${total}`);
 process.exit(bad ? 1 : 0);

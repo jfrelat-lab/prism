@@ -73,10 +73,22 @@ export function makeTypes(model = 'i386', { signedChar } = {}) {
     segPtr: (to, m) => (m === 'seg' && table.nearPointer
       ? { k: 'ptr', to, size: 2, align: 2, signed: false, model: 'seg', real: true }
       : { ...ptr(to), model: m }),
-    enumType: (tag, consts) => ({
-      k: 'enum', tag, consts, ...table.enum,
-      signed: (consts ?? []).some(c => BigInt(c.value) < 0n),
-    }),
+    enumType: (tag, consts) => {
+      const vals = (consts ?? []).map((c) => BigInt(c.value));
+      const signed = vals.some((v) => v < 0n);
+      if (!table.enum.byRange) return { k: 'enum', tag, consts, ...table.enum, signed };
+      /*
+       * 16-bit Watcom sizes an enum by its constants: the FIRST of signed char, unsigned char, int,
+       * unsigned, long, unsigned long that holds them all, signedness included. Measured with wcc
+       * -mm: {1} is a signed byte, {200} an unsigned byte ((enum)300 is 44), {1000} and {-1, 200} are
+       * two bytes, {40000} is unsigned, {70000} is four. This used to be one byte for every enum.
+       */
+      const lo = vals.reduce((m, v) => (v < m ? v : m), 0n), hi = vals.reduce((m, v) => (v > m ? v : m), 0n);
+      const fits = [[1, true, -128n, 127n], [1, false, 0n, 255n], [2, true, -32768n, 32767n],
+        [2, false, 0n, 65535n], [4, true, -2147483648n, 2147483647n], [4, false, 0n, 4294967295n]]
+        .find(([, , min, max]) => lo >= min && hi <= max) ?? [4, true];
+      return { k: 'enum', tag, consts, size: fits[0], align: Math.min(fits[0], 2), signed: fits[1] };
+    },
     promote: (t) => {
       if (t.k === 'enum') return T.INT;
       if (!isInteger(t)) return t;

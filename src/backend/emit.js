@@ -249,18 +249,41 @@ function coerce(ty, js, from, to) {
   if (isSeg(to) && fromPtr && !isSeg(from)) return `((${js})>>>4)`;
   if (isSeg(from) && (to.k === 'ptr' || to.k === 'func') && !isSeg(to)) return `((${js})<<4)`;
   if (to.k === 'ptr' || to.k === 'func') return `(${js}|0)`;
-  if (to.k === 'enum') return `(${js}|0)`;
+  /*
+   * A TWO-BYTE integer is truncated to two bytes whatever it is called. The cases below used to be
+   * keyed on the type's NAME, which was the same thing while only `short` had two bytes; under a
+   * 16-bit model `int`, `unsigned` and an enum have two as well, fell through to `|0`, and
+   * `(int)0xBEEF` came out as 48879 (tools/gate-int16.mjs, against Watcom).
+   */
+  if (to.k === 'enum') {
+    // An enum is as wide as its model makes it: 16-bit Watcom sizes it by its values, one byte for
+    // `enum { red = 1 }`, and a conversion into it truncates to that.
+    if (to.size === 1) return to.signed === false ? `((${js})&255)` : `((${js})<<24>>24)`;
+    if (to.size === 2) return to.signed === false ? `((${js})&65535)` : `((${js})<<16>>16)`;
+    return `(${js}|0)`;
+  }
   if (to.k === 'void') return `(${js})`;
   switch (to.name) {
     case '_Bool': return `((${js})!==0?1:0)`;
     case 'char': return ty.CHAR.signed ? `((${js})<<24>>24)` : `((${js})&255)`;
     case 'signed char': return `((${js})<<24>>24)`;
     case 'unsigned char': return `((${js})&255)`;
-    case 'short': return `((${js})<<16>>16)`;
-    case 'unsigned short': return `((${js})&65535)`;
-    default: return `((${js})|0)`;
+    default:
+      if (to.size === 2) return to.signed ? `((${js})<<16>>16)` : `((${js})&65535)`;
+      return `((${js})|0)`;
   }
 }
+
+/**
+ * An integer result, wrapped to its type's width. Only a two-byte type needs it: an i386 int wraps
+ * by `|0` already and a smaller type never survives promotion, so i386 emits what it always did.
+ *
+ * Applied where a result can reach a consumer that does NOT convert it -- a truth test: `(u + 1) ?`
+ * with u = 65535 is false, and 65536 is not. Every other consumer converts its operand to its own
+ * type first, which is why unary minus (zero only when its operand is) and the compound-assignment
+ * arithmetic (always converted to the lvalue's type) need nothing.
+ */
+const fitInt = (ty, js, t) => (T.isInteger(t) && !is64(t) && t.size === 2 ? coerce(ty, js, t, t) : js);
 
 // ---------------------------------------------------------------- the function emitter
 
@@ -2031,7 +2054,7 @@ export class FunctionEmitter {
     switch (e.op) {
       case '+': return { js: V, type: t };
       case '-': return T.isFloat(t) ? { js: `(-(${v.js}))`, type: t } : { js: `((0-(${v.js}))|0)`, type: t };
-      case '~': return { js: `(~(${v.js}))`, type: t };
+      case '~': return { js: fitInt(this.ty, `(~(${v.js}))`, t), type: t };
       case '!': return { js: `((${v.js})===0?1:0)`, type: this.ty.INT };
     }
     throw new EmitError(`unary '${e.op}'`);
@@ -2108,8 +2131,8 @@ export class FunctionEmitter {
       // count on a 32-bit value becomes an ordinary number. Left as a BigInt, `&31` threw
       // "Cannot mix BigInt and other types" out of `(unsigned)a >> 3ULL` (gcc's pr82192.c).
       const sh = `((${coerce(this.ty, b.js, bt, this.ty.INT)})&31)`;
-      if (op === '<<') return { js: `((${A})<<${sh})`, type: t };
-      return { js: T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`, type: t };
+      if (op === '<<') return { js: fitInt(this.ty, `((${A})<<${sh})`, t), type: t };
+      return { js: fitInt(this.ty, T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`, t), type: t };
     }
 
     const c = this.ty.usualArith(at, bt);
@@ -2120,15 +2143,16 @@ export class FunctionEmitter {
     }
     if (is64(c)) return { js: bin64(op, A, B, c), type: c };
     const u = T.isUnsigned(c);
+    const fit = (js) => ({ js: fitInt(this.ty, js, c), type: c });
     switch (op) {
-      case '+': return { js: `((${A})+(${B})|0)`, type: c };
-      case '-': return { js: `((${A})-(${B})|0)`, type: c };
-      case '*': return { js: `Math.imul(${A},${B})`, type: c };
-      case '/': return { js: u ? `((((${A})>>>0)/((${B})>>>0))|0)` : `(((${A})/(${B}))|0)`, type: c };
-      case '%': return { js: u ? `((((${A})>>>0)%((${B})>>>0))|0)` : `(((${A})%(${B}))|0)`, type: c };
-      case '&': return { js: `((${A})&(${B}))`, type: c };
-      case '|': return { js: `((${A})|(${B}))`, type: c };
-      case '^': return { js: `((${A})^(${B}))`, type: c };
+      case '+': return fit(`((${A})+(${B})|0)`);
+      case '-': return fit(`((${A})-(${B})|0)`);
+      case '*': return fit(`Math.imul(${A},${B})`);
+      case '/': return fit(u ? `((((${A})>>>0)/((${B})>>>0))|0)` : `(((${A})/(${B}))|0)`);
+      case '%': return fit(u ? `((((${A})>>>0)%((${B})>>>0))|0)` : `(((${A})%(${B}))|0)`);
+      case '&': return fit(`((${A})&(${B}))`);
+      case '|': return fit(`((${A})|(${B}))`);
+      case '^': return fit(`((${A})^(${B}))`);
     }
     throw new EmitError(`binary '${op}'`);
   }
@@ -2230,7 +2254,7 @@ export class FunctionEmitter {
         return { js: mask64(`((${A})${op}${shb})`, t), type: t };
       }
       const sh = `((${coerce(this.ty, b.js, bt, this.ty.INT)})&31)`;
-      return { js: op === '<<' ? `((${A})<<${sh})` : (T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`), type: t };
+      return { js: fitInt(this.ty, op === '<<' ? `((${A})<<${sh})` : (T.isUnsigned(t) ? `((${A})>>>${sh})` : `((${A})>>${sh})`), t), type: t };
     }
     const c = this.ty.usualArith(at, bt);
     const A = coerce(this.ty, a.js, at, c), B = coerce(this.ty, b.js, bt, c);
@@ -2247,6 +2271,7 @@ export class FunctionEmitter {
       '&': `((${A})&(${B}))`, '|': `((${A})|(${B}))`, '^': `((${A})^(${B}))`,
     };
     if (!(op in table)) throw new EmitError(`compound operator '${op}='`);
+    // Not fitted here: every caller converts the result to the lvalue's type, which truncates it.
     return { js: table[op], type: c };
   }
 

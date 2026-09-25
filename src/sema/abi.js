@@ -74,7 +74,7 @@ export const SCALARS_DOS16 = {
   'codePointer':          { size: 2,  align: 2 },
   'farPointer':           { size: 4,  align: 2 },
   'nearPointer':          { size: 2,  align: 2 },
-  'enum':                 { size: 1,  align: 1, signed: true },
+  'enum':                 { size: 1,  align: 1, signed: true, byRange: true },   // see types.js enumType
 };
 
 /**
