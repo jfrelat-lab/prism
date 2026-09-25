@@ -385,6 +385,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // ...and whether its compiler made plain char signed. Absent means "what the model's oracle
     // measured"; see types.js makeTypes.
     signedChar: c.signedChar,
+    // ...and whether it sized enums as ints (Borland's -b) or by their constants (the model's rule).
+    enums: c.enums,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*

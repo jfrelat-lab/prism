@@ -182,7 +182,7 @@ function replay() {
   }
   console.log(`${bad === 0 ? '  ok ' : ' BAD '} A. dos16m: ${pass}/${g.cases.length} expressions agree with Watcom -mm`);
   for (const f of first) console.log(`       #${f.k} (${f.size} bytes) got ${f.got} want ${f.want}:  ${f.e.slice(0, 150)}`);
-  const b = partB() + partC();
+  const b = partB() + partC() + partD();
   const ok = bad === 0 && b === 0;
   console.log(ok ? '\nintegers are as wide as the model says.' : `\n${bad + b} WRONG`);
   process.exit(ok ? 0 : 1);
@@ -250,6 +250,7 @@ const PART_C = [
   ['(int)(enum d)300', 44, '{200} is an UNSIGNED byte: 300 converts to 44'],
   ['(int)(enum g)200', -56, '{127} is a SIGNED byte: 200 converts to -56'],
   ['(long)(enum e)40000', 40000, '{40000} is unsigned: 40000 stays 40000'],
+  ['((enum e)0 - 1) > 0', 1, '{40000} promotes to unsigned: 0 - 1 is not negative'],
   ['sizeof(struct s1)', 4, 'char + {1000}: the enum aligns to 2'],
   ['sizeof(struct s2)', 3, 'char + {1} + char: no padding'],
   ['sizeof(struct s3)', 6, 'char + {70000}: aligned to 2, not 4'],
@@ -272,6 +273,48 @@ function partC() {
     if (!ok) bad++;
     console.log(`${ok ? '  ok ' : ' BAD '} C. ${why.padEnd(52)} ${got}${ok ? '' : ` (want ${want})`}`);
   });
+  return bad;
+}
+
+/*
+ * D. compile.enums = 'int' -- Borland's -b, its default: an enum is an int whatever its constants.
+ * The evidence is Borland's own output: Hovertank 3-D ships compiler-generated assembly
+ * (IDLIBC.ASM, MEMMGR.ASM), where a dirtype field (constants 0..8) is written with `mov word ptr`
+ * and a boolean global reserves `db 2 dup (?)`. A constant no int can hold is refused by name.
+ */
+const PART_D = [
+  ['sizeof(enum a)', 2, '{1} is two bytes'],
+  ['sizeof(enum c)', 2, '{-1} is two bytes'],
+  ['sizeof(enum d)', 2, '{200} is two bytes'],
+  ['sizeof(struct s1)', 4, 'char + enum: aligned to 2'],
+  ['sizeof(struct s2)', 6, 'char + enum + char'],
+  ['(int)(enum d)300', 300, '300 fits: no byte truncation'],
+  ['((enum e)0 - 1) > 0', 1, '{40000} is an unsigned int'],
+];
+
+function partD() {
+  const decls = PART_C_DECLS.replace('enum i { big = 70000 };', '').replace('struct s3 { char c; enum i e; };', '');
+  const src = `${decls}\n${PART_D.map(([e], i) => `long d${i}(void) { return ${e}; }`).join('\n')}`;
+  const p = compileProgram([{ file: 'd.c', source: src }],
+    { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true, model: 'dos16m', enums: 'int' });
+  const failed = new Map((p.failures ?? []).map((f) => [f.fn, f.message]));
+  let bad = 0;
+  PART_D.forEach(([, want, why], i) => {
+    let got;
+    if (failed.has(`d${i}`)) got = `refused: ${failed.get(`d${i}`)}`;
+    else { try { got = p.F[`d${i}`](); } catch (e) { got = `threw: ${e.message}`; } }
+    const ok = got === want;
+    if (!ok) bad++;
+    console.log(`${ok ? '  ok ' : ' BAD '} D. enums int: ${why.padEnd(42)} ${got}${ok ? '' : ` (want ${want})`}`);
+  });
+  let m = '(compiled)';
+  try {
+    compileProgram([{ file: 'e.c', source: 'enum big { b = 70000L }; int f(void) { return 0; }' }],
+      { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true, model: 'dos16m', enums: 'int' });
+  } catch (e) { m = e.message; }
+  const ok = m.includes('an int cannot hold');
+  if (!ok) bad++;
+  console.log(`${ok ? '  ok ' : ' BAD '} D. enums int: ${'{70000} refused by name'.padEnd(42)} ${m.slice(0, 60)}`);
   return bad;
 }
 

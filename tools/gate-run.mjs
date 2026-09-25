@@ -20,6 +20,24 @@ const C = (name, src) => cases.push({ name, src });
 // A flexible array member filled by the initialiser. The object is then LARGER than its type says,
 // which is the whole point -- and the case that matters is the global defined right after it, which
 // must not land on top of the extra bytes.
+/*
+ * An enum PROMOTES as its own type does: with no negative constant gcc makes it unsigned int, so
+ * `x - 1 < 0` is false and `(x - 1) > 0` true. PRISM promoted every enum to a signed int and printed
+ * "1 0" -- a wrong answer no case here asked about until the 16-bit enum work reached promote().
+ */
+C('enum-promotion', `
+#include <stdio.h>
+enum e { A, B };
+enum n { M = -1, N };
+int main(void)
+{
+    enum e x = A;
+    enum n y = N;
+    printf("%d %d %d %d\\n", x - 1 < 0, (x - 1) > 0, y - 1 < 0, (int)sizeof(x - 1));
+    return 0;
+}
+`);
+
 C('flexible-array-init', `
 #include <stdio.h>
 struct str { int n; char s[]; };

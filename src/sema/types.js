@@ -24,7 +24,7 @@ export const VOID = { k: 'void', name: 'void', size: 1, align: 1 };
  * `long long` is in i386 and NOT in dos16, which is right: Borland's C89 had no such type. It is
  * absent from the object rather than quietly aliased, so asking for it under dos16 raises.
  */
-export function makeTypes(model = 'i386', { signedChar } = {}) {
+export function makeTypes(model = 'i386', { signedChar, enums } = {}) {
   const base = MODELS[model];
   if (!base) throw new Error(`types: unknown ABI model '${model}'`);
   /*
@@ -84,6 +84,19 @@ export function makeTypes(model = 'i386', { signedChar } = {}) {
       const signed = vals.some((v) => v < 0n);
       if (!table.enum.byRange) return { k: 'enum', tag, consts, ...table.enum, signed };
       /*
+       * compile.enums = 'int': Borland's -b, "treat enums as ints", its default -- an enum is an int
+       * whatever its constants, and the one kind of constant an int cannot hold is refused by name
+       * rather than widened. Observed in Hovertank 3-D's compiler-generated IDLIBC.ASM, where
+       * `action.dir` (constants 0..8) is stored with `mov word ptr [bp-6],7` and a `boolean`
+       * global takes `db 2 dup (?)`.
+       */
+      if (enums === 'int') {
+        const lo16 = vals.every((v) => v >= -32768n && v <= 32767n);
+        const hi16 = !signed && vals.every((v) => v <= 65535n);
+        if (!lo16 && !hi16) throw new Error(`enum ${tag ?? '(anonymous)'}: a constant an int cannot hold, with enums int-sized`);
+        return { k: 'enum', tag, consts, size: T.INT.size, align: T.INT.align, signed: lo16 };
+      }
+      /*
        * 16-bit Watcom sizes an enum by its constants: the FIRST of signed char, unsigned char, int,
        * unsigned, long, unsigned long that holds them all, signedness included. Measured with wcc
        * -mm: {1} is a signed byte, {200} an unsigned byte ((enum)300 is 44), {1000} and {-1, 200} are
@@ -96,7 +109,12 @@ export function makeTypes(model = 'i386', { signedChar } = {}) {
       return { k: 'enum', tag, consts, size: fits[0], align: Math.min(fits[0], 2), signed: fits[1] };
     },
     promote: (t) => {
-      if (t.k === 'enum') return T.INT;
+      // An enum promotes as the integer of its own width and signedness: 16-bit Watcom makes
+      // {40000} an unsigned int, and ((enum e)0 - 1) > 0 is then 1 (measured).
+      if (t.k === 'enum') {
+        if (t.size > T.INT.size) return t.signed ? T.LONG : T.ULONG;
+        return t.size < T.INT.size || t.signed ? T.INT : T.UINT;
+      }
       if (!isInteger(t)) return t;
       if (rank(t) >= 3) return t;
       /*
