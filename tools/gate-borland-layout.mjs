@@ -8,7 +8,10 @@
 // every named member; PRISM parses the same probe with the target's options and computes the same
 // numbers. Bar: exact, on every type.
 //
-// CAPTURE ONCE, REPLAY FOREVER: `--capture` needs Borland C++ 3.1 and dosbox-x (see
+// The golden is captured with Borland C++ 2.0, Keen's own compiler (--bc= its directory); 3.1 lays
+// the same 36 types out identically.
+//
+// CAPTURE ONCE, REPLAY FOREVER: `--capture` needs Borland C++ and dosbox-x (see
 // oracle-borland.mjs) and writes goldens/borland-layout.json; a replay needs neither.
 //
 //   node tools/gate-borland-layout.mjs --capture [--bc=/path/to/BC31]

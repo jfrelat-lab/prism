@@ -1,5 +1,5 @@
 {
- "_doc": "Borland C++  Version 3.1 Copyright (c) 1992 Borland International, options -mm -a -K (from goldens/borland-prj.json), compiling a probe that includes Keen Dreams' headers and RUNNING it in DOSBox-X (tools/gate-borland-layout.mjs --capture).",
+ "_doc": "Borland C++  Version 2.0 Copyright (c) 1991 Borland International, options -mm -a -K (from goldens/borland-prj.json), compiling a probe that includes Keen Dreams' headers and RUNNING it in DOSBox-X (tools/gate-borland-layout.mjs --capture).",
  "options": [
   "-mm",
   "-a",

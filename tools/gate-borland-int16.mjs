@@ -2,8 +2,9 @@
 //
 // gate-int16 asks Watcom to fold constants, and Watcom's folder has faults (it promotes unsigned
 // short to a signed int; it loses a narrowing cast inside ?:), so that gate steps round them. This
-// one asks nothing to fold: random expressions over variables of every integer type -- plain char
-// included, which -K makes unsigned -- are compiled by Borland C++ with Keen's options (-mm -a -K,
+// one asks nothing to fold: random expressions over variables of the integer types -- plain char
+// included, which -K makes unsigned -- are compiled by Borland C++ 2.0, Keen's own compiler (the
+// archive.org borland-cpp-2.0-german floppies), with Keen's options (-mm -a -K,
 // goldens/borland-prj.json) and RUN in DOSBox-X (tools/oracle-borland.mjs); PRISM compiles the same
 // expressions with the Keen target's options and runs them. Every result is read back as
 // (unsigned long)((e) + 0).
@@ -22,10 +23,16 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'borland-int16.json');
 const CASES = 600, BATCH = 150;
 
+/*
+ * NO `unsigned short`. Borland C++ 2.0 -- Keen's own compiler, which these goldens are captured from
+ * -- promotes it to a SIGNED int: `us <= i` compiles to cmp + jg, where 3.1 (and C, short and int
+ * being one size) compares unsigned with ja. Keen declares no unsigned short (a scan of its units
+ * under its options finds none), so the type is left out rather than answered from 2.0's rule.
+ */
 const TYPES = [
   { c: 'char', size: 1, signed: false },            // -K
   { c: 'signed char', size: 1, signed: true }, { c: 'unsigned char', size: 1, signed: false },
-  { c: 'short', size: 2, signed: true }, { c: 'unsigned short', size: 2, signed: false },
+  { c: 'short', size: 2, signed: true },
   { c: 'int', size: 2, signed: true }, { c: 'unsigned', size: 2, signed: false },
   { c: 'long', size: 4, signed: true }, { c: 'unsigned long', size: 4, signed: false },
 ];
@@ -66,11 +73,13 @@ function expr(r, leaves, depth) {
   const op = r.pick(['+', '-', '*', '/', '%', '<<', '>>', '&', '|', '^', '<', '>', '<=', '>=', '==', '!=', '&&', '||']);
   if (op === '/' || op === '%') return `(${a} ${op} (((${b}) & 0x7ff) | 1))`;
   if (op === '<<' || op === '>>') return `(${a} ${op} ((${b}) & 15))`;
-  // Borland 3.1 computes & | ^ between two chars of DIFFERENT signedness in 8 bits and zero-extends
-  // the result (`mov al,[a]` / `or al,[b]` / `mov ah,0`), where C promotes each to int first:
-  // (signed char)-127 | (unsigned char)0 is -127, and it gives 129. A defect of the oracle, stepped
-  // round the way gate-int16 steps round Watcom's folder: `+ 0` promotes both, same value in C.
-  if (op === '&' || op === '|' || op === '^') return `((${a}) + 0 ${op} (${b}) + 0)`;
+  // Borland (2.0 and 3.1 alike) works on two chars of DIFFERENT signedness in 8 bits, unsigned,
+  // where C promotes each to int first: & | ^ (`or al,[b]` / `mov ah,0`: (signed char)-127 |
+  // (unsigned char)0 gives 129, not -127) and the comparisons (`cmp al,[b]` / `jbe`:
+  // (unsigned char)127 > (signed char)-1 is false). A defect of the oracle, stepped round the way
+  // gate-int16 steps round Watcom's folder: `+ 0` promotes both operands, the same value in C. Keen
+  // has no such operation (a scan of its units under its options finds none).
+  if (['&', '|', '^', '<', '>', '<=', '>=', '==', '!='].includes(op)) return `((${a}) + 0 ${op} (${b}) + 0)`;
   return `(${a} ${op} ${b})`;
 }
 function makeCases() {
