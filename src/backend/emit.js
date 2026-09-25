@@ -2119,7 +2119,10 @@ export class FunctionEmitter {
     }
     if (at.k === 'ptr' && bt.k === 'ptr' && op === '-') {
       const s = at.to.size ?? 1;
-      return { js: `((((${a.js})-(${b.js}))|0)/${s}|0)`, type: this.ty.INT };
+      // ptrdiff_t: a LONG between huge pointers, whose distance can pass 64K; an int otherwise --
+      // two bytes under a 16-bit model (Watcom -mm: sizeof(hp - hp) 4, fp - fp and np - np 2).
+      const d = (at.qual === 'huge' || bt.qual === 'huge') ? this.ty.LONG : this.ty.INT;
+      return { js: fitInt(this.ty, `((((${a.js})-(${b.js}))|0)/${s}|0)`, d), type: d };
     }
 
     const CMP = { '==': '===', '!=': '!==', '<': '<', '>': '>', '<=': '<=', '>=': '>=' };

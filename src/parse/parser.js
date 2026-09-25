@@ -1451,7 +1451,8 @@ function binType(ty, op, a, b) {
   const segPlus = (p) => (p.model === 'seg' && p.real ? ty.ptr(p.to, 'far') : p);
   if (at.k === 'ptr' && T.isInteger(bt)) return segPlus(at);
   if (bt.k === 'ptr' && T.isInteger(at)) return segPlus(bt);
-  if (at.k === 'ptr' && bt.k === 'ptr') return ty.INT;
+  // ptrdiff_t: long between huge pointers, int otherwise (emit.js #binary does the same).
+  if (at.k === 'ptr' && bt.k === 'ptr') return (at.qual === 'huge' || bt.qual === 'huge') ? ty.LONG : ty.INT;
   if (op === '<<' || op === '>>') return ty.promote(at);
   /*
    * COMPLEX wins: `z * 2.0` is complex, and its parts are computed in the common type of the two

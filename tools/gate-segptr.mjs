@@ -19,7 +19,7 @@
 //   the rest       p - q, ++p, --p, p += n are refused by name: their result would have to become
 //                  a paragraph again, and nothing in the corpus asks for it
 //   elsewhere      under i386 `_seg` still means nothing and is still refused (gate-borland16), and
-//                  `huge` stays refused in every model
+//                  `huge` stays refused there too
 //
 // No compiler oracle speaks _seg -- Watcom has __segment/:> instead and the Borland compiler is not
 // here -- so the semantics are the documented ones and the checks EXECUTE them. run() refuses a
@@ -140,14 +140,13 @@ int a_plain(recptr s)          { return s->a + (s + 1)->a + (s - 1)->a; }
   report(!failed.has('a_plain'), 'dos16m: a_plain (seg + n, seg - n) emits', failed.get('a_plain') ?? 'emits');
 }
 
-// Where _seg has no meaning it keeps its refusal, and huge keeps its own everywhere.
+// Where _seg has no meaning it keeps its refusal; `huge` is gate-huge's.
 {
   const src = 'typedef void _seg *memptr;\ntypedef char huge *hptr;\n'
     + 'int s(memptr m) { return m != 0; }\nint h(void) { hptr q = 0; return q != 0; }\n';
   const i386 = new Map((build(src, 'i386').failures ?? []).map((f) => [f.fn, f.message]));
   report((i386.get('s') ?? '').includes('seg pointer'), 'i386: _seg still refused', i386.get('s')?.slice(0, 50) ?? 'emitted');
   const m16 = new Map((build(src, 'dos16m').failures ?? []).map((f) => [f.fn, f.message]));
-  report((m16.get('h') ?? '').includes('huge pointer'), 'dos16m: huge still refused', m16.get('h')?.slice(0, 50) ?? 'emitted');
   report(!m16.has('s'), 'dos16m: the same _seg function emits', m16.get('s') ?? 'emits');
 }
 

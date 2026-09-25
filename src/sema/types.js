@@ -67,12 +67,18 @@ export function makeTypes(model = 'i386', { signedChar } = {}) {
      * Borland's `_seg`: a pointer that holds only a SEGMENT -- a paragraph number, two bytes -- and
      * names the object at seg*16. Under a 16-bit model that is a real type with a real size, and
      * `real` says so: segModel() no longer reports it, so nothing refuses it for being one. Under i386
-     * it still has no meaning and keeps the flat placeholder, refused as before. `huge` is not done
-     * here and stays refused in every model.
+     * it still has no meaning and keeps the flat placeholder, refused as before.
+     *
+     * `huge` needs nothing new in a 16-bit model: a PRISM far pointer is already a LINEAR address
+     * whose arithmetic never wraps at 64K, which is exactly what Borland's huge pointer is for --
+     * normalised arithmetic across segments, full 32-bit comparison. So it is a far pointer, marked.
+     * (The converse is the known limit: a Borland FAR pointer's arithmetic wraps its offset at 64K,
+     * and PRISM's does not.)
      */
     segPtr: (to, m) => (m === 'seg' && table.nearPointer
       ? { k: 'ptr', to, size: 2, align: 2, signed: false, model: 'seg', real: true }
-      : { ...ptr(to), model: m }),
+      : m === 'huge' && table.farPointer ? { ...ptr(to, 'far'), qual: 'huge' }
+        : { ...ptr(to), model: m }),
     enumType: (tag, consts) => {
       const vals = (consts ?? []).map((c) => BigInt(c.value));
       const signed = vals.some((v) => v < 0n);
