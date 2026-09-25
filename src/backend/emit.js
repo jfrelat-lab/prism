@@ -278,10 +278,11 @@ function coerce(ty, js, from, to) {
  * An integer result, wrapped to its type's width. Only a two-byte type needs it: an i386 int wraps
  * by `|0` already and a smaller type never survives promotion, so i386 emits what it always did.
  *
- * Applied where a result can reach a consumer that does NOT convert it -- a truth test: `(u + 1) ?`
- * with u = 65535 is false, and 65536 is not. Every other consumer converts its operand to its own
- * type first, which is why unary minus (zero only when its operand is) and the compound-assignment
- * arithmetic (always converted to the lvalue's type) need nothing.
+ * Applied to every result that could otherwise leave its width: a truth test reads it unconverted
+ * (`(u + 1) ?` with u = 65535 is false, and 65536 is not), and so does a WIDENING, whose conversion
+ * assumes its source is already in range -- `(long)-us` with an unsigned short of 1 is 65535, and an
+ * unfitted -1 widened to 0xFFFFFFFF (Borland, executed: gate-borland-int16). Only the
+ * compound-assignment arithmetic needs nothing: it is always converted back to the lvalue's type.
  */
 const fitInt = (ty, js, t) => (T.isInteger(t) && !is64(t) && t.size === 2 ? coerce(ty, js, t, t) : js);
 
@@ -2075,7 +2076,7 @@ export class FunctionEmitter {
     }
     switch (e.op) {
       case '+': return { js: V, type: t };
-      case '-': return T.isFloat(t) ? { js: `(-(${v.js}))`, type: t } : { js: `((0-(${v.js}))|0)`, type: t };
+      case '-': return T.isFloat(t) ? { js: `(-(${v.js}))`, type: t } : { js: fitInt(this.ty, `((0-(${v.js}))|0)`, t), type: t };
       case '~': return { js: fitInt(this.ty, `(~(${v.js}))`, t), type: t };
       case '!': return { js: `((${v.js})===0?1:0)`, type: this.ty.INT };
     }

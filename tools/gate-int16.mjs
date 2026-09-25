@@ -212,6 +212,7 @@ const PART_B = [
   ['unsigned u = 0xffff; return (~u) ? 1 : 2;', 2, '~0xFFFF is 0 in 16 bits'],
   ['unsigned u = 0x8000; return (u << 1) ? 1 : 2;', 2, '0x8000 << 1 wraps to 0'],
   ['enum colour { red = 1 } c = 65536L; return c ? 1 : 2;', 2, 'an enum is two bytes: 65536 converts to 0'],
+  ['unsigned short s = 1; long l = -s; return l == 65535L;', 1, '-us is an unsigned int: widening keeps 65535'],
 ];
 
 function partB() {
