@@ -164,7 +164,12 @@ export function finalizeHeap(M) {
    * every symptom pointed at the planar mapping and the mapping was correct throughout.
    */
   M.heapEnd = Math.max(M.heapEnd ?? M.heap, M.heap);
-  M.heapTop = M.mod.stackLimit - 64 * 1024;
+  /*
+   * The heap stops short of the stack by a margin the MODEL sets. 64K is i386's; under dos16m the
+   * stack's own floor is 0xF000, so 64K below it is below the heap's START -- every near malloc
+   * failed and coreleft() had nothing to report. A 16-bit layout says heapMargin: 1K.
+   */
+  M.heapTop = M.mod.stackLimit - (M.mod.layout?.heapMargin ?? 64 * 1024);
 }
 
 
@@ -190,6 +195,9 @@ function makeLibc(M) {
    * is the one property this allocator promises.
    */
   const freeBySize = new Map();   // rounded size -> [addr, ...]
+  // 16-bit layouts only: freed blocks by the address they END at, so a heap giving its top back can
+  // keep going down through neighbours freed earlier (see free).
+  const freedByEnd = new Map();   // end address -> addr
 
   const malloc = (n) => {
     n = (n | 0) >>> 0;
@@ -198,6 +206,7 @@ function makeLibc(M) {
     const pool = freeBySize.get(size);
     if (pool && pool.length) {
       const addr = pool.pop();
+      freedByEnd.delete(addr - 8 + size);
       dv().setUint32(addr - 8, n, true);
       blocks.set(addr, n);
       return addr;
@@ -218,8 +227,28 @@ function makeLibc(M) {
     // rather than guessed at, because a wrong size here would hand out overlapping memory later.
     if (n === undefined) return;
     const size = Math.ceil((n + 8) / 16) * 16;
+    /*
+     * Under a 16-bit layout the TOPMOST block goes back to the frontier, as Borland's heap gives it
+     * back: coreleft() reports the space between the heap's top and the stack, and a program that
+     * frees its last block and asks again must see it. i386 keeps its buckets exactly as before.
+     */
+    const sixteen = M.mod.layout?.heapMargin !== undefined;
+    if (sixteen && p - 8 + size === M.heapEnd) {
+      M.heapEnd -= size;
+      // ...and every block freed earlier that now ends at the top comes back with it.
+      while (freedByEnd.has(M.heapEnd)) {
+        const q = freedByEnd.get(M.heapEnd);
+        freedByEnd.delete(M.heapEnd);
+        const qs = M.heapEnd - (q - 8);
+        const qp = freeBySize.get(qs);
+        qp.splice(qp.indexOf(q), 1);
+        M.heapEnd = q - 8;
+      }
+      return;
+    }
     const pool = freeBySize.get(size);
     if (pool) pool.push(p); else freeBySize.set(size, [p]);
+    if (sixteen) freedByEnd.set(p - 8 + size, p);
   };
 
   const realloc = (p, n) => {

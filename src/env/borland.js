@@ -28,6 +28,8 @@
 // as a VGA is, and pretending one exists would hand the program invented registers. MIRAGE owns
 // real BIOS services; this is the seam they plug into, exactly as ports.js is for ports.
 
+import { DOS_DATE_ADD } from './borland-lib.js';
+
 /** Borland's <dos.h>, in the real-mode shape: far pointers are linear (headers-watcom.js says why). */
 export const BORLAND_DOS_H = `
 #ifndef __PRISM_BORLAND_DOS_H
@@ -62,7 +64,7 @@ void outportb(int portid, unsigned char value);
 
 extern int _argc;
 extern char **_argv;
-
+${DOS_DATE_ADD}
 #endif
 `;
 

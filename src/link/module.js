@@ -45,7 +45,7 @@ export const LAYOUTS = {
    * linker for. Exceeding any of it is refused by name: a 2-byte pointer that wrapped would be a
    * wrong answer, and a silent one.
    */
-  dos16: { space: 0x10000, staticBase: 0x100, stringGap: 2 * 1024, stack: 4 * 1024 },
+  dos16: { space: 0x10000, staticBase: 0x100, stringGap: 2 * 1024, stack: 4 * 1024, heapMargin: 1024 },
   /*
    * The LARGE model: four-byte pointers, and CONVENTIONAL MEMORY. A far pointer here is the linear
    * address seg*16+off, and a real-mode segment tops out at 0xFFFF, so every byte a program can name
@@ -57,7 +57,8 @@ export const LAYOUTS = {
    * The image is the whole first megabyte so the device windows keep their real addresses --
    * MK_FP(0xB800, 0) IS 0xB8000 -- and data runs from 64K up to `dataEnd`, with the stack at its top.
    */
-  dos16l: { space: 0x100000, staticBase: 0x10000, dataEnd: 0xA0000, stringGap: 16 * 1024, stack: 16 * 1024 },
+  dos16l: { space: 0x100000, staticBase: 0x10000, dataEnd: 0xA0000, stringGap: 16 * 1024, stack: 16 * 1024,
+    heapMargin: 1024 },
   /*
    * MEDIUM: near data. A near pointer is an offset in DGROUP, and DGROUP is placed at linear 0, so a
    * near pointer and its linear address are the same number and widening one to far changes nothing
@@ -67,6 +68,7 @@ export const LAYOUTS = {
    * megabyte, so far pointers reach the device windows at their real addresses.
    */
   dos16m: { space: 0x100000, staticBase: 0x1000, dataEnd: 0x10000, stringGap: 2 * 1024, stack: 4 * 1024,
+    heapMargin: 1024,
     // Far data -- objects declared `far` -- from the end of DGROUP up to the video windows.
     farBase: 0x10000, farEnd: 0xA0000 },
 };

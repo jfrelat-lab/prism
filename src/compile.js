@@ -1304,7 +1304,13 @@ export function charDefines(model = 'i386', signedChar) {
  */
 export function modelDefines(model = 'i386', signedChar) {
   const realMode = model === 'dos16' || model === 'dos16m' || model === 'dos16l';
-  return { ...charDefines(model, signedChar), ...(realMode ? { __PRISM_REALMODE__: '1' } : {}) };
+  return {
+    ...charDefines(model, signedChar),
+    ...(realMode ? { __PRISM_REALMODE__: '1' } : {}),
+    // Data pointers are four bytes: the large model. A header that declares a width by model reads it
+    // (Borland's coreleft returns an unsigned long there, an unsigned in small and medium).
+    ...(model === 'dos16l' ? { __PRISM_FARDATA__: '1' } : {}),
+  };
 }
 
 export function builtinHeaderResolver(extra = {}) {
