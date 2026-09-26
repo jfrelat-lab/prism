@@ -21,8 +21,15 @@ const SEEK_SET = 0, SEEK_CUR = 1, SEEK_END = 2;
 
 // Sentinel handles for the three standard streams, and the base for real files. High enough that a
 // FILE* can never be confused with a data pointer in the guest's image.
-const STDIN = 0x7000_0001, STDOUT = 0x7000_0002, STDERR = 0x7000_0003;
-const FIRST = 0x7100_0000;
+const STD32 = { STDIN: 0x7000_0001, STDOUT: 0x7000_0002, STDERR: 0x7000_0003, FIRST: 0x7100_0000 };
+/*
+ * UNDER A 16-BIT MODEL a FILE * is two bytes and an `int` handle sixteen bits, so the tokens above
+ * would be truncated in the program's hands. There a descriptor is numbered as DOS numbers handles --
+ * the lowest free from 5, after stdin/stdout/stderr/stdaux/stdprn -- and the FILE * a program holds is
+ * that same small number, non-null and inside the vector table, where no data object can be. The
+ * standard streams are FILE * 100h, 102h and 104h. src/env/dos.js serves int 21h on these handles.
+ */
+const STD16 = { STDIN: 0x100, STDOUT: 0x102, STDERR: 0x104, FIRST: 5 };
 
 export function installStdio(M, {
   files = {}, readChar = () => -1, env = {},
@@ -111,8 +118,18 @@ export function installStdio(M, {
   const environment = { HOME: '/', USER: 'prism', TMPDIR: '/', PATH: '/bin:/usr/bin', ...env };
   const interned = new Map();
 
+  const small = (M.abi?.ptr ?? 4) === 2;
+  const { STDIN, STDOUT, STDERR, FIRST } = small ? STD16 : STD32;
   const handles = new Map();
   let next = FIRST;
+  // The next descriptor: DOS hands out the lowest free one; i386 keeps counting up, as before.
+  const take = () => {
+    if (!small) return next++;
+    let h = FIRST;
+    while (handles.has(h)) h++;
+    if (h > 0xffff) throw new Error('stdio: out of 16-bit handles');
+    return h;
+  };
 
   const fileOf = (fp) => handles.get(fp | 0) ?? null;
   let tmpSeq = 0;
@@ -192,9 +209,10 @@ export function installStdio(M, {
 
       if (kind === 'r') {
         if (key === null) return 0;                     // NULL: not found, which programs check
-        handles.set(next, { key, bytes: store.get(key), pos: 0,
-                            read: true, write: update, eof: false });
-        return next++;
+        const h = take();
+        handles.set(h, { key, bytes: store.get(key), pos: 0,
+                         read: true, write: update, eof: false });
+        return h;
       }
       // A new file can only be created in a directory that exists.
       if (key === null && !dirExists(norm(name))) return 0;
@@ -202,9 +220,10 @@ export function installStdio(M, {
       const start = kind === 'a' && existing ? existing : new Uint8Array(0);
       const k = key ?? norm(name);
       store.set(k, start);
-      handles.set(next, { key: k, bytes: start, pos: kind === 'a' ? start.length : 0,
-                          read: readable, write: writable, append: kind === 'a', eof: false });
-      return next++;
+      const h = take();
+      handles.set(h, { key: k, bytes: start, pos: kind === 'a' ? start.length : 0,
+                       read: readable, write: writable, append: kind === 'a', eof: false });
+      return h;
     },
 
     fclose: (fp) => {
@@ -591,7 +610,10 @@ export function installStdio(M, {
   api.getwd = (buf) => api.getcwd(buf, 4096);
 
   api.close = (fd) => api.fclose(fd);
-  api.write = (fd, src, n) => { api.fwrite(src, 1, n, fd); return n | 0; };
+  // Descriptors 1 and 2 are stdout and stderr -- under a 16-bit model, where the program's handle
+  // numbers are DOS's; i386 keeps its own numbering untouched.
+  const stdFd = (fd) => (small && (fd | 0) === 1 ? STDOUT : small && (fd | 0) === 2 ? STDERR : fd);
+  api.write = (fd, src, n) => { api.fwrite(src, 1, n, stdFd(fd)); return n | 0; };
   // fd 0 is stdin. It is a distinct number from the FILE* stdin above, and a program that mixes the
   // two -- soundsrv.c reads fd 0 while printing through stderr -- must find both working.
   api.read = (fd, dst, n) => {
@@ -988,7 +1010,7 @@ export function installStdio(M, {
   });
 
   Object.assign(M.rt, api);
-  M.files = { store, find, norm };
+  M.files = { store, find, norm, isOpen: (h) => handles.has(h | 0) };
 
   // The three standard streams are ordinary globals a program can take the address of -- each a
   // FILE *, so two bytes under a 16-bit model: a four-byte store put stderr's high half over the
@@ -1001,4 +1023,4 @@ export function installStdio(M, {
   return M.files;
 }
 
-export const STREAMS = { STDIN, STDOUT, STDERR };
+export const STREAMS = STD32;

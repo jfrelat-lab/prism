@@ -113,7 +113,8 @@ export function installBorland(M, { services = {} } = {}) {
   M.interrupt = (n, regs) => {
     state.calls.push(n);
     if (state.installed.has(n)) { M.icall(vector(n), []); return; }
-    const svc = services[n];
+    // A harness's service, else the machine's own DOS and BIOS (src/env/dos.js), if installed.
+    const svc = services[n] ?? M.pcServices?.[n];
     if (svc) { svc(regs, M); return; }
     throw new Error(`int ${hex(n)}h AH=${hex(regs.ax >>> 8)}h: no service for this interrupt is installed `
       + '(PRISM supplies no BIOS or DOS; pass one in the borland environment\'s `services`)');

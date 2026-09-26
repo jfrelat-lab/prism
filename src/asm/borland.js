@@ -73,6 +73,11 @@ const H8 = [['al', 'ax', 0], ['ah', 'ax', 8], ['bl', 'bx', 0], ['bh', 'bx', 8],
 export const REGISTER_FILE = '{' + [
   ...W16.map((r) => `${r}:0`), 'cf:0', 'zf:0', 'sf:0', 'if:1', 'df:0',
   ...W16.map((r) => `get ${r.toUpperCase()}(){return this.${r}},set ${r.toUpperCase()}(v){this.${r}=v&65535}`),
+  // The flags word Borland's _FLAGS reads (PUSHF): CF, ZF, SF, IF and DF, with bit 1 set. A flag
+  // this machine could not know holds 2, and reading it through the word is refused like any other.
+  'get FLAGS(){if(this.cf>1||this.zf>1||this.sf>1)throw new Error("Borland _FLAGS: a flag whose value is undefined here");'
+    + 'return 2|this.cf|(this.zf<<6)|(this.sf<<7)|(this.if<<9)|(this.df<<10)}',
+  'set FLAGS(v){this.cf=v&1;this.zf=(v>>6)&1;this.sf=(v>>7)&1;this.if=(v>>9)&1;this.df=(v>>10)&1}',
   ...H8.map(([h, r, sh]) => (sh
     ? `get ${h.toUpperCase()}(){return this.${r}>>>8},set ${h.toUpperCase()}(v){this.${r}=(this.${r}&255)|((v&255)<<8)}`
     : `get ${h.toUpperCase()}(){return this.${r}&255},set ${h.toUpperCase()}(v){this.${r}=(this.${r}&65280)|(v&255)}`)),
@@ -673,19 +678,23 @@ class Translator {
 export const PSEUDO = new Map([
   ...['AX', 'BX', 'CX', 'DX', 'SI', 'DI', 'ES', 'DS'].map((r) => [`_${r}`, { acc: r, size: 2 }]),
   ...['AL', 'AH', 'BL', 'BH', 'CL', 'CH', 'DL', 'DH'].map((r) => [`_${r}`, { acc: r, size: 1 }]),
+  ['_FLAGS', { acc: 'FLAGS', size: 2 }],
 ]);
 /** The ones that name something PRISM has no value for. */
 export const PSEUDO_REFUSED = new Map([
   ['_BP', 'Borland\'s frame pointer'], ['_SP', 'the stack pointer'], ['_SS', 'the stack segment'],
-  ['_CS', 'the code segment'], ['_FLAGS', 'the flags word'],
+  ['_CS', 'the code segment'],
 ]);
 
 const UNITS = { ax: ['al', 'ah'], bx: ['bl', 'bh'], cx: ['cl', 'ch'], dx: ['dl', 'dh'],
   si: ['si'], di: ['di'], bp: ['bp'], ds: ['ds'], es: ['es'],
-  al: ['al'], ah: ['ah'], bl: ['bl'], bh: ['bh'], cl: ['cl'], ch: ['ch'], dl: ['dl'], dh: ['dh'] };
-const GENERAL = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'si', 'di', 'bp', 'es'];
+  al: ['al'], ah: ['ah'], bl: ['bl'], bh: ['bh'], cl: ['cl'], ch: ['ch'], dl: ['dl'], dh: ['dh'],
+  // The flags word, as one unit: defined by an interrupt (geninterrupt) or by the program's own
+  // assembly, whose flags this file computes (a flag it cannot know reads as 2 and throws).
+  flags: ['flags'] };
+const GENERAL = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'si', 'di', 'bp', 'es', 'flags'];
 /** What a C call leaves undefined: the registers Borland's code does not preserve across one. */
-const CLOBBERED = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'es'];
+const CLOBBERED = ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'es', 'flags'];
 
 /** Which register units one asm instruction reads and writes. */
 function insEffect(ins) {
@@ -771,6 +780,7 @@ export function firstUndefinedRead(body, { isPseudo }) {
         const { reads, writes } = insEffect(e.ins);
         found = check(reads, `\`${e.ins.text}\``);
         for (const u of writes) written.add(u);
+        written.add('flags');
         if (e.ins.op === 'int') clobberedBy = null;
         return;
       }
