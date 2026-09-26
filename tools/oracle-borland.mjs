@@ -15,8 +15,8 @@
 //   // -> [{ name, compiled, stdout, compileLog }]; a program may carry `args`, its command line
 //
 // Programs are run in one DOSBox-X session per call, in order, so a batch costs one start-up.
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
@@ -36,7 +36,13 @@ export function bccRun(programs, { bc = BC_DEFAULT, options = [], includes = [] 
   for (const p of programs) {
     if (!/^[A-Z0-9_]{1,8}$/.test(p.name)) throw new Error(`oracle-borland: '${p.name}' is not an 8.3 name`);
     writeFileSync(join(work, `${p.name}.C`), p.source.replace(/\r?\n/g, '\r\n'));
-    bat.push(`c:\\bin\\bcc ${options.join(' ')} -I${inc} -LC:\\LIB -e${p.name}.EXE ${p.name}.C > ${p.name}.CL`);
+    // `files`: host files copied beside the program (an assembly module and what it INCLUDEs);
+    // `link`: which of them go on BCC's command line, which assembles them with TASM and links them.
+    for (const f of p.files ?? []) copyFileSync(f, join(work, basename(f).toUpperCase()));
+    // `before`: DOS commands run first -- assembling a module with the options its project used.
+    for (const cmd of p.before ?? []) bat.push(cmd);
+    const extra = (p.link ?? []).map((f) => f.toUpperCase()).join(' ');
+    bat.push(`c:\\bin\\bcc ${options.join(' ')} -I${inc} -LC:\\LIB -e${p.name}.EXE ${p.name}.C ${extra} > ${p.name}.CL`);
     bat.push(`if exist ${p.name}.EXE ${p.name}.EXE${p.args ? ` ${p.args}` : ''} > ${p.name}.OUT`);
   }
   writeFileSync(join(work, 'RUN.BAT'), `${bat.join('\r\n')}\r\n`);

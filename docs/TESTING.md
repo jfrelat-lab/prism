@@ -2982,3 +2982,70 @@ Three of these were vacuous at first and needed the tests changed before they co
 * **The end pointer and the int stored at 32 bits stayed green** because what they overwrote was never
   read again. The object is now the first member of a struct whose second member is a sentinel that
   the program prints.
+
+## Keen Dreams linked whole: its assembly and its resources (`tools/gate-tasm-link.mjs`, `tools/gate-link-scope.mjs`)
+
+The build links two kinds of object that are not C:
+* **the three TASM modules**;
+* **eleven MakeOBJ resources** (`static/*.KDR`). Each is transcribed from `static/make.bat` and
+  `makeobj.c`: mode `c` puts the file's bytes in `_DATA` of DGROUP, and mode `f` in a
+  paragraph-aligned FAR_DATA segment of its own, with a public name at offset 0.
+
+Both reach PRISM as **extern data** (compile.js `externData`). Each is one block, placed near or far
+like the object it stands for, with its publics at their offsets. The blocks are placed *before* the
+C resolves its externs, so `extern int px;` names the assembly's px rather than getting zeroed storage
+of its own. A module is one block, not one allocation per name, because the assembly walks its own
+tables across its labels. After compilation, `src/asm/tasm-link.js` loads each module's images and
+binds each public PROC as a C function using Borland's calling convention:
+* arguments right to left on PRISM's own stack (DGROUP at 0, so SS = DS = 0);
+* a far pointer laid down as offset then segment;
+* a far return address to a code segment no module uses;
+* the result taken from AX or DX:AX.
+
+**The oracle is Borland's own link.** `tests/tasm-link/link.c` calls Keen's `id_us_a.asm` and
+`id_vw_a.asm`. Borland C++ 2.0 builds it: the modules are assembled with `tasm /mx`, as the project
+does (bcc's own call to TASM passes `/ml`, under which id_vw_a.asm does not assemble), then linked and
+run. PRISM builds the same C with the same modules. The test covers:
+* an int result;
+* a far string argument above 64K;
+* two four-argument routines working on a "screen" in ordinary memory (screenseg is the C's to set);
+* the assembly's px, py, fontcolor and bufferwidth, read and written from C.
+
+Seven lines, identical. 5 mutations, all red. Two were green at first, because the test could not see
+what they broke:
+* a far pointer passed as its linear address is the same address below 64K, so a far string above
+  64K was added;
+* a reversed argument order is invisible with one-argument routines, so two four-argument routines
+  were added.
+
+### Found on the way, each a compiler defect before it was a Keen problem (gate-link-scope)
+
+* **A unit's own function lost to a foreign array.** lzhuf.c has `static void update(int c)`, and
+  id_rf.c defines `byte update[2][UPDATESIZE]`, which lzhuf.c never declares. The program-wide globals
+  map made `update(c)` in DecodeChar a call through the array. It surfaced as "Cannot read properties
+  of undefined (reading 'k')". That error had been listed among Keen's refusals since "Keen Dreams
+  builds whole", whose count of five deliberate refusals was therefore wrong: there were six, and one
+  was a crash.
+* **A block-scope `extern` could not reach an object file's public.** USL_CtlHButtonCustom declares
+  `extern char far gametext` inside the block that uses it. It now resolves to the linked symbol.
+
+### What sharing linear 0 costs DGROUP
+
+Under dos16m, DGROUP sits at linear 0, so it also holds real mode's own low memory: the vector table
+and the BIOS data area, which Keen reads through `peek(0x40,...)`. Keen's DGROUP is 59,770 bytes of
+statics, and it needs 1K of near heap (`SAVENEARHEAP`, below which MM_Startup's length underflows) with
+its stack. That fitted Borland's 64K, and did not fit PRISM's layout (statics from 1000h, a 4K stack,
+a 2K string gap, a 1K heap margin). The layout is now:
+* statics from 500h, just above the BIOS data area;
+* a 2K stack;
+* a 512-byte string gap;
+* a 256-byte margin between heap and stack.
+
+The stack is smaller than Borland's because PRISM keeps most locals in JS variables. A 16-bit frame
+now checks its floor, so running out is an error by name rather than a write into the heap.
+
+With it, every Keen unit compiles, and the 17 routines the C calls are bound. The four refusals left
+are deliberate. `main` runs until MM_Startup reaches MML_CheckForEMS, whose `mov dx,OFFSET emmname`
+names a local. Borland 2.0 was asked what that means, and it runs as **DX = 65526**, the local's
+displacement from BP (−10), **not its address (65508)**. So the real game asked DOS to open whatever
+name lay at DS:FFF6.

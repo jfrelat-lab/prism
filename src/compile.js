@@ -852,7 +852,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, ppSizeof = null, paged = false, exports: moduleExports = {}, extraBuiltins = null } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, ppSizeof = null, paged = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -1081,6 +1081,26 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
    * Each unit's own declarations of objects it does not define: same address, its own type. Done
    * after `visible`, because that is when every definition has an address to point at.
    */
+  /*
+   * DATA OTHER OBJECT FILES DEFINE: an assembly module's _DATA, a MakeOBJ'd resource, an assembly
+   * module's code segment. Each is ONE block, placed near (DGROUP) or far like the object it stands
+   * for, with its public names at their offsets -- one block and not one allocation per name,
+   * because the assembly walks its own tables across its labels. Placed before the C's extern
+   * declarations are resolved, so `extern int px;` finds the assembly's px rather than getting
+   * zeroed storage of its own.
+   */
+  const externPlaced = new Map();       // block name -> linear base
+  const externNames = new Set();
+  for (const b of externData) {
+    const base = b.far ? mod.allocFar(b.size, b.align ?? 16) : mod.alloc(b.size, b.align ?? 2);
+    if (b.bytes) mod.u8.set(b.bytes, base);
+    externPlaced.set(b.name, base);
+    for (const pub of b.publics ?? []) {
+      if (mod.symbols.has(pub.name)) throw new CompileError(`${b.name}: '${pub.name}' is also defined in C`);
+      mod.symbols.set(pub.name, { name: pub.name, addr: base + pub.offset, size: 0, type: null, kind: 'var' });
+      externNames.add(pub.name);
+    }
+  }
   const undefinedData = new Map();      // extern variables nobody defines
   for (const p of parsed) {
     const seen = visible.get(p.module ?? MAIN);
@@ -1120,6 +1140,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       // existing entry when the name is already taken, so the sharing is free.
       const sym = mod.defineGlobal(d.name, d.type);
       p.globals.set(d.name, { addr: sym.addr, type: d.type });
+      if (externNames.has(d.name)) continue;
       if (!undefinedData.has(d.name)) undefinedData.set(d.name, new Set());
       undefinedData.get(d.name).add(basename(p.file));
     }
@@ -1139,6 +1160,14 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       funcs: overlay(seen.funcs, p.funcs),
       builtins: envTable,
     };
+    /*
+     * A unit's own declaration of a name wins over ANOTHER KIND of thing by that name elsewhere.
+     * Keen Dreams' lzhuf.c has `static void update(int c)` and id_rf.c a global
+     * `byte update[2][UPDATESIZE]` that lzhuf.c never declares; the program-wide globals map made
+     * `update(c)` in DecodeChar a call through the array.
+     */
+    for (const name of p.funcs.keys()) if (!p.globals.has(name)) ctx.globals.delete(name);
+    for (const name of p.globals.keys()) if (!p.funcs.has(name)) ctx.funcs.delete(name);
     for (const d of p.unit.decls) {
       if (d.n === 'vardecl') {
         if (!d.init) continue;
@@ -1229,8 +1258,11 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
      function fail differently -- one reads as zero, the other throws when called. */
   const undefinedVars = [...undefinedData].map(([name, units]) => ({ name, units: [...units].sort() }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  // The declared type of every function the main module knows, defined or not: what a binding for
+  // a function another object file defines needs, to lay its arguments out as the C pushes them.
+  const funcTypes = new Map([...perModule.get(MAIN).funcs].map(([n, f]) => [n, f.type]));
   return { M, F, src, mod, failures, duplicates, undefined: undefined_, undefinedVars,
-           run: makeRunner(M, F, mod, model) };
+           externPlaced, funcTypes, run: makeRunner(M, F, mod, model) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */

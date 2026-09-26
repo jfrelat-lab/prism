@@ -503,6 +503,9 @@ export class FunctionEmitter {
       ? `var _fp=(M.sp-${this.frameSize})&${~(this.frameAlign - 1)}|0;`
       : `var _fp=M.sp-${this.frameSize}|0;`);
     if (this.frameSize) body.push(`M.sp=_fp;`);
+    // Under a 16-bit model the stack is a few kilobytes of DGROUP with the near heap right below it:
+    // running past its floor would write the heap, silently. i386's megabyte is left unchecked.
+    if (this.frameSize && this.ty.INT.size === 2) body.push(`if(_fp<${this.mod.stackLimit})M.stackOverflow(_fp);`);
     if (this.usesRegs) body.push(REGISTER_DECLS);
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
@@ -635,6 +638,11 @@ export class FunctionEmitter {
       if (g) { this.locals.set(d.name, { kind: 'global', addr: g.addr, type: g.type }); return; }
       const f = this.ctx.funcs.get(d.name);
       if (f) { this.locals.set(d.name, { kind: 'global', addr: f.addr, type: f.type }); return; }
+      // ...or to an object another OBJECT FILE defines -- an assembly module's public, a MakeOBJ
+      // resource -- which no C unit declares at file scope: Keen Dreams' USL_CtlHButtonCustom
+      // declares `extern char far gametext` inside the block that uses it.
+      const linked = this.mod.symbols.get(d.name);
+      if (linked?.kind === 'var') { this.locals.set(d.name, { kind: 'global', addr: linked.addr, type: d.type }); return; }
       // Nothing to bind to: leave the name unresolved so a use reports it rather than reading a
       // silently invented object.
       return;

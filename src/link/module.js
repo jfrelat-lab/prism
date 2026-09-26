@@ -67,8 +67,18 @@ export const LAYOUTS = {
    * 0x10000, and running over is refused by name rather than truncated. The image is still the first
    * megabyte, so far pointers reach the device windows at their real addresses.
    */
-  dos16m: { space: 0x100000, staticBase: 0x1000, dataEnd: 0x10000, stringGap: 2 * 1024, stack: 4 * 1024,
-    heapMargin: 1024,
+  /*
+   * THE BUDGET IS BORLAND'S, less what sharing linear 0 costs. DGROUP here also holds real mode's
+   * own low memory -- the vector table (0-3FFh, getvect/setvect) and the BIOS data area (400h-4FFh,
+   * which Keen Dreams reads through peek(0x40,...)) -- which a real DGROUP does not, so statics start
+   * at 500h and everything above is trimmed to fit what Borland fitted: Keen's DGROUP is 59,770
+   * bytes of statics and needs 1K of near heap (SAVENEARHEAP) with its stack. The stack is 2K rather
+   * than Borland's 4K because PRISM keeps most locals in JS variables, and a 16-bit frame checks
+   * its floor (emit.js), so running out is an error by name; the string gap is 512 bytes and the
+   * heap stops 256 below the stack.
+   */
+  dos16m: { space: 0x100000, staticBase: 0x500, dataEnd: 0x10000, stringGap: 512, stack: 2 * 1024,
+    heapMargin: 256,
     // Far data -- objects declared `far` -- from the end of DGROUP up to the video windows.
     farBase: 0x10000, farEnd: 0xA0000 },
 };

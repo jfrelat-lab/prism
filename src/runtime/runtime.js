@@ -153,6 +153,9 @@ export function makeMachine(mod = new Module()) {
   M.storeInt = (a, v) => { if (M.abi.int === 2) M.mod.dv.setInt16(a, v, true); else M.mod.dv.setInt32(a, v | 0, true); };
   /** A reader over a caller-packed variadic buffer, at the model's widths. */
   M.va = (p) => vaReader(M, p);
+  M.stackOverflow = (fp) => {
+    throw new Trap(`stack overflow: a frame at ${fp} is below the ${M.mod.model} stack's floor at ${M.mod.stackLimit}`);
+  };
   M.rt = makeLibc(M);
   return M;
 }

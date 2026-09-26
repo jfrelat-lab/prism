@@ -21,6 +21,7 @@ import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
 import { installAsm } from './asm/link.js';
+import { tasmModules, tasmExternData, installTasm } from './asm/tasm-link.js';
 
 /**
  * @typedef {object} Target
@@ -365,7 +366,27 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const c = { ...(target.compile ?? {}), ...overrides };
   // What each extra module makes visible to the main one, from the program's own .def file.
   const moduleExports = moduleExportsOf(target, dir);
+  /*
+   * OTHER OBJECT FILES THE BUILD LINKS, placed before the C is emitted so its externs resolve to
+   * them: Turbo Assembler modules (`tasm`, see src/asm/tasm-link.js) and MakeOBJ resources
+   * (`dataObjects`: a file's bytes as one object, near in DGROUP or in a far segment of its own, with
+   * a public name at its start -- what static/makeobj.c's `c` and `f` modes write).
+   */
+  const names = existsSync(dir) ? readdirSync(dir) : [];
+  const readIn = (name) => {
+    const f = names.find((x) => x.toLowerCase() === String(name).toLowerCase());
+    return f ? readFileSync(join(dir, f), 'latin1') : null;
+  };
+  const tasm = tasmModules(target.tasm ?? [], readIn);
+  const externData = [
+    ...tasmExternData(tasm),
+    ...(target.dataObjects ?? []).map((o) => {
+      const bytes = new Uint8Array(readFileSync(join(dir, o.file)));
+      return { name: o.file, bytes, size: bytes.length, far: !!o.far, align: o.far ? 16 : 2, publics: [{ name: o.symbol, offset: 0 }] };
+    }),
+  ];
   const program = compileProgram(units, {
+    externData,
     exports: moduleExports,
     defines: target.defines ?? {},
     // The environments' own headers, which override the global table for the names they claim --
@@ -426,6 +447,12 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
    *
    * After buildEnv, because a routine that does `out` needs the port seam to exist.
    */
+  const tasmBound = tasm.length ? installTasm(program, tasm) : [];
+  // What the modules supplied is no longer missing: the report was made before they were bound.
+  if (tasmBound.length) {
+    const got = new Set(tasmBound.map((b) => b.name));
+    program.undefined = program.undefined.filter((u) => !got.has(u.name));
+  }
   const asmBound = target.asmTranslate?.length
     ? installAsm(program, {
       sources: target.asmTranslate.map(f => ({ file: f, text: readFileSync(join(dir, f), 'latin1') })),
@@ -445,6 +472,6 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   }
   return {
     program, env, units, dir, asm, asmExports, asmWanted, missingHeaders: [...missing], dosPaths: [...dosPaths], casePaths: [...casePaths],
-    win32Exports, asmBound,
+    win32Exports, asmBound, tasmBound,
   };
 }

@@ -1,0 +1,4 @@
+{
+ "_doc": "Borland C++  Version 2.0 Copyright (c) 1991 Borland International, -mm -a -K: tests/tasm-link/link.c with Keen Dreams' id_us_a.asm and id_vw_a.asm, assembled by its TASM, linked and RUN in DOSBox-X (tools/gate-tasm-link.mjs --capture).",
+ "stdout": "8 109 220 222 241 149 107 75 248 254 140 16 \nbefore px 13 py 20 drawmode 24 color 15\nafter px 130 width 15 height 6\nafter px 212 width 2 height 6 color 3\nfar px 54 width 7 seg-above-64K 1\nmemtoscreen 15 40 45 34061\nscreentomem 15 45 5432\n"
+}
