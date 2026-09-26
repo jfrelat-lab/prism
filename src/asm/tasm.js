@@ -3,12 +3,12 @@
 // It reads the source the way TASM 2.x does and produces a MODULE: the data segment as bytes (with
 // the positions that hold addresses), the code segment as an ordered stream of labels, instructions
 // and data, the procedures with their arguments, and the public and external names. It does not
-// encode instructions -- PRISM translates them (src/asm/borland.js's semantics) rather than running
-// machine code -- so the code segment carries no byte offsets, and nothing downstream may need one.
+// encode instructions: the code segment is tokens, and src/asm/tasm16.js gives each one the offset
+// and length TASM gives it, then translates it.
 //
 // COVERED, because Keen's four files use it, and nothing beyond it: IDEAL and MASM modes; INCLUDE;
 // `=` and EQU, numeric and textual; IF/IFE/IFDEF/IFNDEF/ELSE/ENDIF; MACRO/ENDM in both spellings, with
-// parameters; REPT; @@ local labels; MODEL; DATASEG/CODESEG; ASSUME (recorded, not needed); PROC/ENDP
+// parameters; REPT; @@ local labels; MODEL; DATASEG/CODESEG; ASSUME (stamped on each instruction: it decides TASM's override prefixes); PROC/ENDP
 // with named arguments and USES, whose prologue and epilogue are generated as TASM generates them
 // (PUSH BP / MOV BP,SP / PUSH uses ... POP uses / POP BP / RET); DB/DW/DD with DUP, `?`, strings and
 // label references; STRUC/ENDS and instances; LABEL; EVEN; PUBLIC; EXTRN. Anything else is REFUSED
@@ -93,6 +93,8 @@ export function assembleTasm(file, { read }) {
     data: { bytes: [], labels: new Map(), fixups: [] },     // DATASEG, in DGROUP
     code: { items: [], labels: new Map(), bytes: [], fixups: [] }, // CODESEG: stream + its data area
     procs: [],
+    // What each segment register is assumed to hold: 'code', 'data' (DGROUP) or null. An instruction
+    // carries the assumptions in force where it stands, because they decide TASM's override prefixes.
     assume: {},
   };
   const macros = new Map();           // lowercased name -> { params: [], body: [lines] }
@@ -287,7 +289,7 @@ export function assembleTasm(file, { read }) {
           if (s.fields.has(n)) {
             // `x.field` is x plus the field's offset.
             if (isP(t2.at(-1), '.')) t2[t2.length - 1] = { k: 'punct', v: '+' };
-            t2.push({ k: 'num', v: String(s.fields.get(n).offset), field: t.v });
+            t2.push({ k: 'num', v: String(s.fields.get(n).offset), field: t.v, fieldSize: s.fields.get(n).size });
             return;
           }
         }
@@ -330,7 +332,7 @@ export function assembleTasm(file, { read }) {
       next = `$next#${mod.code.items.length}`;
       t2.splice(1, 3, { k: 'id', v: next });
     }
-    mod.code.items.push({ kind: 'ins', toks: t2, where, generated, proc: proc?.name ?? null });
+    mod.code.items.push({ kind: 'ins', toks: t2, where, generated, proc: proc?.name ?? null, assume: mod.assume });
     if (next) {
       mod.code.labels.set(next, { name: next, seg, type: 'near', offset: mod.code.bytes.length, index: mod.code.items.length });
       mod.code.items.push({ kind: 'label', name: next, where, dataOffset: mod.code.bytes.length });
@@ -465,7 +467,11 @@ export function assembleTasm(file, { read }) {
     // Mode and model.
     if (f === 'ideal') { mod.mode = 'ideal'; return; }
     if (f === 'masm') { mod.mode = 'masm'; return; }
-    if (f === 'model') { mod.model = toks.slice(1).filter((t) => t.k === 'id').map((t) => t.v.toLowerCase()); return; }
+    if (f === 'model') {
+      mod.model = toks.slice(1).filter((t) => t.k === 'id').map((t) => t.v.toLowerCase());
+      mod.assume = { cs: 'code', ds: 'data', ss: 'data', es: null };
+      return;
+    }
     if (f === 'include') {
       const name = toks[1]?.v;
       const text = read(name);
@@ -476,7 +482,14 @@ export function assembleTasm(file, { read }) {
     if (f === 'dataseg') { seg = 'data'; return; }
     if (f === 'codeseg') { seg = 'code'; return; }
     if (f === 'assume') {
-      for (let k = 1; k < toks.length; k++) if (isP(toks[k], ':')) mod.assume[lc(toks[k - 1])] = toks[k + 1]?.v;
+      const next = { ...mod.assume };
+      for (let k = 1; k < toks.length; k++) {
+        if (!isP(toks[k], ':')) continue;
+        const v = lc(toks[k + 1]);
+        next[lc(toks[k - 1])] = v === 'nothing' ? null : /^@code$|_text$/.test(v) ? 'code'
+          : /^(@data|dgroup|_data)$/.test(v) ? 'data' : fail(where, `ASSUME of '${toks[k + 1]?.v}'`);
+      }
+      mod.assume = next;
       return;
     }
     if (f === 'end') return;

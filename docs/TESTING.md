@@ -2840,3 +2840,84 @@ The macro-parameter mutation was **green** until jump destinations were compared
 place a parameter is used, and a destination compared as just "a target" cannot tell `mask1E` from
 `addr`. The EVEN mutation was green until the code-segment data was compared, because nothing looked at
 those bytes, and phase 2 will read them.
+
+## Keen's assembly, translated and executed against TASM's object code (`tools/gate-tasm-run.mjs`)
+
+`src/asm/tasm16.js` turns a module from the front end into JavaScript that runs it as the 8086 runs
+TASM's bytes. It does this in two steps.
+
+**Layout first.** Every instruction gets the offset and length TASM gives it. That means TASM's
+choices, not just any valid encoding:
+* a forward `jmp` is three bytes, because TASM sizes it in one pass;
+* `mov ax,[x]` takes the accumulator's short form;
+* `lea r,[x]` is assembled as `mov r,OFFSET x`;
+* a code-segment variable read under ASSUME DS:DGROUP costs the CS: prefix TASM adds on its own;
+* a structure field carries its declared size.
+
+This matters because the program can see code addresses. It keeps jump tables of code labels
+(`jmp [ss:memtoscreentable+di]`), stores a routine's address in a variable
+(`mov [routinetouse],OFFSET generalmask`), keeps data in its code segment and pushes real return
+addresses. gate-tasm-front holds all 2001 offsets, lengths and segment registers to TASM's listing and
+bytes.
+
+**Then the machine.** The registers, flags and SS:SP are real, and so are CALL, RET and RETF. A
+routine returns to whatever address is on the stack, and a far return that leaves the code segment
+hands control back to the caller. The code is split into one function per procedure, dispatched by
+real code offset, because a single switch over a whole module is too large for V8 to optimise. The
+flags are lazy: an operation records its kind, operands and result, and a flag is computed only when
+something reads it. All six arithmetic flags exist, because PUSHF can expose any of them.
+
+**The oracle is TASM's own object code, executed.** `--capture` assembles the three modules with TASM
+2.5 in DOSBox-X and relocates the .OBJ files with `tools/omf.mjs` linkOmf, using a fixed placement:
+DGROUP at 1000h, the code at 3000h and far data from 4000h. It then runs each case under Unicorn
+(`tools/oracle/unicorn-tasm.py`).
+
+Each case sets up a world the routine can be called in:
+* EGA memory, with a 64-byte line;
+* `ylookup` and `blockstarts` computed the way the C computes them;
+* map planes holding tile numbers the graphics can actually index;
+* update matrices ending in their UPDATETERMINATE;
+* a font whose characters are 1 to 24 pixels wide (width 0 would index `shiftdrawtable`'s 0, a jump
+  to offset 0);
+* the C arguments, with a far return address under them.
+
+Ports and interrupts answer by one rule on both sides: seeded values, or echo the last write so that
+a 6845 can be found, and an XOR on AX/BX for INT.
+
+The replay needs neither DOSBox nor Unicorn, because the golden also carries the linked segments. It
+first checks that PRISM's loader produces memory **byte-identical** to the linked object, which proves
+that addresses resolve the way the linker resolves them. It then requires the same registers, the same
+flags, all 272 pages of memory and the same sequence of port writes.
+
+Result:
+* **Part A:** every public routine of the three modules, 182 calls, all identical.
+* **Coverage:** 1,994 of 2,001 instructions executed. The report names the 7 never reached; all are
+  rare adapter-detection branches in VW_VideoID.
+* **Part B** (`flags.asm`, generated, then assembled by TASM): every ALU, shift and rotate form, at 8
+  and 16 bits, by 1 and by CL, ending in PUSHF/POP DI so that the whole flags word is compared.
+  840 calls, all identical, including a code-segment variable read and written without an override under
+  ASSUME DS:DGROUP, with DS elsewhere.
+
+### What it found
+
+* **The EVEN pad is executed.** When control falls into an EVEN-aligned label, it runs through
+  the NOP TASM placed there. The translator had treated the pad as the end of the flow. Found in
+  `VW_DrawPropString`, whose `shift1wide` falls into `@@loop1`.
+* **Three flag rules, found by part B.** NEG's AF is that of `0 - a`, not `a - a`. For SHR by more
+  than 1, OF is `msb((a >> (c-1)) ^ (a >> c))`. For RCL/RCR, OF is `msb(old ^ new)`. The 8086 defines
+  OF for a count of 1 only, and the translator follows the reference machine beyond that.
+
+### Mutations
+
+27 mutations of the translator and layout were run against both gates, and 25 go red. Two stay
+green, and why each does is part of the result:
+* **The EVEN pad treated as the end of the flow** is an equivalent mutant. The rule that lets a call
+  return onto a pad also makes the pad an entry point, so behaviour is unchanged.
+* **A word read at offset FFFFh not wrapped** cannot be settled here. No case reaches that offset, and
+  Unicorn cannot answer it anyway: a 386 in real mode faults where the 8086 wraps.
+
+Part B exists because of the mutations. ADD's carry, INC keeping CF, RCL's carry, SAR read as SHR
+and CLI all stayed green against the Keen routines alone, because Keen never reads those flags back.
+The automatic CS: override stayed green too: no Keen instruction reaches a code-segment variable
+without an explicit override while DS is not CS. Part B now does, and gate-tasm-front checks the
+segment register of every memory operand against TASM's bytes.

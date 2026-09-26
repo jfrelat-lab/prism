@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { layoutTasm } from '../src/asm/tasm16.js';
 import { assembleTasm } from '../src/asm/tasm.js';
 import { parseOperand, splitOperands } from '../src/asm/borland.js';
 
@@ -264,7 +265,7 @@ async function capture() {
           end = x.off + x.bytes.length;
         });
         if (code.size > end) codeGaps.push({ before: ins.length, off: end, hex: hex(end, code.size) });
-        return { mnemonics: ins.map((x) => x.m), ins: ins.map((x, j) => ({ fix: x.fix, dis: dis[j], to: to(dis[j], x.fix, j) })), codeGaps };
+        return { mnemonics: ins.map((x) => x.m), ins: ins.map((x, j) => ({ fix: x.fix, dis: dis[j], to: to(dis[j], x.fix, j), off: x.off, len: x.bytes.length })), codeGaps, codeSize: code.size };
       })(),
     };
   });
@@ -347,6 +348,31 @@ for (const f of FILES) {
       }
       if (hex !== g.hex) { gapWrong++; gapFirst ??= `before instruction #${k} (${ins[k]?.where ?? 'the end'}): ${hex.slice(0, 24)} vs ${g.hex.slice(0, 24)}`; }
     }
+    // Every instruction at TASM's offset, with TASM's length: src/asm/tasm16.js's layout.
+    let lay = null, layErr = null;
+    try { lay = layoutTasm(m); } catch (e) { layErr = e.message; }
+    let offWrong = 0, offFirst = layErr;
+    if (lay) {
+      lay.ins.forEach((x, k) => {
+        const w = want.ins[k];
+        if (x.off !== w.off || x.len !== w.len) {
+          offWrong++;
+          if (process.env.ALL) console.log(`    ${x.where}: at ${x.off} len ${x.len} vs ${w.off} len ${w.len}  ${w.dis}`);
+          offFirst ??= `${x.where}: at ${x.off} length ${x.len}, TASM ${w.off} length ${w.len} (${w.dis})`;
+        }
+      });
+      // ...and every memory operand through the segment register TASM's bytes use: a prefix it wrote
+      // (explicit, or the CS: it adds for a code-segment variable under ASSUME DS:DGROUP), else the
+      // default for the address (SS through BP, DS otherwise).
+      lay.ins.forEach((x, k) => {
+        const m = /\[(?:(cs|ds|es|ss):)?([^\]]*)\]/.exec(want.ins[k].dis);
+        if (!x.seg || !m || x.op === 'lea') return;
+        const theirs = m[1] ?? (/\bbp\b/.test(m[2]) ? 'ss' : 'ds');
+        if (theirs !== x.seg) { offWrong++; offFirst ??= `${x.where}: through ${x.seg}, TASM through ${theirs} (${want.ins[k].dis})`; }
+      });
+      if (lay.size !== want.codeSize) { offWrong++; offFirst ??= `code segment ${lay.size} bytes, TASM ${want.codeSize}`; }
+    }
+    report(lay && !offWrong, `${f}: the offset, length and segment of every instruction`, offFirst ? `${offWrong} differ; first ${offFirst}` : '');
     report(!gapWrong, `${f}: the ${want.codeGaps.length} runs of data and padding among the instructions`, gapWrong ? `${gapWrong} differ; first ${gapFirst}` : '');
   }
 }
