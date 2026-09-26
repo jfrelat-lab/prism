@@ -2921,3 +2921,64 @@ and CLI all stayed green against the Keen routines alone, because Keen never rea
 The automatic CS: override stayed green too: no Keen instruction reaches a code-segment variable
 without an explicit override while DS is not CS. Part B now does, and gate-tasm-front checks the
 segment register of every memory operand against TASM's bytes.
+
+## run() under a 16-bit model, held to Borland C++ running the same programs (`tools/gate-dos16-run.mjs`)
+
+run() used to refuse every model except i386, and the reason was written in its own body: argv was
+built from 4-byte pointers by hand. Opening it meant sizing by the model every place where the
+runtime reads or writes an object the program owns.
+* **argv** holds data pointers: two bytes in dos16m, four (linear far) in dos16l.
+* **Variadic arguments** are packed in int-sized slots. On i386 that is four bytes, as before. Under a
+  16-bit model it is one 8086 stack word: an int takes 2 bytes, a long 4, a near pointer 2 and a
+  double 8, exactly as Borland's caller pushes them.
+* **The printf family** under a 16-bit model reads that packed buffer rather than a JS array. Each
+  conversion reads its own width: `%d` reads 2 bytes, `%ld` 4, `%s` a data pointer, and `%u` of −1
+  is 65535.
+* **The runtime's stores** go through `M.storePtr` and `M.storeInt`: strtol/strtod's end pointer,
+  frexp's exponent, localeconv, the va_list walk, and the three standard streams.
+
+What still assumes i386 refuses by name where it lives: struct stat, struct tm and fd_set in stdio,
+mktime and strftime, and printf's `%p`. The last is refused because Borland prints SSSS:OOOO, which
+PRISM's addresses do not model.
+
+**The oracle is Borland C++ 2.0, Keen's compiler, run with Keen's options** (`-mm -a -K`, from its
+.PRJ). It compiles each program in `tests/dos16/`, runs it in DOSBox-X and records what it prints.
+PRISM builds the same source exactly as it builds Keen (targets/keendreams.json: env stdio+borland,
+dos16m), calls run() with the same command line DOS gives (`D:\LIB.EXE one TWO 3`), and must print
+the same bytes. There are five programs:
+* `fmt.c`: printf at every width, flag and modifier;
+* `vararg.c`: the program's own va_arg at int, long, double and pointer, and vsprintf handed a va_list;
+* `lib.c`: argv, strtol/strtoul, setjmp/longjmp, qsort and bsearch, the heap, sprintf, strings, and
+  the pointer and int the library writes through, each followed by a sentinel;
+* `lang.c`: structs by value, recursion, a static table of far function pointers, long arithmetic,
+  wrap-around;
+* `far.c`: farmalloc, far pointers, _fmemcpy, a far static.
+
+All five agree.
+
+### What it found
+
+* **stderr overwrote the next variable.** stdio stored `stdin`, `stdout` and `stderr` as four-byte
+  ints, but they are `FILE *`, two bytes under dos16m. stderr's high half, zero, landed on the first
+  two bytes of whatever the linker placed after it. In `lang.c` that was the table
+  `ops[] = { twice, neg }`, and the first call through it went to function index 0x7000. Keen would
+  have met it the same way, silently, in whatever variable followed stderr.
+* **bsearch did not exist.** It was declared nowhere and had no runtime entry. It is added, and its
+  prototype in the shared stdlib.h shifts every i386 program's function-table indices by one. Doom,
+  Quake and MAME emit the same code with those numbers masked. Their emitted-JS hashes change for
+  that reason and no other: doom aaff6733bf6ffbb1, quake 87f7a01061e5030b, mame05 a35490bc1d9ca6f3.
+
+### Mutations, all red (12)
+
+argv strided by four, va_arg stepping by four, varargs packed by four, printf ints at 32 bits,
+`%d` reading a long, `%s` reading four bytes, the standard streams stored as int32, strtol's end
+pointer stored as int32, the printf family handed a JS array under 16 bits, bsearch searching the
+wrong half, `%u` of an int at 32 bits, and an int stored as 32 bits.
+
+Three of these were vacuous at first and needed the tests changed before they could go red:
+* **argv strided by four stayed green** while the only argument was argv[0]. With one argument,
+  `argv[argc]` falls on the high half of the first pointer, which is zero, so it passed either way.
+  The programs now take a command line, and the oracle passes it (`bccRun` programs carry `args`).
+* **The end pointer and the int stored at 32 bits stayed green** because what they overwrote was never
+  read again. The object is now the first member of a struct whose second member is a sentinel that
+  the program prints.

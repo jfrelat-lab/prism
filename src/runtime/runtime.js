@@ -5,6 +5,7 @@
 // the unresolved-symbol list is the worklist, never anticipation.
 
 import { Module, isFuncPtr, funcIndex } from '../link/module.js';
+import { MODELS } from '../sema/abi.js';
 
 export class Trap extends Error {}
 export class ExitCalled extends Error {
@@ -44,6 +45,12 @@ const EPOCH_US = 855_100_800_000_000;
  */
 export function checkLeash(M) {
   if (M.leashDeadline && performance.now() > M.leashDeadline) throw new Error('__leash');
+}
+
+/** struct tm is nine ints strided by four: laid out for i386, refused elsewhere (as stdio's localtime is). */
+function tmIsI386(M, what) {
+  const m = M.mod.model ?? 'i386';
+  if (m !== 'i386') throw new Error(`${what}: its fields are laid out for i386 and this is ${m}`);
 }
 
 export function makeMachine(mod = new Module()) {
@@ -132,6 +139,20 @@ export function makeMachine(mod = new Module()) {
     output() { return M.stdout.join(''); },
   };
 
+  /*
+   * THE MODEL'S WIDTHS, for every place the runtime reads or writes a C object the program owns: an
+   * `int *` it was handed, a `char **` end pointer, argv, a va_list. Under i386 both are four bytes and
+   * nothing changes; under a 16-bit model an int is two bytes and a data pointer two (four in the
+   * large model, where it is PRISM's linear far address). Writing four there overwrote the neighbour.
+   */
+  const table = MODELS[mod.model ?? 'i386'];
+  M.abi = { int: table.int.size, ptr: table.pointer.size };
+  M.loadPtr = (a) => (M.abi.ptr === 2 ? M.mod.dv.getUint16(a, true) : M.mod.dv.getInt32(a, true));
+  M.storePtr = (a, v) => { if (M.abi.ptr === 2) M.mod.dv.setUint16(a, v & 0xffff, true); else M.mod.dv.setInt32(a, v | 0, true); };
+  M.loadInt = (a) => (M.abi.int === 2 ? M.mod.dv.getInt16(a, true) : M.mod.dv.getInt32(a, true));
+  M.storeInt = (a, v) => { if (M.abi.int === 2) M.mod.dv.setInt16(a, v, true); else M.mod.dv.setInt32(a, v | 0, true); };
+  /** A reader over a caller-packed variadic buffer, at the model's widths. */
+  M.va = (p) => vaReader(M, p);
   M.rt = makeLibc(M);
   return M;
 }
@@ -536,7 +557,7 @@ function makeLibc(M) {
         i++;
       }
       // No digits at all: the end pointer goes back to the ORIGINAL string, not past the sign.
-      if (endp) M.mod.dv.setInt32(endp, p + (i === start ? 0 : i), true);
+      if (endp) M.storePtr(endp, p + (i === start ? 0 : i));
       return i === start ? 0 : sign * v;
     },
     atol: (p) => (parseInt(M.cstr(p), 10) | 0) || 0,
@@ -558,6 +579,19 @@ function makeLibc(M) {
       idx.sort((a, b) => M.icall(cmp, [base + a * size, base + b * size]) | 0);
       const tmp = M.u8.slice(base, base + n * size);
       for (let i = 0; i < n; i++) M.u8.set(tmp.subarray(idx[i] * size, (idx[i] + 1) * size), base + i * size);
+    },
+    /** bsearch: the comparator is called as C's is, (key, element), and the first match found returned. */
+    bsearch: (key, base, n, size, cmp) => {
+      let lo = 0, hi = (n >>> 0) - 1;
+      size >>>= 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >>> 1;
+        const at = base + mid * size;
+        const c = M.icall(cmp, [key, at]) | 0;
+        if (c === 0) return at;
+        if (c < 0) hi = mid - 1; else lo = mid + 1;
+      }
+      return 0;
     },
     abs: (v) => Math.abs(v | 0) | 0,
 
@@ -624,11 +658,11 @@ function makeLibc(M) {
         used = m[0].length;
       } else {
         m = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/.exec(text);
-        if (!m) { if (endp) M.mod.dv.setUint32(endp, p, true); return 0; }
+        if (!m) { if (endp) M.storePtr(endp, p); return 0; }
         value = parseFloat(m[0]);
         used = m[0].length;
       }
-      if (endp) M.mod.dv.setUint32(endp, p + i + used, true);
+      if (endp) M.storePtr(endp, p + i + used);
       return value;
     },
     strtof: (p, endp) => Math.fround(lib.strtod(p, endp)),
@@ -636,13 +670,13 @@ function makeLibc(M) {
     /** The C locale's own lconv, in guest memory, filled once. */
     localeconv: () => {
       if (!M.__lconv) {
-        const SIZE = 10 * 4 + 8;
+        const SIZE = 10 * M.abi.ptr + 8;
         M.__lconv = M.rt.malloc(SIZE);
         M.u8.fill(0, M.__lconv, M.__lconv + SIZE);
         const dot = M.mod.intern([0x2e, 0]);          // "."
         const empty = M.mod.intern([0]);
-        M.mod.dv.setUint32(M.__lconv, dot, true);     // decimal_point
-        for (let f = 1; f < 10; f++) M.mod.dv.setUint32(M.__lconv + f * 4, empty, true);
+        M.storePtr(M.__lconv, dot);                   // decimal_point
+        for (let f = 1; f < 10; f++) M.storePtr(M.__lconv + f * M.abi.ptr, empty);
       }
       return M.__lconv;
     },
@@ -671,11 +705,13 @@ function makeLibc(M) {
      * because a silently missing field in a formatted date is the kind of wrong that travels.
      */
     mktime: (tmPtr) => {
+      tmIsI386(M, 'mktime');
       const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);
       return Math.floor(Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0)) / 1000) | 0;
     },
     difftime: (a, b) => (a | 0) - (b | 0),
     strftime: (dst, max, fmt, tmPtr) => {
+      tmIsI386(M, 'strftime');
       const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);
       const date = new Date(Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0)));
       const p2 = (n) => String(n).padStart(2, '0');
@@ -937,12 +973,14 @@ function makeLibc(M) {
      * and the list already points at the next one.
      */
     __prism_va_next: (pp, size) => {
-      const cur = dv().getInt32(pp, true);
+      const cur = M.loadPtr(pp);
       // A zero-sized argument advances by ZERO, not by one slot: the `|| 1` fallback here disagreed
       // with the caller's packing, which desynchronised every argument after a `struct { char x[0]; }`
-      // (gcc's va-arg-22.c passes 21 structs by value, the first of them empty).
-      const step = Math.ceil((size | 0) / 4) * 4;
-      dv().setInt32(pp, (cur + step) | 0, true);
+      // (gcc's va-arg-22.c passes 21 structs by value, the first of them empty). The slot is the
+      // model's int: four bytes on i386, one 8086 stack word under a 16-bit model.
+      const unit = M.abi.int;
+      const step = Math.ceil((size | 0) / unit) * unit;
+      M.storePtr(pp, cur + step);
       return cur;
     },
 
@@ -1137,13 +1175,13 @@ function makeLibc(M) {
     ldexp: (x, e) => x * Math.pow(2, e | 0),
     ldexpf: (x, e) => Math.fround(x * Math.pow(2, e | 0)),
     frexp: (x, ep) => {
-      if (x === 0 || !Number.isFinite(x)) { if (ep) M.mod.dv.setInt32(ep, 0, true); return x; }
+      if (x === 0 || !Number.isFinite(x)) { if (ep) M.storeInt(ep, 0); return x; }
       const e = Math.ceil(Math.log2(Math.abs(x)));
       let m = x / Math.pow(2, e), exp = e;
       // log2 can land a bit off at the boundary; normalise into [0.5, 1).
       while (Math.abs(m) >= 1) { m /= 2; exp++; }
       while (Math.abs(m) < 0.5) { m *= 2; exp--; }
-      if (ep) M.mod.dv.setInt32(ep, exp, true);
+      if (ep) M.storeInt(ep, exp);
       return m;
     },
     fmod: (a, b) => a % b,
@@ -1166,18 +1204,32 @@ function makeLibc(M) {
  * Splitting the reader is what lets one formatter serve both. The conversion tells us the width, so
  * the reader never has to guess.
  */
+/*
+ * The readers `format` takes its arguments from. `int`, `long` and `ptr` are the three widths a
+ * conversion can ask for; on i386 all three are the same four bytes, which is why a JS array of
+ * values (what the emitter passes the printf family there) is enough. Under a 16-bit model the
+ * arguments arrive packed as Borland's caller pushes them -- int 2, long 4, near pointer 2, double 8
+ * -- and a `%d` given a long reads its low word, as the real machine does.
+ */
 function arrayReader(args) {
   let i = 0;
-  return { i32: () => args[i++], f64: () => args[i++], i64: () => args[i++] };
+  const next = () => args[i++];
+  return { i32: next, f64: next, i64: next, int: next, long: next, ptr: next, intBits: 32 };
 }
 
 export function vaReader(M, ap) {
   let p = ap | 0;
   const dv = M.mod.dv;
+  const { int, ptr } = M.abi ?? { int: 4, ptr: 4 };
+  const i32 = () => { const v = dv.getInt32(p, true); p += 4; return v; };
   return {
-    i32: () => { const v = dv.getInt32(p, true); p += 4; return v; },
+    i32,
+    long: i32,
+    int: int === 2 ? () => { const v = dv.getInt16(p, true); p += 2; return v; } : i32,
+    ptr: ptr === 2 ? () => { const v = dv.getUint16(p, true); p += 2; return v; } : i32,
     f64: () => { const v = dv.getFloat64(p, true); p += 8; return v; },
     i64: () => { const v = dv.getBigInt64(p, true); p += 8; return v; },
+    intBits: int * 8,
   };
 }
 
@@ -1199,7 +1251,10 @@ export function format(M, fmtPtr, args) {
   const fmt = M.cstr(fmtPtr);
   const src = Array.isArray(args) ? arrayReader(args) : args;
   let out = '';
-  const nextArg = () => src.i32();
+  // `*` and %c take an int; %s a data pointer. Array readers (i386) have no widths to choose between.
+  const nextArg = () => (src.int ?? src.i32)();
+  const nextPtr = () => (src.ptr ?? src.i32)();
+  const intBits = src.intBits ?? 32;
 
   for (let i = 0; i < fmt.length; i++) {
     const c = fmt[i];
@@ -1240,6 +1295,11 @@ export function format(M, fmtPtr, args) {
     let len = '';
     while ('hlLqjzt'.includes(fmt[i])) len += fmt[i++];
     const wide64 = len.includes('ll') || len === 'q' || len === 'j';
+    // An integer conversion reads an int, or a long with `l` -- which differ under a 16-bit model --
+    // and its value is taken at that width.
+    const isLong = !wide64 && len.includes('l');
+    const intIn = () => (wide64 ? src.i64() : isLong ? (src.long ?? src.i32)() : nextArg());
+    const bits = wide64 ? 64 : isLong ? 32 : intBits;
     const narrowBits = len === 'hh' ? 8 : len === 'h' ? 16 : 0;
     const narrow = (v, signed) => {
       if (!narrowBits || typeof v === 'bigint') return v;
@@ -1250,20 +1310,22 @@ export function format(M, fmtPtr, args) {
     const conv = fmt[i];
     let body;
     switch (conv) {
-      case 'd': case 'i': body = String(intArg(narrow(wide64 ? src.i64() : src.i32(), true), wide64, true)); break;
-      case 'u': body = String(intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false)); break;
-      case 'x': body = intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false).toString(16); break;
-      case 'X': body = intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false).toString(16).toUpperCase(); break;
-      case 'o': body = intArg(narrow(wide64 ? src.i64() : src.i32(), false), wide64, false).toString(8); break;
+      case 'd': case 'i': body = String(intArg(narrow(intIn(), true), bits, true)); break;
+      case 'u': body = String(intArg(narrow(intIn(), false), bits, false)); break;
+      case 'x': body = intArg(narrow(intIn(), false), bits, false).toString(16); break;
+      case 'X': body = intArg(narrow(intIn(), false), bits, false).toString(16).toUpperCase(); break;
+      case 'o': body = intArg(narrow(intIn(), false), bits, false).toString(8); break;
       case 'c': body = String.fromCharCode(nextArg() & 0xff); break;
       case 's': {
-        const p = nextArg() | 0;
+        const p = nextPtr() | 0;
         body = p === 0 ? '(null)' : M.cstr(p);
         if (prec !== null) body = body.slice(0, +prec);
         break;
       }
       case 'p': {
-        const v = (nextArg() | 0) >>> 0;
+        // Borland prints a pointer as its segment and offset, which no PRISM address reproduces.
+        if (intBits !== 32) throw new Error('printf %p under a 16-bit model: Borland prints SSSS:OOOO, which PRISM does not model');
+        const v = (nextPtr() | 0) >>> 0;
         body = v === 0 ? '(nil)' : '0x' + v.toString(16);
         break;
       }
@@ -1362,12 +1424,13 @@ export function format(M, fmtPtr, args) {
  * BigInt for 64-bit, because neither JS type converts to the other implicitly — `nextArg() | 0` on a
  * BigInt throws outright, which is how `%lld` announced itself.
  */
-function intArg(v, wide64, signed) {
-  if (wide64) {
+function intArg(v, bits, signed) {
+  if (bits === 64) {
     const b = typeof v === 'bigint' ? v : BigInt(Math.trunc(Number(v) || 0));
     return signed ? BigInt.asIntN(64, b) : BigInt.asUintN(64, b);
   }
   const n = typeof v === 'bigint' ? Number(BigInt.asIntN(32, v)) : (v | 0);
+  if (bits === 16) return signed ? (n << 16) >> 16 : n & 0xffff;
   return signed ? (n | 0) : (n >>> 0);
 }
 

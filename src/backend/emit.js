@@ -2526,6 +2526,15 @@ export class FunctionEmitter {
         const impl = rt.impl ?? name;
         if (rt.variadic) {
           const fixed = args.slice(0, rt.params.length);
+          /*
+           * Under a 16-bit model the tail is packed as Borland's caller pushes it and read back at the
+           * widths the format asks for -- a JS array cannot say that a %d given a long reads its low
+           * word. i386 keeps the array: there every width it reads is the same four bytes.
+           */
+          if (this.ty.INT.size === 2) {
+            const packed = this.#packVarargs(e, { params: rt.params.map((t) => ({ type: t })) });
+            return { js: `M.rt.${impl}(${[...fixed, `M.va(${packed})`].join(',')})`, type: rt.ret };
+          }
           const rest = args.slice(rt.params.length);
           return { js: `M.rt.${impl}(${[...fixed, `[${rest.join(',')}]`].join(',')})`, type: rt.ret };
         }
@@ -2620,9 +2629,10 @@ export class FunctionEmitter {
 
   /**
    * Pack the variadic tail of a call into a caller-owned buffer and return its address. Each value
-   * takes a whole number of 4-byte slots after the DEFAULT ARGUMENT PROMOTIONS — a float is passed
+   * takes a whole number of int-sized slots after the DEFAULT ARGUMENT PROMOTIONS — a float is passed
    * as a double, anything narrower than int as an int — because that is what the callee's `va_arg`
-   * will assume when it is handed a type to read.
+   * will assume when it is handed a type to read. The slot is the model's int: four bytes on i386,
+   * one 8086 stack word under a 16-bit model, where a long takes two and a near pointer one.
    */
   #packVarargs(e, ft) {
     const fixed = ft.params.length;
@@ -2637,8 +2647,9 @@ export class FunctionEmitter {
       if (T.isFloat(t) && t.name === 'float') t = this.ty.DOUBLE;          // default promotion
       else if (T.isInteger(t) && T.rank(t) < 3) t = this.ty.promote(t);
       const size = T.isRecord(t) ? t.size : (t.size ?? 4);
+      const unit = this.ty.INT.size;
       items.push({ node, type: t, off: total });
-      total += Math.ceil(size / 4) * 4;
+      total += Math.ceil(size / unit) * unit;
     }
     if (!total) return '0';
     const base = this.slot(total, 8);

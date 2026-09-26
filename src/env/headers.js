@@ -227,6 +227,7 @@ int atoi(const char *s);
    with it -- so a program that calls it is not doing anything unusual for its compiler. */
 char *itoa(int value, char *buffer, int radix);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 int putenv(char *s);
 long atol(const char *s);
 int abs(int v);

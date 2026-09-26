@@ -416,6 +416,7 @@ export const BUILTINS = new Map(Object.entries({
   strpbrk: { ret: P, params: [P, P] },
   strtok: { ret: P, params: [P, P] },
   qsort: { ret: T.VOID, params: [P, U, U, P] },
+  bsearch: { ret: P, params: [P, P, U, U, P] },
   memcpy: { ret: P, params: [P, P, U] },
   memmove: { ret: P, params: [P, P, U] },
   memset: { ret: P, params: [P, I, U] },
@@ -1246,28 +1247,25 @@ const tagOf = (file) => file.replace(/\.[cC]$/, '').replace(/[^A-Za-z0-9_]/g, '_
 function makeRunner(M, F, mod, model = 'i386') {
   return function run(argv = ['prog']) {
     /*
-     * COMPILING FOR A 16-BIT MODEL IS ALLOWED; RUNNING ONE IS NOT, YET.
-     *
-     * The refusal used to sit at emission, which also refused the survey -- and the survey is the
-     * only thing that says what is still missing. The risk was never in compiling: it is in
-     * executing code whose backend is half-built. Three lines below this one are a case in point,
-     * building argv with `4 * (ptrs.length + 1)` and setInt32, which is a 4-byte pointer written
-     * by hand. Every other unfinished piece is guarded where it lives -- segmented pointers
-     * (gate-borland16), i386-shaped structs in stdio (gate-stdio-model), the 64K space
-     * (gate-layout) -- and this is the door for everything not yet found.
+     * A 16-BIT MODEL RUNS, since the pieces that execute a whole program are sized by it: argv here,
+     * the variadic buffer in emit.js (int-sized slots, and the printf family reading each conversion
+     * at its own width), and the runtime's stores of pointers and ints through M.loadPtr/storePtr and
+     * loadInt/storeInt. What still assumes i386 refuses by name where it lives -- struct stat, tm and
+     * fd_set in stdio, mktime/strftime, printf's %p -- and tools/gate-dos16-run.mjs holds whole
+     * programs to Borland C++ 2.0 running the same source.
      */
-    if (model !== 'i386') {
-      throw new CompileError(`compiled for '${model}', which cannot be run yet: tier-0 executes ` +
-        'i386 only (ROADMAP P11.1). Compiling is allowed so the program can be surveyed.');
+    if (!['i386', 'dos16', 'dos16m', 'dos16l'].includes(model)) {
+      throw new CompileError(`compiled for '${model}', which run() does not know`);
     }
     M.stdout.length = 0;
     const main = F.main;
     if (!main) throw new CompileError('no main()');
-    // argv lives in the image, because main may keep the pointers.
+    // argv lives in the image, because main may keep the pointers -- each one the model's data pointer.
     const ptrs = argv.map(a => mod.intern([...new TextEncoder().encode(a)]));
-    const vec = mod.alloc(4 * (ptrs.length + 1), 4);
-    ptrs.forEach((p, i) => mod.dv.setInt32(vec + i * 4, p, true));
-    mod.dv.setInt32(vec + ptrs.length * 4, 0, true);
+    const w = M.abi.ptr;
+    const vec = mod.alloc(w * (ptrs.length + 1), w);
+    ptrs.forEach((p, i) => M.storePtr(vec + i * w, p));
+    M.storePtr(vec + ptrs.length * w, 0);
     finalizeHeap(M);
     try {
       const code = main.length === 0 ? main() : main(ptrs.length, vec);

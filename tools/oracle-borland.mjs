@@ -12,7 +12,7 @@
 //
 //   import { bccRun } from './oracle-borland.mjs';
 //   const outs = bccRun([{ name: 'P1', source }], { bc: '/path/to/BC31', options: ['-mm', '-a', '-K'] });
-//   // -> [{ name, compiled, stdout, compileLog }]
+//   // -> [{ name, compiled, stdout, compileLog }]; a program may carry `args`, its command line
 //
 // Programs are run in one DOSBox-X session per call, in order, so a batch costs one start-up.
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
@@ -37,7 +37,7 @@ export function bccRun(programs, { bc = BC_DEFAULT, options = [], includes = [] 
     if (!/^[A-Z0-9_]{1,8}$/.test(p.name)) throw new Error(`oracle-borland: '${p.name}' is not an 8.3 name`);
     writeFileSync(join(work, `${p.name}.C`), p.source.replace(/\r?\n/g, '\r\n'));
     bat.push(`c:\\bin\\bcc ${options.join(' ')} -I${inc} -LC:\\LIB -e${p.name}.EXE ${p.name}.C > ${p.name}.CL`);
-    bat.push(`if exist ${p.name}.EXE ${p.name}.EXE > ${p.name}.OUT`);
+    bat.push(`if exist ${p.name}.EXE ${p.name}.EXE${p.args ? ` ${p.args}` : ''} > ${p.name}.OUT`);
   }
   writeFileSync(join(work, 'RUN.BAT'), `${bat.join('\r\n')}\r\n`);
   const mounts = ['-c', `mount c "${bc}"`, '-c', `mount d "${work}"`];

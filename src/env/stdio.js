@@ -990,10 +990,12 @@ export function installStdio(M, {
   Object.assign(M.rt, api);
   M.files = { store, find, norm };
 
-  // The three standard streams are ordinary globals a program can take the address of.
+  // The three standard streams are ordinary globals a program can take the address of -- each a
+  // FILE *, so two bytes under a 16-bit model: a four-byte store put stderr's high half over the
+  // first bytes of whatever the linker placed next.
   for (const [name, value] of [['stdin', STDIN], ['stdout', STDOUT], ['stderr', STDERR]]) {
     const sym = M.mod.symbols.get(name);
-    if (sym) M.mod.dv.setInt32(sym.addr, value, true);
+    if (sym) M.storePtr(sym.addr, value);
   }
 
   return M.files;
