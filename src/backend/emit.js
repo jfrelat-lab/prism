@@ -1646,6 +1646,23 @@ export class FunctionEmitter {
       },
       load: (addr, size) => loadExpr(addr, U[size]),
       store: (addr, size, v) => storeExpr(addr, U[size], v),
+      /*
+       * `OFFSET local` in Borland inline assembly is the local's displacement from BP in BORLAND's
+       * frame -- measured: `char emmname[9]` alone in its function gives DX = -10, not the address
+       * (goldens/borland-offset.json). PRISM's frame is its own, so the displacement is answered only
+       * where Borland's layout is known from measurement: the function's ONLY automatic, an array, a
+       * struct or a four-byte scalar at -(size rounded to a word), a char at -1. Anything else --
+       * a second local, an int that Borland may keep in SI -- returns null and stays refused.
+       */
+      borlandFrameOffset: (name) => {
+        const autos = [];
+        collectAutos(this.decl.body, autos);
+        if (autos.length !== 1 || autos[0].name !== name) return null;
+        const t = autos[0].type;
+        if (t.k === 'array' || T.isRecord(t) || t.size === 4) return -(Math.ceil(t.size / 2) * 2);
+        if (t.size === 1 && T.isInteger(t)) return -1;
+        return null;
+      },
     };
   }
 
@@ -3056,6 +3073,18 @@ function fitToWidth(t, js) {
 }
 
 /** Every name a declaration in this subtree introduces. */
+/** The automatic variables a function body declares, in any block: not static, extern or typedef. */
+function collectAutos(node, out) {
+  if (!node || typeof node !== 'object') return;
+  if (Array.isArray(node)) { for (const x of node) collectAutos(x, out); return; }
+  if (node.n === 'vardecl' && node.name && !['static', 'extern', 'typedef'].includes(node.storage)) out.push(node);
+  for (const k of Object.keys(node)) {
+    if (k === 'type' || k === 'loc' || k === 'sym') continue;
+    const v = node[k];
+    if (v && typeof v === 'object') collectAutos(v, out);
+  }
+}
+
 function collectDeclNames(node, out) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { for (const x of node) collectDeclNames(x, out); return; }

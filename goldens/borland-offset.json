@@ -1,0 +1,15 @@
+{
+ "_doc": "Borland C++  Version 2.0 Copyright (c) 1991 Borland International, -mm -a -K: DX after `mov dx,OFFSET v`, v the function's only local, run in DOSBox-X",
+ "want": {
+  "c1": -2,
+  "c2": -2,
+  "c3": -4,
+  "c9": -10,
+  "c10": -10,
+  "i3": -6,
+  "s3": -6,
+  "l": -4,
+  "c9p": -10,
+  "ch": -1
+ }
+}

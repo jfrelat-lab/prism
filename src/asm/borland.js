@@ -467,7 +467,12 @@ class Translator {
       case 'imm': return { get: String(o.value & (size === 1 ? 0xff : 0xffff)), set: () => fail('writing to an immediate') };
       case 'offset': {
         const s = this.env.symbol(o.sym);
-        if (s.local) fail(`OFFSET of the local '${o.sym}'`);
+        if (s.local) {
+          // Borland's answer is the BP displacement in ITS frame, not an address (see emit.js).
+          const disp = this.env.borlandFrameOffset?.(o.sym) ?? null;
+          if (disp === null) fail(`OFFSET of the local '${o.sym}', whose place in Borland's frame is not known here (only a function's sole array, struct, long or char is)`);
+          return { get: String((disp + o.c) & 0xffff), set: () => fail('writing to OFFSET') };
+        }
         if (s.near === null) fail(`OFFSET of '${o.sym}', which lives outside DGROUP`);
         return { get: `(((${s.addr})+${o.c})&65535)`, set: () => fail('writing to OFFSET') };
       }
