@@ -1058,6 +1058,8 @@ Each entry is a row of [ROADMAP.md](ROADMAP.md), verbatim, as it stood when the 
 
 ⚪ **What is still open on the 16-bit runtime**, none of it blocking today: a Borland far pointer's offset wraps at 64K and PRISM's does not; the file layer sets no errno; virtual time runs far ahead of real time; and there is no pixel reference against the real `KDREAMS.EXE` -- Keen replaces int 8 unchained, which MIRAGE's frame grabber needs.
 
+**2026-09-27 — the pixel reference exists**, and it needs nothing from the guest: DOSBox-X's `DX-CAPTURE /V` records the emulated framebuffer as ZMBV (`tools/zmbv.mjs`), `AUTOTYPE` drives the keys, and `tools/gate-keen-pixels.mjs` holds every stable screen PRISM draws to the set the real binary drew. Its first run found three defects, each invisible to every other gate: a 200-line EGA mode's colours are IRGB (colour 6 is brown), not rgbRGB; the BIOS loads a different palette for one; and Borland inline asm's views of a far pointer re-normalised the offset on every read, so MemDrawChar's digits lost three planes (`tests/dos16/farview.c` now holds the pattern against Borland C++ 2.0). The virtual clock is tied to the wall in the browser host (P11.5). Still open: the 64K offset wrap and errno.
+
 **Effort:** M
 
 **Why / unblocks:** The wrap is the one that could produce a wrong answer rather than a refusal.

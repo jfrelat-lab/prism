@@ -23,13 +23,34 @@
 // every plane back, and PRISM must print the same bytes.
 
 const WINDOW = 0xa0000, PLANE = 0x10000;
-// The EGA's power-on palette for 16-colour modes: 0-7, then 38h-3Fh.
-const DEFAULT_PALETTE = [0, 1, 2, 3, 4, 5, 0x14, 7, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f];
+// The palette the BIOS loads with a mode. A 350-line mode gets the 64-colour one (brown as 14h, the
+// bright colours as 38h-3Fh); a 200-line mode (0Dh, 0Eh) gets 0-7 and 10h-17h, which its monitor reads
+// as IRGB -- bit 4 the intensity, colour 6 turned brown by the monitor (ega200Rgb). Loading the
+// 350-line palette for 0Dh made index 6 light red and 8-15 the wrong half of the table on every
+// screen Keen Dreams draws before it sets a palette of its own; the real KDREAMS.EXE, captured under
+// DOSBox-X, shows brown and the bright colours there.
+const PALETTE_350 = [0, 1, 2, 3, 4, 5, 0x14, 7, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f];
+const PALETTE_200 = [0, 1, 2, 3, 4, 5, 6, 7, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17];
+const is200 = (m) => m === 0x0d || m === 0x0e;
 
-/** An EGA 6-bit colour (rgbRGB) as RGB bytes. */
+/** An EGA 6-bit colour (rgbRGB) as RGB bytes -- what a 350-line mode shows. */
 export function egaRgb(c) {
   const lvl = (hi, lo) => ((c >> hi) & 1) * 0xaa + ((c >> lo) & 1) * 0x55;
   return [lvl(2, 5), lvl(1, 4), lvl(0, 3)];
+}
+
+/**
+ * The same attribute value as a 200-LINE mode shows it (0Dh, 0Eh). The EGA drives its monitor in
+ * those modes with four bits, IRGB, as a CGA does: bit 4 is intensity, bits 3 and 5 are not sent,
+ * and the monitor turns colour 6 into brown. A VGA BIOS loads its DAC to give the same picture in
+ * those modes. Keen Dreams writes its bright colours as 18h-1Fh and brown as 06h, so under the
+ * 64-colour reading its world map came out teal and dark yellow where the real binary, captured
+ * under DOSBox-X, shows grey and brown.
+ */
+export function ega200Rgb(c) {
+  const i = (c >> 4) & 1, r = (c >> 2) & 1, g = (c >> 1) & 1, b = c & 1;
+  const lvl = (bit) => bit * 0xaa + i * 0x55;
+  return [lvl(r), (r && g && !b && !i) ? 0x55 : lvl(g), lvl(b)];
 }
 
 export function installEga(M) {
@@ -46,7 +67,7 @@ export function installEga(M) {
     seq.fill(0); gc.fill(0); crtc.fill(0); attr.fill(0);
     seq[2] = 0x0f;                     // all planes
     gc[8] = 0xff;                      // every bit
-    DEFAULT_PALETTE.forEach((v, k) => { attr[k] = v; });
+    (is200(mode) ? PALETTE_200 : PALETTE_350).forEach((v, k) => { attr[k] = v; });
     attr[0x12] = 0x0f;
     crtc[0x13] = mode === 0x0d ? 20 : 40;   // words per line: 320 pixels, or 80 text columns
     if (clear) for (const p of planes) p.fill(0);
@@ -147,7 +168,8 @@ export function installEga(M) {
           pix[y * width + x] = c & enable;
         }
       }
-      const palette = [...attr.slice(0, 16)].map(egaRgb);
+      // 0Dh is a 200-line mode: the monitor sees IRGB (ega200Rgb), not the 64-colour reading.
+      const palette = [...attr.slice(0, 16)].map(ega200Rgb);
       return { width, height, pix, palette };
     },
     /** The same picture as RGBA. */

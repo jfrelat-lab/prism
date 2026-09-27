@@ -32,7 +32,7 @@ row. A row's story after that date is in its commit.
 
 | # | What | Rows | Effort |
 |---|---|---|---|
-| 1 | **A pixel oracle for every DOS target: the real binary under DOSBox-X.** `DX-CAPTURE /V` records the emulated framebuffer as ZMBV -- palette indices, unscaled -- and `tools/zmbv.mjs` reads it; `AUTOTYPE` drives the keys. It needs nothing from the guest, so a game that takes INT 8 unchained (Keen) cannot stop it. Keen Dreams first, then Heretic, Hexen, Jump 'n Bump, MAME and Quake on DOS: "it looks right" becomes "it draws what the shipped binary draws". | P11.8, P3.6 | M |
+| 1 | **A pixel oracle for every DOS target: the real binary under DOSBox-X.** `DX-CAPTURE /V` records the emulated framebuffer as ZMBV -- palette indices, unscaled -- and `tools/zmbv.mjs` reads it; `AUTOTYPE` drives the keys. It needs nothing from the guest, so a game that takes INT 8 unchained (Keen) cannot stop it. **Keen Dreams: done** (`gate-keen-pixels`, 35 of 35 stable screens are the real binary's, and the first run found three defects no other gate saw). Next Heretic, Hexen, Jump 'n Bump, MAME and Quake on DOS: "it looks right" becomes "it draws what the shipped binary draws". | P11.8, P3.6 | M |
 | 2 | **Playable by a person, on one clock.** Keen Dreams plays in the browser (P11.5); next its sound (PC speaker, then an OPL2), then Hexen and Heretic at 35 Hz and OpenDUNE's intro that runs slow and then lurches. | P11.5, P6.4, P7.11 | M |
 | 3 | **NetHack**, from its own tree and its own `sys/` ports: a large program with NO proprietary data, that stresses the libc, the file layer and the terminal where the games stress devices. | P7.12 | M |
 | 4 | **OpenGL onto WebGL, from the small end**: Brian Paul's `gears` first (a few GL calls, the classic smoke test; `glxgears` adds GLX on the X11 shim), then GLQuake and Quake II's `ref_gl` (63 GL functions, measured). | P12.5, P12.4 | M, then L |
@@ -238,7 +238,7 @@ has to be faithful, and [TESTING.md](TESTING.md) for each gate and its mutations
 | P11.5 | 🟡 | Keen Dreams PLAYS IN THE BROWSER, by a person: `KDREAMS` on the DOS shelf, a `borland16` host that ties pcirq's virtual clock to the wall (interrupts stay where virtual time puts them), real keys through port 60h and IRQ1, the EGA composed as palette indices. Title, control panel, world map, Keen walking. Not yet: sound (PC speaker, then an OPL2 neither project has). | M | [log](LOG.md#p11-5) |
 | P11.6 | ⚪ | Keen 4-6, for the oracle nothing else gives. | L | [log](LOG.md#p11-6) |
 | P11.7 | 🟡 | The data of the other 16-bit id titles, verified against their sources by decoding (done); the targets themselves (not started) | S | [log](LOG.md#p11-7) |
-| P11.8 | ⚪ | What is still open on the 16-bit runtime | M | [log](LOG.md#p11-8) |
+| P11.8 | 🟡 | What is still open on the 16-bit runtime: the far-pointer 64K wrap and errno; the pixel reference is DONE (`gate-keen-pixels`) | M | [log](LOG.md#p11-8) |
 
 ## P12 · More machines, and a second renderer
 

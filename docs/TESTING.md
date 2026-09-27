@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Fifty-two now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Fifty-three now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -30,6 +30,7 @@ something outside PRISM that could contradict it.
 | `gate-tasm-run.mjs` | **Unicorn executing TASM's own object code** | registers, flags, 1,088 KB page by page, port writes |
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
+| `gate-keen-pixels.mjs` | **the shipped `KDREAMS.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen PRISM's Keen Dreams holds for 3 frames is one the real binary showed, pixel for pixel |
 | `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
 | `gate-run.mjs` | a native i386 gcc build | 65 programs behave identically |
 | `gate-suite.mjs` | c-testsuite, gcc torture | 213 / 219 and 1,438 of the torture corpus |
@@ -53,6 +54,30 @@ no PC I/O space on a Linux host, so it checks a contract rather than an oracle.
 two positive controls recorded (MSB-first allocation → 18 of 22 cases red; big-endian plain members →
 8 red), and the reason is at the bottom of this file: a check bounded by its own assumption cannot
 fail, and `gate-abi16` was one for months without anyone noticing.
+
+## The Keen Dreams pixel oracle (`tools/gate-keen-pixels.mjs`, `tools/zmbv.mjs`)
+
+The reference is the real shareware 1.13 binary, started the way its own shell starts it (START.EXE,
+option 5 -- KDREAMS.EXE refuses to run otherwise), under DOSBox-X with `machine=ega`. `DX-CAPTURE /V`
+records the EMULATED framebuffer as a ZMBV AVI: palette indices before any scaling, so nothing is
+asked of the guest, and a game that takes INT 8 unchained cannot stop the capture the way it stops a
+resident grabber. `tools/zmbv.mjs` decodes it (one deflate stream per keyframe segment; motion
+vectors are dx and dy each shifted left one, the low bit of dx saying XOR data follows; an empty chunk
+is a dropped frame). DOSBox-X starts a new file on each mode change.
+
+The golden holds hashes of the 61 distinct 320x200 screens of a 45 s run, each channel reduced to the
+EGA's four levels; no game data enters the repository, and the replay SKIPS without the data set
+(`PRISM_KEEN_DATA`). The two runs are not synchronised -- virtual microseconds against DOSBox cycles --
+so the claim is a set inclusion, not a frame match: every screen PRISM holds for three frames on the
+same key path is in the reference, at least 25 of them, one after 20 s (the world map). **35 of 35.**
+
+**What it found on its first run**, each a defect no other gate could see, and each now a mutation
+that turns the gate red: a 200-line mode's monitor reads IRGB, where colour 6 is brown (read as
+rgbRGB, the title's colours were wrong); the BIOS loads a different palette for 200-line modes; and
+Borland inline asm's views of a far pointer re-normalised the offset on every read, while
+MemDrawChar loads ES once and steps the offset by a plane's size -- planes 1-3 of every digit landed on
+plane 0. That last one is also a `gate-dos16-run` case now (`tests/dos16/farview.c`, Borland C++
+2.0's output captured), red without the fix.
 
 ## The oracle (`tools/oracle.mjs`, `tools/oracle/Dockerfile`)
 

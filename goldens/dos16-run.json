@@ -8,6 +8,7 @@
  "programs": {
   "dosint.c": "open cf 0 handle>4 1\nlseek 0 50\nread 10: 150 153 156 159 162 165 168 171 174 177\nfar read: 60 63 66 69 72 75 78 81\nioctl file device-bit 0\nioctl stdin device-bit 1\nclose cf 0\nmissing cf 1 error 2\n",
   "far.c": "alloc 1\nsum 60980\ndiff 500\ntable 70 115\nnear 105 1\nsizes 4 2\n",
+  "farview.c": "planes 1 2 3 4 0\nstepped 256\n",
   "fmt.c": "d -1 32767 -32768\nu 65535 65535 32768\nx ffff 8000 177777 0xff 010\nld -1 2147483647 -2147483648\nlu 4294967295 ffffffff 1234ABCD 10\nhd -2 65534 fffe\nc AÈ 200 65\nw [   42] [42   ] [00042] [+42] [ 42] [007] [    -007]\ns [abc] [     abc] [abc     ] [ab]\nmix 1 70000 2\nstar [    12] [12    ] [0012]\nf 3.250000 -1.50      0.667 1.234568e+04 0.0001 100000\n% done\n",
   "lang.c": "mid 20 10 a size 6\nfib 6765\nops 42 -21\nlong -97406784 -156 372 987648 -30864\nulong 1431655765 65535\nwrap 0 0 -32768\nchar 200\ngrid 13 17 size 40\nsizes 2 4 2 4\n",
   "lib.c": "argc 4 argv[argc] null\nargv[0] [D:\\LIB.EXE]\nargv[1] [one]\nargv[2] [TWO]\nargv[3] [3]\nstrtol -1234 rest [xyz]\nhex 32767 rest []\nstrtoul 4000000000\natoi -77 atol 100000\nendptr [z] guard 1234\nfrexp -750 6 guard 4321\nlongjmp 7 depth 3\n-1 1 10 12 23 25 38 42 \nbsearch 7\nhello, world 12 1\ncalloc 0\nsprintf [00099|ab  |ABCDEF] 17\nstrchr |ab  |ABCDEF strrchr |ABCDEF strstr ab  |ABCDEF\nstrcmp 1 1 0\nmem zzzzz 1\nputs\n!\n",

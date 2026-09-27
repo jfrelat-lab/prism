@@ -27,10 +27,18 @@
 //
 // FAR POINTERS ARE LINEAR IN PRISM, and asm sees their halves. `mov es,[WORD PTR dest+2]` reads the
 // segment of `byte far *dest`. Wherever an operand's C type says it covers a far pointer, the two
-// words are VIEWS of the linear address, decomposed normalised exactly as FP_OFF/FP_SEG are
-// (headers-watcom.js): offset = L & 15, segment = L >> 4, and a write recombines seg*16 + off. A
-// far pointer reached through a REGISTER rather than a name cannot be recognised, and reads its
-// linear representation -- the same limit as C code that type-puns one.
+// words are VIEWS of the linear address. The FIRST view an invocation takes of a pointer is
+// decomposed normalised, as FP_OFF/FP_SEG are (headers-watcom.js): offset = L & 15, segment = L >> 4.
+// From then on that invocation keeps the SEGMENT it saw, because a Borland far pointer is a
+// segment:offset pair and asm relies on it: Keen Dreams' MemDrawChar loads ES from dest+2 once,
+// then steps [WORD PTR dest] by a plane's size and reads it back as DI each time round the loop.
+// Re-normalised on every read, the offset came back as (o + planesize) & 15 while ES still held
+// the old segment, so planes 1-3 of every digit landed on plane 0 -- the one difference left
+// between PRISM's world map and the real KDREAMS.EXE's, captured under DOSBox-X. So an offset is
+// read and written relative to the kept segment, a segment write replaces it and keeps the offset,
+// and a pointer that C code has moved out of that segment's 64K window is decomposed afresh. A far
+// pointer reached through a REGISTER rather than a name cannot be recognised, and reads its linear
+// representation -- the same limit as C code that type-puns one.
 //
 // FLAGS: CF, ZF and SF, computed at the operation's width, which is every condition this
 // translator accepts. A jump that needs OF or PF (jl, jg, jo, jp...) is refused by name rather than
@@ -86,7 +94,9 @@ export const REGISTER_FILE = '{' + [
 ].join(',') + '}';
 
 /** The locals a function using the register file declares. */
-export const REGISTER_DECLS = `var $r=${REGISTER_FILE},$t=0,$u=0,$v=0,$stk=[];`;
+export const REGISTER_DECLS = `var $r=${REGISTER_FILE},$t=0,$u=0,$v=0,$v2=0,$stk=[],$fb=new Map(),`
+  // The segment an invocation's views of the far pointer at address a are relative to (see above).
+  + '$fvb=(a,L)=>{let s=$fb.get(a);if(s===undefined||L-s*16<0||L-s*16>65535){s=L>>>4;$fb.set(a,s);}return s;};';
 
 /**
  * Conditions, as JavaScript over the flags this file computes. A flag holding 2 is UNKNOWN: set by
@@ -440,11 +450,16 @@ class Translator {
   farView(addr, at, size, name) {
     const env = this.env;
     const L = env.load(addr, 4);
+    // Relative to the segment this invocation keeps for the pointer ($fvb, REGISTER_DECLS).
+    const seg = `$fvb(${addr},${L})`;
     if (size === 2 && at === 0) {
-      return { view: true, get: `(${L}&15)`, set: (v) => `${env.store(addr, 4, `((${L}&-16)+((${v})&65535))`)};` };
+      return { view: true, get: `(${L}-${seg}*16)`, set: (v) => `${env.store(addr, 4, `(${seg}*16+((${v})&65535))`)};` };
     }
     if (size === 2 && at === 2) {
-      return { view: true, get: `((${L}>>>4)&65535)`, set: (v) => `${env.store(addr, 4, `((((${v})&65535)<<4)+(${L}&15))`)};` };
+      return {
+        view: true, get: seg,
+        set: (v) => `$v2=${L}-${seg}*16;$fb.set(${addr},(${v})&65535);${env.store(addr, 4, `((((${v})&65535)<<4)+$v2)`)};`,
+      };
     }
     if (size === 4 && at === 0) return { far: true, L, set: null };
     return fail(`${size === 1 ? 'a byte' : 'a word'} at +${at} of the far pointer '${name}'`);
