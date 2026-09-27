@@ -28,19 +28,20 @@ estimate from it. **When a chantier closes, write its row before starting the ne
 measurements, the dead ends, the defects found on the way — is in [LOG.md](LOG.md), linked from each
 row. A row's story after that date is in its commit.
 
-## Menu — what to pick next, ranked
+## Menu — what to pick next, in the owner's order (2026-09-27)
 
 | # | What | Rows | Effort |
 |---|---|---|---|
 | 1 | **A pixel oracle for every DOS target: the real binary under DOSBox-X.** `DX-CAPTURE /V` records the emulated framebuffer as ZMBV -- palette indices, unscaled -- and `tools/zmbv.mjs` reads it; `AUTOTYPE` drives the keys. It needs nothing from the guest, so a game that takes INT 8 unchained (Keen) cannot stop it. Keen Dreams first, then Heretic, Hexen, Jump 'n Bump, MAME and Quake on DOS: "it looks right" becomes "it draws what the shipped binary draws". | P11.8, P3.6 | M |
 | 2 | **Playable by a person, on one clock.** Keen Dreams plays in the browser (P11.5); next its sound (PC speaker, then an OPL2), then Hexen and Heretic at 35 Hz and OpenDUNE's intro that runs slow and then lurches. | P11.5, P6.4, P7.11 | M |
-| 3 | **A Borland far pointer's offset wraps at 64K and PRISM's does not** -- the one open item that could be a wrong answer rather than a refusal. Detect it, refuse it by name, then see whether Keen or Catacomb ever relies on it. | P11.8 | S |
-| 4 | **A static bundle of a whole program**, Emscripten's deliverable without Emscripten's port: the emitted JavaScript and the linked image, loadable without the compiler. Needs no IR. | P13.1 | S–M |
-| 5 | **Catacomb 3-D's code written at run time.** Define the seam `(memory, registers, io) => registers`; whether a PRISM executor or MIRAGE fills it is the owner's decision, not the compiler's. | P11.4 | S, then M–L |
-| 6 | **An IR, designed around separate objects** -- `.o`/`.obj`, archives, shared modules -- which is also what the whole-program optimiser and a WASM backend stand on. The structural chantier; P2.3 is reframed as part of it. | P13.2, P13.3, P2.3 | L |
-| 7 | **The compiler's own gaps**: `long double` and bitfields wider than 32 bits, most of the 118 torture programs left; or cheaper safepoints (only the loops that call nothing). | N2, N1, P0.5b, P2b.1 | M |
-| 8 | **A second renderer: OpenGL onto WebGL** -- GLQuake and Quake II's ref_gl, 63 GL functions, measured. The largest visible step, and half of IRIX's blocker. | P12.4 | L |
-| 9 | **Whether files should be fully buffered by default**, as C99 says; today a stream buffers only when `setvbuf` asks. A decision about every target at once. | P8.11 | S |
+| 3 | **NetHack**, from its own tree and its own `sys/` ports: a large program with NO proprietary data, that stresses the libc, the file layer and the terminal where the games stress devices. | P7.12 | M |
+| 4 | **OpenGL onto WebGL, from the small end**: Brian Paul's `gears` first (a few GL calls, the classic smoke test; `glxgears` adds GLX on the X11 shim), then GLQuake and Quake II's `ref_gl` (63 GL functions, measured). | P12.5, P12.4 | M, then L |
+
+**After those, in the order they were ranked:** the far-pointer offset wrap (P11.8, the one open
+item that could be a wrong answer); a static bundle of a whole program (P13.1); Catacomb 3-D's
+run-time code seam (P11.4); an IR designed around separate objects, then WASM (P13.2, P13.3); the
+compiler's own gaps -- `long double`, wide bitfields, cheaper safepoints (N2, N1, P2b.1); and the
+default-buffering decision (P8.11).
 
 ## P0 · Foundation and oracles (no game yet)
 
@@ -166,6 +167,7 @@ second ABI — and the question "what else is DOS but flat?" had an answer.
 | P7.9 | ✅ | `#pragma aux` routine bodies compile. | M | [log](LOG.md#p7-9) |
 | P7.10 | ✅ | Heretic was never broken — the harness needs `--safepoints`. | S | [log](LOG.md#p7-10) |
 | P7.11 | 🟡 | OpenDUNE's animations run slow and then lurch. | M | [log](LOG.md#p7-11) |
+| P7.12 | ⚪ | **NetHack.** 133 units in `src/` and its own `sys/msdos` and `sys/unix` ports: pick the platform layer the way Quake's were picked, from the tree's own makefiles. No game data to fetch or license -- the dungeon is the program -- and no graphics: it stresses what the games do not, the libc, the file layer (save files, bones, the high-score file with its locking) and a terminal (tty, termcap/curses or the DOS console). A tty on the page is the text surface the shell already has. | M | — |
 
 ## P8 · Semantic oracles: Lua, the MAME releases, and what they found
 
@@ -256,6 +258,7 @@ Two different kinds of thing, and the distinction is the same one the shell now 
 | P12.2 | 🔴 | IRIX is BLOCKED, and on two things rather than the one I thought. | L | [log](LOG.md#p12-2) |
 | P12.3 | ✅ | Quake on svgalib: the default mode is linear, not planar, so P3.5's blocker does not apply -- a fifth platform build | M | [log](LOG.md#p12-3) |
 | P12.4 | 🔴 | OPENGL -- `ref_gl` and Quake's sixteen `gl_*.c`. | L | [log](LOG.md#p12-4) |
+| P12.5 | ⚪ | **OpenGL from the small end: `gears`.** Brian Paul's gears -- the GLUT version in Mesa's demos, a few hundred lines, a few dozen GL entry points (lists, lighting, `glBegin`/`glEnd` quad strips, a rotation) -- is the smoke test every GL implementation has run; `glxgears` is the same program over GLX, which the X11 shim already half-speaks. It gives the WebGL layer a first target small enough to be exact about -- immediate mode and fixed-function lighting emulated over WebGL's shaders -- before GLQuake's 63 functions, and its frame is a picture a reference implementation (Mesa's software rasteriser) can be compared with. Other small classics after it: the Red Book examples, `glutplane`, `isosurf`. | M | — |
 
 ## P13 · Artefacts: a static bundle, an IR with objects, a second backend, and Live C
 
