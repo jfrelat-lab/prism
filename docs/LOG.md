@@ -1,0 +1,1150 @@
+# PRISM — the long form of every roadmap row
+
+Each entry is a row of [ROADMAP.md](ROADMAP.md), verbatim, as it stood when the roadmap was cut back to one line per task: the measurements, the dead ends, the defects found on the way. The roadmap says WHAT and WHERE IT STANDS; this says HOW IT GOT THERE. Rows added after the cut have no entry here -- their story is in their commit.
+
+## P0 · Foundation and oracles (no game yet)
+
+<a id="p0-1"></a>
+
+### P0.1
+
+✅ ✅ **DONE** — the oracle: `linux/386` gcc 12.2 + csmith 2.3 container, long-lived, `tools/oracle.mjs`. Measured the host has no gcc, no `-m32`, no cross-compiler, no csmith; measured `docker run` 3.8 s vs `docker exec` 46 ms; fixed Debian's csmith shipping no runtime headers (three are `m4` templates).
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-2"></a>
+
+### P0.2
+
+✅ ✅ **DONE** — `src/sema/abi.js` + `tools/gate-abi.mjs`. Exact i386 layout, gated on 105k checks across 13 seeds, sensitivity-checked. Found three bitfield rules by generation that hand cases missed.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-3"></a>
+
+### P0.3
+
+✅ ✅ **DONE** — `src/cpp/` (lexer, `#if` evaluator, directives, Prosser expansion) + `tools/gate-cpp.mjs`. Token-identical to `gcc -E` on 42 hand cases (including the canonical C99 6.10.3.5 example and Prosser's `f(2)(9)`) and 250 generated cases × 7 seeds. Generation found four rules the hand cases missed and sensitivity-checking found two runaway defects. See [TESTING.md](TESTING.md).
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-3b"></a>
+
+### P0.3b
+
+❌ ❌ **RETRACTED — measured, and not worth doing.** The quadratic behaviour is real: expanding in place moves **133.6M** array elements on Hexen, 111x its token count (Doom 24x, Heretic 40x). But `Array.prototype.splice` on a contiguous array is a memmove, and moving 133 million pointers costs **49 ms of 613** — 8.0% of preprocessing, 1.1% on Heretic, 0.3% on Doom. Preprocessing is itself about 0.6 s of a 2.2 s build. The entry warned that the premise was unmeasured and to check it first; it was right to.
+
+**Why / unblocks:** Exactly the shape of MIRAGE's retracted D6 diagnosis — a plausible asymptotic argument that the constant factor settles.
+
+<a id="p0-3c"></a>
+
+### P0.3c
+
+✅ ✅ **DONE** — `tools/gate-cpp-files.mjs`. **289 of 289 whole translation units from five programs match `gcc -E` token for token** (⚠️ at `--limit=200`: the default is **8 files per program**, so a bare run compares 36 and that is the number the gate prints — the headline is a deliberately widened run, which this row failed to say for months) (297 collected, 10 refused by gcc). The comparison is made meaningful by giving gcc PRISM's headers and nothing else: `-nostdinc`, `-undef`, and PRISM's TARGET_DEFINES as a prelude, so both sides start from the same text and the same macro table. It found a real defect on its first run — `__FILE__` and `__LINE__` inside a macro reported the DEFINITION site, so every `LOG(...)` macro living in a header named the wrong place.
+
+**Effort:** M
+
+**Why / unblocks:** The snippet gate (P0.3) tests the preprocessor; this tests it on what it is asked to do.
+
+<a id="p0-4"></a>
+
+### P0.4
+
+✅ ✅ **DONE** — `src/parse/parser.js` + `src/sema/types.js` + `tools/gate-decl.mjs`. C89 complete (K&R definitions, implicit `int`, nested declarators), the useful C99, GNU (`__attribute__`, `typeof`, `({...})`, statement exprs, case ranges). Gated on 8400+ checks across 4 seeds: sizeof/align/offsets/enum values of every tag and typedef PRISM understands, asked of gcc. ⚠️ **Statements and expressions are parsed but NOT gated** — nothing observes them until the backend exists (P0.5).
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-5"></a>
+
+### P0.5
+
+✅ ✅ **DONE** — `src/link/module.js`, `src/backend/emit.js`, `src/runtime/runtime.js`, `src/env/headers.js`, `src/compile.js` + `tools/gate-run.mjs`. **22/22 programs behave identically to a native i386 build.** Even tier-0 keeps a non-address-taken scalar local in a JS `var`; everything else goes to a shadow stack. Six real defects found by running, and two of my own test cases turned out to test undefined behaviour — see [TESTING.md](TESTING.md).
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-5b"></a>
+
+### P0.5b
+
+🟡 🟡 **torture 1294 → 1438, c-testsuite 204 → 213, zero wrong answers throughout.** Closed this session: bitfields in a brace initialiser (a WRONG ANSWER -- consecutive bitfields share their unit's offset and only the first was written), forty __builtin_ entries including the type-generic overflow family, `%hh`/`%h` narrowing in printf, quoted includes relative to the including file, tmpnam/freopen/printf-through-a-stream, 64-bit bitfields, three GNU spellings, and variable-length arrays for locals. Then **inline asm with an empty template (P5.2a, +19)**, **GNU nested functions (+10)**, **statement expressions (+8)**, **flexible array member initialisers (+4)** **giving a VLA's storage back (+3)** **`__attribute__((alias))` (+3)** and a handful of small ones -- the shift count's own type, `__alignof__` of an expression, `__func__` (+5) -- and **gcc's own setjmp/longjmp, resuming at the stack pointer the setjmp saw (+4)**, and **a compound literal as a postfix expression, with an aggregate member copied rather than stored (+8)**, **brace elision in a local initialiser (+4)** **GNU/C99 complex types (+17)** **`__attribute__((mode))` (+6)** and **the address of a file-scope compound literal (+1, and c-testsuite +2)**, taking it to **1438** with c-testsuite at **213** (array range designators, an attribute at the start of a type name, and the address of a library function). Still open, ranked: long double (14, see N2), wide bitfield arithmetic (9, see N1), a label nested inside a block (4), `__builtin_longjmp` (4), `__attribute__` where the parser does not expect it (4). Was: **`long long` DONE** — tier-0 represents a 64-bit integer as a **BigInt**, not as i32 pairs. The plan called for pairs; tier-0 is the compact/generic path and BigInt is correct by construction (arbitrary precision plus an explicit 64-bit mask) where pairs need ~20 helpers and a return-value convention. Every crossing in or out is explicit, so a missed conversion throws `Cannot mix BigInt and other types` instead of producing a wrong number. **Torture 892 → 1206, c-testsuite 183 → 192.** `long long`, structs by value, asm parsing, `<stdarg.h>` + user variadics, `goto`, GNU label addresses and computed goto, bitfield `++`. Remaining, ranked by measurement: nested functions (24), non-empty inline asm (19), compound literals as lvalues (18), address constants the folder still refuses (17), the remaining headers (17), labels nested in a block (14), `long double` (11). Structs by value and empty-template asm are DONE.
+
+**Effort:** L
+
+**Why / unblocks:** `npm run gaps:torture`.
+
+<a id="p0-5c"></a>
+
+### P0.5c
+
+⚪ **Lower i64 to i32 pairs in tier-1.** BigInt is a correctness choice with a real speed cost; tier-1 must lower it. **Do not start before measuring** — the cost is currently unquantified, which is exactly the shape of MIRAGE's retracted D6 diagnosis.
+
+**Effort:** L
+
+**Why / unblocks:** Depends on P2.4 producing a number first.
+
+<a id="p0-6"></a>
+
+### P0.6
+
+✅ ✅ **DONE (c-testsuite)** — `tools/gate-suite.mjs`, gcc captured once into `tools/suite-baseline.json`. **182/219 pass, 0 wrong answers.** Found four real defects including a stack-frame lifetime bug and a silent `long long` miscompile. See [TESTING.md](TESTING.md) for the ranked gaps.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-6b"></a>
+
+### P0.6b
+
+✅ ✅ **DONE** — `gcc.c-torture/execute`, 1592 programs, fetched from the gcc 12.2 tarball. **869/1558 pass, 0 unexplained wrong answers.** Two tables (`__builtin_*` aliases and gcc's predefined TYPE macros) moved it from 696 to 868 with no compiler work. Forced three harness corrections — per-program timeouts, excluding tests the gcc reference itself fails, and reclassifying `abort()` as a defect rather than a gap. See [TESTING.md](TESTING.md).
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-6c"></a>
+
+### P0.6c
+
+✅ ✅ **LARGELY DONE** — 37 miscompiles down to 6, torture 869 → 892. Seven causes: `aligned`/member-`packed` attributes, a half-fixed address-precedence bug worth 15 programs on its own, bitfield integer promotions, float constant folding, bitfields in brace initialisers (dynamic *and* static), `extern` in a block, plus turning type-changing attributes and wide literals into refusals. See [TESTING.md](TESTING.md). Remaining: ~8, mostly wide chars and a few one-offs.
+
+**Effort:** —
+
+**Why / unblocks:** mostly done
+
+<a id="p0-6d"></a>
+
+### P0.6d
+
+✅ ✅ **DONE** — wide literals as 4-byte elements, plus the endianness macros and bitfield placement in unions (a class the ABI generator had never produced). Torture 885 → **892**, miscompiles 8 → **6**.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-6e"></a>
+
+### P0.6e
+
+✅ ✅ **DONE** — **zero wrong answers** across 1556 torture + 219 c-testsuite programs. Bitfield assignment value, byte-transparent source reading, cast folding, flexible array members, and two tests excluded as UB. Literal decoding de-duplicated into `src/util/charset.js`.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p0-7"></a>
+
+### P0.7
+
+✅ ✅ **DONE** — `tools/csmith-diff.mjs`. Random programs against `gcc -O0`/`-O2`, with gcc-vs-itself as the UB filter so a divergence is evidence about PRISM and not about csmith. Found **six defects in the first forty programs**, one of them a silent wrong answer: an integer constant's type ignored its base, so `0xAD2A1758533D8CC8LL` — above LLONG_MAX and therefore *unsigned* — was read as negative. Also `#pragma pack` (unimplemented), bitfields straddling a 32-bit unit (refused), the 64-bit half of `stdint.h` (absent), C99 hex float constants (silently zero), the `fabsf` family, and a record rvalue through `*p`.<br><br>Reduction needed no reducer: csmith's per-variable CRC narrows 378 globals to one, inverting that CRC recovers the value each side held, and a printf on every `block id` turns execution into a diffable trace — 1,608 lines down to one `if`. See docs/TESTING.md.
+
+**Effort:** M
+
+**Why / unblocks:** The `test386.asm` of C, and it earned the comparison in an afternoon.
+
+## P1 · MAME
+
+<a id="p1-1"></a>
+
+### P1.1
+
+✅ ✅ **DONE** — corpus fetched, `tools/mame.mjs` builds and runs it.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p1-2"></a>
+
+### P1.2
+
+✅ ✅ **DONE, and no Allegro shim was needed** — MAME's own `osdepend.h` boundary is eighteen functions, so `src/env/osd.js` replaces `src/msdos/msdos.c` wholesale. The libc extras were measured from MAME's sources, not guessed: `stricmp fopen fclose fread fwrite getchar rand`.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p1-3"></a>
+
+### P1.3
+
+✅ ✅ **DONE** — Pac-Man runs and every frame is bit-identical to a native gcc build over 200 frames (`tools/mamediff.mjs`). Two defects found: a runtime builtin shadowed the program's own function definition (twelve-hour hang), and the platform backend allocated in the static area instead of the guest heap.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p1-4"></a>
+
+### P1.4
+
+✅ ✅ **DONE** — `tools/z80diff.mjs`. Found the defect in seconds: compound assignment evaluated the lvalue before the right-hand side, so `R.PC.W.l += (offset)M_RDMEM_OPCODE()` made every relative jump one byte short. The core is now identical to gcc over 20006 steps including the interrupt path.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p1-5"></a>
+
+### P1.5
+
+✅ ✅ **DONE** — `web/` + `tools/serve.mjs`: a program-agnostic browser shell. Guest in a Web Worker over a SharedArrayBuffer; the page observes guest memory, because a C main loop never yields and rewriting it (Emscripten's `emscripten_set_main_loop`) is the modification this project refuses. One surface, text until the program creates a display; scan codes in; `argv` through to `main`. Pac-Man is playable at a measured 60.0 of 60 fps. Four defects, and one lesson: **every gate was green while the game was unplayable** — nothing headless has a frame rate. See [TESTING.md](TESTING.md).
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p1-6"></a>
+
+### P1.6
+
+✅ ✅ **DONE — the shell is FOUR MACHINES, and Live C is a page of its own.** `web/` no longer has a program dropdown and a `host` dropdown beside it; it has DOS, Linux, SUN and Windows, and a program is something that is ON one of them (`web/machines.json`). That was never presentation: `quake:dos`, `quake:x11`, `quake:sun` and `quake:win` are four platform layers over one engine, and while the choice was a word in a menu you had to already know that `mgl` meant the Windows build. Each machine shows what it has the way it did: a DIR listing, an `ls -l`, an OpenWindows console, a desktop of icons **side by side**. The chrome around it is a VM window — name, state pill, hardware line. Unit counts on those listings come from `/__target`, so they are the numbers the build produces rather than numbers typed into a file. Icons are the programs' own `.ico`, pointed at in their source trees (a browser decodes ICO natively), and they appear on Windows and nowhere else. **Live C is `web/live/`**, deliberately separate: files in the browser, Run, the program's output as it prints, an **Emitted JS** pane beside it, and stdin through the same shared queue a game's keyboard uses — because `run()` never returns and a keystroke posted as a message would reach a worker whose loop has stopped. Five examples, each one a thing a C→JS compiler has to do rather than a tour of the language: the chain, the i386 ABI, type punning through a union, function pointers as data, stdin.
+
+**Effort:** M
+
+**Why / unblocks:** Three defects it turned up, all real: a break code delivered a NUL to every program reading TEXT (`take(1)` now skips them); `#include "./x.h"` from a subdirectory resolved to `dir/./x.h` and was silently stubbed; and `PostQuitMessage` did not exist in the Win32 shim, so PuTTY threw before it had painted once.
+
+<a id="p1-7"></a>
+
+### P1.7
+
+✅ ✅ **DONE.** `src/env/osd.js` is deleted and MAME compiles its own `src/msdos/msdos.c`, the file its makefile selects for DOS. What is shimmed is one level down: `src/env/allegro.js` (Allegro's 13 functions, SEAL's 17, DJGPP's memory helpers), `src/env/headers-djgpp.js` (`allegro.h audio.h go32.h sys/farptr.h dos.h io.h`), and a generated unit that DEFINES `screen`, `key[]` and the joystick globals — real C objects, because msdos.c takes their address and indexes them.<br><br>Three predictions from this entry held: no VGA register emulation was needed (both display paths end in `_dosmemputl`, and the geometry comes from the game's own `bitmap` global), SEAL is a second library and not part of Allegro, and P5.1's port intrinsics were the only compiler-level blocker.<br><br>One prediction was **wrong**: `TwkUser.c` is not merely compiled, it is called — `outRegArray` reprograms the CRTC on the mode-13h path. It changes nothing the host reads, which is why it does not matter, but "included but never called" was not true.<br><br>What was NOT predicted, and is the more interesting half: **the keyboard stopped being a function.** `osd_key_pressed` is now the game's own C reading `key[]` out of memory, so `while (osd_key_pressed(k));` calls nothing and spin damping cannot see it. That loop needs the safepoint — which is the honest analogue of what a real Allegro does, an interrupt handler writing key[] asynchronously.
+
+**Effort:** M
+
+**Why / unblocks:** Done.
+
+<a id="p1-8"></a>
+
+### P1.8
+
+✅ 🟡 **DONE, and proved end to end.** `src/env/pipe.js` (a byte pipe in a SharedArrayBuffer, with `pending` separate from `read` because the reader POLLS), `src/env/popen.js` (matches a command line to an already-running process; also answers the `access(path, X_OK)` Doom checks first), and `tools/doomsnd.mjs` + `tools/sndserv-worker.mjs`: Doom in one thread, its own sound server in another, neither modified, neither interleaved. A command injected in Doom's own format crosses the pipe, is parsed by the server, mixed by Doom's own mixer and comes out at **peak 24576, nothing dropped**.<br><br>The piece that made it work was a clock. A sound server has none — it free-ran and the ring lost 400,000 samples in four hundred submits — so `installDsp` gained `blockWhenFull`: `write()` to a real /dev/dsp blocks until the card has room, and **the DAC is what paces a sound server**. What remains is a trigger: with `-warp 1 1` and no input Doom stands still and asks for no sound.
+
+**Effort:** M
+
+**Why / unblocks:** Also the general answer for `fork`/`popen`.
+
+<a id="p1-10"></a>
+
+### P1.10
+
+✅ ✅ **DONE — Wizard of Wor was `rand()`, and it was never a PRISM defect in the way the complaint implied.** Reported from play as "the lasers look wrong". Narrowed by three new `mamediff` instruments (`--dump=N` pixels, `--vram`, `--ram`) to **one byte, `0xd34a`, differing from frame 1** — invisible in the picture for 266 frames because nothing read it. Wrapping `Z80_WRMEM` named the writer: **PC 0x0f61**, 15 times in six frames, values that looked random; the ROM at the seeding site reads `ED 5F` `32 4A D3` — **`LD A,R` then `LD (0xD34A),A`**, so `0xd34a` is WOW's RNG seed and it comes from the Z80's refresh register. And `Z80_Reset` in MAME's own core does **`R.R = rand()`**. The arithmetic confirmed it rather than my arguing it: the reference's fetch count at frame 1 was 1804294666, and glibc's first unseeded `rand()` is **1804289383** — the difference is the 5,283 instructions since reset. PRISM's was 22121 − 5283 = **16838**, the first value of the ANSI sample LCG it used to implement. **The fix: PRISM's `rand()` is now glibc's** TYPE_3 additive-feedback generator, verified against gcc on five seeds by a new `gate-run` case. Deterministic was never the requirement — *agreeing with the reference* is, wherever a program's output can depend on an implementation-defined value. **WOW now matches the native build exactly: 295/295 lines attract, and 915/915 played with coin, start and fire** (was 402 of 915 differing).
+
+**Effort:** M
+
+**Why / unblocks:** Two hypotheses died by measurement on the way — a global placed on top of `RAM` (PRISM's symbol table refuted it) and nondeterminism in the reference (the tcc binary run twice is byte-identical). And my own gate case "failed" first on unspecified behaviour: three `random()` calls as three `printf` arguments test evaluation ORDER, which gcc takes right-to-left and PRISM left-to-right.
+
+<a id="p1-11"></a>
+
+### P1.11
+
+✅ ✅ **DONE — MAME 0.4 HAS a native oracle, and the row that said it could not was too narrow.** It said this release "needs a period compiler (gcc 2.x, or tcc)" and left it there while a period compiler — Open Watcom, put in the container by N5 — was already one `docker exec` away. Watcom **does** take `case MRA_RAM:`, so the named blocker was never the whole story; it then refuses `unsigned char *line[0]` in `osdepend.h` in **every** mode including `-za`, and that header is in all 31 units, so it cannot stand in either. (`-za` is needed anyway, because Watcom reserves `interrupt`, which MAME uses as a field name.) **tcc 0.9.27 accepts all three** — the zero-length array, `interrupt` as an identifier, and the cast-pointer case label — links against `-lm` and runs. A census settled how much was ever at stake: over the whole release, **the only thing gcc 12 refuses is four `case` labels in `src/machine.c` (392, 393, 430, 433)**. `mamediff` now builds with gcc and falls back to tcc when it sees that one error, saying so. **And the differential is green where it can be**: PRISM's MAME 0.4 running Wizard of Wor is identical to a native tcc build over 135 lines / 120 frames of attract mode.
+
+**Effort:** S
+
+**Why / unblocks:** `node tools/mamediff.mjs --release=04 --game=wow --roms=<dir>`
+
+<a id="p1-12"></a>
+
+### P1.12
+
+✅ ✅ **DONE — the shell became a machine you use.** The terminal is REAL: drawn on the canvas in the same 80x25 text mode the program will use, so nothing rescales when one starts; you type `HEXEN -devparm` at it, Tab completes, ArrowUp recalls, `dir`/`ls`/`cls` answer, an unknown name gets the machine's own refusal. A program INHERITS that screen and gives it back with a prompt under whatever it printed, so its output continues below the command line. A desktop launches on a double-click and keeps its icons while the program opens a WINDOW over them, sized and positioned from the guest. Data arrives WITH the program (`needsData.dir` names one root under `serve.mjs --games=`) instead of being loaded by hand. Ctrl+C abandons a line at the prompt and interrupts a program that is still on the text screen -- the test is the display, because a program that has taken it is a game where Ctrl is the fire button. The program's output goes to the browser console; PRISM's panel keeps PRISM's own messages and closes. **Nine defects found this way**, four of them in the engine rather than the page: a leading `/` was not stripped from a path (Quake's DOS build derives an empty basedir and asks for `/id1/pak0.pak`); `#include "./x.h"` from a subdirectory resolved to `dir/./x.h`; a break code delivered a NUL to every program reading text; and the canvas was resized only when the ImageData disagreed, so a picture landed 1:1 in the corner of a screen four times too big.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+## P2 · Performance
+
+<a id="p2-1"></a>
+
+### P2.1
+
+🟡 🟡 **Direct calls are on by default.** What blocked them was never speed, it was observability: every harness instruments by reassigning `prog.F["name"]`, which a direct call cannot see. The module now returns a rebinder that assigns to the emitted function's own binding, and `F`'s properties are accessors driving it -- no harness changed. A function declaration creates a MUTABLE binding, in strict mode too, so the `let` this entry planned was unnecessary. **On Quake it is +6%, not the 2-2.5x of the Z80 core**: Quake is not call-bound, and what stays indirect in it goes through function pointers, i.e. the table. Remaining: the IR, so every memory access stops going through a DataView and every address-taken local lives in the heap.
+
+**Effort:** L
+
+**Why / unblocks:** The gap between +6% and 2.5x IS the finding. Optimising against one workload optimises that workload.
+
+<a id="p2-2"></a>
+
+### P2.2
+
+⚪ Alignment inference, GVN on address arithmetic, LICM, inlining. **Blocked on an IR: `src/ir/` and `src/opt/` are empty directories.**
+
+**Effort:** L
+
+**Why / unblocks:** Nothing in the corpus is waiting on this — Quake has 24x the headroom it needs. It is the pitch that is waiting on it.
+
+<a id="p2-3"></a>
+
+### P2.3
+
+⚪ **tier-0 → tier-1 promotion** + inline caches on function pointers. **This is the row that makes the word "dynamic" true**; until it exists, PRISM is an AOT compiler that happens to run in the page, and the project should describe itself that way.
+
+**Effort:** M
+
+**Why / unblocks:** Also unblocks P0.5c (lowering BigInt `long long` to i32 pairs), which must not start before its cost is measured.
+
+<a id="p2-4"></a>
+
+### P2.4
+
+✅ ✅ **DONE** — `tools/bench.mjs`, and it no longer needs a ROM (`--synthetic`). Two workloads published separately: **~9.5×** slower than clang -O2 on MAME's Z80 core with Pac-Man, **~10×** on the synthetic mix. Half the gap at short workloads is JIT warm-up.
+
+**Effort:** M
+
+**Why / unblocks:** And a measured lead: `--direct-calls` is **2–2.5×**, see P2.1.
+
+<a id="p2-5"></a>
+
+### P2.5
+
+⚪ **Two load modes, over one serialised IR.** Today the shell always compiles from source in the page — 430 files, 68 units, 666 ms, which is fast enough that this is a convenience rather than a need. A second mode would fetch a serialised IR and skip the front end. ⚠️ **Corrected: this row used to say "once P2.1 gives us an IR". P2.1 landed and produced no IR** — it is a link-time direct-call decision, not a representation. This is blocked on P2.2's IR, which does not exist.
+
+**Effort:** M
+
+**Why / unblocks:** The measured win it would buy is the front end only; the back end still emits.
+
+## P2b · Safepoints — the only way a loop that calls nothing is reachable
+
+<a id="p2b-1"></a>
+
+### P2b.1
+
+⚪ **Instrument only the loops that call NOTHING.** Today the safepoint goes on every `while`, `do` and `for` — the three sites in `emit.js` have no filter. But a loop that makes a call is **already** observable: spin damping sees it. The safepoint is only needed for a loop whose body contains no call, which is a trivial static question about the AST. **This is the cheapest real improvement to the mechanism and the one I would take first**: it attacks the only genuine objection to it — the per-iteration cost on every loop in the program — without changing its semantics at all, and it might make safepoints cheap enough to leave ON by default. Measure the emitted-code cost before and after, on `bench.mjs`, and count how many loops survive the filter in Quake and MAME.
+
+**Effort:** S
+
+**Why / unblocks:** Also makes the cost claim in ARCHITECTURE.md a measured one instead of an inherited MIRAGE number.
+
+<a id="p2b-2"></a>
+
+### P2b.2
+
+⚪ **Write the guest's memory from the OTHER thread, and skip the safepoint entirely.** The most interesting one, because it is MORE faithful rather than less: a hardware interrupt does not hand control back to the program, it **writes memory while the program runs**. The guest already lives in a SharedArrayBuffer the page shares, and `while (tics == lasttic);` is a memory read. So the tic counter and Allegro's `key[]` could be written by the PAGE, with the guest never yielding — `allegro.js` already calls the safepoint "the honest analogue of an interrupt handler writing key[] asynchronously", and this would be the thing itself. **The limit, stated up front: it only works where the ISR reduces to writing bytes.** MAME's `key[]` probably qualifies; Heretic's `I_TimerISR` does more than increment, and running the guest's own C is something only the guest's thread can do. So this likely replaces one of the three uses and not the other. Nothing here is measured — read the ISRs first.
+
+**Effort:** M
+
+**Why / unblocks:** If it holds for MAME, that program stops needing safepoints in the browser and needs them only headless, where there is no second thread.
+
+<a id="p2b-3"></a>
+
+### P2b.3
+
+⚪ **A shared FLAG instead of a budget.** `if(M.irq)` is a load and a compare where `if(--M.spBudget<0)` is a load, a subtract, a store and a compare. More importantly, a flag living in the control block is raised by the PAGE, so the cadence follows real time instead of a count of iterations — which is what the budget is standing in for. This is the classic polling-safepoint design (the JVM, Go before signal preemption). JavaScript cannot make the load trap, so it stays a load plus a branch.
+
+**Effort:** S
+
+**Why / unblocks:** Pairs with P2b.1: fewer sites, and each site cheaper.
+
+<a id="p2b-4"></a>
+
+### P2b.4
+
+⚪ **A handler for the general case: Stop interrupting a `while (1);`.** Same mechanism, different handler, and it is the one use of safepoints that is NOT built. Today the recourse for a program with no safepoints is terminating the worker, which loses everything.
+
+**Effort:** S
+
+**Why / unblocks:** Wants P2b.1 first, otherwise it argues for instrumenting every program by default at full cost.
+
+<a id="p2b-5"></a>
+
+### P2b.5
+
+🔴 🔴 **Not taken: lowering loops to state machines so the host can re-enter between turns.** `flatten.js` already knows how to flatten control flow, so the machinery exists — but this is, in substance, Asyncify, and it pays Asyncify's cost on every path that might unwind. Named here so the option is refused explicitly rather than forgotten.
+
+**Effort:** L
+
+**Why / unblocks:** The comparison is in ARCHITECTURE.md's Emscripten section, and that section is not measured.
+
+## P3 · Quake
+
+<a id="p3-1"></a>
+
+### P3.1
+
+✅ ✅ **DONE** — `src/env/headers-djgpp.js`: `go32.h sys/farptr.h sys/movedata.h dpmi.h dos.h io.h`, plus `pc.h` from P5.1. Written for MAME's `msdos.c` (P1.7) rather than for Quake, which is the ordering the roadmap did not predict.
+
+**Effort:** M
+
+**Why / unblocks:** The `outportb` premise was wrong — see P5.1.
+
+<a id="p3-2"></a>
+
+### P3.2
+
+✅ ✅ **DONE** — `WinQuake/` compiles and runs: 1030 functions, 1.73 MB of JavaScript in 0.9 s, demo1 at **525 fps**. `id386=0` turned out NOT to be the switch: `TARGET_DEFINES` sets `__i386__`, so the tree had been built in the wrong configuration all along until `mergeDefines` learned that `null` means *undefine*. | M |
+
+<a id="p3-3"></a>
+
+### P3.3
+
+✅ 🟡 **Quake runs on its OWN DOS platform units.** `node tools/quake.mjs --dos --run` builds 77 units / 51,391 lines with `sys_dos.c vid_dos.c vid_vga.c vid_ext.c vregset.c snd_dos.c snd_dma.c snd_mem.c snd_mix.c cd_audio.c in_dos.c dos_v2.c` — zero functions unemitted — and it reaches its console at 320x200 in mode 13h, drawing its own start-up messages and logo. The survey held: the default video mode programs no VGA registers, so the same three devices Heretic needed sufficed, plus `src/env/go32.js` for DJGPP's DPMI floor.<br><br>Not one of them is a modification: `-mem 16` is Quake's own switch (its `dos_getmaxlockedmem` does sbrk arithmetic PRISM does not support yet), and `tools/quake-dos-vars.c` supplies what the LINKER and ASSEMBLER provide — eleven x87 control-word routines that are genuinely no-ops here, and `VGA_UpdateLinearScreen` transcribed from `d_copy.s`. **And it plays.** Escape opens the menu, Down/Enter reaches Single Player, three more keys start a game: the 3D renderer, the start map, the status bar. The clock is `src/env/pit.js` -- Sys_FloatTime POLLS counter 0 and the BIOS tick at 0x46C, so a counter sufficed and no interrupt controller was needed -- and the keys go through Quake's own `TrapKey`, which `dos_registerintr(9, …)` put behind the protected-mode vector and which reads port 0x60 into Quake's own ring buffer.
+
+**Effort:** M
+
+**Why / unblocks:** The entry called this "device emulation, not shimming" and "a different project".
+
+<a id="p3-4"></a>
+
+### P3.4
+
+🟡 🟡 **The timedemo runs and the number is Quake's own: `969 FRAMES  1.4 SECONDS  694.2 FPS` on demo1.** It became possible only with the DOS build, because `Sys_FloatTime` there reads a real PIT — the null build's returns `t += 0.1`, so every timing the program did of itself was fiction and only a wall clock outside it meant anything. What is left is the pixel diff against real Quake under DOSBox-X.
+
+**Effort:** M
+
+**Why / unblocks:** This is the second real workload for P2.1, and the first that is a whole game rather than a CPU core.
+
+<a id="p3-5"></a>
+
+### P3.5
+
+🔴 🔴 **Quake's DOS mode-X resolutions cannot work yet, for TWO independent reasons.** Picking one from the video menu dies in `VGA_UpdatePlanarScreen`, which is defined only in `d_copy.s` -- the ONE routine in that build with no C equivalent behind `id386=0` (PRISM's build report has always named it; the page says so now too, at start-up rather than by crashing). And even translated, it would have nowhere to write: the DOS host publishes `0xA0000` as a LINEAR framebuffer and emulates no sequencer or plane registers, which is what a mode-X write needs. So this is P5 work AND host work, and the honest order is host first -- a planar VGA is what MIRAGE already has and PRISM does not.
+
+**Effort:** L
+
+**Why / unblocks:** Also unblocks every other mode-X DOS program. The linear modes are unaffected and the default one programs no VGA registers at all.
+
+<a id="p3-5b"></a>
+
+### P3.5b
+
+✅ 🟡 **ONE COLUMN IN FOUR: FIXED. The translated assembly was bypassing the page map.** The user read the screenshot better than I did -- I had said the sprites looked coherent and stopped, which one column in four does not support. `src/asm/x86.js` emitted `D.setUint8(addr, v)` straight at the flat image, so `get_block` and `put_block` -- the two routines that exist precisely to move rectangles in and out of PLANAR video memory -- never reached a plane. The same hole as memset/memcpy, closed hours earlier the same day and reopened here by hand. **Measured after routing loads and stores through xr/xw: 27,694 -> 66,027 non-zero pixels, and the title becomes legible where there had been noise.** **Why 400 green Unicorn cases said nothing about it: they run on a FLAT image, where the question cannot arise.** gate-asm now also runs each case PAGED -- identical to the flat run under an identity map, and REQUIRED TO DIFFER under a redirecting one, which is what proves xr/xw are actually consulted. That control first fired on 34 of 400, all clipped rectangles where the routine legitimately touches nothing: a control that reddens on correct code teaches people to ignore the gate, so it now applies only where the run changed something.
+
+**Effort:** M
+
+**Why / unblocks:** Two things it did NOT fix, both now measured rather than suspected -- see P3.5c.
+
+<a id="p3-5c"></a>
+
+### P3.5c
+
+✅ ✅ **SOLVED, and the defect was nowhere the symptoms pointed. `finalizeHeap` is called TWICE and the second call handed the game memory the environment had already been given.** Once while compiling and again inside run() before main, where it reset the heap frontier to its initial value -- so the 320 kB of VGA planes that registry.js allocates while installing the device were given back, and the game's own malloc for its background image returned an address SIXTEEN BYTES inside them. The background pass then read its source and wrote plane 0 over the top of it: a loop overwriting what it was reading. Fixed by making the frontier monotonic, which is exactly what the comment above sbrk in the same file already prescribes for its own instance of this -- 'a working sbrk would have handed out bytes malloc had already given away'. Same bug class, second site. **Verified: 0 differing pixels of 102,400, 256/256 rows exact, three backgrounds running, and the menu renders correctly** -- title, forest, rabbits, real palette. Gates after: gate-run 61/61, gate-asm 400/400, gate-planar, gate-memmap, gate-ports 4/4, gate-sound, gate-pixels 3/3, mame-golden 19/19. **THE COST IS THE LESSON.** Seven hypotheses were refuted on the way -- scratch bank, page boundary, read plane, address base, cross-plane leakage, spurious re-chaining, memset fan-out -- and none was absurd; two left permanent checks behind. But three times a trigger chosen because it was EASY TO DETECT rather than because it meant what I needed manufactured a phenomenon that did not exist (the false 8,604, 'plane 0 keeps degrading', 'the clear does not clear'), and I built on each before noticing. The rule worth keeping: when a symptom confines itself to a STRUCTURAL boundary -- here two 4 kB pages -- inspect the data structure instead of measuring its effects again. The addresses of the planes and of the source buffer were one command away from the start.
+
+**Effort:** M
+
+**Why / unblocks:** done
+
+<a id="p3-5d"></a>
+
+### P3.5d
+
+⚪ **The picture is still wrong, in a DIFFERENT way: the title repeats FOUR TIMES across the width, with heavy horizontal banding.** Still true with the real palette: bands of correct artwork separated by rows of noise. **Two hypotheses tested, one refuted, and a first measurement that is not yet clean.** REFUTED: a mid-draw capture. Snapshotting AT a page flip -- the program's own statement that a page is finished -- gives a byte-identical picture to one taken at an arbitrary safepoint, so the instrument is not the cause. CONFIRMED INNOCENT BY ARITHMETIC: the reader's formula. main.c writes source byte `l2*4 + c1` at offset `l2` of plane `c1`, so plane p at offset o holds `source[o*4 + p]`, and reading plane `x & 3` at `y*100 + (x>>2)` yields `source[y*400 + x]` exactly. MEASURED against the game's own `background_pic` after 2,000 flips: **64 of 256 rows byte-identical (exactly a quarter), 38,502 of 102,400 pixels differing, in 7 runs -- 4-11, 15-48, 55-58, 63, 81-145, 163-232, 246-255**. A quarter of rows perfect is a vertical factor of four beside the horizontal one, which is the strongest signal so far. **BUT THE MEASUREMENT CONFLATES TWO THINGS and is therefore not yet evidence of a defect**: the menu draws rabbits and a title OVER the background, and those rows legitimately differ. THE CLEAN EXPERIMENT IS DONE, AND THE BACKGROUND WRITE ITSELF IS WRONG. Comparing at the instant the four plane passes finish -- detected by the program's own signature, Map Mask 1,2,4,8 in order followed by any other -- and at OFFSET 0, where those passes write whatever page is on screen: **background #1 8,604 differing pixels, 157/256 rows exact; #2 and #3 both 36,066 differing, 82/256 rows exact.** No sprite has drawn yet, so the over-drawing confound is gone and no innocent explanation is left: four passes of 25,600 bytes cover the whole page, so the planes should EQUAL the source. Three things the numbers say beyond "wrong": it is DETERMINISTIC (#2 and #3 agree to the pixel, so not a race and not a capture instant); rows 0-3 are exact and 4-11 are not, the same row 4 the full-screen run showed; and it GETS WORSE between the first background and the later ones (157 rows exact, then 82) although a complete pass should overwrite everything whatever was there before. THE SCRATCH BANK IS ELIMINATED, and splitting the damage BY PLANE found the real shape of it. Zeroing the bank at the start of each background and reading it back after: **0 non-zero bytes, three times** -- the 510 bytes measured earlier were a whole-session total with nothing to do with this. And per plane, where plane p at offset o must hold source[o*4 + p]: **background #1 -- plane 0 is 8,604 bad from offset 483 (row 4), and planes 1, 2 and 3 are BYTE-PERFECT. Backgrounds #2 and #3, identical to the pixel -- plane 0 is 15,470 bad from the same offset 483, and planes 1-3 are ~6,860 bad each, all three first faulting at offset 8188 (row 81).** So the first background damages ONE plane only, which turns "the background is wrong" into a far narrower question. Two leads, both untested: (a) the READ table defaults to bank(readPlane) with readPlane = 0, so every window read lands in plane 0 -- any read-modify-write path would damage exactly that plane; (b) **REFUTED: 8188 is four bytes short of a 4 kB boundary, but straddling writes are fine.** Tested at the seams of pages 1, 2, 3 and 15, 32-bit and 16-bit: every one lands correctly, because `redirect` maps consecutive pages consecutively. The cases are now permanent in gate-memmap, so the refutation does not have to be redone. One real edge did come out of it: a 32-bit store two bytes before the END of the window spills two bytes past the bank into whatever follows -- at offset 65534, not 8188, so not this defect, but worth closing. (a) **REFUTED TOO, by intervention rather than observation.** Forcing the read plane to 2 before the program starts leaves the damage exactly where it was -- plane 0: 8,604, planes 1-3: 0, identical to the pixel -- and the run confirms the read plane really was 2 at that moment, so the intervention was not a no-op. The read table is innocent. **WHAT IS LEFT, REFRAMED: it is not "plane 0 is damaged", it is "the FIRST PASS is wrong and the other three are right".** The background loop runs the same code four times with a different single-bit mask; passes 2, 3 and 4 write 25,600 bytes each, byte-perfect, and pass 1 gets 8,604 of 25,600 wrong from offset 483. That eliminates everything structural -- the planar layout, the addressing formula, the translated assembly, the page map are identical across all four passes. What differs is what happens BEFORE the first one. **MEASURING PASS 1 IN ISOLATION -- plane 0 snapshotted at mask 1 and again at mask 2 -- moved the question again, and the three numbers are the most useful thing this chase has produced:** of the 25,600 bytes the pass writes, only **14,021 actually changed**; plane 0 was wrong in 16,860 places before and **3,509 after**; and of those 3,509, only **574 were written with a wrong value** while **2,935 were never written at all**. So roughly 11% of a pass's writes do not land in the plane at all, and that is a different fault from writing a wrong value. **CORRECTION TO A NUMBER I QUOTED REPEATEDLY: the 8,604 was my instrument, not the program.** The "end of the four passes" trigger fired on the FIFTH mask change -- whatever mask the game writes next -- and between pass 4 finishing and that moment the game draws sprites, whose writes into plane 0 are entirely legitimate. Measured properly, plane 0 is wrong in 3,509 places when the background ends, not 8,604, and it does NOT go on degrading. Two more leads died with it: during pass 2, with the mask selecting plane 1, bank 0 changes in **0 places** (no leakage), and `chained` flips exactly **once** in the whole run, at the initial unchaining (so writes are never silently sent to the flat image by a re-chaining). **WHAT IS LEFT IS ONE CLEAN ANOMALY: the FIRST pass loses about 11% of its writes and the other three lose none.** Passes 2, 3 and 4 are byte-perfect; pass 1 leaves 2,935 bytes never written and 574 written with a wrong value. **THE STATE PASS 1 INHERITS IS NOT WHAT I EXPECTED, and the result is ambiguous rather than decisive.** open_screen sets Map Mask 0x0f and memsets 65,535 zeros, so at the first single-plane mask all four planes should be zero. Measured: plane 0 has 13,693 non-zero bytes of 25,600 (first at offset 1933, row 19) and planes 1, 2, 3 have 17,875 / 17,908 / 17,697 (first at offsets 479, 484, 484 -- ROW 4, the same row pass 1 starts going wrong). Two readings and no way to choose yet: either the memset fan-out does not do what this project claims it does, or the game drew something between the clear and that point, which would mean the trigger fires later than assumed -- the same trap as the "fifth mask change" that manufactured the false 8,604. The asymmetry is the interesting part: plane 0 is both emptier and starts 15 rows later than the other three. **And 510 bytes in the scratch bank are confirmed real losses** -- byte writes made outside memset while four planes were selected, which is exactly the case the map declares it cannot express. **SETTLED, and the fan-out is vindicated.** Watching M.rt.memset itself: the clearing call is `dst=0xa0000 value=0 len=65535` under mask 0x0f, and at the instant it returns **all four planes are exactly zero**. writeSpans really does produce one destination per masked plane and memset really does reach all of them -- the mechanism does what this project claims, on the one program that exercises it. So the second reading was the true one: the trigger fired late, and the ~17,000 non-zero bytes per plane seen at the first single-plane mask are ordinary drawing done in between (a second window memset, dst=0xa55f0 len=2000, is already past by then). **THAT IS THE THIRD TIME TODAY A LATE TRIGGER MANUFACTURED A PHENOMENON** -- the false 8,604, the "plane 0 keeps degrading", and now "the clear does not clear". Same mode of error each time: measuring at a moment chosen for convenience rather than for meaning. WHAT REMAINS, now on solid ground: pass 1 loses about 11% of its writes, from a starting state known to be correctly cleared and then legitimately drawn. **AND THE MISSING BYTES HAVE A STRUCTURE: every one of the 2,935 lies in the FIRST TWO 4 kB PAGES of the plane -- page 0 holds 2,180 of them, page 1 holds 755, and pages 2 through 6 hold NONE.** The plane is 25,600 bytes, so more than two thirds of it is byte-perfect and the damage stops dead at offset 8192. That is a structural boundary, not a property of the picture, and it re-explains a number set aside earlier: planes 1-3 "first faulting at offset 8188" was the edge of this same region -- the limit was real, only my reading of it was wrong. Two secondary facts worth keeping: the missing offsets are spread evenly modulo 2, 4 and 8, which RULES OUT plane interleave and access width as causes; and modulo 100 (the row pitch) many columns are missing exactly 33 bytes, which looks like whole ROWS going unwritten rather than a scatter. What it is NOT: a detection artefact. A byte counts as unwritten only when it still differs from the source AND is unchanged, so a write that stored a value already present cannot appear here. ALSO RULED OUT: address shifting. `__djgpp_conventional_base` is 0 (a tentative definition in headers-djgpp.js, and go32.js states the image is flat with the low megabyte in place), so the guest's `0xa0000 + l2 + base` is exactly the window address. Superseded note: whether writes are lost to the scratch bank under a multi-plane mask -- 510 bytes were measured there, far short of 8,604 -- and why a full pass fails to restore a page. The image at that instant is uniformly black because the fade has not run, so the numbers are the result rather than a picture. The superseded plan was: compare immediately after the background's four plane passes finish and before the first sprite -- hooking the first put_block fired far too early, during the splash, when the palette was still black. A lead from the source rather than the picture -- main.c draws the background in four passes of 25,600 bytes from 0xA0000, i.e. into PAGE 0, one Map Mask per plane, reading its source with `l1 = c1; l1 += 4`. A layout fault, and the obvious suspect is already eliminated: the plane separation works. Measured -- the game sets Map Mask 0x1, 0x2, 0x4 and 0x8 six times each (one plane at a time, as a mode X blit does) plus 0x0f four times, and the four planes hold DISTINCT data (non-zero 44,929 / 34,221 / 34,296 / 34,256, four different checksums). So this is not the fan-out writing everywhere. **IT IS NOT AN EXACT REPEAT EITHER, and one hypothesis is already dead.** Measured on the busiest row: bytes match at period 25 (= 100 screen pixels) only **47.3%** of the time -- elevated against 12.8% at period 12 and 14.1% at period 20, so the structure is real -- and the four 100-pixel quarters of that row are **four DISTINCT** runs, not copies. I then guessed the menu draws four 100-pixel player panels, which would have made the picture correct, and `menu.c` refutes it: all four rabbits share one coordinate space (x 165..208, staggered by `c1 * 2`), clustered mid-screen, which is what the first screenshot showed. So the period-100 structure is UNEXPLAINED and I have no tested hypothesis left. **Do not judge it visually before the palette works**: the colours are a synthetic ramp today, under which a flat area becomes a chequerboard, so looking harder at that image is guessing. The reader's formula does match the game's own assembly -- plane `(x + c1) & 3` at `((x + c1) >> 2)`, i.e. plane `x & 3` at `x >> 2` -- which is why it is not the first suspect. **And a second, smaller defect measured alongside it: 510 non-zero bytes in the scratch bank** -- byte writes under a multi-plane Map Mask, genuinely lost, exactly the class the scratch bank exists to contain. **`vga.scratchWrites` cannot tell you this and never could: it is declared and incremented NOWHERE, so reading it returns 0 whatever happens** -- a decorative counter whose comment claims it stops the loss being silent. Either make it real or delete it; counting the bank's non-zero bytes is what actually measures it today. **THE PALETTE IS FIXED, and my diagnosis of it was wrong for several hours.** I said repeatedly -- in two commits and in this row -- that it was black because the game fades in under its own TIMER and nothing delivers IRQ 0 ticks. It asks the video hardware, not the clock: the fade loop in main.c calls `wait_vrt()` every iteration, which polls bit 3 of the retrace register at 0x3DA both ways, and the target simply did not name the `crtstatus` device. That device already existed and its own header comment describes this exact eternal loop. One word in an env list. **Measured after: palette 0/768 -> 678/768 non-zero, page flips 1 -> 119,756, 99 colours, and the artwork renders in its real colours.** The picture is now JUDGEABLE, which is what makes the remaining fault worth chasing.
+
+**Effort:** M
+
+**Why / unblocks:** Do not chase all three as one bug. The keyboard and the palette are the same missing thing (interrupt delivery from a safepoint); the four-times-across is not.
+
+<a id="p3-6"></a>
+
+### P3.6
+
+🟡 🟡 **The pixel diff against DOSBox-X needs a THIRD ingredient, and it is not obvious.** The recipe `tools/gate-pixels.mjs` already uses between PRISM's own four platform layers is: (a) the arguments `-nosound -nocdaudio +host_framerate 0.05 +con_notifytime 0`, (b) stop at the Nth `R_RenderView` -- a frame of the WORLD, so it does not matter how many console screens each side drew on the way -- and (c) **a clock that steps by a fixed amount**, because `host.c:643` calls `rand()` once per iteration of the main LOOP, before `Host_FilterTime` decides whether that iteration will simulate anything. The PRNG therefore follows the host's clock speed, not simulated time: PRISM's DOS build had spun 3,061 times by world frame 90 where its X11 build gave 90, and from the first particle the two pictures differ -- 289 of 64,000 pixels by frame 200, every one of them rand()-placed. Inside PRISM (c) is a replaced `Sys_FloatTime`. **Against a real binary under DOSBox-X it cannot be, and that is the open part of this task**: the reference side needs its BIOS tick and PIT counter stepped by 1/72 s per LATCH instead of by wall time, which is a host change on that side, not a Quake option.
+
+**Effort:** M
+
+**Why / unblocks:** The MIRAGE session hit exactly this from the other end and is taking the same hardware-level route (their G7); worth comparing notes before building it here. Without (c) the diff is red with particles and says nothing about either engine.
+
+<a id="p3-7"></a>
+
+### P3.7
+
+✅ ✅ **DONE — there is a mouse, on DOS and on X11.** The channel in the control block is an ACCUMULATOR rather than a position, because that is what every program here wants: `Atomics.add` on the page's side, `Atomics.exchange` for zero on the guest's, so a movement cannot be lost to the other side's timing. **DOS** is three INT 33h services and no more (AX=0000 status, 0003 buttons as a LEVEL -- Quake makes the edges itself -- 000B motion counters, signed): Quake prints `3-BUTTON MOUSE AVAILABLE` and turns. **X11** is a VIRTUAL POINTER, because X reports where the pointer IS and the host has only how far it moved: the position advances by each delta and `XWarpPointer` resets it, which is exactly the loop `vid_x.c:891` and `i_video.c:325` run, so their subtract-the-centre arithmetic comes out as the delta they wanted. The page captures under Pointer Lock, with an honest fallback when it is refused. **And two of id's own conditions surfaced**: Doom needs `-grabmouse`, because `PointerMotionMask` is COMMENTED OUT in `i_video.c:802` and it is the XGrabPointer behind that switch which selects motion at all; and `i_video.c:257` posts the event only `if (x != centre && y != centre)` -- an AND, so a purely horizontal movement is discarded by the game itself. Both are the program's, not ours, and both are now in its descriptor.
+
+**Effort:** —
+
+**Why / unblocks:** done, on all three hosts. Win32 took one thing more than the others: WM_ACTIVATE. WinQuake's `IN_Move` is `if (ActiveApp && !Minimized)` (in_win.c:741) and `ActiveApp` comes from that message alone -- with no window manager to send it, the deltas arrived, `IN_Accumulate` banked them (measured: `mx_accum` reached 11,760) and `IN_MouseMove` was called ZERO times in 400 frames. A shown window is the active one here, and the page's focus now drives it, which is also what makes alt-tab release the mouse. Windowed WinQuake additionally needs its own `+_windowed_mouse 1` (vid_win.c:1610), which is id's rule for a windowed game and is in the descriptor.
+
+## P4 · Doom
+
+<a id="p4-1"></a>
+
+### P4.1
+
+✅ ✅ **DONE** — `src/env/x11.js`, the Xlib boundary (not the protocol), plus the POSIX half in `src/env/stdio.js`. `linuxdoom-1.10` compiles entirely unmodified: 62 units, 45,152 lines, 714 of 715 functions.
+
+**Effort:** M
+
+**Why / unblocks:** ⚠️ The DOS/Watcom Doom source was never released; this is the Linux/X11 tree, which is why the host is Xlib and not DOS.
+
+<a id="p4-2"></a>
+
+### P4.2
+
+✅ ✅ **DONE, and better than the entry asked** — not just the title screen: `-warp 1 1` plays **E1M1**, 260 frames at ~1 ms each. The shareware WAD's demos do not play and Doom says why itself (`Demo is from a different game version!`). Sound needs P1.8.
+
+**Effort:** M
+
+**Why / unblocks:** The pixel diff against `DOOM.EXE` is not possible: MIRAGE cannot run Doom (DPMI), which is the whole reason PRISM exists.
+
+## P5 · Native assembly
+
+<a id="p5-1"></a>
+
+### P5.1
+
+✅ ✅ **DONE, and it did not need inline assembly at all.** The premise was wrong twice over, and the measurement that dissolved it took one command: **neither MAME's `msdos.c` nor Quake's `sys_dos.c` contains a single asm statement of its own** — sys_dos.c's only `__asm__` is a symbol label, not an instruction. Every port access in both goes through `pc.h`'s `inportb`/`outportb`, and PRISM SUPPLIES `pc.h`; declaring them as functions is a platform port, exactly like supplying `stdio.h`. Delivered instead: `src/env/ports.js`, the I/O seam using MIRAGE's own device contract (`onPortRead`/`onPortWrite`/`mem`) so its devices install unchanged, and `src/env/pit.js`, counter 0 plus the BIOS tick at 0x46C — the clock Quake's DOS build actually polls. Gated by `tools/gate-ports.mjs`, which has no oracle and says so: there is no PC I/O space on the container's Linux host, so it checks the device's contract instead.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p5-2"></a>
+
+### P5.2
+
+🟡 🟡 **MEASURED AT ONE SYMBOL — AND THE CENSUS HAD A HOLE, WHICH IS WHERE THE ASSEMBLER CAME FROM.** The cross-reference across the whole corpus: Quake/DOS `21 files export 126 symbols; 1 still undefined` (`VGA_UpdatePlanarScreen`), Quake II `22 files, 165 symbols, 0 undefined`, Heretic `0`, Hexen `0`. Every other assembly routine already has a C twin the source itself ships, which is what `id386=0` and `#ifndef __WATCOMC__` are FOR. So an assembler's remaining value is not compatibility, it is SPEED -- Quake's `id386=1` inner loops -- and speed work here needs a measured baseline first (P2.4), which does not exist. **That census covered Quake/DOS, Quake II, Heretic and Hexen and concluded corpus-wide; it never looked at Jump 'n Bump.** Its DOS tree's `dos/gfx.S` is NASM despite the `.S`, exports `get_block` and `put_block`, and ships **no C twin at all** — the disabled C bodies belong to tag 0.72, the port's tree, not the original. So the one file in the corpus where assembly cannot be side-stepped was the one the survey skipped, and P5 started there rather than with Quake's renderer. **DELIVERED: `src/asm/{nasm,x86,link,pragma-aux}.js`** — a NASM subset parsed and translated to a `for(;;) switch(_pc)` state machine with eager, width-correct EFLAGS (MIRAGE's model re-derived, not imported), bound through the target's `asmTranslate`; builds print `assembly translated and bound: get_block put_block`. Oracle: **Unicorn on 400 random cases**, plus a PAGED control that must differ under a redirecting map — 400 green flat cases had said nothing about stores bypassing the plane map (P3.5b). **STILL NOT STARTED, and still on purpose:** the GAS `.s` subset for speed — to recover Quake's `id386=1` inner loops. Also Heretic and Hexen's `LINEAR.ASM`, whose `R_DrawColumn`/`R_DrawSpan` are currently sidestepped by compiling `R_DRAW.C` with `__WATCOMC__` undefined to select the C bodies the file already carries.
+
+**Effort:** L
+
+**Why / unblocks:** MIRAGE's x86 recompiler is both the fallback and the oracle.
+
+<a id="p5-2a"></a>
+
+### P5.2a
+
+✅ 🟢 **Inline asm with an EMPTY TEMPLATE — torture 1344 → 1363.** Twenty of gcc's programs are `asm("" : "=r"(i) : "0"(x))` and nothing else: no instructions, so everything they do is in the CONSTRAINTS, and a digit constraint on an input names the output it shares a register with. The output ends up holding the input. Also: a `+` output evaluates its lvalue exactly once, side effects and all (990130-1.c counts the calls), and a constraint arrives as a string token with its quotes on. **This is not the assembler** -- it is the twenty programs that never needed one.
+
+**Effort:** S
+
+**Why / unblocks:** done
+
+<a id="p5-3"></a>
+
+### P5.3
+
+✅ 🟢 **A program's own assembly is TRANSLATED from its source, in three dialects — and the one that matters most was not in this section's plan.** (1) The GAS/NASM subset of P5.2 (`nasm.js`, `x86.js`), flat 32-bit, for Jump 'n Bump's blitters. (2) **Borland inline `asm`** (`borland.js`), interleaved with C, jumping to C labels, seeing a far pointer as seg:off views of a linear address; held to Unicorn in 16-bit real mode, 1,339 cases. (3) **Whole TASM modules** (`tasm.js`, `tasm16.js`, `tasm-link.js`): MASM and IDEAL, macros, REPT, STRUC, PROC/USES, ASSUME, FARDATA, `.386C` -- laid out at Turbo Assembler 2.5's own offsets, because the program sees its code addresses, then executed against TASM's own object code under Unicorn. What none of them can do is the boundary of the whole approach: **code the program writes at run time** (P11.4).
+
+**Effort:** —
+
+**Why / unblocks:** See **P11**.
+
+## P6 · Raven (Heretic, Hexen)
+
+<a id="p6-1"></a>
+
+### P6.1
+
+✅ ✅ **DONE — Heretic plays its attract loop.** Title, credits and the demo, 320x200 with the 3D renderer, monsters and the status bar. Both trees compile completely from their own makefiles (761 and 1,215 functions). `tools/raven.mjs`.
+
+**Effort:** M
+
+**Why / unblocks:** The whole DOS platform cost three devices; see P3.3.
+
+<a id="p6-2"></a>
+
+### P6.2
+
+✅ 🟢 **Hexen RUNS, on the retail v1.1 WAD.** (was: blocked on its own data) `P_SETUP.C:803` defaults every map's sky to `R_TextureNumForName("SKY1")`, unconditionally and before MAPINFO is read, and the WAD in `mirage/games/HEXEN` has no such texture — 148 textures in TEXTURE1 plus `BULLSHIT` in TEXTURE2, SKY2/3/4 and no SKY1. The string does not occur anywhere in the file except as MAPINFO's own `sky1` keyword. **That WAD is the four-level DEMO** (10,644,136 bytes, 2856 lumps, Oct 1995), not retail — an earlier note here had the two the wrong way round, which pointed at the wrong data. The source release is v1.1 retail, so it needs the RETAIL HEXEN.WAD; the demo's own EXE ships the same string and the same function, so v1.0 evidently did not make that lookup fatal. PRISM builds exactly the textures the WAD holds and looks them up exactly. **Not a Mode-X problem**: Hexen exits in video mode 0x3, before any graphics mode is set. MIRAGE cannot arbitrate either — its own Hexen is still inside DOS4GW's mode-switch loop at ~1021 Mc and never reaches a video mode (mirage docs/ROADMAP.md C5).
+
+**Effort:** S
+
+**Why / unblocks:** Recorded rather than worked around: patching the game or the data is the one thing this project does not do.
+
+<a id="p6-3"></a>
+
+### P6.3
+
+✅ ✅ **DONE — Heretic is interactive.** `src/env/kbd8042.js`: ports 0x60 and 0x64, plus the PIC's end-of-interrupt at 0x20. Escape opens the menu, Down/Down/Enter reaches the load/save submenu — four keypresses, four correct responses. Nothing about the keyboard is special-cased: PRISM queues a scan code, calls the game's own `I_KeyboardISR`, and the ISR fills the game's own ring buffer.
+
+**Effort:** S
+
+**Why / unblocks:** The third and last device a DOS game of this era needs.
+
+<a id="p6-4"></a>
+
+### P6.4
+
+⚪ **Pace it, and put it in the browser.** The tic is delivered per N safepoint hits, which is deterministic but not 35 Hz. A real clock and the existing `web/` shell would make it playable.
+
+**Effort:** M
+
+**Why / unblocks:** Same host contract as MAME and Doom; the descriptor is the only new thing.
+
+## P7 · Targets as data, and the programs they brought
+
+<a id="p7-1"></a>
+
+### P7.1
+
+🟡 🟡 **Targets are DATA.** `targets/*.json` + `src/target.js` + `src/env/registry.js` + `tools/build.mjs`: the six decisions each harness had hand-written -- units, generated C, platform macros, include resolution, memory, environment -- stated once per program. All five targets reproduce their hand-written harness EXACTLY (Quake DOS 77 units / 51,391 lines / 1169 functions / same two stubbed headers; Heretic 761 functions; MAME 913; Doom 715). Units come from a list, a glob, or **the program's own MAKEFILE**, which is the best of the three because it is the build the authors ran.
+
+**Effort:** M
+
+**Why / unblocks:** The four tools in tools/ still restate their build, so it is described twice until they call buildTarget(). That is the next step, not a finished state.
+
+<a id="p7-2"></a>
+
+### P7.2
+
+✅ 🟢 **The 16-bit ABI is pinned by an external oracle — `gate-abi16.mjs`, ~4,970 checks over six seeds, exact.** Nothing here runs a DOS executable, so the answers come out of the OBJECT FILE: each query is a `char` array initialised with the DIGITS of its value, the compiler folds the constant, and `oracle.watcom16` reassembles the OMF data records and scans for it — the technique CMake uses to size types when it cross-compiles. Reading the file raw loses answers silently, because a probe string that straddles an LEDATA boundary appears in two pieces (3 of 38 went missing). **What the oracle then said, none of it guessable:** alignment stops at 2, so `struct { char; double; }` is 10 bytes and not 12; an enum is ONE byte; and Watcom places bitfields in WHOLE UNITS — a bitfield of type T takes a unit of sizeof(T) at the next alignof(T) boundary, units are shared only within one type FAMILY (signedness stripped: `unsigned int` shares with `int`, not with `unsigned short`), and `int :0` closes the open unit. 28 of 518 checks disagreed until that rule existed, and every one of them held a bitfield. `layoutStruct` takes `bitfields: 'gcc' | 'watcom'`; i386 is untouched (16,531/16,531). **And a SECOND oracle, for behaviour rather than layout**: `oracle.watcomRun16(source)` builds a real DOS executable and runs it under **DOSBox-X headless** (`-silent -fastlaunch -nogui -nomenu -time-limit`, `SDL_VIDEODRIVER=dummy`; the time limit is not optional -- a DOS program waiting for a key holds the session open for ever, which is how the first attempt hung). It agrees with the object-file oracle on layout and answers what the object file cannot: `30000 + 30000` prints **-5536**, the 16-bit wrap, which no 32-bit reference can tell us. **And a THIRD oracle, because the second one was not being asked anything**: `tools/gate-bits16.mjs` compares the BYTE IMAGE of an initialised struct against a real DOS run. `gate-abi16` cannot reach this and says so itself -- offsetof is illegal on a bitfield, so bitfield placement is pinned only by the struct's size, which fixes WHICH UNIT a field lands in and nothing about WHERE IN IT. Flip the allocation order inside every unit and all ~4,970 of its checks still pass, while `layoutStruct` commits to `bitOffset = unitAt * 8 + unitUsed` regardless: an assumption in a measurement's clothes. The new gate hands Watcom an initialised object and reads the bytes back -- **210 cases, 14,760 bits, byte-identical over three seeds** -- and the answer came in one line before the gate existed: `struct B { int a:3; int b:5; }` = `{5, 9}` is `4D`, i.e. `01001_101`, **LSB-first**. It also pins what no offset can: a negative field's sign bit, IEEE-754 little-endian `float`/`double`, and zero padding in a static image. **Its positive control is part of the result**: allocating MSB-first turns 18 of 22 cases red and writing plain members big-endian turns 8 red, so the green run means something. What is NOT done: PRISM still emits for i386 only — this is the measuring instrument and the model, not a 16-bit backend.
+
+**Effort:** M
+
+**Why / unblocks:** `node tools/gate-abi16.mjs [count] [seed]`
+
+<a id="p7-3"></a>
+
+### P7.3
+
+✅ 🟢 **Per-module symbol namespaces — Quake II runs.** A program of this era is often several shared objects, and they do not see each other's globals: `qcommon/common.c:101`, `game/g_main.c:154` and `ref_soft/r_main.c:1410` each define `Com_Printf` through their own import struct. A target now declares modules; each keeps its own external namespace, sees the main module's for what it does not define (ELF's rule for a .so against the executable), and exposes only what its own `.def` file EXPORTS — `EXPORTS GetRefAPI`, `EXPORTS GetGameAPI`, one symbol each. **`dlopen` proved unnecessary**: `null/vid_null.c` is titled DIRECT LINK GLUE and calls `GetRefAPI` in process, so the program's own export files were the whole bridge. Quake II now prints `Console initialized.`, crosses into `ref_soft$GetRefAPI`, and stops at `Couldn't load pics/colormap.pcx` — the right stop for a run with no data.
+
+**Effort:** L
+
+**Why / unblocks:** One subtlety cost a run: a DECLARATION must not shadow a DEFINITION further out. ref_soft includes q_shared.h, so a prototype gave it `ref_soft$Swap_Init` for a function whose only body is in the engine. A prototype claims nothing; only a body does.
+
+<a id="p7-4"></a>
+
+### P7.4
+
+🟡 🟡 **OpenDUNE compiles and runs to its data check** — 84 units, 46,169 lines, 834 functions, 11 unemitted. A REIMPLEMENTATION, so it says PRISM handles a large modern-C DOS program, not that it runs unmodified 1990s source; the claim is different and worth keeping straight. It was cheap because the project ships `Makefile.wc`: Watcom, DOS4G, flat model, `video_dos.c`, author-maintained `dsp_none`/`midi_none`/`crashlog_none` — the Heretic environment exactly. What is left, ranked: 5× a local of incomplete type (tier-0), `strpbrk` and `_mkdir` (libc), one `'bin' is not an lvalue`, and three fields missing from `struct Team` — the last worth a look, because PRISM keeps ONE global struct-tag table where C scopes tags per translation unit. `i86.h` is stubbed, so `video_dos.c`'s DOS calls are undeclared.
+
+**Effort:** M
+
+**Why / unblocks:** Four PRISM gaps found and fixed on the way: `_loadds` and a bare `far` before an identifier, a pragma inside a function body, `<sys/types.h>` losing to a tree file's basename, and `&((c*)8)->m` — the hand-rolled offsetof, which was refusing every save/load table in the program. Plus one regression the gate caught: skipping body pragmas silently discarded `#pragma push_macro`/`pop_macro`, turning c-testsuite 00206 from a refusal into a wrong answer. Now handled in the preprocessor; 201 → 202/219.
+
+<a id="p7-5"></a>
+
+### P7.5
+
+✅ 🟢 **Quake II RENDERS.** 109 units, 87,098 lines, **2120 functions**, nothing unemitted. `src/env/dl.js` answers `dlopen`/`dlsym` from PRISM's own symbol table -- nothing is loaded, because everything is already linked; `dlopen` names a module and `dlsym` looks up the linkage name pass 1 gave it (`game$GetGameAPI`). The soname comes from the target, and the target got it from `linux/Makefile.i386`. With `linux/sys_linux.c` in place of the null platform it reaches `====== Quake2 Initialized ======`, connects a client over the loopback, spawns `Player\\male/grunt` and plays `demos/q2demo1.dm2` on **Installation**.
+
+**Effort:** L
+
+**Why / unblocks:** `linux/rw_x11.c` was the program's own answer for the surface, over the Xlib PRISM already had for Doom -- four Xlib entry points, 21 keysyms, `struct sigaction` and a Visual with its masks. The thing that actually stood between a blank buffer and a picture was **anonymous `mmap`**: `Hunk_Begin` reserves 16 MB that way and calls `Sys_Error` on -1.
+
+<a id="p7-6"></a>
+
+### P7.6
+
+✅ 🟢 **OpenDUNE RUNS on Dune II's data** — past `Cannot initialise files`, into its own intro: 400 Video_Tick, the credits drawing in the framebuffer. The data goes under a `DATA/` subdirectory of whatever `--data` names, because `file.c:38` compiles `DUNE_DATA_DIR` as `"DATA"` and enumerates that directory; pointing --data straight at the PAKs finds nothing. Behind it, read out of the source: `get_bios_keyboard_scancode` and the mouse.
+
+**Effort:** S
+
+**Why / unblocks:** `node tools/opendune.mjs --data=<dir containing DATA/> --frames=400 --png=/tmp/od.png`
+
+<a id="p7-7"></a>
+
+### P7.7
+
+✅ 🟢 **Undefined symbols are reported.** A linker names them; PRISM swallowed them, so a call to a declared-and-never-defined name compiled and threw at run time. The first run found a real defect: C99 6.2.2p4 says a definition with no storage class keeps the INTERNAL linkage of a visible prior `static` declaration, and PRISM made it external — so Heretic's `DrawMainBar` (declared static at SB_BAR.C:39, defined without it at 909) had two objects and every call reached the one nothing defined. Five in Heretic, eight in Quake II's qmenu.c. It also found two units missing from a target because `linux/Makefile.i386` is older than the source beside it: `client/cl_newfx.c` and `game/g_chase.c`.
+
+**Effort:** S
+
+**Why / unblocks:** Six of seven targets now report none.
+
+<a id="p7-8"></a>
+
+### P7.8
+
+✅ 🟢 **The assembly cross-reference: 298 exported symbols, 1 missing.** Every `.s` and `.ASM` in a target is scanned for what it exports (`\.globl C(name)` in GAS, `PUBLIC name_` in MASM) and crossed with the undefined list. That answers the only question worth asking before writing an assembler — for THIS target, how many symbols would one buy? quake:dos 126→**1**, quake2 165→0, hexen 7→0, heretic 6→0, doom 4→0, opendune and mame01 have no assembly at all. The one is `VGA_UpdatePlanarScreen`, the mode-X sibling of a routine already transcribed from the same `d_copy.s`.
+
+**Effort:** S
+
+**Why / unblocks:** It measures the id386=0 thesis instead of assuming it.
+
+<a id="p7-9"></a>
+
+### P7.9
+
+✅ 🟢 **`#pragma aux` routine bodies compile.** Not a calling convention decorating a C function — the whole routine, in assembly. Eleven exist in the corpus and eight are in a library no build includes, so the real clients are three: `FixedMul`, `FixedDiv2`, `get_bios_keyboard_status`. `src/asm/pragma-aux.js` knows their instructions and refuses everything else BY NAME. All three had been transcribed by hand first, which makes them its oracle: the same program with and without the pragmas hashes identically, and OpenDUNE's intro renders the same 37,405 pixels.
+
+**Effort:** M
+
+**Why / unblocks:** It does NOT use MIRAGE, and the reason generalises: MIRAGE consumes BYTES, a pragma body is TEXT. An assembler front end is needed either way; what MIRAGE offers P5.2 is semantics and a differential oracle, not a component.
+
+<a id="p7-10"></a>
+
+### P7.10
+
+✅ 🟢 **Heretic was never broken — the harness needs `--safepoints`.** `tools/raven.mjs` drives the TIMER INTERRUPT from the safepoint, because that is the only place an asynchronous event can reach a program sitting inside a loop of its own C. Without the flag no safepoint is emitted, no tic is ever delivered, and the game waits for ever — which looks exactly like a hang and is not one. With it, Heretic finishes in under 21 s and the safepoint profile shows it rendering: `R_DrawColumn` 100 M iterations, `R_DrawSpan` 36 M, `V_DrawPatch`, `W_CheckNumForName`.
+
+**Effort:** S
+
+**Why / unblocks:** I recorded this as a red regression and bisected it to the first commit of the session before reading my own tool. The tool now says so when the flag is missing.
+
+<a id="p7-11"></a>
+
+### P7.11
+
+🟡 🟡 **OpenDUNE's animations run slow and then lurch.** Reported from play: the intro plays slowly and suddenly catches up at a fade. Not investigated. The two candidates are the shape of the symptom: the real clock (`installRealClock` scales `performance.now`, and a program that polls a timer it does not trust will bank the difference) and the spin damping (a service polled in a tight loop is PARKED for a millisecond, so a program measuring elapsed time across that park sees a jump). Both are measurable before anything is changed: count the guest's clock reads per frame, and compare the intervals it computes against the wall.
+
+**Effort:** M
+
+**Why / unblocks:** The same two mechanisms pace every DOS program here, so whatever this turns out to be is not OpenDUNE's alone.
+
+## P8 · Semantic oracles: Lua, the MAME releases, and what they found
+
+<a id="p8-1"></a>
+
+### P8.1
+
+✅ 🟢 **Lua 5.4 runs** — 34 units, 25,957 lines, 1,092 functions, nothing unemitted. It is here as an ORACLE, not a target: 33 files of its own `assert()`-based tests, of which `sort.lua` (50,000 elements, 852,463 comparisons), `math.lua` and `bitwise.lua` reach `OK`.
+
+**Effort:** M
+
+**Why / unblocks:** It paid for itself on the first run by finding the UTF-8 bug below.
+
+<a id="p8-2"></a>
+
+### P8.2
+
+✅ 🟢 **A C string is BYTES.** Every printf-family writer encoded its result as UTF-8 and `cstr` decoded as UTF-8, so the two were consistently wrong and round-tripped — which is why nothing had noticed. `sprintf("%c", 0xE4)` produced `C3 A4`: five bytes where C says four. Both now map one byte to one character, exact for every byte including those no UTF-8 decoder accepts.
+
+**Effort:** S
+
+**Why / unblocks:** Found by Lua's `strings.lua:204`, not by reading.
+
+<a id="p8-3"></a>
+
+### P8.3
+
+✅ 🟢 **`%f` expands in BigInt.** (was: goes exponential above 1e21) `string.format('%.99f', -1e308)` must print 309 integer digits; JavaScript's `toFixed` returns `-1e+308`. This is the next thing `strings.lua` stops on (line 272) and a printf correctness bug in its own right. Fixed: a double is exactly m x 2^e, so `value * 10^p` is an exact ratio and the tie -- half to EVEN, as glibc does it and `toFixed` does not -- is a comparison of two integers. `strings.lua` moved from line 272 to line 326.
+
+**Effort:** S
+
+**Why / unblocks:** Written down before it was fixed, which is why the report named the line.
+
+<a id="p8-4"></a>
+
+### P8.4
+
+✅ 🟢 **DONE — 14 pass to 16, 5 fail to 1.** The gate re-executes itself with a bigger JS stack (three failures were the host, not the language) and walks the test tree rather than listing it flat. Five stdio defects: `fopen(path,"w")` succeeded for any path, `ungetc(EOF)` rewound a byte, a read-only stream accepted writes and a write-only one accepted reads, and `"r+"` TRUNCATED. Left: buffering. Was: **Lua's test suite as a GATE.** Today three files were run by hand. Thirty-three exist, they are self-checking, and they cover semantics no game exercises — coroutines, garbage collection, metatables, the C API's own limits. This is the same move c-testsuite and Csmith already are, on a corpus that ships with the program.
+
+**Effort:** M
+
+**Why / unblocks:** The highest-value next step: it turns one afternoon's finding into a standing oracle, and P8.3 becomes its first report rather than a note.
+
+<a id="p8-5"></a>
+
+### P8.5
+
+✅ 🟢 **MAME 0.1 through 0.4, from one harness.** `tools/mame.mjs --release=04` — the unit list is transcribed from each makefile's own OBJS, because the releases differ in more than drivers (0.3 dropped most of the per-driver `machine.c`). 0.3 runs **Donkey Kong**; 0.4 adds Bagman and **Wizard of Wor**, which is the first driver in the corpus that is not a Pac-Man-family Z80 board. 0.4 compiles first try (33 units, 10,762 lines, 973 functions) and both new drivers render. One header gap came out of it: `M_PI`. It is X/Open rather than ISO, and every DJGPP and Unix math.h of the era defined it unconditionally -- `cclimber/PSG.C` builds its wave table with `128*cos(2*M_PI*i/WTS)` and declares nothing. The whole M_ family is in `math.h` now. Four releases of one program in five months is a compiler test no single snapshot gives.
+
+**Effort:** S
+
+**Why / unblocks:** `node tools/mame.mjs --release=04 --roms=<dir> --game=wow --run --frames=600 --png=/tmp/wow.png`
+
+<a id="p8-6"></a>
+
+### P8.6
+
+✅ 🟢 **clangsay**, and the Duff's device it found. A `case` label inside an `if` is legal C and illegal JavaScript; PRISM emitted it faithfully and the engine refused to parse the result. The fix was not to refuse the shape — `flatten.js` already lowers a switch to labels and gotos — and my first attempt, which did refuse it, cost a c-testsuite program and announced itself that way.
+
+**Effort:** S
+
+**Why / unblocks:** It is a 2016 reimplementation of a PERL program, so it says nothing about running original source. Its whole value was the bug.
+
+<a id="p8-7"></a>
+
+### P8.7
+
+⚪ **Descent: not a candidate until P5.2.** Four of its 66 `.ASM` files have a `.C` twin; the other 62 include all 28 of TEXMAP — the texture mapper IS assembly — and the eleven files of the 3D pipeline. Also: comparing stems is the WRONG test for anything descended from Quake, which names `d_polysa.asm` against `d_polyse.c`. For that family the measurement is to compile with `id386=0` and read the undefined-symbol report.
+
+**Effort:** —
+
+**Why / unblocks:** The candidate list, ranked and measured, is in docs/COMPAT.md. Hexen II is first.
+
+<a id="p8-8"></a>
+
+### P8.8
+
+✅ 🟢 **The menus answer the keyboard.** `xkey.keycode` was written at offset 36 and is at 52, so every key reached Doom as keycode 0; Escape only looked like it worked because `G_Responder` opens the menu on any keydown during a demo. The page also swallowed presses while the focus sat on its own controls and delivered the matching releases anyway. `tools/doom.mjs --keys=esc,enter,enter,enter` now reaches E1M1 with `demoplayback=0`. MAME needed no fix: it was waiting for `0` at its audio-device prompt.
+
+**Effort:** S
+
+**Why / unblocks:** The instrument came first: wrapping `M_Responder` and printing its argument ended an argument two wrong readings long.
+
+<a id="p8-9"></a>
+
+### P8.9
+
+✅ 🟢 **Six printf defects, from Lua's own assertions.** `strings.lua` walked 326 → 329 → 345 → 351 → 361 and now reaches its own skip line: the sign of `-0.0`, `inf` printed as `Infinity`, a `.` with no digits meaning precision **0**, `#` on octal, flags that ran for integers only (`%+#014.0f` gave `          100` for `+000000000100.`), and `%g` choosing its style by accident instead of by C99 7.19.6.1p8. Plus a memory bug that was not printf: `finalizeHeap` froze the heap base while `Module.alloc` kept bumping past it, so lazily interned strings landed inside malloc'd memory — 64 KB is now reserved, and overflowing it names itself. Lua 27 files: 14 pass, 8 self-skipped, **5 fail (was 8)**.
+
+**Effort:** M
+
+**Why / unblocks:** The remaining five are the JS call stack (3), the allocator (1), and files.lua:47 (1). `main.lua` is skipped by name: it shells out to the interpreter.
+
+## P9 · One engine, more platforms: X11, Win32, SunOS, and sound
+
+<a id="p9-1"></a>
+
+### P9.1
+
+✅ 🟢 **Quake's Linux/X11 client runs, renders, and now compiles whole.** 71 units, 47,798 lines, 1083 functions, nothing unemitted. Zero new Xlib: the shim written for Doom already had all 41 functions it calls. The unit list is the difference between `Makefile.linuxi386`'s `X11_OBJS` and the engine list, computed. `build.mjs` gains generic `--frames`/`--png` (XPutImage is the frame boundary).
+
+**Effort:** M
+
+**Why / unblocks:** Open on this target: sound needs an mmap-able /dev/dsp with a play pointer; sockets are 8 functions behind `net_none.c`.
+
+<a id="p9-2"></a>
+
+### P9.2
+
+✅ 🟢 **Duff's device.** `collectCases` looked inside loops for nested `case` labels; `walkSwitchBody` did not, so every jump was emitted and no label was. Fixed where the statement actually sits. **c-testsuite 202 → 204**, gate-run 31/31 with a new case covering all eight remainder classes, Quake/X11 2 unemitted → 0, clangsay 8 → 7.
+
+**Effort:** S
+
+**Why / unblocks:** The refusal named one program; the defect was costing three.
+
+<a id="p9-3"></a>
+
+### P9.3
+
+✅ 🟢 **Doom is audible in the browser.** `web/sndworker.js` runs `corpus/DOOM/sndserv` as a second program, connected by a byte pipe, publishing into the audio ring the page already read for MAME. 10,922 frames/second into the ring at 11,025 Hz. The lesson is which thread starts it: the worker running Doom never returns from `prog.run`, so a child created there posts to an event loop that has stopped.
+
+**Effort:** M
+
+**Why / unblocks:** The page is the system; a program is a thread.
+
+<a id="p9-4"></a>
+
+### P9.4
+
+✅ 🟢 **Quake/X11 has sound**, through the OTHER way a program uses /dev/dsp: mmap the DMA buffer and ask GETOPTR where the card is. `snd_linux.c` checks DSP_CAP_MMAP and refuses without it. Verified against the `volume` cvar rather than against a histogram.
+
+**Effort:** M
+
+**Why / unblocks:** `GETOSPACE` describes the DEVICE, not the queue -- the old answer gave a program asking about the card an answer about the ring.
+
+<a id="p9-5"></a>
+
+### P9.5
+
+✅ 🟢 **WinQuake runs, renders and takes the keyboard** — the same game on a third platform from one tree. 76 units, 1,297 functions, 0 undefined. `src/env/headers-win32.js` (the Windows SDK the shipped DirectX/MGL headers assume), `src/env/mgl.c` and `src/env/win32.c`, both in C because their contracts are public structs.
+
+**Effort:** L
+
+**Why / unblocks:** Two shims were wrong the same way -- `CreateEvent` and `MGL_changeDisplayMode` refusing what is not a device. And `MGL_fatalError` as `{ }` let a fatal path continue.
+
+<a id="p9-6"></a>
+
+### P9.6
+
+✅ 🟢 **The cross-platform pixel gate is green, and the 2% it found was Quake's.** `tools/gate-pixels.mjs` renders demo1 frame 60 at 320x200 on DOS, X11 and Win32 and asserts all three. `x11 == dos` is exact. `x11 vs win` differed in 1219 of 64,000 pixels; six hypotheses were measured and refuted (phase, PRNG, surface-cache size and placement, `vid.numpages`, the three Win32 mode sets, an uninitialised read) before every input to the span rasteriser was compared and found equal -- leaving `vid.colormap`, which `vid_win.c:2117` rewrites because "GDI doesn't let us remap palette index 0". Every one of the 1219 is index 0 becoming 48. Now asserted **modulo that substitution**, with the index recomputed from the captured palette by id's own nearest-colour loop; forcing 47 fails. | M | The str The same Quake demo now renders on DOS, X11 and Win32 from ONE engine, so the same frame must be identical on all three -- it is the same C. Nothing checks that today, and it would have caught the WinQuake palette being four times too bright.
+
+**Effort:** M
+
+**Why / unblocks:** The strongest oracle available for free: three implementations of the environment, one implementation of the picture.
+
+<a id="p9-7"></a>
+
+### P9.7
+
+✅ 🟢 **The pixel gate is green at 200 and 400 frames, and the 289 pixels were Quake's own clock.** `host.c:643` calls `rand()` once per iteration of the MAIN LOOP, before `Host_FilterTime` decides whether that iteration simulates anything -- id's comment says "keep the random time dependent". So the PRNG advances once per loop, and the loop spins as often as each platform's clock says: DOS (PIT) had spun **3,061** times by world frame 90 where X11 (gettimeofday) gave **90**. From the first particle onward the pictures differ, and every one of the 289 differing pixels at frame 200 was placed by `R_DrawParticles` -- `bracket-pixel` named it in one run. Not a defect in either platform layer, but it also made the gate depend on how fast the machine ran it. `Sys_FloatTime` now advances by a fixed 1/72 s per call in the gate, so every platform takes the same number of iterations, and the comparison is about the RENDERER again.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p9-8"></a>
+
+### P9.8
+
+✅ 🟢 **A FOURTH platform layer: Quake on SunOS.** `quake.json:sun` — 68 units, 45,820 lines, 1,054 functions — runs the demo at 320x200 on id's own SUN driver, which nobody had ever built. What it cost, all of it in the shim rather than the game: **ICCCM** (`XSetWMProperties`, `XInternAtom`, `XSetWMProtocols`, `XAllocWMHints`, `XChangeProperty`, `XFree`), which the Linux driver never touches and a workstation client sets on every window; the **Sun keyboard's F13-F35**, because a Sun had no navigation cluster and sends Home as `XK_F27`; `ScreenOfDisplay`/`WidthOfScreen`, answering the same 640x480 the `DisplayWidth` macro already gave; a real `<X11/Xatom.h>` (it was stubbed EMPTY, which is what made `VID_SetWindowTitle` unemittable); `XClientMessageEvent`, since this driver asks for `WM_DELETE_WINDOW`; and `fileno`. Two build selections, both offered by id's own tree: `in_sun.c` is NOT built, because `vid_sunx.c` defines the same four IN_ entry points exactly as `vid_x.c` does; and **`-zone 512` is not tuning** -- `vid_sunx.c` takes its framebuffer from Quake's ZONE where `vid_x.c` uses malloc, and the zone's default 0xc000 cannot hold a 64,000-byte frame on any machine. `mmap` of a file still fails, and `sys_sun.c` handles that itself: `Sys_FileRead` falls back to `fread` when the map is null. **Open, and reported by gate-pixels without being asserted:** SUN differs from X11 by about one COLORMAP ROW over part of the picture, from the first frame — `bracket-pixel` names `D_DrawSpans8` writing 17 where X11 writes 16. The drivers set the renderer up differently (a static `surfcache[1024*1024]` and a high-hunk `d_pzbuffer`, against `D_SurfaceCacheForRes` and one allocation), so a lighting input differs before anything can go stale.
+
+**Effort:** M
+
+**Why / unblocks:** `node tools/build.mjs quake.json:sun --run --data=<dir> --args="-zone 512 -width 320 -height 200"`
+
+## P10 · PuTTY — an application, not a game
+
+<a id="p10-1"></a>
+
+### P10.1
+
+✅ 🟢 **The build system is read, not transcribed.** `tools/putty-sources.mjs` resolves every `CMakeLists.txt` into libraries and executables, models static-library shadowing (`no-X.c` beats `X.c`), embedded object libraries (`$<TARGET_OBJECTS:logging>`, whose omission left `log_init` undefined), and `be_list()` (one file per application carrying the backend list). It reports every `if()` guard it had to take on faith. `tools/putty-generate.mjs` writes the two headers the build generates rather than ships.
+
+**Effort:** M
+
+**Why / unblocks:** done
+
+<a id="p10-2"></a>
+
+### P10.2
+
+✅ 🟢 **`test_split_into_argv` passes 92/92** — 137 units. The first run said 41/51 and the failure was PuTTY's own: `split_into_argv.c:158` picks its behaviour on `#if _MSC_VER < 1400`, so a non-MSVC compiler reads as older than VS7 while the test always expects the modern rules. MinGW would hit the same.
+
+**Effort:** S
+
+**Why / unblocks:** done
+
+<a id="p10-3"></a>
+
+### P10.3
+
+✅ 🟢 **`test_terminal` passes** — 157 units, the VT emulator checked against PuTTY's own table. Found three PRISM defects: **the emitter had no block scoping** (one flat locals map per function, JS variables named after the C ones, so a `char buf[2]` in an inner block broke every later use of the outer struct); that let `flatten.js`'s sibling-declaration refusal be **lifted** rather than worked around, unblocking `term_out`; and a stubbed `inttypes.h` cost **105 functions** to one missing declaration. c-testsuite 204 → 206.
+
+**Effort:** M
+
+**Why / unblocks:** done
+
+<a id="p10-4"></a>
+
+### P10.4
+
+✅ 🟢 **PuTTYtel runs** — 194 units, 57k lines. WinMain, the command line, `RegisterClassW`, `CreateWindowExW`, then its own error box: *"Unable to open connection to localhost / Host does not exist"*. The window is 642x386 — 80x24 cells of the 8x16 font plus a border, so the metric propagates. The hang before that was `while (DeleteMenu(...))` against a stub that always returned TRUE; `tools/find-loop.mjs` named it in one run by sampling safepoints, after `program.F` hooks had found nothing.
+
+**Effort:** M
+
+**Why / unblocks:** done
+
+<a id="p10-5"></a>
+
+### P10.5
+
+✅ 🟢 **The Win32 shim draws.** `src/env/vgafont.js` puts `assets/vga-rom-8x16.bin` — the font the page already uses for DOS text mode — into guest memory; `win32-gui.c` rasterises 8x16 glyphs into a framebuffer, mapping Unicode through code page 437. `tools/gate-vgafont.mjs` compares every glyph **against the ROM bytes**, not "pixels changed".
+
+**Effort:** M
+
+**Why / unblocks:** done
+
+<a id="p10-6"></a>
+
+### P10.6
+
+✅ 🟢 **An update region.** `InvalidateRect` dirties, `GetMessage` keeps producing WM_PAINT while anything is, `BeginPaint` validates, `DefWindowProc` validates (which Quake needs, or `Sys_SendKeyEvents` spins). Nothing invalidates on its own — inventing show/resize paints turned gate-pixels red on 152 rows, because Quake answers WM_PAINT with `SCR_UpdateWholeScreen`. Window words are real storage, keyed by window.
+
+**Effort:** S
+
+**Why / unblocks:** done
+
+<a id="p10-7"></a>
+
+### P10.7
+
+✅ 🟢 **DONE — PuTTY shows a terminal with text in it.** Real TCP to a real server, on a thread of its own because `program.run` never returns to node's event loop. Seven platform defects came out of making a session run, every one invisible while nothing arrived: events posted in ascending BIT order (FD_WRITE before FD_CONNECT), one global window on every message, one window procedure for all classes, timers that did nothing, a macro defined below its first use, `Rectangle` filling with the text colour, and a test server that corrupted the protocol. See COMPAT.md. Was: **Winsock over the host's sockets.** PuTTY exits before its message loop for want of a network, so nothing it draws can be seen. The design is the same on both hosts and the browser constraint is not a compromise: PuTTY's GUI is event-driven (`WSAAsyncSelect` → `WM_NETEVENT`), so `recv` never blocks and the only wait is `GetMessage`. Program in a worker, sockets on the other side, a ring in a SharedArrayBuffer, `Atomics.wait` in `GetMessage`. node uses `net`; the browser needs a WebSocket→TCP relay, because a browser cannot open TCP at all.
+
+**Effort:** L
+
+**Why / unblocks:** the terminal, with text in it
+
+<a id="p10-8"></a>
+
+### P10.8
+
+⚪ **PuTTY's configuration box needs `.rc` resources.** PRISM compiles none, so `CreateDialog` has no template and `ShinyDialogBox` waits for a dialogue that never ends. Naming a session on the command line is the program's own way past it. A resource compiler is a real, separate piece of work.
+
+**Effort:** L
+
+**Why / unblocks:** the GUI without a command line
+
+<a id="p10-9"></a>
+
+### P10.9
+
+🟡 🟡 **The page has a Win32 host, and three browser-only bugs came out of it.** A `win32` branch publishes `prism_gdi_surface` and paces on `MsgWaitForMultipleObjects` -- the one moment a GUI program with nothing to do comes back round -- plus `SLOT.PIXFMT`, because a GDI surface is 32-bit BGRA and every other program here is 8-bit through a palette. PuTTY now **compiles in the page** (194 units, 57,866 lines, 23,443 functions, 4.5 s) and runs to its own "host does not exist", which is where a browser leaves it: there are no raw sockets, so a session needs a WebSocket relay. The three bugs were all the same shape and all invisible in Node: a `node:*` import in a module the page loads. In a WORKER an unresolvable specifier is FETCHED and the request HANGS rather than failing, so the module never finishes evaluating, the worker never reaches its message handler, and the page sits at "starting" with no error anywhere -- `wsock.js` and `vgafont.js` both did it, and a page-side test that seemed to clear them was run in the document, where the same import fails fast. Both now ask for node only when `process.versions.node` says there is one. The third: include dirs were sliced relative to the target's root, so `corpus/putty/../putty-generated` matched nothing and the root itself was never searched -- PuTTY's `#include "defs.h"` was stubbed EMPTY and the parse died 488 lines later on a type that header defines.
+
+**Effort:** M
+
+**Why / unblocks:** descriptors for PuTTY and Quake II; `node tools/serve.mjs`
+
+<a id="p10-10"></a>
+
+### P10.10
+
+✅ 🟢 **QUAKE II RENDERS IN THE PAGE** — 320x240, 256 pens, 30.9 fps on demo1, with both of its shared objects loaded: `ref_soft version: SOFT 0.01` and `Loading gamei386.so`. The worker keeps the per-unit `module` tag the server always sent, passes each module's export list (read from the program's own `.def` by the server, since a browser cannot), and installs `dl` when the target's env asks -- nothing is LOADED, dlopen is answered from PRISM's own symbol table. **And the bug it uncovered is the better half.** With every data directory merged, Quake II opened `./baseq2/pak0.pak` and got QUAKE ONE's `ID1/PAK0.PAK`: the store's `norm()` did not strip a leading `./`, so the exact match missed and the basename fallback answered with whatever else was called pak0.pak. It loaded a pack of 339 files instead of 1,106 and died on a texture. A path's identity now ignores `./`, a key that ends with the whole requested path is preferred next, and the basename fallback answers only when it is UNAMBIGUOUS. Node never saw it: one game's data directory has one pak0.pak.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p10-11"></a>
+
+### P10.11
+
+🟡 🟡 **PuTTY names the 18 functions it is missing, and they are the Win32 shim's real edges.** Named pipes (`CreateNamedPipe`, `ConnectNamedPipe`, `CreatePipe`, `ERROR_PIPE_BUSY`) for its agent forwarding, `CryptProtectMemory`, `_wfopen`, `MUTEX_ALL_ACCESS`, and one tier-0 gap that is ours rather than Windows's -- a non-constant static initialiser (a `?:` expression) into a struct field. None is reached without a network, which is why the window opens and the program exits; `PostQuitMessage` now exists, so it exits cleanly rather than throwing.
+
+**Effort:** M
+
+**Why / unblocks:** The tier-0 initialiser is the one to take first: it is a compiler gap, not a shim gap, and it will be somebody else's program next time.
+
+<a id="p10-12"></a>
+
+### P10.12
+
+✅ 🟢 **Quake II takes the keyboard, and the fix was a BUILD SELECTION.** It was deaf by construction: the target compiled `null/vid_null.c` + `null/in_null.c` -- id's DIRECT LINK GLUE and eight empty functions -- so nothing ever assigned `KBD_Update_fp` and `Sys_SendKeyEvents` found a null pointer every frame. Measured with a new `tools/quake2.mjs --probe-input`: `KBD_Update` 0 calls in 60 frames, then 232. It now builds `linux/vid_so.c`, which needs the soname `ref_softX.so` (vid_so.c refuses a library not owned by root unless its name contains "softx") and `/etc/quake2.conf` -- hence targets' new `files`: what the INSTALLATION provides, as against what the player does. And `XLookupString` was a stub returning 0, whose keysym is an OUT parameter it never wrote: Doom asks with `XKeycodeToKeysym` and always worked, Quake II asks with this one.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+## P11 · The 16-bit axis — Borland C++, TASM, and the bare machine
+
+<a id="p11-1"></a>
+
+### P11.1
+
+✅ 🟢 **The 16-bit id corpus, surveyed — and the number that decides is not the one I first counted.** `tools/survey16.mjs` over Wolf3D, Keen Dreams, Catacomb 3-D and Hovertank 3D. Splitting inline assembly by WHERE it sits changes the ranking completely, because `id_*` is a BOUNDARY -- the same caching/video/sound libraries in every title, the role MAME's `osdepend.h` and Quake's `sys_*.c` play, and assembly behind a boundary can be shimmed rather than translated: **Keen Dreams 544 engine / 101 GAME · Wolf3D 650 / 467 · Catacomb 598 / 638 · Hovertank 0 / 366** (its engine is 15,446 lines of separate .ASM instead). So the first 16-bit target is **Keen Dreams**: 20 units, 24,239 lines, and about a hundred lines of assembly in the game's own code once the ID engine is shimmed. It still needs the two things none of them avoid: a 16-bit BACKEND (int is 2 bytes through the emitter) and far pointers -- `_seg`/`huge` appears 91-96 times in every one of them, so real segmentation is not optional for any. Wolf3D stays the wrong first target, and MIRAGE already runs it from the binary. | XL | **FIRST HALF DONE, and XL is now a number.** `types.js` bound i386 at module scope and fixed a pointer at 4 bytes; `makeTypes(model)` makes the model a VALUE, with the module still exporting the i386 instance so nothing moves under the call sites — every gate, every target and c-testsuite identical, which is the whole claim of that commit. `tools/gate-typemodel.mjs` holds the seam (dos16: int 2, pointer 2, enum ONE byte, no `long long` — Borland C89 had none) and is checked red. THE SECOND HALF, counted: **262 module-scope type constants across 15 files**, plus 25 `T.ptr()` and 15 `T.scalar()`. 170 of them are the core — emit.js 83, parser.js 77, compile.js 40 — and ~92 are `env/*`, which NO 16-bit target needs yet (Keen Dreams' environment is `stdio` alone), so the env layer can stay i386 until one asks for a library. What makes the rest more than a rename: parser.js uses model-dependent types in MODULE-SCOPE helpers (usual arithmetic, literal typing, ~1391-1509) which have no `this` to reach an instance through, so they need the model as an argument. AND THE MEMORY MODEL IS RECORDED NOWHERE: neither Wolf3D nor Keen Dreams states it — both .PRJ files are binary Borland projects naming only include and library paths, Wolf3D's GO.BAT is a file-checkout script, and no shipped binary exists in either tree to measure against. It matters less than it first looks: small and medium agree on DATA pointers (near, 2 bytes), so struct layout is unaffected; they differ on CODE pointers, so it is function pointers that are open. **THE DOOR IS NOW AT run(), NOT AT EMISSION** -- compiling for a model is how a program gets surveyed, and executing one whose backend is half-built is the actual risk; makeRunner builds argv with 4-byte pointers written by hand. The first dos16 build of Keen Dreams stopped at "static storage exhausted; the dos16 address space is 65536 bytes", and I read that as the model being wrong -- 113,967 bytes of statics, "cannot have been built small or medium", so large -- and added dos16l for it. **That deduction used i386 type sizes and is retracted.** With 16-bit sizes the near data is 50,403 bytes and fits one 64K segment, and the program states its model in its own assembly: `MODEL MEDIUM,C` in id_rf_a.asm and id_us_a.asm. Keen Dreams is MEDIUM -- far code, near data. dos16l (Watcom -ml, gate-abi16l) stays as a correct measurement and as the target's stand-in, being right on int, long, code pointers and conventional memory and wrong on data pointers. The medium model followed (dos16m: near data, far code, gate-abi16m against Watcom -mm; `far` objects outside DGROUP, gate-farobj), and Keen Dreams now compiles for the model it declares. **Then `_seg` pointers** (gate-segptr): the value is a paragraph, two bytes, and the object is at seg*16; conversion to another pointer multiplies by 16, from one divides, to and from an integer keeps the number; `seg + n` is a FAR pointer, seg:n*sizeof, as Borland documents and as `mapsegs[0]+offset` needs; `seg - seg`, `++`, `--` and `+=` are refused by name. No compiler oracle speaks `_seg`, so the gate executes the documented semantics directly (12 mutations, all red). Keen Dreams under dos16m: 144 refused functions -> 81, none of them for `_seg`. **Then Borland inline assembly** (src/asm/borland.js, gate-borlandasm): lowered before emission into instructions and `if (flag) goto label`, so the C goto machinery carries the jumps; registers are function locals; DS = SS = 0 because dos16/dos16m put DGROUP at linear 0, and dos16l keeps the refusal; every local the asm names is pinned to a stack slot and addressed SS-relative; far pointers named in an operand are seen as seg:off VIEWS of the linear address; a function falling off its end after asm returns AX / DX:AX. CF, ZF, SF only -- jl/jg/jo/jp refused by name -- and a flag whose value is undefined (arithmetic on a far-pointer half, a shift by the full width) throws if read. Oracle: Unicorn in 16-bit real mode on the same snippets assembled by nasm, 400 random cases plus a 939-case grid of every ALU op on every pair of edge values (1,339/1,339, goldens/borland-asm.json); 17 mutations, all red. The oracle caught `xchg bx,[es:bx]` and `les bx,[bx]` computing their address from the register they had already overwritten. Keen Dreams: 81 refused functions -> 58; of the 32 that were refused for asm, 23 now emit whole, 8 stop on something else, and 1 (MML_CheckForEMS) on `int 21h`. **Then the DOS interrupt surface** (gate-dosint, and gate-borlandasm part B): the register file is one object per invocation shared by the asm and Borland's pseudo-registers (`_AX` is `$r.AX`, `_AL` its low half); geninterrupt and asm `int n` are one call, M.interrupt(n, regs), answered by the handler the program installed with setvect, else a service the harness passes to the new `borland` environment, else a throw naming the vector and AH -- no BIOS is invented. The vector table is memory at 0..0x3FF (refused by name under dos16, whose data starts at 0x100); peek/poke are Borland's own macros over MK_FP; `void interrupt (*p)(void)` now declares p (it was parsed as a function named interrupt). THE RULE that keeps it honest: a register is read only after the function wrote it, and not across a C call -- so an ISR reading the interrupted code's CX (SDL_TimingService), a critical-error handler reading DOS's DI (USL_HardError) and `errno = _AX` after a call are refused by name instead of answered with 0. Keen Dreams: 58 refused functions -> 33. **Then 16-bit integer widths** (gate-int16): conversions are decided by a type's WIDTH, not its name, so a two-byte int, unsigned or enum truncates; arithmetic whose result can reach an unconverting consumer (a truth test) is fitted too; i386 output is byte-identical (Doom, Quake, MAME hashed). Oracle: Watcom -mm folding 600 random expressions over every integer type, run by PRISM on variables -- with two Watcom FOLDER faults found and stepped round, each confirmed against its own code generator (unsigned short promoted as signed; a narrowing cast lost inside ?: for -32768). Enums are now sized as 16-bit Watcom sizes them, by their constants ({1000} is two bytes, {200} an unsigned byte), where every enum used to be one byte. OPEN: Borland, Keen's compiler, makes enums int-sized by default (-b), so the enum rule is Watcom's until Keen's own option is known. **Then a cast as an lvalue** (gate-castlvalue): `(long)pcSound = 0`, `*((char far *)*(char far **)outfile)++` -- Borland's extension, gcc's until 4.0 -- means `*(T *)&obj`, so it is accepted for an integer, enum or pointer of the same size (a local under one is pinned to memory) and refused by name otherwise. Keen Dreams: 33 -> 26. **Then `huge`** (gate-huge): a PRISM far pointer is already linear with unwrapped arithmetic, which IS Borland's huge pointer, so huge is a far pointer marked `qual: 'huge'` in a 16-bit model (i386 keeps the refusal); the difference of two huge pointers is a long (Watcom -mm: 4 bytes, far and near 2). The converse is the known limit: a Borland FAR pointer's offset wraps at 64K and PRISM's does not. Keen Dreams: 26 -> 21. **Then the Borland library Keen calls** (src/env/borland-lib.js, gate-borlandlib): ltoa/ultoa/itoa (itoa at 16 bits), coreleft/farcoreleft/farmalloc/farfree (a far arena above the far statics in dos16m; malloc's heap in dos16l), _fmemcpy/_fmemset/movedata, findfirst/findnext over the file store, getdate, clrscr/textcolor into B800, bioskey through int 16h, and errno.h/sys/stat.h/dir.h constants -- errno numbers only where they are DOS error codes, the rest left undeclared rather than guessed; sys_errlist is refused for the same reason (its wording is Borland's). Found on the way: the near heap's top sat 64K below the stack, i.e. below its own start under dos16m, so every near malloc failed -- the margin is now the layout's (1K for 16-bit), and a 16-bit heap gives its top block back on free, coalescing, as coreleft() needs. Keen Dreams: 21 -> 5, and all five are deliberate: OFFSET of a local, the timer ISR reading the interrupted CX, the critical-error handler reading DOS's DI, sys_errlist, and gametext (data in a static .OBJ). **Then the structure layout, settled from evidence** (targets/keendreams.json `_layout`, gate-int16 part D, gate-run `enum-promotion`): Hovertank 3-D ships Borland's own generated assembly, which shows char SIGNED (`cbw`), enums INT-sized (`mov word ptr` into a 0..8 enum, `db 2 dup (?)` for a boolean) and WORD alignment (pad bytes after odd-sized globals) -- alignment 2, what PRISM already does. kdreams.prj is read as [id u16][len u16] records, checked on the memory-model record (0x00FC: 2 for Keen and Catacomb's MODEL MEDIUM, 1 for Hovertank's SMALL); Keen's options agree with Hovertank's on 145 of 158 records. Keen was then set to signedChar TRUE on that indirect evidence -- and **Borland's own PRJCFG** (Borland C++ 3.1, archive.org bcpp31, run in DOSBox-X on the unmodified kdreams.prj; tools/gate-borland-options.mjs, goldens/borland-prj.json) corrected it: Keen's project records `-mm -a -K`, i.e. char UNSIGNED, where Hovertank's has no -K. PRJCFG 3.1 is believed on these 2.0 projects because its Hovertank output agrees with Hovertank's generated assembly on three settings, checked by the gate. So Keen compiles with signedChar false, compile.enums 'int' (-b, the default), word alignment (-a = alignment 2); under those only ffblk's sizeof depends on the alignment. **Then a Borland oracle** (tools/oracle-borland.mjs): BCC 3.1 compiles AND RUNS programs in DOSBox-X, so it answers with behaviour rather than folded constants. gate-borland-layout: a probe including Keen's own headers, compiled with Keen's options -- all 36 of its named types (objtype 76, maptype 38, ffblk 44...) laid out by PRISM exactly as Borland lays them out. gate-borland-int16: 600 random expressions over every integer type, plain (unsigned, -K) char and unsigned short included, executed by Borland and by PRISM -- 600/600, after it caught one PRISM defect (unary minus left unfitted, so widening `-us` to long gave 0xFFFFFFFF, now fixed) and one Borland 3.1 defect (& | ^ between chars of different signedness done in 8 bits and zero-extended; stepped round, and open whether BC 2.0, Keen's compiler, shares it). **Then Borland C++ 2.0 itself**, Keen's exact compiler (archive.org borland-cpp-2.0-german, 12 floppies; the split .CA? archives join once each part's 4-byte header is dropped): both oracle goldens recaptured with it -- layout 36/36; integers 600/600 after two more departures of Borland's from C were confirmed in its generated code: chars of different signedness are COMPARED in 8 bits unsigned too (cmp al,[b] / jbe, 3.1 as well), and 2.0 alone promotes unsigned short to a SIGNED int (jg where 3.1 has ja). gate-borland-dialect scans Keen under its options for every such operation (with a positive control): exactly two, both `<` between a signed char loop counter and an unsigned char plane count in gelib.c's UnpackEGAShapeToScreen, bounded by Dst[8], where Borland's 8-bit comparison and C's agree -- so for Keen, PRISM's C is what KDREAMS.EXE did. **Then id_ca.c** (gate-pp-sizeof): its `#if BUFFERSIZE < sizeof(maptype)` is answered from compile.ppSizeof -- the target STATES maptype's size, 38, and the gate holds that to PRISM's own layout and to Borland 2.0's measured one; an unstated type keeps the refusal by name. With it, CAL_ShiftSprite surfaced: its asm points bp at a shift table, so memory through a bp the function LOADED is now accepted, SS-relative as on the 8086, while Borland's frame pointer stays out through the register rule (reading bp unwritten is refused). **Keen Dreams now compiles whole: no unit stops; 5 functions refused, each deliberately; and the link names what is missing -- 26 symbols of the four TASM .ASM files.** **Then the TASM front end** (src/asm/tasm.js, gate-tasm-front): the three Turbo Assembler modules (id_us_a, id_rf_a, id_vw_a with id_vw_ae) are read as TASM reads them -- IDEAL and MASM, INCLUDE, EQU, IF/IFE, MACRO with parameters, REPT, `@@` scopes, PROC with arguments/USES and its generated frame, DB/DW/DD, STRUC -- into data bytes with fixups and a code segment of instruction tokens with the data between them. Oracle: TASM 2.5 from the BC 2.0 floppies in DOSBox-X on the unmodified sources; its OBJ and /la listing, decoded by ndisasm (two ndisasm 3.01 faults found and stepped round: FF register forms, shift-by-one printed as 0). All three agree on 2001 instructions and operands, 136/140 jump destinations, 13 runs of code-segment data, 6148 data bytes and every public; 15 mutations, all red. **Then the translation** (src/asm/tasm16.js, gate-tasm-run): every instruction at TASM's own offset and length (a forward jmp is 3 bytes, the accumulator short form, LEA as MOV, the CS: prefix TASM adds) -- because the program sees code addresses through jump tables, stored routine addresses and return addresses -- and a real machine under it: registers, lazy flags, SS:SP, CALL/RET/RETF, one function per procedure dispatched by real offset. Oracle: TASM's .OBJ relocated by tools/omf.mjs and EXECUTED by Unicorn from the same memory, in a world set up as the game sets it; PRISM's loader must produce byte-identical memory, then the same registers, flags, all 1,088 KB and the same port writes. Part A: every public routine, 182 calls, 1,994 of 2,001 instructions executed; part B, a generated flags.asm assembled by TASM: every ALU/shift/rotate form at 8 and 16 bits, 840 calls. Found: the EVEN pad NOP is executed, not a stop; NEG's AF; OF of SHR and RCL/RCR by more than 1. 27 mutations, 25 red; the two green are an equivalent mutant and the word at FFFFh, which a 386 reference cannot answer. **Then run() opens for 16-bit models** (gate-dos16-run): argv, variadic arguments (int-sized slots; the printf family reads a packed buffer at each conversion's width) and the runtime's pointer and int stores are sized by the model; what still assumes i386 refuses by name (stat/tm/fd_set, mktime/strftime, %p). Oracle: Borland C++ 2.0 with Keen's options compiling and RUNNING five programs from tests/dos16/ with a command line; all five print the same bytes. Found: stdio stored stdin/stdout/stderr as four bytes, so stderr's zero high half landed on the next variable (a table of far function pointers, whose first call went to index 0x7000); bsearch did not exist. 12 mutations, all red after three vacuous checks were made observable. i386 emission changes only by function-table indices (+1, bsearch's prototype). **Then Keen links whole** (src/asm/tasm-link.js, compile.js externData, gate-tasm-link, gate-link-scope): the TASM modules and the eleven MakeOBJ resources (transcribed from static/make.bat) are placed as extern data before the C resolves its externs, and each public PROC is bound under Borland's calling convention; oracle: Borland's own link of a C test with Keen's id_us_a.asm and id_vw_a.asm, identical. Found: a unit's static function lost to another unit's array of the same name (lzhuf.c update vs id_rf.c update -- a crash that had been counted among Keen's refusals), and a block-scope extern could not reach an object file's public (gametext). dos16m's DGROUP layout trimmed to fit what Borland fitted (statics from 500h, 2K stack with a frame check, 512-byte string gap). Keen: 4 deliberate refusals, 17 routines bound, main runs until MML_CheckForEMS. **Then OFFSET of a local** (gate-borland-offset): Borland C++ 2.0 runs `mov dx,OFFSET emmname` as the BP displacement (-10), not the address; PRISM answers it where Borland's frame is measured (the function's only automatic: array/struct/long at -(size rounded to a word), char at -1) and refuses the rest. Keen: 3 deliberate refusals; main runs to MML_CheckForEMS's int 21h AH=3Dh. **Then DOS and BIOS services** (src/env/dos.js, env `dos`; gate-dos16-run dosint.c): int 21h on stdio's own handles (open/close/read/write/lseek/IOCTL/time/version), which under a 16-bit model are numbered as DOS numbers them (from 5; FILE * the same small number); int 10h of a VGA; int 16h from a harness queue; int 33h with no driver; everything else refused by AH/AL. _FLAGS supported. Oracle: Borland's program doing int 21h on a file its C library wrote, including a far read with DS set in assembly; 4 mutations red. Keen's data: shareware 1.13 (archive.org), checked against the static headers, outside the repo. Keen now reads its way to SDL_InitDelay, which spins in inline assembly until the timer ISR it installed on int 8 fires. **Then hardware interrupts** (src/env/pcirq.js, env `pcirq`, gate-pcirq): virtual time counted in back edges (C loops, inline-asm backward gotos, TASM jumps; 1 us each), the budget set to the next event so M.sp_ runs exactly when an interrupt is due; PIT counter 0, an 8259 (in-service hold, EOI, mask, IRQ0 over IRQ1, re-dispatch after IRET), one IF for the machine (delivered on STI), interrupt functions entered with the interrupted registers, BIOS int 8/9, the keyboard on 60h/IRQ1 from a timed scancode script, 3DAh at 70 Hz. Oracle: the hardware's rules, 9 properties, 10 mutations red. Keen: 2 deliberate refusals; the startup text screen renders ('Ready - Press a Key'), a queued space reaches INL_KeyService, and the DemoLoop runs on TimeCount. **Then the EGA** (src/env/ega.js, env `ega`, compile.window, gate-ega): a device hook behind A000h for compiled C (integer accessors), inline asm, TASM rb/wb and the runtime's block copies; planes, latches, write modes 0-3, read modes 0-1, map mask, set/reset, rotate and logical function, bit mask, CRTC start/offset, attribute palette and pel panning, frame() for mode 0Dh. Oracle: DOSBox's VGA running a Borland program over every path, 11 lines identical, 7 mutations red. Keen Dreams DRAWS: tools/keen.mjs shows the startup text screen, then after a key the Gamer's Edge title and the high-score window, alternating on TimeCount. Then KEEN PLAYS: control panel, 'Loading The Land of Tuberia', the world map -- after the shareware 1.13 data turned out not to match the 1.93 source's MAPHEAD/MAPDICT (a map header read as 52480x16555 overran mapbwidthtable into SoundUserHook); tools/keen-static.mjs takes them from the data set's own LZEXE-packed KDREAMS.EXE, validated by decoding every map's size and name. NOT YET: a pixel reference against the real KDREAMS.EXE (Keen replaces int 8 unchained, which MIRAGE's grabber needs); input beyond a scripted key list; sound; speed (virtual time runs far ahead of real time). On the way, promote() was found turning every enum into a signed int: gcc -m32 promotes an enum with no negative constant to unsigned, so `x - 1 < 0` printed 1 where gcc prints 0 -- an i386 wrong answer, fixed (Doom's and Quake's emitted JS change accordingly). **CLOSED.** Keen Dreams: 17 units, 25,756 lines, 447 functions, **2 refusals**, 17 TASM routines bound, and it plays to the world map. The list that used to sit here -- assignment to a cast, `huge`, the Borland library, the register reads -- is empty but for the two that stay refused on purpose (USL_HardError reads DOS's `_DI`; `sys_errlist`'s wording is Borland's). **XL was wrong, and so was the rest of this row's forecast**: it said the backend was the cost and that Wolf3D would stay out of reach, and the backend turned out to be the cheap half -- the expensive and interesting half was holding the program's own assembly to Turbo Assembler's own offsets. Everything after this row is in **P11** below.
+
+**Effort:** XL
+
+**Why / unblocks:** `node tools/survey16.mjs`, `node tools/gate-typemodel.mjs`
+
+<a id="p11-2"></a>
+
+### P11.2
+
+✅ 🟢 **KEEN DREAMS PLAYS.** id Software / Softdisk 1991, Borland C++ 2.0, `MODEL MEDIUM`, not one source file touched: text screen → title → high scores → control panel → "Loading The Land of Tuberia" → the world map, drawn by its own TASM routines through the EGA. 17 units, 447 functions, 17 TASM routines bound, **2 refusals** and both deliberate. Data: shareware 1.13 from archive.org, outside the repo, with its map headers taken from its own LZEXE-packed `KDREAMS.EXE` (`tools/keen-static.mjs`) because the 1.93 source's do not describe it.
+
+**Effort:** —
+
+**Why / unblocks:** done (`tools/keen.mjs`)
+
+<a id="p11-3"></a>
+
+### P11.3
+
+✅ 🟢 **Catacomb 3-D BUILDS** — the second 16-bit target, same engine generation, `targets/catacomb3d.json`. 17 units, 433 functions, 17 TASM routines bound, 17 refusals. Its four TASM modules are identical to TASM 2.5's own output, which cost four front-end features: EVEN in DATASEG, FARDATA and `SEG x`, `.386C` (a forward `jcc` reserves the 386 near form, `74 15 90 90`; 32-bit operands take the 66h prefix), and `MODEL MEDIUM` without the C language, where the source spells its own underscore. Its six data `.OBJ`s are linked as they stand (`src/asm/omf.js`). **JABHACK.ASM is not a problem**: the machine is a 286, PUSHF keeps FLAGS bits 12-15 clear, so the program's own `CheckIs386` answers no and the 386 path is never taken -- its instructions are translated to refusals that throw by name only if executed.
+
+**Effort:** —
+
+**Why / unblocks:** done
+
+<a id="p11-4"></a>
+
+### P11.4
+
+🔴 🔴 **Catacomb 3-D's view needs code the program WRITES AT RUN TIME, and that is a boundary rather than a gap.** `C3_SCALE.C` compiles one x86 scaler per wall height and one drawing routine per shape, entered by `call far` from `C3_ASM.ASM` and from `ScaleShape`'s inline asm; `BuildCompShape` patches a `retf` into a routine and takes it back out. **PRISM reads a source once and emits JavaScript; it cannot express code that does not exist at translation time.** Three options, and the choice is a dependency decision rather than a compiler one: (a) borrow MIRAGE, whose native case this is -- but the convergence section below puts the meeting point at the DEVICE boundary, not the CPU, and this would be the CPU; (b) a small executor in PRISM, refusing every uncovered opcode BY NAME and living in guest memory, validated against Unicorn; (c) define the seam now -- `(memory, registers, io) => registers`, which is deliberately the shape `translateTasm` already produces and the shape Unicorn already has -- and leave the implementation open. **Recommended: (c) first**, because it costs nothing and keeps (a) and (b) both reachable. Note against (a)'s performance argument: a scaler is ~10 instructions per column and 264 columns per frame, so interpretation is not the cost.
+
+**Effort:** M
+
+**Why / unblocks:** Wolf3D needs the same thing (its own compiled scalers), so this is not one target's problem.
+
+<a id="p11-5"></a>
+
+### P11.5
+
+⚪ **Keen Dreams in the browser, played by a person.** Today it runs headless under a scripted key list and a virtual-time leash. Missing: a `web/programs/keen.json` descriptor (seventeen programs already go through that shell), a real clock, and SOUND -- `id_sd.c` drives the PC speaker (PIT channel 2) and an AdLib at 0x388, and **neither PRISM nor MIRAGE has an OPL2 today**, so that half is new work either way. The speaker is the small one and PIT channel 2 is half there.
+
+**Effort:** M
+
+**Why / unblocks:** This is what turns "it compiles and reaches the world map" into something anyone can click, and it beats a third target.
+
+<a id="p11-6"></a>
+
+### P11.6
+
+⚪ **Keen 4-6, for the oracle nothing else gives.** K1n9_Duk3's reconstructed source compiles under **Borland C++ 3.0 and, after LZEXE, reproduces the shipped v1.4 executables byte for byte**. Nothing in this corpus offers that: a reference binary built from the very source PRISM is compiling. Keen 4's data is legitimate shareware. Bio Menace is the same author's reconstruction and Apogee made it freeware.
+
+**Effort:** L
+
+**Why / unblocks:** The strongest possible form of the P11 claim -- and a second Borland version, which is its own risk.
+
+<a id="p11-7"></a>
+
+### P11.7
+
+🟡 **The other two 16-bit id titles, and their data, verified.** Decoded chunk by chunk against each source's own numbering rather than by checking offsets: **Hovertank 3D** matches as it stands (86 chunks = NUMCHUNKS, 83/83 pictures exact); **Wolfenstein 3D** matches ONLY the id/Activision 1.4 six-episode edition (archive.org `WOLF3D-MS-DOS`; 150 VGAHEAD entries = GFXV_WL6's 149+1, 131/132 pictures) -- the Apogee 1.4 registered has 161 chunks and the shareware 156, and no `GFXV_*.H` in WOLFSRC has either; **Catacomb 3-D** exists only as v1.00 against a v1.21 source, so its EGA header, dictionary and intro screen come from its own `CAT3D.EXE`. Neither is a recommended next target: they are more evidence of the same kind.
+
+**Effort:** S
+
+**Why / unblocks:** done (the data), not started (the targets)
+
+<a id="p11-8"></a>
+
+### P11.8
+
+⚪ **What is still open on the 16-bit runtime**, none of it blocking today: a Borland far pointer's offset wraps at 64K and PRISM's does not; the file layer sets no errno; virtual time runs far ahead of real time; and there is no pixel reference against the real `KDREAMS.EXE` -- Keen replaces int 8 unchained, which MIRAGE's frame grabber needs.
+
+**Effort:** M
+
+**Why / unblocks:** The wrap is the one that could produce a wrong answer rather than a refusal.
+
+## P12 · More machines, and a second renderer
+
+<a id="p12-1"></a>
+
+### P12.1
+
+✅ ✅ **DONE, and it is not what the row said it was.** I wrote that Solaris "uses the same X11 refresher" -- inferred from the ABSENCE of video files in `solaris/`, which was the wrong conclusion from the right observation. `solaris/Makefile.Solaris` builds **`q2ded`**: `cl_null.c` and `cd_null.c` are in its object list, it links no renderer, and there is no `rw_*` or `vid_*` anywhere in that directory. **id's Solaris port of Quake II is a dedicated SERVER.** So that is what was built, and it is worth having for a reason the client cannot offer: it is the server half alone -- pak loaded, `gamei386.so` dlopened, world spawned (49 entities inhibited), its own frame loop running -- with no renderer in the build at all. 71 units, 52,579 lines, 1,432 functions. It sits on the SUN machine, which now has two programs. Two header facts came out of it, both about where a platform PUTS a type: `fd_set` and `struct timeval` are reachable from `<sys/types.h>` on Solaris (via `<sys/select.h>`), and `solaris/net_udp.c` declares both having included neither -- so they moved there, the second under a guard because `<sys/time.h>` defines it too.
+
+**Effort:** —
+
+**Why / unblocks:** done. UDP fails and says so twice: a browser has no socket and this target's env is stdio+dl. A dedicated server with no network still runs its world.
+
+<a id="p12-2"></a>
+
+### P12.2
+
+🔴 🔴 **IRIX is BLOCKED, and on two things rather than the one I thought.** First, its video is OpenGL and only OpenGL: `irix/` holds `glw_imp.c` and `qgl_irix.c` and no software path -- nothing in it mentions `SWimp_` or `XCreateImage` -- so an IRIX client needs P12.4 before it can draw anything. Second, **there is no makefile for it in the corpus.** `corpus/Quake2/makefile` looked like one and is not: it is QUAKEWORLD's (EXEBASE = QuakeWorld, rhapsody/, `r_next.o`), and its `_irix` target only changes CFLAGS while keeping the NeXT object list. Nothing anywhere names `sys_irix.o`. So the unit list would have to be inferred, and pairing `irix/sys_irix.c` with `linux/rw_x11.c` to get a software renderer would be assembling a build id never shipped -- which is the one thing this project does not do.
+
+**Effort:** L
+
+**Why / unblocks:** Reachable after P12.4, from the files id did ship. Until then it is a machine that could compile and not run.
+
+<a id="p12-3"></a>
+
+### P12.3
+
+✅ ✅ **DONE, and the row's own reasoning was wrong.** I wrote that `vid_svgalib.c` "is bank-switched and planar" and so shared P3.5's blocker. It has both paths -- `VGA_planar = modes[current_mode].bytesperpixel == 0` selects `VGA_UpdatePlanarScreen`, which is in `d_copy.s` and has no C equivalent -- but with no arguments the driver takes `G320x200x256`, which on a real svgalib is a **linear** eight-bit mode. So the planar branch is not dodged by a trick; it is not the mode the program asks for, and nothing was owed to P3.5. **68 units, 45,671 lines, 1,052 functions**, and the whole platform layer is nineteen library calls (`src/env/svgalib.js`) plus three headers written out in full (`src/env/headers-svgalib.js`) -- `vga_modeinfo` among them, because the driver `memcpy`s the entire struct and a short one would copy garbage over its neighbour. The two input surfaces are the cheapest in the corpus: svgalib hands a client a **raw PC scan code** and **relative** mouse deltas, which are exactly the two channels the control block already carries, so this layer forwards rather than translates. One header decision was mine and wrong before it was right: I declared `<asm/io.h>` empty on the grounds that port I/O was svgalib's business, and the GAME does it -- `D_BeginDirectRect` programs the sequencer by hand -- so `outb`/`inb` are declared and routed to PRISM's port machine (value-first, Linux's order, swapped on the way in).
+
+**Effort:** M
+
+**Why / unblocks:** done. **The gate is the result**: `x11 == svgalib`, bit-identical over 64,000 pixels and 768 palette bytes, now an asserted pair in `tools/gate-pixels.mjs`. The Linux machine has the two video drivers id shipped for it.
+
+<a id="p12-4"></a>
+
+### P12.4
+
+🔴 🔴 **OPENGL -- `ref_gl` and Quake's sixteen `gl_*.c`.** Measured rather than guessed: `ref_gl` is **9 units**, Quake's GL renderer calls **63 distinct GL functions**, and Quake II routes every one of them through its OWN pointer table (`qgl.h`, 343 entries) that the platform layer fills in -- which is the hook a shim needs and the reason this is a library boundary rather than a port. **The cost is not the entry points, it is the model:** GL 1.1 is immediate mode (`glBegin`/`glVertex`/`glEnd`), WebGL 2 has none of it, so the shim has to accumulate into vertex buffers and flush at `glEnd` -- plus texture objects, the matrix stack and the fixed-function pipeline's state. A real project, and the first one here whose output could not be compared pixel-for-pixel against the software renderer.
+
+**Effort:** L
+
+**Why / unblocks:** It would give both Quakes a second renderer and the page its first GPU path. Start with Quake 1's 63 calls, not Quake II's table.
+
+## Noted and not taken — decisions that are not mine
+
+<a id="n1"></a>
+
+### N1
+
+⚪ **Arithmetic on a bitfield WIDER than 32 bits.** C 6.7.2.1p9 makes a bitfield "an integer type consisting of the specified number of bits", and gcc takes that literally: `unsigned long long b:40` shifted left by 32 is computed in FORTY-bit precision, so `0x100 << 32` is 0 rather than `0x10000000000`. Three torture programs check it (`bitfld-5.c`, `pr32244-1.c`, `pr34971.c`). | Needs a width-parameterised integer type, which this type system does not have. Implementing storage without the arithmetic gains 5 programs and produces 3 plausible WRONG ANSWERS, so the storage path refuses width > 32 rather than lying. Narrow 64-bit-typed fields work and were the real win.
+
+<a id="n2"></a>
+
+### N2
+
+⚪ **`long double`** — 21 torture programs. i386 makes it 80-bit in 12 bytes. | Treating it as `double` would make some pass and turn others into wrong answers, and the ABI gate would rightly reject the size. It needs 80-bit float emulation, which is a project of its own and buys nothing the corpus asks for.
+
+<a id="n3"></a>
+
+### N3
+
+⚪ **A Descent WAD.** (Dune II is now named -- and it is Westwood's DUNE2, not the Cryo *Dune* in `mirage/games/DUNE`, which is a different game.) | Commercial data this project does not fetch. Needs a directory to be named.
+
+<a id="n4"></a>
+
+### N4
+
+⚪ **A `.rc` resource compiler** (P10.8). PuTTY's configuration box cannot open without one. | Large, and the program's own command line already gets past it. Worth deciding against explicitly rather than drifting into.
+
+<a id="n5"></a>
+
+### N5
+
+✅ ✅ **DONE — Open Watcom is in the oracle container.** `tools/oracle/Dockerfile` fetches the CI snapshot (the self-extracting installer dies with SIGFPE under this platform's qemu-user; the plain tree runs fine) and keeps `binl h lh lib386 lib286`. `oracle.watcom(cmd, {target})` compiles for `linux` (32-bit, hosted, so the result RUNS in the container), `dos16` or `dos32`. Verified: `wcc386 -bt=linux` builds and runs a probe, `wcc -bt=dos -0 -ms` builds a real DOS EXE. **First datum, and it matters: Watcom's `long double` is 8 bytes where gcc's is 12** -- so N2 is a gcc-TARGET problem, not a universal one, and a Watcom-targeted build could have long double for free. What is still missing is a way to RUN 16-bit output (see P7.2).
+
+<a id="n6"></a>
+
+### N6
+
+⚪ **Quake II on RHAPSODY** (the first Mac OS X). `rhapsody/` is real and complete -- `sys_rhap.m`, `vid_next.m`, `in_next.m`, `snd_next.m`, `swimp_rhap.m`. | They are **Objective-C**. PRISM compiles C. This is not a missing feature, it is a different language, and saying so is cheaper than discovering it in P11.
+
+<a id="n7"></a>
+
+### N7
+
+⚪ **4:3 pixel-aspect correction.** A 320x200 VGA frame was shown on a 4:3 monitor, so its pixels were 1.2:1 tall; PRISM shows the buffer's own 1.6:1, which is very slightly squashed against what a player saw in 1994. DOSBox corrects it by default. | Not taken, because the rule that is actually right is per-MODE and per-MACHINE -- 320x200 and 640x400 want the stretch, 320x240 and 640x480 do not, and an arcade board wants its own -- so a blanket 4:3 would be wrong for MAME and for Quake II. It needs a decision about which authority to follow, and that decision is the user's.
+
