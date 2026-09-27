@@ -1,9 +1,9 @@
-// emit.js — the tier-0 JavaScript emitter.
+// emit.js — the JavaScript emitter ("tier-0" in these comments, for history).
 //
-// Tier-0 is the COLD path: compact, generic, no optimisation. Memory goes through a DataView so
-// unaligned access is correct without proof, and every integer op is written in its canonical
-// 32-bit form. Tier-1 (roadmap P2.3) re-emits hot functions with typed-array views, unboxed locals
-// and inline caches; the two must produce identical state, which is why tier-0 stays this literal.
+// Compact, generic, LITERAL, no optimisation. Memory goes through a DataView so unaligned access is
+// correct without proof, and every integer op is written in its canonical 32-bit form. Optimisation,
+// when it comes, is a static pass over an IR of the whole program (roadmap P13.2) whose output must
+// produce the same state as this one -- which is why this one stays literal.
 //
 // Value representation, chosen once and relied on everywhere:
 //   * every integer type ≤ 32 bits is a JS int32 holding the two's-complement BIT PATTERN.
@@ -214,10 +214,10 @@ const storeExpr = (addr, t, val) => {
 const WIDE = new Set(['long double']);
 
 /**
- * A 64-bit integer is a BigInt in tier-0. The plan calls for i32 pairs, and tier-1 will lower them,
- * but tier-0 is the compact/generic path: BigInt is correct by construction (arbitrary precision plus
- * an explicit 64-bit mask) where pairs need a twenty-function helper library and a return-value
- * convention. The cost is speed, which is exactly what tier-1 exists to fix.
+ * A 64-bit integer is a BigInt here. Lowering it to i32 pairs is the optimiser's job (roadmap P0.5c,
+ * P13.2), or WASM's native i64 (P13.3); this is the compact/generic path: BigInt is correct by
+ * construction (arbitrary precision plus an explicit 64-bit mask) where pairs need a twenty-function
+ * helper library and a return-value convention. The cost is speed, measured before it is paid.
  *
  * The hazard is that JS throws on mixing BigInt with Number, so EVERY conversion in or out has to be
  * explicit — which is why `coerce` handles i64 before anything else.

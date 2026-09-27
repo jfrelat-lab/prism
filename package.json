@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "A dynamic C→JavaScript compiler in pure JavaScript, running unmodified DOS-era game and emulator sources.",
+  "description": "A C→JavaScript compiler that runs in the page, in pure JavaScript, running unmodified DOS-era game and emulator sources.",
   "scripts": {
     "oracle:build": "docker build --platform linux/386 -t prism-oracle tools/oracle",
     "oracle:version": "node -e \"import('./tools/oracle.mjs').then(o=>console.log(o.version()))\"",

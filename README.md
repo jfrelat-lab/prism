@@ -1,7 +1,7 @@
 # PRISM
 
-A **dynamic C→JavaScript compiler, written in pure JavaScript**, for running the unmodified source
-of DOS-era games and emulators — MAME, Quake, Doom, Keen Dreams — in the browser.
+A **C→JavaScript compiler that runs in the page, written in pure JavaScript**, for running the
+unmodified source of DOS-era games and emulators — MAME, Quake, Doom, Keen Dreams — in the browser.
 
 Sibling of [MIRAGE](../mirage), which recompiles a DOS program's **x86 binary**. The difference is
 what each one needs: MIRAGE needs a binary and no source, PRISM needs published source and no

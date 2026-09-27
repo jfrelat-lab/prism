@@ -9,9 +9,9 @@ by a person rather than by a script. Effort: **S** ≤ half a session, **M** ≈
 See [COMPAT.md](COMPAT.md) for what runs and [TESTING.md](TESTING.md) for the gates.
 
 **Where the compiler actually is, in four lines, so nothing below is read as a description of
-today.** PRISM is **tier-0 only**: `src/ir/` and `src/opt/` are empty directories and every mention
-of "tier-1" in the source is a comment in tier-0 about what tier-1 will do (P2.2, P2.3, P0.5c — not
-started). It emits for **i386 and for 16-bit real-mode DOS** (`dos16`/`dos16m`/`dos16l`, real
+today.** PRISM has **one literal emitter and no optimiser**: `src/ir/` and `src/opt/` are empty
+directories (P13.2), and it is not a JIT -- runtime re-emission was reconsidered and set aside
+(P2.3). It emits for **i386 and for 16-bit real-mode DOS** (`dos16`/`dos16m`/`dos16l`, real
 segmentation, `far`/`_seg`/`huge`): Keen Dreams plays, Catacomb 3-D builds (P11). It compiles
 **C89/C99 + GNU, no C++**. It **translates a program's own assembly from its source** — Borland
 inline `asm`, whole TASM modules, Watcom `#pragma aux` — and emulates no CPU. Perf, measured:
@@ -54,7 +54,7 @@ row. A row's story after that date is in its commit.
 | P0.4 | ✅ | `src/parse/parser.js` + `src/sema/types.js` + `tools/gate-decl.mjs`. C89 complete (K&R definitions, implicit `int`, nested declarators), the useful C99, GNU … | — | [log](LOG.md#p0-4) |
 | P0.5 | ✅ | `src/link/module.js`, `src/backend/emit.js`, `src/runtime/runtime.js`, `src/env/headers.js`, `src/compile.js` + `tools/gate-run.mjs`. 22/22 programs behave identically … | — | [log](LOG.md#p0-5) |
 | P0.5b | 🟡 | Torture 1294 → 1438, c-testsuite 204 → 213, zero wrong answers throughout. | L | [log](LOG.md#p0-5b) |
-| P0.5c | ⚪ | Lower i64 to i32 pairs in tier-1. | L | [log](LOG.md#p0-5c) |
+| P0.5c | ⚪ | Lower i64 to i32 pairs in the optimised output (P13.2), or to native i64 in WASM (P13.3). | L | [log](LOG.md#p0-5c) |
 | P0.6 | ✅ | c-testsuite as a gate, gcc captured once: 182/219 then, 0 wrong answers; four real defects found | — | [log](LOG.md#p0-6) |
 | P0.6b | ✅ | `gcc.c-torture/execute`, 1592 programs, fetched from the gcc 12.2 tarball. 869/1558 pass, 0 unexplained wrong answers. Two tables (`__builtin_*` aliases and gcc's … | — | [log](LOG.md#p0-6b) |
 | P0.6c | ✅ | 37 miscompiles down to 6, torture 869 → 892. Seven causes: `aligned`/member-`packed` attributes, a half-fixed address-precedence bug worth 15 programs on its own, … | — | [log](LOG.md#p0-6c) |

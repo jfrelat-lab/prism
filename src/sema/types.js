@@ -260,7 +260,7 @@ export const withExactAlign = (t, n) => (n && n !== t.align ? { ...t, align: n }
  * (`const struct sqlite3_io_methods *pMethods`), and the same shape is everywhere in real C.
  *
  * This is safe only because `cv` is recorded and never read — nothing in the compiler consults it
- * today. When `volatile` starts to matter (it will, at tier-1), qualification has to move onto the
+ * today. When `volatile` starts to matter (it will, for an optimiser), qualification has to move onto the
  * DECLARATION rather than onto the shared type object; doing it there would have avoided this bug in
  * the first place.
  */

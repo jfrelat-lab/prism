@@ -1,7 +1,7 @@
 # PRISM — Architecture
 
-PRISM is a **dynamic C→JavaScript compiler written in pure JavaScript**. It compiles the
-*unmodified source* of DOS-era games and emulators and runs them in the browser or headless in Node.
+PRISM is a **C→JavaScript compiler written in pure JavaScript, that runs in the page**. It compiles
+the *unmodified source* of DOS-era games and emulators and runs them in the browser or headless in Node.
 
 Sibling project: [MIRAGE](../../mirage) recompiles a program's **x86 binary**; PRISM compiles its
 **C source**. The real difference is what each one needs: MIRAGE needs a binary and no source, PRISM
@@ -25,7 +25,7 @@ PRISM's.
 >
 > **Where this file stands.** Everything below is either measured or marked as not built. The
 > sections that describe a mechanism describe one that exists; the two places where the original
-> plan is still a plan — the IR and tier-1 — say so in those words rather than in the present tense.
+> plan is still a plan — the IR and its optimiser — say so in those words rather than in the present tense.
 
 ## The bet
 
@@ -88,24 +88,17 @@ code plus the browser's own JIT, and readability as the primary debugging lever.
 backend-agnostic anyway, so the decision can be revisited on a measured number rather than an
 intuition.
 
-**"Dynamic" is the plan's load-bearing word, and today it is a PLAN.** The intent is what an AOT
-compiler cannot do: compile a function at its first call with compact emission, re-emit it
-aggressively once hot, and specialize on observed facts — the real target of a function pointer, the
-real alignment of a pointer, a global written once at startup.
-
-⚠️ **None of that is built.** `src/ir/` and `src/opt/` are empty directories; every occurrence of
-"tier-1" in the source is a comment in tier-0 describing what tier-1 will do. What exists and is
-measured is one link-time decision, not a runtime one: **direct calls** (P2.1), worth **2–2.5×**.
-Anyone describing PRISM to an outsider should say "a C compiler that runs in the page with no build
-step", and should not say "with runtime specialisation" until P2.3 exists.
-
-**And P2.3 itself was reconsidered (2026-09-27).** The JavaScript engine under PRISM is already a
-tiered, speculating JIT: it compiles lazily, re-optimises what is hot and specialises on what it
-observes. A PRISM-level tier would do that job again, one level up and with less knowledge of the
-machine. What the engine cannot see is C's memory semantics -- aliasing, alignment, a local that
-never escapes -- and that is STATIC knowledge, because PRISM always has the whole program. It
-belongs to an optimiser over an IR (ROADMAP P13.2), not to a runtime tier. Profile-guided
-re-emission stays possible, and should be taken only on a measurement the static pass cannot match.
+**PRISM is not a JIT, and "dynamic" is no longer the word for it.** The original plan was: compile a
+function at its first call, re-emit it once hot, specialise on observed facts -- the real target of a
+function pointer, the real alignment of a pointer, a global written once. That job is already done,
+one level down, by the JavaScript engine PRISM emits for: it compiles lazily, re-optimises what is
+hot and speculates on what it observes. A PRISM-level tier would do it again with less knowledge of
+the machine. What the engine cannot see is C's memory semantics -- aliasing, alignment, a local that
+never escapes -- and that is STATIC knowledge, because PRISM always holds the whole program: it
+belongs to an optimiser over an IR (ROADMAP P13.2). What exists and is measured today is one
+link-time decision of that kind: **direct calls** (P2.1), worth **2–2.5×**. Profile-guided
+re-emission stays possible, to be taken only on a measurement the static pass cannot match. The
+short description is "a C compiler that runs in the page, with no build step".
 
 ## Target ABI
 
@@ -140,7 +133,7 @@ parse/     C89 + C99 + GNU -> AST
 sema/      types, scopes, layout per ABI model (abi.js), constant folding
 ir/        EMPTY — planned: CFG, SSA-lite, explicit load/store against linear memory
 opt/       EMPTY — planned: escape analysis, mem2reg, GVN, alignment inference, inlining, LICM
-backend/   emit.js (tier-0) + flatten.js. There is no tier-1.
+backend/   emit.js (the literal emitter) + flatten.js. No optimiser yet (P13.2).
 asm/       the program's OWN assembly, translated from its SOURCE, never emulated:
            borland.js (Borland inline `asm` interleaved with C), tasm.js + tasm16.js + tasm-link.js
            (whole TASM modules), pragma-aux.js (Watcom routine bodies), nasm.js + x86.js, omf.js
@@ -183,25 +176,22 @@ started because the cost has never been quantified.
 with saved state. Applied only to functions that actually call `setjmp` (Quake's `host_error`,
 Doom's `I_Error`), never globally.
 
-## Two-tier emission
+## One literal emitter, and where optimisation will live
 
 MIRAGE **measured** that compile cost tracks emitted *source volume*, not function count (Turbo
 Pascal: 151 blocks were 96.6% of 10 MB of emitted JS; 54% of one block was the inlined memory path).
-A C compiler over Quake's 128 `.c` files hits that wall immediately, so the split exists from the
-start rather than being retrofitted:
+A C compiler over Quake's 128 `.c` files hits that wall immediately, so the emitter is compact and
+LITERAL: memory access through short helper calls, every integer operation in its canonical form,
+`long long` a BigInt rather than something clever. It is called tier-0 in the code for history.
 
-- **tier-0 (cold)** — compact emission, memory access through short helper calls, no optimization.
-- **tier-1 (hot)** — after N calls or iterations, re-emitted with everything inlined, locals
-  unboxed, memory access specialized, inline caches installed.
+Optimisation, when it comes, is a STATIC pass over an IR of the whole program (ROADMAP P13.2) --
+unboxed locals, memory access specialised where aliasing and alignment are proven, calls made direct
+-- not a runtime re-emission of hot code, for the reason given under *The bet*. The invariant is
+MIRAGE's `fuzz-region` one, carried over: optimised and literal output must produce identical state,
+every pass gets a `PRISM_NO*` kill-switch, and every gate must pass with each switch on and off.
 
-**Invariant, modelled on MIRAGE's `fuzz-region`:** tier-0 and tier-1 must produce identical state.
-Every optimization pass gets a `PRISM_NO*` kill-switch, and every gate must pass with each switch
-both on and off.
-
-⚠️ **Status: tier-0 only. Tier-1 does not exist**, and neither does the IR it would work over. The
-split shaped tier-0 — it is why the cold emitter is deliberately literal, and why `long long` is a
-BigInt rather than something clever — but the promotion, the optimiser and the inline caches are
-P2.2/P2.3 and are not started. The measured consequence is in *Numbers* below.
+⚠️ **Status: the literal emitter only**; the IR and the optimiser do not exist. The measured
+consequence is in *Numbers* below.
 
 ## Determinism
 
