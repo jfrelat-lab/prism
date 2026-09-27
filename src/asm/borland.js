@@ -71,7 +71,9 @@ const W16 = ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'ds', 'es'];
 const H8 = [['al', 'ax', 0], ['ah', 'ax', 8], ['bl', 'bx', 0], ['bh', 'bx', 8],
   ['cl', 'cx', 0], ['ch', 'cx', 8], ['dl', 'dx', 0], ['dh', 'dx', 8]];
 export const REGISTER_FILE = '{' + [
-  ...W16.map((r) => `${r}:0`), 'cf:0', 'zf:0', 'sf:0', 'if:1', 'df:0',
+  ...W16.map((r) => `${r}:0`), 'cf:0', 'zf:0', 'sf:0', 'df:0',
+  // IF is the machine's (M.cpu), not the invocation's: CLI here masks the timer everywhere.
+  'get if(){return M.cpu.if},set if(v){const was=M.cpu.if;M.cpu.if=v&1;if(!was&&(v&1))M.irqPoll?.(this)}',
   ...W16.map((r) => `get ${r.toUpperCase()}(){return this.${r}},set ${r.toUpperCase()}(v){this.${r}=v&65535}`),
   // The flags word Borland's _FLAGS reads (PUSHF): CF, ZF, SF, IF and DF, with bit 1 set. A flag
   // this machine could not know holds 2, and reading it through the word is refused like any other.
@@ -757,8 +759,9 @@ function insEffect(ins) {
  *
  * Returns null, or a sentence naming the first offending read.
  */
-export function firstUndefinedRead(body, { isPseudo }) {
-  const written = new Set(['ds']);
+export function firstUndefinedRead(body, { isPseudo, entryDefined = false }) {
+  // An interrupt function starts with every register holding the interrupted code's value.
+  const written = new Set(entryDefined ? ['ds', ...GENERAL] : ['ds']);
   let clobberedBy = null;
   const check = (units, what) => {
     for (const u of units) {

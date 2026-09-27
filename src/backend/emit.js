@@ -381,9 +381,16 @@ export class FunctionEmitter {
     collectDeclNames(d.body, declared);
     for (const p of d.type.params) if (p.name) declared.add(p.name);
     this.isPseudo = (name) => realMode && PSEUDO.has(name) && !declared.has(name) && !this.ctx.globals.has(name);
+    /*
+     * A Borland `interrupt` function begins with the registers of the code it interrupted: its
+     * prologue pushes them all and reloads DS. So in one, a register holds a value on entry -- the
+     * interrupted code's -- and reading it first is not the undefined read it is elsewhere
+     * (SDL_TimingService's `TimerVal = _CX`). src/env/pcirq.js hands those registers over.
+     */
+    this.isInterrupt = realMode && !!d.type.ret?.cv?.interrupt;
     if (realMode && (this.asm || mentionsPseudo(d.body, this.isPseudo) || callsName(d.body, 'geninterrupt'))) {
       this.usesRegs = true;
-      const why = firstUndefinedRead(d.body, { isPseudo: this.isPseudo });
+      const why = firstUndefinedRead(d.body, { isPseudo: this.isPseudo, entryDefined: this.isInterrupt });
       if (why) unsup(`a register value only Borland's code could supply: ${why}`);
     }
 
@@ -484,6 +491,7 @@ export class FunctionEmitter {
           this.out.push(`_sjv=0; M.rt.__prism_setjmp(${env},_fp,${k});`);
         }
         this.out.push(`case ${k}:`);
+        this.curSegment = k;
         for (const item of seg.items) this.#item(item, escaped);
       }
       if (this.hasSetjmp) {
@@ -507,6 +515,7 @@ export class FunctionEmitter {
     // running past its floor would write the heap, silently. i386's megabyte is left unchecked.
     if (this.frameSize && this.ty.INT.size === 2) body.push(`if(_fp<${this.mod.stackLimit})M.stackOverflow(_fp);`);
     if (this.usesRegs) body.push(REGISTER_DECLS);
+    if (this.usesRegs && this.isInterrupt) body.push('if(M.isrRegs)for(const _k of ["ax","bx","cx","dx","si","di","bp","es"])$r[_k]=M.isrRegs[_k]&65535;');
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
@@ -1516,7 +1525,10 @@ export class FunctionEmitter {
       case 'goto': {
         const k = this.labels?.index.get(s.label);
         if (k === undefined) unsup(`goto '${s.label}'`);
-        this.out.push(`{_pc=${k}; continue _top;}`);
+        // A BACKWARD goto is a loop's back edge -- in Borland inline assembly, every `jnz` and `loop`
+        // that closes a loop is one -- so it carries the safepoint a `while` does.
+        const back = this.ctx.safepoints && k <= (this.curSegment ?? -1) ? this.#safepoint() : '';
+        this.out.push(`{${back}_pc=${k}; continue _top;}`);
         return;
       }
       case 'gotoexpr': {
@@ -1923,7 +1935,9 @@ export class FunctionEmitter {
     if (!this.ctx.safepoints) return '';
     const id = this.mod.safepoints.length;
     this.mod.safepoints.push(`${this.decl.name}#${this.mod.safepoints.length}`);
-    return `if(--M.spBudget<0)M.sp_(${id});`;
+    // A function with a register file hands it over: an interrupt delivered here gives its handler
+    // the registers this code holds (src/env/pcirq.js).
+    return `if(--M.spBudget<0)M.sp_(${id}${this.usesRegs ? ',$r' : ''});`;
   }
 
   #stringAddr(e) {

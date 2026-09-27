@@ -83,7 +83,7 @@ const hex = (n, w = 2) => n.toString(16).toUpperCase().padStart(w, '0');
 
 export function installBorland(M, { services = {} } = {}) {
   const dv = () => M.mod.dv;
-  const state = { installed: new Set(), harderr: 0, if: 1, calls: [] };
+  const state = { installed: new Set(), harderr: 0, calls: [] };
   const tableFits = () => {
     const base = M.mod.layout?.staticBase ?? 0;
     if (base < 0x400) {
@@ -103,8 +103,10 @@ export function installBorland(M, { services = {} } = {}) {
     harderr: (handler) => { state.harderr = handler >>> 0; },
     hardresume: () => { throw new Error('Borland hardresume: no critical error is being handled'); },
     hardretn: () => { throw new Error('Borland hardretn: no critical error is being handled'); },
-    disable: () => { state.if = 0; },
-    enable: () => { state.if = 1; },
+    // IF is the CPU's, one for the machine: disable() here, CLI in inline assembly and the interrupt
+    // gate (src/env/pcirq.js) all move the same flag.
+    disable: () => { M.cpu.if = 0; },
+    enable: () => { M.cpu.if = 1; M.irqPoll?.(); },
     inport: (p) => (M.machine ? M.machine.read(p, 2) & 0xffff : 0xffff),
     outport: (p, v) => { M.machine?.write(p, 2, v | 0); },
   };

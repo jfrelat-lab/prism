@@ -26,6 +26,7 @@ import { installGo32, GO32_VARS } from './go32.js';
 import { installWatcom } from './watcom.js';
 import { installBorland, BORLAND_DOS_H, BORLAND_VARS, BORLAND_BUILTINS } from './borland.js';
 import { installDos } from './dos.js';
+import { installPcIrq } from './pcirq.js';
 import { installBorlandLib, BORLAND_LIB_HEADERS, BORLAND_LIB_BUILTINS } from './borland-lib.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
@@ -113,6 +114,9 @@ export const ENV = {
   },
   // The machine's DOS and BIOS under `int n` (src/env/dos.js): files through stdio, a VGA, no EMS.
   dos: { install: (M, _c, o) => installDos(M, o) },
+  // Hardware interrupts (src/env/pcirq.js): a virtual clock counted in back edges, the PIT's IRQ0,
+  // the PIC, delivery to the program's int 8 handler. Needs compile.safepoints, which is the clock.
+  pcirq: { install: (M, _c, o) => installPcIrq(M, o) },
   // dj: Jump n Bump s DOS sound library, source-less and therefore answered rather than built.
   dj: { install: (M, _c, o) => installDj(M, o) },
 

@@ -317,7 +317,11 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
         if (!isTerminal(x)) out.push(`return ${after(x)};`);
       }
     });
-    fns.push(`function g${gi}(_pc){if(--_budget<0)budget();for(;;){if(--_budget<0)budget();switch(_pc){\n${out.join('\n')}\ndefault: return nowhere(_pc);}}}`);
+    // Every jump taken and every entry spends the clock's budget -- the machine's own when the host
+    // gives one (io.clock, src/env/pcirq.js: an interrupt may be delivered there, with this code's
+    // registers and IF), else a step budget of its own.
+    const tick = 'if(--CLK.spBudget<0)CLK.sp_(-1,regsNow,(_fl>>>9)&1);';
+    fns.push(`function g${gi}(_pc){${tick}for(;;){${tick}switch(_pc){\n${out.join('\n')}\ndefault: return nowhere(_pc);}}}`);
   }
 
   function isTerminal(x) {
@@ -498,7 +502,9 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
   return `(function(D, io){
 "use strict";
 let ax=0,bx=0,cx=0,dx=0,si=0,di=0,bp=0,sp=0,ds=0,es=0,ss=0;
-let _k=0,_a=0,_b=0,_c=0,_u=0,_r=0,_w=2,_fl=0x202,_t=0,_s=0,_v=0,_o=0,_f=0,_n=0,_xcs=0,_xip=0,_budget=0;
+let _k=0,_a=0,_b=0,_c=0,_u=0,_r=0,_w=2,_fl=0x202,_t=0,_s=0,_v=0,_o=0,_f=0,_n=0,_xcs=0,_xip=0;
+const CLK=io.clock??{spBudget:0,sp_(){budget();}};
+const regsNow=()=>({ax,bx,cx,dx,si,di,bp,sp,ds,es,ss});
 const rb=(s,o)=>D.getUint8((s<<4)+o);
 const rw=(s,o)=>o===65535?(D.getUint8((s<<4)+o)|(D.getUint8(s<<4)<<8)):D.getUint16((s<<4)+o,true);
 const wb=(s,o,v)=>D.setUint8((s<<4)+o,v);
@@ -524,7 +530,7 @@ ${fns.join('\n')}
 const ENTRY=new Map([${entries}]);
 function run(R,steps){
   ax=R.ax&65535;bx=R.bx&65535;cx=R.cx&65535;dx=R.dx&65535;si=R.si&65535;di=R.di&65535;bp=R.bp&65535;sp=R.sp&65535;
-  ds=R.ds&65535;es=R.es&65535;ss=R.ss&65535;_fl=(R.flags??0x202)&65535;_k=${K.CONST};_budget=steps??1e9;
+  ds=R.ds&65535;es=R.es&65535;ss=R.ss&65535;_fl=(R.flags??0x202)&65535;_k=${K.CONST};if(!io.clock)CLK.spBudget=steps??1e9;
   let pc=R.ip&65535;
   while(pc>=0){const g=ENTRY.get(pc);if(!g)nowhere(pc);pc=g(pc);}
   mat();

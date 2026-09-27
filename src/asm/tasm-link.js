@@ -77,6 +77,8 @@ export function installTasm(program, modules) {
   }
   const machine = M.machine;
   const io = {
+    // The machine's clock, when interrupts are delivered (src/env/pcirq.js): TASM loops spend it too.
+    clock: M.vclock ? M : undefined,
     in: (port, w) => (machine ? machine.read(port, w) : 0xff),
     out: (port, w, v) => { if (machine) machine.write(port, w, v); },
     // M.interrupt speaks Borland's register file (cf/zf/sf flags); the machine a flags word.
@@ -111,8 +113,12 @@ export function installTasm(program, modules) {
         D.setUint16(at, 0, true);                          // IP
         D.setUint16(at + 2, FROM_C, true);                 // CS
         words.forEach((w, k) => D.setUint16(at + 4 + 2 * k, w, true));
-        const R = { ax: 0, bx: 0, cx: 0, dx: 0, si: 0, di: 0, bp: 0, sp, ds: 0, es: 0, ss: 0, ip: entry, flags: 0x202 };
+        const R = { ax: 0, bx: 0, cx: 0, dx: 0, si: 0, di: 0, bp: 0, sp, ds: 0, es: 0, ss: 0, ip: entry,
+          flags: 0x2 | (M.cpu.if << 9) };
         machineOf.run(R);
+        const was = M.cpu.if;
+        M.cpu.if = (R.flags >>> 9) & 1;          // a routine may leave interrupts as it found them, or not
+        if (!was && M.cpu.if) M.irqPoll?.();
         return result(ft.ret, R);
       };
       program.F[p.name] = fn;

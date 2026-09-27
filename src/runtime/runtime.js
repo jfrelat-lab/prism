@@ -63,6 +63,7 @@ export function makeMachine(mod = new Module()) {
     heapEnd: 0,
     stdout: [],
     randState: 1,            // see rt.rand — deterministic on purpose
+    cpu: { if: 1 },          // the interrupt flag, one for the machine (env/pcirq.js delivers against it)
     /*
      * The safepoint budget. Emitted loops decrement it and call sp_ when it runs out; the default
      * handler just refills it, so an uninstrumented run pays a decrement and nothing else. A harness

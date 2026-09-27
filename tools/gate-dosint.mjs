@@ -104,7 +104,7 @@ report(run('t_bda') === 1 && p.mod.dv.getUint16(0x417, true) === 0x1234, 'peek/p
   report(got === -16657 && log.join(' ') === 'w3c4/2=f02 r3c4/2', 'inport/outport are words; the result is a 16-bit int', `${got} ${log.join(' ')}`);
 }
 run('t_irq');
-report(host.state.if === 0, 'disable() is recorded');
+report(p.M.cpu.if === 0, 'disable() clears the machine IF');
 report(run('t_args') === 0 && p.mod.symbols.has('_argc') && p.mod.symbols.has('_argv'), '_argc and _argv exist');
 {
   const q = build('dos16');

@@ -3049,3 +3049,62 @@ are deliberate. `main` runs until MM_Startup reaches MML_CheckForEMS, whose `mov
 names a local. Borland 2.0 was asked what that means, and it runs as **DX = 65526**, the local's
 displacement from BP (−10), **not its address (65508)**. So the real game asked DOS to open whatever
 name lay at DS:FFF6.
+
+## Hardware interrupts under a 16-bit model (`src/env/pcirq.js`, `tools/gate-pcirq.mjs`)
+
+Keen Dreams calibrates itself against the timer. SDL_InitDelay installs its own int 8 handler, sets
+the PIT to 1 ms, and waits in inline assembly for that handler to run. Nothing delivered interrupts,
+so the wait never ended. The profiler found it, because assembly jumps crossed no safepoint and the
+leash could not reach them.
+
+**Time is counted in back edges.** PRISM executes no instructions it could count, but every loop
+decrements `M.spBudget` on its back edge: compiled C, Borland inline assembly (whose backward `goto`s
+now carry a safepoint) and translated TASM modules (every taken jump). Each edge is one virtual
+microsecond. The budget is set to the number of edges left before the next event, a PIT expiry or a
+scancode's arrival, so `M.sp_` runs exactly when an interrupt is due. This is a model, and it is
+stated as one: a program that calibrates against it gets a consistent, reproducible answer, not a
+1991 PC's.
+
+**What is modelled, and to what rule:**
+* **The 8253, counter 0:** reload, latch, and read LSB then MSB. IRQ0 is raised at each expiry.
+* **The 8259:** requests are held while one of equal or higher priority is in service, released by a
+  non-specific EOI, and masked through port 21h. IRQ0 goes before IRQ1. After each IRET the next
+  pending request is delivered at once.
+* **IF, one flag for the machine:** `disable()`/`enable()`, inline `cli`/`sti`/`popf`/`_FLAGS` and a
+  TASM routine's flags all move `M.cpu.if`. The interrupt gate clears it and IRET restores it. A
+  request held under CLI is delivered on STI, not at the next expiry.
+* **An `interrupt` function begins with the interrupted code's registers**, as Borland's prologue
+  pushes them. So `TimerVal = _CX` in SDL_TimingService reads the CX of the loop it interrupted. That
+  was one of Keen's deliberate refusals; now it is simply what the function means.
+* **The BIOS's own int 8 and int 9** sit in the vector table until the program replaces them: the tick
+  at 0040:006C, and keys for int 16h.
+* **The keyboard:** scancodes from the harness, with the virtual time they arrive at, each latched on
+  port 60h and announced by IRQ1.
+* **The display's timing on port 3DAh:** 70 Hz frames of 449 lines, vertical retrace on bit 3, blanking
+  on bit 0.
+
+**The oracle is the hardware's rules, not an emulator.** PRISM's time is its own, so no DOSBox run can
+be compared with it cycle for cycle. `tests/pcirq/irq.c` prints one number per property, each with a
+value the hardware fixes:
+* the BIOS tick advances;
+* a counting handler runs while IF is set;
+* nothing is delivered under CLI, and the held request is delivered on STI;
+* a handler without EOI is entered once;
+* an interrupt function's CX is the interrupted loop's;
+* scancodes arrive in order;
+* vertical retrace comes 70 times a second;
+* IRQ0 is served before IRQ1.
+
+Nine checks, all green; 10 mutations, all red. Three of them were not red at first:
+* **IRQ1 before IRQ0** stayed green until a section left both pending under CLI.
+* **A 60 Hz retrace** stayed green while the window was 100 ms, where 60 Hz and 70 Hz both allow 6;
+  the window is now a second.
+* **The priority section's first run was a real defect** ("priority 0 0"): after an IRET the pending
+  IRQ1 waited for the next safepoint, by which time a new tick was due. The PIC raises INTR at once,
+  so delivery now loops until nothing deliverable remains.
+
+**Keen Dreams with it:** SDL_InitDelay completes, the data loads, the startup text screen reads "Ready
+- Press a Key", a queued space reaches INL_KeyService on int 9, and the title sequence runs. The
+DemoLoop runs its screens and waits by TimeCount, which SDL_t0Service advances at 70 Hz. Two
+refusals remain, both deliberate: USL_HardError reads the DI a DOS critical error leaves, and
+sys_errlist is Borland's wording.
