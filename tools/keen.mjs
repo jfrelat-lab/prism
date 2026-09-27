@@ -10,6 +10,8 @@
 //              text screen waits for a key from about 0.6 s on
 //   --seconds  real-time leash: the run is stopped there, wherever the game is
 //   --frame    the EGA picture at the end; --every/--dir one picture every so many virtual ms
+//   --stack    print where a run that threw was
+//   --static   a directory of static resources matching the data (tools/keen-static.mjs)
 import { readdirSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +28,19 @@ const files = Object.fromEntries(readdirSync(dataDir).filter((f) => /^KDREAMS\./
   .map((f) => [f.toUpperCase(), new Uint8Array(readFileSync(join(dataDir, f)))]));
 const keys = (arg('keys', '') ?? '').split(',').filter(Boolean).map((k) => { const [ms, scan] = k.split(':').map(Number); return { ms, scan }; });
 const t0 = performance.now();
-const { program: p, tasmBound } = buildTarget(loadTarget(join(ROOT, 'targets', 'keendreams.json')),
+const target = loadTarget(join(ROOT, 'targets', 'keendreams.json'));
+// Resources linked from the data set's own build where it has them (tools/keen-static.mjs): the
+// source's static/ is 1.93's, and the shareware 1.13 maps need 1.13's MAPHEAD and MAPDICT.
+const staticDir = arg('static') && home(arg('static'));
+if (staticDir) {
+  const have = new Set(readdirSync(staticDir).map((f) => f.toUpperCase()));
+  target.dataObjects = target.dataObjects.map((o) => {
+    const base = o.file.split('/').pop().toUpperCase();
+    return have.has(base) ? { ...o, file: join(staticDir, base) } : o;
+  });
+  console.log(`static from ${staticDir}: ${[...have].join(' ')}`);
+}
+const { program: p, tasmBound } = buildTarget(target,
   { root: ROOT, envExtra: { stdio: { files }, pcirq: { keys } } });
 console.log(`built in ${(performance.now() - t0).toFixed(0)} ms; ${p.failures.length} refused; ${tasmBound.length} TASM routines bound`);
 
@@ -46,7 +60,10 @@ if (every && shotDir) {
 }
 p.M.leashDeadline = performance.now() + Number(arg('seconds', 10)) * 1000;
 let ended;
-try { ended = `exited ${p.run(['C:\\KDREAMS.EXE']).code}`; } catch (e) { ended = e.message === '__leash' ? 'stopped by the leash' : `threw: ${e.message}`; }
+try { ended = `exited ${p.run(['C:\\KDREAMS.EXE']).code}`; } catch (e) {
+  ended = e.message === '__leash' ? 'stopped by the leash' : `threw: ${e.message}`;
+  if (process.argv.includes('--stack') && e.message !== '__leash') console.log(e.stack.split('\n').slice(1, 14).join('\n'));
+}
 console.log(`${ended} at ${(p.M.vclock.us / 1e6).toFixed(1)} s virtual, video mode ${p.M.ega.mode.toString(16)}h`);
 const out = arg('frame');
 if (out) {

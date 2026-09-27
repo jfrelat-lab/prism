@@ -381,7 +381,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const externData = [
     ...tasmExternData(tasm),
     ...(target.dataObjects ?? []).map((o) => {
-      const bytes = new Uint8Array(readFileSync(join(dir, o.file)));
+      // Relative to the source tree, or absolute: a data set may bring the headers that match it.
+      const bytes = new Uint8Array(readFileSync(resolvePath(dir, o.file)));
       return { name: o.file, bytes, size: bytes.length, far: !!o.far, align: o.far ? 16 : 2, publics: [{ name: o.symbol, offset: 0 }] };
     }),
   ];

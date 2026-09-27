@@ -3163,3 +3163,29 @@ nothing is wrong with the colours.
 **Not yet referenced:** the pictures are held to DOSBox only through gate-ega's register paths, not
 pixel for pixel against the real KDREAMS.EXE. MIRAGE's grabber (a TSR on int 8) cannot reach Keen's
 screens, because Keen replaces int 8 without chaining it.
+
+### Keen Dreams plays -- and the data check that was too weak
+
+Pressing Enter at the title opens the control panel, and Enter again starts a game. The game shows
+"Loading The Land of Tuberia" and then the world map, with Keen, the flags, the water and the status
+bar. `tools/keen.mjs --data=<dir> --static=<dir>/static --keys=2000:57,2100:185,5000:28,5100:156,7000:28,7100:156`
+gets there.
+
+On the way it crashed with "call through a non-function pointer 0xc2002800" inside SDL_t0Service. A
+watch on the stores into SoundUserHook caught RF_NewMap filling `mapbwidthtable` about 5,000 entries
+past its end: map 0's header had been read as 52480x16555. **The shareware data does not match the
+1.93 source's map headers.** Its graphics and audio do: EGAHEAD's last offset is KDREAMS.EGA's size,
+and six of static/'s files appear byte for byte in the 1.13 executable. But 1.13's KDREAMS.MAP was
+saved differently, and its headers are Huffman-coded with a different MAPDICT. The earlier check,
+"every MAPHEAD offset falls inside the file", could not have failed on that. A header that decodes
+into a map of plausible size with a name made of letters is what can fail, and does.
+
+The source's README names the remedy: link the static data that matches the data set.
+`tools/keen-static.mjs` unpacks the data set's own KDREAMS.EXE (`tools/lzexe.mjs`, LZEXE 0.91) and
+reports which of static/'s files it contains. It finds that build's MAPHEAD, the RLEW tag followed by
+offsets inside the map file, and its MAPDICT, which must decode all 18 headers into sizes and names
+("LAND OF TUBERIA" through "CASTLE TUBERIA"). A first version accepted a dictionary that decoded the
+names into strings of `:` and `/`, all of them printable; requiring letters and a plausible size
+rejects it. The two files are written into the data directory, never into this repository.
+1.13's GAMETEXT (the help text) also differs and is not extracted: it is only read by the control
+panel's help screen.
