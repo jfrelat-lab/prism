@@ -101,10 +101,24 @@ step", and should not say "with runtime specialisation" until P2.3 exists.
 
 ## Target ABI
 
+**Two of them, and the model is a value rather than a module-scope constant.**
+
 **i386 System V, flat 32-bit (DJGPP)**: one address space, 32-bit pointers, no segmentation, no far
-pointers. Guest memory is one `ArrayBuffer`. `long` is 4 bytes, `char` is signed. The exact layout
-rules — including the ones that are not what the manuals suggest — are in
-[`src/sema/abi.js`](../src/sema/abi.js) and documented in [TESTING.md](TESTING.md).
+pointers. `long` is 4 bytes, `char` is signed.
+
+**16-bit real-mode DOS** (`dos16` small, `dos16m` medium, `dos16l` large): `int` and a near pointer
+are 2 bytes, alignment stops at 2, there is no `long long` — Borland C89 had none — and
+segmentation is real. The size of an enum is the compiler's rule and not the model's, so it is a
+target option: Watcom sizes one by its constants, Borland makes it an `int` by default
+(`compile.enums`), and each target states which compiler built it. `far`, `_seg` and `huge` are pointer kinds the parser and the
+emitter both carry. DGROUP sits at linear 0 so a near pointer IS its linear address; far objects
+live above 0x10000; the low megabyte is reserved, so the interrupt vector table at 0 and the EGA at
+0xA0000 are the addresses the program expects.
+
+Guest memory is one `ArrayBuffer` either way. The exact layout rules — including the ones that are
+not what the manuals suggest — are in [`src/sema/abi.js`](../src/sema/abi.js) and documented in
+[TESTING.md](TESTING.md); the i386 rules are pinned against gcc, the 16-bit ones against Open Watcom
+in the same container and against Borland C++ 2.0 itself under DOSBox-X.
 
 Language scope: **C89/C99 + the GNU extensions real code uses**. No C++, which puts modern MAME out
 of scope and MAME 0.1 (C89) in it.
@@ -115,11 +129,14 @@ of scope and MAME 0.1 (C89) in it.
 cpp/       preprocessor — translation phases 1-4, exact
 lex/       pp-tokens -> C tokens
 parse/     C89 + C99 + GNU -> AST
-sema/      types, scopes, i386 layout (abi.js), constant folding
+sema/      types, scopes, layout per ABI model (abi.js), constant folding
 ir/        EMPTY — planned: CFG, SSA-lite, explicit load/store against linear memory
 opt/       EMPTY — planned: escape analysis, mem2reg, GVN, alignment inference, inlining, LICM
 backend/   emit.js (tier-0) + flatten.js. There is no tier-1.
-asm/       pragma-aux.js — three #pragma aux routine bodies, everything else refused BY NAME
+asm/       the program's OWN assembly, translated from its SOURCE, never emulated:
+           borland.js (Borland inline `asm` interleaved with C), tasm.js + tasm16.js + tasm-link.js
+           (whole TASM modules), pragma-aux.js (Watcom routine bodies), nasm.js + x86.js, omf.js
+           (object files read as data). Anything outside each subset is refused BY NAME.
 link/      symbols, static placement of globals, the function-pointer table
 runtime/   libc, malloc, setjmp/longjmp, math, printf
 env/       djgpp/ (dpmi, pc.h, farptr, movedata) - allegro/ - posix+xlib/
@@ -466,7 +483,7 @@ keeps its own can use.
 The general lesson for the next port: look for what the program already writes down before writing a
 shim to intercept it.
 
-### Six of them now, and the shape of the boundary is the whole design
+### Seven of them now, and the shape of the boundary is the whole design
 
 | layer | shim | what the boundary actually is |
 |---|---|---|
@@ -476,6 +493,17 @@ shim to intercept it.
 | Quake / SunOS | the same, plus ICCCM and the Sun keyboard's F13–F35 | a workstation client sets properties a Linux one never touches |
 | Quake / svgalib | `src/env/svgalib.js` | **the console framebuffer**: 19 calls, raw scan codes, relative mouse |
 | WinQuake, PuTTY / Win32 | `src/env/win32.c`, `mgl.c`, `headers-win32.js` | **a message queue and a window**, written in C because the contracts are public structs |
+| Keen Dreams, Catacomb 3-D / DOS 16-bit | `src/env/borland.js`, `dos.js`, `pcirq.js`, `ega.js` | **the bare machine**: `int n`, the vector table as memory, the PIT and the 8259, the EGA's planes and latches |
+
+The seventh is the thinnest boundary of the seven, and that is the point of it. A 1991 DOS game has
+no library underneath it: it installs its own timer interrupt with `setvect`, reads the keyboard from
+its own `int 9` handler, and writes the EGA's registers directly. So the shim is not a library, it is
+a **machine** — `M.interrupt(n, regs)` answered by the handler the program itself installed, else by
+a DOS or BIOS service, else a throw naming the vector and AH, because no BIOS is invented; a virtual
+clock advancing one microsecond per backward branch, driving PIT channel 0 and an 8259 with real
+IRQ priority; and the EGA behind 0xA0000 with its write modes, read modes and latches. Nothing here
+polls in real time: the guest's own clock is what schedules an interrupt, which is why a headless run
+is reproducible.
 
 Two structural facts came out of having six rather than two:
 
@@ -498,23 +526,72 @@ the same canvas the game uses (DOS `C:\>` with `DIR`, a `$` shell with `ls -l`, 
 with the programs' own `.ico` files, double-click to launch); a program takes the screen, and when it
 ends the shell takes it back.
 
-## The 16-bit axis: measured, not implemented
+## The 16-bit axis, and what fidelity means when a program can see its own addresses
 
-Wolfenstein 3D and the id titles around it are **16-bit segmented**, which is a second ABI rather
-than a narrower one. Two rules alone make it so: alignment stops at 2, so `struct { char; double; }`
-is 10 bytes and not 12; and an enum is ONE byte. Both are pinned by an external oracle — Open Watcom
-in the container — and neither is guessable.
+Keen Dreams plays. It is compiled from id Software's unmodified 1991 C, linked against its own three
+TASM modules and its own resource objects, and it reaches the world map: text screen, title, high
+scores, control panel, "Loading The Land of Tuberia". Catacomb 3-D builds the same way. Both are
+Borland C++ 2.0, `MODEL MEDIUM`, and neither source file was touched.
 
-**PRISM emits for i386 and only for i386.** `modelTypes('dos16')` exists in `src/sema/abi.js` and has
-exactly two consumers, both of them gates: `gate-abi16.mjs` (~4,970 checks, from the object file) and
-`gate-bits16.mjs` (the byte image of an initialised struct, from a real DOS run under DOSBox-X).
-`src/sema/types.js` binds the i386 table at module scope and fixes a pointer at 4 bytes; threading a
-target through it *is* the 16-bit backend, and that is P11.1.
+This section exists because the 16-bit work forced a sharper answer to a question the 32-bit targets
+never asked: **what is it that has to be faithful?**
 
-And the backend is not the only cost: `_seg`/`huge` appears **91 to 96 times in each** of Wolf3D, Keen
-Dreams, Catacomb 3-D and Hovertank 3-D, so real segmentation is not optional for any of them. The
-first 16-bit target, if one is taken, is **Keen Dreams** and not Wolf3D — measured in P11.1 by
-splitting each title's inline assembly into engine and game code.
+For a flat DJGPP program the answer is "the values". Doom does not care where its functions live;
+nothing in it can observe a code address as a number. Keen Dreams can, and does:
+
+* `id_vw_a.asm` keeps **jump tables of code labels** and dispatches through them
+  (`jmp [ss:memtoscreentable+di]`).
+* It stores a routine's address in a variable — `mov [routinetouse],OFFSET generalmask` — and calls
+  through it later.
+* It keeps **data inside the code segment**, between instructions.
+* It pushes real return addresses onto a real stack, and C and assembly hand control to each other
+  across it.
+
+So an address is not an implementation detail here, it is a **value the program computes with**. If
+a code label were at anything but the offset Turbo Assembler gave it, every one of those would hold
+a number the real program never held, and the program would still appear to run — for a while.
+
+**Hence the shape of `src/asm/tasm16.js`: layout FIRST, translation second.** Every instruction is
+given the offset and the length TASM 2.5 gives it — not merely a valid encoding, but the same
+choices:
+
+* a forward `jmp` is three bytes, because TASM sizes it in one pass and reserves the near form;
+* under `.386C` a forward conditional jump is four, `74 15 90 90`;
+* `mov ax,[x]` uses the accumulator's short form;
+* a code-segment variable read under `ASSUME DS:DGROUP` costs a `CS:` prefix TASM adds on its own;
+* a FARDATA variable's offset is final in its own segment, so TASM writes it with no relocation and
+  a small one becomes a one-byte displacement.
+
+**And the oracle is Turbo Assembler itself.** `tools/gate-tasm-front.mjs` runs the real TASM 2.5,
+from the Borland C++ 2.0 floppies, under DOSBox-X, and compares its object files and `/la` listings
+byte for byte: the public names, the data segment, every position that holds a relocation, the
+instruction stream disassembled by ndisasm, and the offset, length and segment register of every
+single instruction. `tools/gate-tasm-run.mjs` then **executes TASM's own object code under Unicorn**
+and requires the translation to agree on registers, flags, 1,088 KB of memory page by page, and the
+sequence of port writes.
+
+That is the claim worth making about this project, and it is narrower and stronger than "it runs":
+**the program's own assembly sees the addresses the real binary saw**, and an external reference
+says so rather than the project saying so about itself.
+
+### What it costs, and where it stops
+
+The same property is what makes one class of program unreachable, and the boundary is worth stating
+plainly because it is not a gap to be closed later — it is structural.
+
+**PRISM reads a source file once and emits JavaScript. It has no way to express code that does not
+exist at translation time.** Catacomb 3-D's `C3_SCALE.C` writes x86 instructions into memory at run
+time — one compiled scaler per wall height, one compiled drawing routine per shape — and enters them
+with a `call far`; `BuildCompShape` even patches a `retf` into a routine and takes it back out
+afterwards. No amount of work on the translator reaches that, because the bytes are a product of the
+program's execution.
+
+This is exactly the line the sibling project owns: **MIRAGE recompiles x86 as it is executed, and
+self-modifying code is its native case.** The division holds — MIRAGE owns the low level, PRISM the
+high level — and the meeting point stays the **device** boundary, not the CPU. What Catacomb's
+scalers need is a seam with the shape `(memory, registers, io) => registers`, which is deliberately
+the shape `translateTasm` already produces and the shape Unicorn already has; whoever fills it is a
+dependency decision, not a compiler one.
 
 ## Control-flow flattening (`src/backend/flatten.js`)
 

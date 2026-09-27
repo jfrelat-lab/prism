@@ -1,41 +1,53 @@
 # PRISM
 
 A **dynamic C→JavaScript compiler, written in pure JavaScript**, for running the unmodified source
-of DOS-era games and emulators — MAME 0.1, Quake, Doom — in the browser.
+of DOS-era games and emulators — MAME, Quake, Doom, Keen Dreams — in the browser.
 
-Sibling of [MIRAGE](../mirage), which recompiles a DOS program's **x86 binary**. MIRAGE is real-mode
-only, so DOS/4GW and DPMI titles are out of scope there. PRISM reaches exactly that class by
-compiling the **C source** instead, and never emulating a CPU.
+Sibling of [MIRAGE](../mirage), which recompiles a DOS program's **x86 binary**. The difference is
+what each one needs: MIRAGE needs a binary and no source, PRISM needs published source and no
+binary. A program whose source was never published is MIRAGE's alone; one that ships only source is
+PRISM's.
 
 The difference from Emscripten is the compatibility boundary. Emscripten requires **porting** the
 game — replacing its main loop, its video access, its DOS calls. PRISM moves that boundary from the
-game to the library: it supplies libc, the DJGPP layer, Allegro and Xlib in JavaScript, and the game
-compiles as it shipped.
+game to the library: it supplies libc, the DJGPP layer, Allegro, Xlib, the Win32 SDK and the DOS
+interrupt surface in JavaScript, and the game compiles as it shipped.
 
-- Target ABI: **i386 System V, flat 32-bit (DJGPP)** — one address space, no segmentation.
+- Target ABI: **i386 System V, flat 32-bit (DJGPP)**, and **16-bit real-mode DOS** (`dos16`,
+  `dos16m`, `dos16l`) with real segmentation, `far`/`_seg`/`huge` pointers and DGROUP.
 - Language: **C89/C99 + the GNU extensions real code uses**. No C++.
+- Assembly: a program's own is **translated, not emulated** — Borland inline `asm` and whole TASM
+  modules, from their source. PRISM has no CPU and wants none.
 - Backend: **JavaScript, no WASM** — readable emitted code is the primary debugging lever.
 
 ## Status
 
-The compiler works and **MAME 0.1 runs Pac-Man in a browser**, compiled from its unmodified 1997 C
-source: 18 translation units, 894 functions, 0.45 MB of emitted JavaScript, compiled in the browser
-in about 700 ms. Playable — coin, start and the arrow keys all reach the game.
+Seventeen targets build from unmodified sources, on six platform layers, and all but one run.
+Among them: **MAME 0.1–0.5** (Pac-Man playable in a browser at 60 fps, bit-identical to a native
+build), **Quake** on four platforms (DOS, X11, Win32, SunOS; its own timedemo reports 694 fps),
+**Doom** with sound, **Quake II** rendering its demo, **Lua 5.4** running its own test suite, **PuTTY**
+connecting over real sockets — and **Keen Dreams**, the first 16-bit target, which plays.
 
-Measured against external oracles, never against itself:
+Measured against external oracles, never against itself — **52 gates, 50 green**:
 
 | Gate | Result |
 |---|---|
-| i386 ABI layout (`sizeof`/`offsetof`/bitfields) vs gcc | exact, 1745/1745 |
-| Preprocessor vs `gcc -E` | token-identical |
-| Declarations + sema vs gcc | 1819/1819 |
-| c-testsuite | 193/219, **0 wrong answers** |
-| gcc.c-torture/execute | 1218/1556, **0 wrong answers** |
+| i386 ABI layout (`sizeof`/`offsetof`/bitfields) vs gcc | exact, 105k checks |
+| 16-bit DOS layout (small/medium/large) vs Open Watcom | exact |
+| Preprocessor vs `gcc -E` | token-identical, including 289 whole translation units |
+| Declarations + sema vs gcc | 8400+ checks |
+| c-testsuite | 213/219, **0 wrong answers** |
+| gcc.c-torture/execute | 1438/1556, **0 wrong answers** |
+| Random programs vs `gcc -O0`/`-O2` (csmith) | divergence-free |
 | MAME 0.1 vs a native gcc build | **bit-identical framebuffer over 200 frames** |
+| Quake at 320x200 on DOS, X11 and Win32 | **identical pixels** |
+| TASM front end vs **Turbo Assembler 2.5** | every byte, offset and instruction |
+| Translated TASM routines vs **TASM's own object code** under Unicorn | registers, flags, 1 MB of memory |
+| 16-bit programs vs **Borland C++ 2.0** running the same source | identical output |
 | Speed, tier-0 vs `clang -O2` native | 9.5× slower |
 
-Quake compiles but does not yet run. See [docs/COMPAT.md](docs/COMPAT.md) and
-[docs/ROADMAP.md](docs/ROADMAP.md).
+See [docs/COMPAT.md](docs/COMPAT.md) for what runs and [docs/ROADMAP.md](docs/ROADMAP.md) for what
+is next.
 
 ## Running a program in the browser
 
@@ -48,9 +60,10 @@ The shell compiles the C in a worker and shows the program on one surface — a 
 creates a display, its framebuffer afterwards. `--data` is optional (the page has a file picker), and
 **no game data is ever fetched or stored by this repository** — it reads only a directory you name.
 
-Two programs ship. MAME 0.1 needs a ROM set you supply; the Mandelbrot is plain C89 with no platform
-layer and no data files, and exists so that "the shell is generic" is a claim something can falsify.
-Adding a program means adding a `web/programs/*.json` descriptor, not touching the page.
+Seventeen programs ship as `web/programs/*.json` descriptors; each needs the data files you supply.
+The Mandelbrot is plain C89 with no platform layer and no data files, and exists so that "the shell
+is generic" is a claim something can falsify. Adding a program means adding a descriptor, not
+touching the page.
 
 The dev server exists because `SharedArrayBuffer` requires the COOP/COEP headers, and the shell loads
 `src/` as unbundled ES modules — the browser runs the same files the Node gates run, so there is no
@@ -58,13 +71,19 @@ build step to drift.
 
 ## Getting started
 
-Everything that makes a claim about C is checked against a **real i386 gcc**, which on an arm64 Mac
-means a container:
+Everything that makes a claim about C is checked against a **real compiler**, which on an arm64 Mac
+means a container for gcc and DOSBox-X for the period ones:
 
 ```bash
 npm run oracle:build     # one-off: linux/386 gcc 12.2 + csmith 2.3
-npm run gate:abi         # the one gate that exists: struct layout vs gcc, exact
+npm run gate:abi         # struct layout vs gcc, exact
+node tools/build.mjs <target>          # build any targets/*.json
 ```
+
+Three oracles need software this repository does not ship: the gcc container (built above), Open
+Watcom for the 16-bit layouts, and **Borland C++ 2.0 + Turbo Assembler 2.5** under DOSBox-X for the
+16-bit targets. Every gate that needs one replays from a committed golden, so a plain `node
+tools/gate-*.mjs` run needs none of them.
 
 ## Documentation
 

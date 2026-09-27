@@ -5,8 +5,8 @@ written": a row here means a gate observed it, not that the code looks capable o
 
 | Target | Status |
 |---|---|
-| a hosted C program using the supported subset | ✅ **runs** — 30/30 hand programs, 213/219 c-testsuite, 1259/1556 gcc torture |
-| nested functions, compound literals as lvalues, non-empty inline asm, GNU complex, `long double`, labels nested in a block | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement) |
+| a hosted C program using the supported subset | ✅ **runs** — 62/62 execution programs, 213/219 c-testsuite, 1438/1556 gcc torture |
+| `long double`, wide bitfield arithmetic, a label nested inside a block, `__builtin_longjmp`, `__attribute__` where the parser does not expect it | ⛔ tier-0 gaps, each a clear error not a miscompile (P0.5b, ranked by measurement). Nested functions, compound literals as lvalues, GNU complex types and inline asm are no longer on this list. |
 | a wrong answer anywhere in the corpus | ✅ **none** — every failure is a named refusal, never a silent miscompile |
 | **MAME 0.1 — all five drivers** | ✅ **BIT-IDENTICAL TO A NATIVE gcc BUILD** — see the table below. Game ROMs are supplied by the user, never fetched. Now compiled with **MAME's own DOS platform backend**, `src/msdos/msdos.c`: nothing of MAME is written in JavaScript any more, and what PRISM shims is one level down — Allegro, SEAL and DJGPP's memory helpers. Both of msdos.c's display paths render, 224x288 through the tweaked VGA mode and 640x480 with `-vesa`. | Sound works: SEAL is a real four-voice mixer into a shared ring the page reads (only pengo and ladybug have sound in 0.1).
 | **Quake** (`WinQuake/`, `id386=0`) | ✅ **RENDERS** — 69 units, 44,570 lines, **every function emits**, 1.72 MB of JavaScript. Loads `id1/pak0.pak`, runs its demos, and draws the game at 320x200 in the browser at **72.0 fps — which is Quake's own ceiling** (`Host_FilterTime`, 1/72 s), not PRISM's: with the shell's speed selector set to *unlimited* the same build reaches **1,725 fps**. (This line read "~26 fps" from 24 August to 9 September, unmeasured in between.) Game data is supplied by the user, never fetched. Sound and networking are Quake's own null drivers. |
@@ -17,7 +17,9 @@ written": a row here means a gate observed it, not that the code looks capable o
 | **PuTTY** (`puttytel`) | 🟢 **CONNECTS AND DRAWS** — a real telnet session over the host's sockets, text on a 642x386 black terminal in the VGA ROM font. Win32: a window class, a message queue, GDI, Winsock. 18 functions still unemitted. | **Win32** |
 | **Quake, DOS platform** | 77 units / 51,391 lines with `sys_dos.c vid_dos.c vid_vga.c vid_ext.c vregset.c snd_dos.c snd_dma.c snd_mem.c snd_mix.c cd_audio.c in_dos.c dos_v2.c` | **DOS / DJGPP** | 🟢 **PLAYS.** Console, menu, and a started game at 320x200 in mode 13h — 3D renderer, start map, status bar. Zero functions unemitted. Three devices (0x3DA retrace, the DAC, the keyboard controller), the PIT for the clock, and `src/env/go32.js` for DJGPP's DPMI floor; `dos_v2.c` builds all of dosisms.h on top of that. The default video mode programs no VGA registers at all. |
 | **SQLite 3.53.4** (amalgamation) | ✅ **RUNS, AND AGREES WITH gcc** — 269,650 lines in ONE translation unit, 2542 functions, 5.8 MB of emitted JavaScript in **1.5 s** (~180,000 lines/second). Creates a table, inserts 200 rows and answers eight queries — aggregates, an index, ORDER BY, a self join — **byte-identical to an i386 gcc build of the same sources** (`tools/sqlite.mjs --diff`). No platform layer and no data files: where MAME and Quake test whether PRISM can HOST a program, this tests whether it can COMPILE one. |
-| **DOOM** (`linuxdoom-1.10`) | 🟢 **PLAYS A REAL LEVEL** — 62 units, 45,152 lines, 714 of 715 functions, 1.11 MB of JavaScript in 0.8 s. Loads `DOOM1.WAD`, draws its title, credits and order screens, and with `-warp 1 1` runs E1M1: 260 frames at ~1 ms each, 320x200, 156 distinct colours on screen, status bar and all. Compiled **entirely unmodified**, X11 and all. Its shareware demos still do not play, and Doom says why itself: `Demo is from a different game version!` — the WAD's demos predate this source. **Sound is the one thing missing, and not for an audio reason:** doomdef.h defines `SNDSERV`, so Doom delegates sound to a separate program. That program (`corpus/DOOM/sndserv`, 2,026 lines) compiles and mixes correctly on its own — what is missing is a process model. |
+| **Keen Dreams** (id Software / Softdisk, 1991) | 🟢 **PLAYS** — the first 16-bit target: Borland C++ 2.0, `MODEL MEDIUM`, real segmentation. 17 units, 25,756 lines, 447 functions, **2 refusals**, and **17 routines bound out of its own three TASM modules**. Text screen → title → high scores → control panel → "Loading The Land of Tuberia" → the world map, drawn by the game's own assembly through a real EGA. Not one source file was touched. Data: shareware 1.13, supplied by the user, never fetched. | **DOS 16-bit, on the bare machine** |
+| **Catacomb 3-D** (id Software / Softdisk, 1992) | 🟡 **BUILDS** — 17 units, 29,593 lines, 433 functions, 17 TASM routines bound, 17 refusals. Its four TASM modules agree with Turbo Assembler 2.5 instruction for instruction, `JABHACK.ASM`'s `.386C` included. It does not yet draw its 3D view, and the reason is structural rather than a gap: `C3_SCALE.C` writes x86 into memory at run time and calls it (ROADMAP P11.4). | **DOS 16-bit** |
+| **DOOM** (`linuxdoom-1.10`) | 🟢 **PLAYS A REAL LEVEL** — 62 units, 45,152 lines, 714 of 715 functions, 1.11 MB of JavaScript in 0.8 s. Loads `DOOM1.WAD`, draws its title, credits and order screens, and with `-warp 1 1` runs E1M1: 260 frames at ~1 ms each, 320x200, 156 distinct colours on screen, status bar and all. Compiled **entirely unmodified**, X11 and all. Its shareware demos still do not play, and Doom says why itself: `Demo is from a different game version!` — the WAD's demos predate this source. **It has sound**, and the reason it once did not was not an audio one: doomdef.h defines `SNDSERV`, so Doom delegates sound to a separate program. That program (`corpus/DOOM/sndserv`, 2,026 lines) now runs as a second process in its own worker, connected by a byte pipe (ROADMAP P9.3). |
 
 ### MAME 0.1, driver by driver
 
@@ -1541,3 +1543,41 @@ Two things this exercise established that are worth more than the numbers:
   prints `883 rendered frames/s (deterministic clock, unthrottled)` rather than "fps" for exactly
   this reason. The ~2x gap between the two is **not explained here**, because nothing has measured
   it, and explaining a gap without measuring it is how the 26 fps survived.
+
+## The 16-bit id titles: which data set each source actually describes
+
+Four id/Softdisk titles of 1991-1992 are Borland C++ 16-bit programs with published source: **Keen
+Dreams** (plays), **Catacomb 3-D** (builds), **Hovertank 3D** and **Wolfenstein 3D**. For each, the
+question that decides whether it can run is not "does the source compile" but **"which release of
+the game data does this source describe"**, because an id title of this era compiles its graphics
+numbering into the C (`GFXV_WL6.H`, `GFXE_C3D.EQU`, `GRAPHHOV.H`) and links some of its data headers
+as object files. A source and a data set from two different releases do not fail loudly: they read
+the wrong chunk and draw garbage, or overrun a table.
+
+**The check that settles it decodes the data.** Checking that every offset falls inside the file
+proves nothing — Keen Dreams passed that check on data it could not read, which is how a map header
+read as 52480x16555 overran `mapbwidthtable` into `SoundUserHook`. What proves a match: every
+Huffman-compressed chunk decodes, with the header's own dictionary, to exactly the length it states
+in exactly its span; and every picture the source's `pictable` names has the size that entry says.
+The decoder was first validated on Keen Dreams, whose data is known good (368 chunks exact).
+
+| title | source | data that matches it | how it was shown |
+|---|---|---|---|
+| **Keen Dreams** | v1.93 | shareware **1.13** — but only with its OWN map headers, which differ from the source tree's static ones | `tools/keen-static.mjs` unpacks the LZEXE `KDREAMS.EXE` and finds a MAPHEAD/MAPDICT pair that decodes every map to a printable name and a plausible size |
+| **Catacomb 3-D** | v1.21 | **v1.00** is the only release to be found (three copies, all 258,007 bytes of EGAGRAPH). Maps and audio match the tree's `.OBJ` headers exactly; the EGA header, the EGA dictionary and the intro screen do not | v1.00's own copies are inside its LZEXE-packed `CAT3D.EXE`; with them, **all 155 pictures** have the size v1.21's `pictable` gives — so v1.21's chunk NUMBERING holds on v1.00's data |
+| **Hovertank 3D** | as published | the one release | it reads `EGAHEAD.HOV` (dictionary and offsets) at run time, so nothing is linked to disagree: 86 chunks = `NUMCHUNKS`, **83 of 83** pictures exact |
+| **Wolfenstein 3D** | WOLFSRC, `GOODTIMES` defined | **only the id / Activision 1.4 six-episode release** | 150 VGAHEAD entries = `GFXV_WL6.H`'s 149 + 1, the last offset = VGAGRAPH's length, 132 pictures = `NUMPICS`, 131 of 132 exact |
+
+Two results in that table are worth having found before anyone tried to play the game:
+
+* **Wolfenstein 3D's source describes neither of the editions most people own.** The Apogee 1.4
+  registered release has **161** graphics chunks, the shareware **156**; WOLFSRC's headers have 149
+  (`GFXV_WL6.H`) and 556 (`GFXV_WL1.H`, which matches nothing found). `VERSION.H` defines
+  `GOODTIMES`, the id/GT edition later sold by Activision, and that is the one that fits. The
+  Apogee registered data came off its own install disk by running its own `INSTALL.EXE` under
+  DOSBox-X, because the archive format is Apogee's and "transcribe, don't infer" applies.
+* **Catacomb 3-D's source is newer than any data that survives**, and the gap is exactly the linked
+  headers. The same solution Keen Dreams needed applies: take them from the executable that shipped
+  with the data.
+
+All of it lives outside this repository and is never fetched by it.

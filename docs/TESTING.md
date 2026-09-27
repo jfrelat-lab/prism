@@ -5,8 +5,11 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-Thirteen now, so here is the index. The rule that shapes the list: **no gate answers its own
-question.** Each column names something outside PRISM that could contradict it.
+**Fifty-two now, fifty green** — `gate-lua` and `gate-pixels` are red, and were before the 16-bit
+work began. This is the index of the ones that carry an external authority; the smaller seam gates
+(`gate-accessor`, `gate-layout`, `gate-memmap`, `gate-typemodel` and the like) are named in their
+own sections. The rule that shapes the list: **no gate answers its own question.** Each column names
+something outside PRISM that could contradict it.
 
 | gate | external authority | asserts |
 |---|---|---|
@@ -16,7 +19,17 @@ question.** Each column names something outside PRISM that could contradict it.
 | `gate-abi.mjs` | gcc 12, i386 | i386 SysV layout, ~105k checks over 13 seeds |
 | `gate-abi16.mjs` | Open Watcom, from the OBJECT FILE | 16-bit DOS layout, ~4,970 checks over six seeds |
 | `gate-bits16.mjs` | Open Watcom, run under **DOSBox-X** | the BYTE IMAGE — bitfield allocation order, byte order, padding |
-| `gate-run.mjs` | a native i386 gcc build | 60 programs behave identically |
+| `gate-abi16m.mjs`, `gate-abi16l.mjs` | Open Watcom `-mm` / `-ml` | medium and large models: near data, far code, and the reverse |
+| `gate-borland-layout.mjs`, `gate-borland-int16.mjs` | **Borland C++ 2.0**, compiling and RUNNING under DOSBox-X | Keen's 36 named types laid out as Borland lays them; 600 random integer expressions executed by both |
+| `gate-borland-options.mjs` | **PRJCFG** (Borland C++ 3.1) on the unmodified `.PRJ` | every 16-bit target compiles with the options its own project records |
+| `gate-dos16-run.mjs` | **Borland C++ 2.0** running the same programs | identical output under a 16-bit model: argv, varargs, printf, DOS services |
+| `gate-borlandasm.mjs` | **Unicorn** in 16-bit real mode, on the same snippets assembled by nasm | Borland inline asm, 1,339 cases |
+| `gate-tasm-front.mjs` | **Turbo Assembler 2.5** under DOSBox-X, per game | every byte, relocation, public, instruction, offset and length TASM produced — Keen Dreams and Catacomb 3-D |
+| `gate-tasm-run.mjs` | **Unicorn executing TASM's own object code** | registers, flags, 1,088 KB page by page, port writes |
+| `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
+| `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
+| `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
+| `gate-run.mjs` | a native i386 gcc build | 62 programs behave identically |
 | `gate-suite.mjs` | c-testsuite, gcc torture | 213 / 219 and 1,438 of the torture corpus |
 | `csmith-diff.mjs` | Csmith + gcc `-O0`/`-O2` | unlimited random programs, zero divergence |
 | `gate-pixels.mjs` | PRISM against ITSELF on four platform layers | `x11 == dos == win == svgalib`, pixel for pixel |
@@ -3189,3 +3202,61 @@ names into strings of `:` and `/`, all of them printable; requiring letters and 
 rejects it. The two files are written into the data directory, never into this repository.
 1.13's GAMETEXT (the help text) also differs and is not extracted: it is only read by the control
 panel's help screen.
+
+## Catacomb 3-D's assembly, and the gate made per game (`tools/gate-tasm-front.mjs --game=cat3d`)
+
+The second 16-bit target is the same engine generation as Keen Dreams, and its four TASM modules
+(`C3_ASM`, `ID_US_A`, `ID_VW_A` with `ID_VW_AE`, `JABHACK`) went through the same gate — which now
+runs per game, each against its own golden (`goldens/tasm-keen.json`, `goldens/tasm-cat3d.json`).
+All four agree with Turbo Assembler 2.5 on every public, every data and FAR_DATA byte and relocation,
+and the offset, length and segment register of all 1,601 instructions.
+
+### What TASM does that this corpus had to teach
+
+Each of these was found by the listing, not by reading a manual:
+
+* **EVEN in DATASEG**, at offset 0, pads nothing. What TASM pads DATA with at an odd offset has not
+  been observed, so that case is refused by name rather than filled with a guessed byte.
+* **FARDATA offsets are final and carry no relocation.** `mov [es:rndindex],dx` is `26 89 16 0000`
+  with no fixup marker, so a small FARDATA offset is a BYTE displacement: `mov al,[es:rndtable+bx]`
+  is `26 8A 47 02`, four bytes where a relocated operand would take five. `SEG rndtable` is the
+  segment's paragraph, a relocation of the other kind (frame 5, target FAR_DATA).
+* **Under `.386C` a forward conditional jump reserves the 386's near form**: `jz not386` is
+  `74 15 90 90`, four bytes, where the 8086's one-pass rule gives two. A forward `jmp` is still three.
+  32-bit operands cost the operand-size prefix, and `shr edx,16` is the `C1` form.
+* **The listing changes shape under `.386C`**: the offset column becomes eight wide and the object
+  bytes move four columns right. The listing reader first parsed ZERO instructions from JABHACK and
+  crashed on `ins.at(-1)`; it now detects the wider field on each line.
+* **`MODEL MEDIUM` without `,C` makes no underscores.** JABHACK declares `PROC _CheckIs386` and
+  `EXTRN _intaddr`; the object's names are exactly those. The gate derives the object name from the
+  model's language rather than always prefixing `_`.
+
+And one thing that looked like a gap and was not: `if NUMFONT+NUMFONTM` in `ID_VW_AE.ASM` failed
+with "two addresses in one expression" in the first survey, because the survey assembled that file
+alone. It is INCLUDEd by `ID_VW_A.ASM` after the equates are defined, and never assembled on its own.
+
+### A machine that is a 286, and refusals that wait to be executed
+
+`JABHACK.ASM` tests the processor (PUSHF/POPF with FLAGS bits 12-15) and, on a 386, patches Borland's
+long-division helper `LDIV@` to an `int 60h` handler that divides with a 32-bit IDIV. PRISM's
+translation of PUSHF has always masked bits 12-15 to zero, which is a 286 in real mode — so the
+program's OWN test answers "not a 386", and the 386 path is never taken.
+
+Its instructions still have to translate, and some cannot: the 32-bit arithmetic, the `SEG` of an
+external no linked object defines (`LDIV@` is Borland's run-time, which PRISM's C never calls), and
+two reads of the module's own instruction bytes, which are not encoded. Each becomes a statement
+that throws by name **only if executed**, and `installTasm` lists them. Refusing them at translation
+time would have refused the whole module, and with it `CheckIs386`, which runs.
+
+### Mutations, all red (8)
+
+| mutation | what turns red |
+|---|---|
+| 386 forward `jcc` sized as on the 8086 | 43 instruction offsets in JABHACK |
+| no operand-size prefix | 9 offsets |
+| `C1` shift sized as `D1` | 5 offsets |
+| FARDATA offset left to a relocation | 4 offsets in ID_US_A (the byte displacement is lost) |
+| FARDATA written into DGROUP | the FAR_DATA segment, and 3 more checks |
+| EVEN in data always pads | C3_ASM's data segment, 3,301 bytes against 3,300 |
+| publics always underscored | JABHACK's two public names |
+| `.386C` ignored | JABHACK's layout refuses `eax`; its operands |
