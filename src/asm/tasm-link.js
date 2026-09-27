@@ -15,6 +15,7 @@
 // that made the call.
 import { assembleTasm } from './tasm.js';
 import { layoutTasm, translateTasm, loadTasm } from './tasm16.js';
+import { readOmf } from './omf.js';
 
 // The return address pushed for a call from C: a code segment no module is loaded at. RETF to it
 // leaves the machine (tasm16.js returns when the popped CS is not its own).
@@ -53,6 +54,34 @@ export function tasmExternData(modules) {
     if (mod.fardata.bytes.length) out.push({ name: `${file}:FAR_DATA`, size: mod.fardata.bytes.length, far: true, align: 16, publics: [] });
   }
   return out;
+}
+
+/**
+ * The other object files a project links, as blocks compile.js places before the C resolves its
+ * externs (`dataObjects` in a target). `bytesOf(entry)` supplies the file: Node reads it off disk,
+ * the browser has fetched it, and both get the same blocks from here.
+ *
+ *   - `{ file, symbol, far }`: a raw file's bytes as ONE object with a public at its start -- what
+ *     Keen Dreams' static/makeobj.c writes, near in DGROUP or in a far segment of its own.
+ *   - `{ object }`: an OMF object as it stands (Catacomb 3-D's C3DEHEAD.OBJ): each segment a block,
+ *     near when the object puts it in DGROUP, its publics its names. Only pure data is taken -- an
+ *     object with fixups or externals is code, or data holding addresses, and would need a linker.
+ */
+export function dataObjectBlocks(entries, bytesOf) {
+  return entries.flatMap((o) => {
+    if (o.object) {
+      const obj = readOmf(bytesOf(o), o.object);
+      if (obj.fixups.length || obj.externs.length) throw new Error(`${o.object}: an object with fixups or externals, which is more than data`);
+      const near = new Set(obj.groups.filter((g) => g.name === 'DGROUP').flatMap((g) => g.members));
+      return obj.segments.map((s) => {
+        const far = !near.has(s.name);
+        const publics = obj.publics.filter((p) => p.seg === s.name).map((p) => ({ name: p.name.replace(/^_/, ''), offset: p.offset }));
+        return { name: `${o.object}:${s.name}`, bytes: s.bytes, size: s.size, far, align: far ? 16 : 2, publics };
+      });
+    }
+    const bytes = bytesOf(o);
+    return [{ name: o.file, bytes, size: bytes.length, far: !!o.far, align: o.far ? 16 : 2, publics: [{ name: o.symbol, offset: 0 }] }];
+  });
 }
 
 /** The words an argument of type t occupies on the 8086 stack, from PRISM's JS value. */

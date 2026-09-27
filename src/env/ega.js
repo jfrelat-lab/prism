@@ -124,16 +124,19 @@ export function installEga(M) {
     get mode() { return mode; },
     setMode,
     resetFlipFlop() { ports.attrFlip = false; },
-    /** The visible picture of mode 0Dh, as RGBA: start address, line offset and pel panning applied. */
-    frame() {
+    /**
+     * The visible picture of mode 0Dh as PALETTE INDICES, 0-15 after the colour-plane enable, with
+     * the 16 attribute-palette entries as RGB bytes -- start address, line offset and pel panning
+     * applied. `into` receives the pixels when given (a host's display buffer), so a frame costs no
+     * allocation.
+     */
+    indexed(into = null) {
       if (mode !== 0x0d) return null;
       const width = 320, height = 200;
-      const rgba = new Uint8Array(width * height * 4);
+      const pix = into ?? new Uint8Array(width * height);
       const start = (crtc[0x0c] << 8) | crtc[0x0d];
       const pitch = crtc[0x13] * 2;
-      const pel = attr[0x13] & 7;
-      const rgb = attr.slice(0, 16).map((c) => c);
-      const lut = [...rgb].map(egaRgb);
+      const pel = attr[0x13] & 7, enable = attr[0x12];
       for (let y = 0; y < height; y++) {
         const line = start + y * pitch;
         for (let x = 0; x < width; x++) {
@@ -141,12 +144,22 @@ export function installEga(M) {
           const off = (line + (bitpos >> 3)) & 0xffff, bit = 7 - (bitpos & 7);
           let c = 0;
           for (let p = 0; p < 4; p++) c |= ((planes[p][off] >> bit) & 1) << p;
-          const [r, g, b] = lut[c & attr[0x12]];
-          const o = (y * width + x) * 4;
-          rgba[o] = r; rgba[o + 1] = g; rgba[o + 2] = b; rgba[o + 3] = 255;
+          pix[y * width + x] = c & enable;
         }
       }
-      return { width, height, rgba };
+      const palette = [...attr.slice(0, 16)].map(egaRgb);
+      return { width, height, pix, palette };
+    },
+    /** The same picture as RGBA. */
+    frame() {
+      const f = this.indexed();
+      if (!f) return null;
+      const rgba = new Uint8Array(f.width * f.height * 4);
+      for (let i = 0; i < f.pix.length; i++) {
+        const [r, g, b] = f.palette[f.pix[i]];
+        rgba[4 * i] = r; rgba[4 * i + 1] = g; rgba[4 * i + 2] = b; rgba[4 * i + 3] = 255;
+      }
+      return { width: f.width, height: f.height, rgba };
     },
   };
   M.win = win;

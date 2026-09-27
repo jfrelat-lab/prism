@@ -7,6 +7,8 @@
 // number nobody read. Now the exit status is non-zero only when a gate that ran said no.
 //
 //   node tools/gates.mjs [substring...]          run all, or those whose name contains one of them
+//   node tools/gates.mjs --skip=lua              all but those whose name contains a --skip value
+//                                                (gate-lua alone is about eight minutes of the run)
 //   PRISM_QUAKE_DATA=<dir with id1/> node tools/gates.mjs     let gate-pixels run
 import { readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -15,11 +17,15 @@ import { spawnSync } from 'node:child_process';
 import { SKIP_CODE } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const filters = process.argv.slice(2);
+const args = process.argv.slice(2);
+const filters = args.filter((a) => !a.startsWith('--'));
+const skips = args.filter((a) => a.startsWith('--skip=')).flatMap((a) => a.slice(7).split(',')).filter(Boolean);
 const gates = readdirSync(join(ROOT, 'tools'))
   .filter((f) => /^gate-.*\.mjs$/.test(f) && f !== 'gate-skip.mjs')
   .filter((f) => !filters.length || filters.some((s) => f.includes(s)))
+  .filter((f) => !skips.some((s) => f.includes(s)))
   .sort();
+if (skips.length) console.log(`not run, by request: every gate matching ${skips.join(', ')}\n`);
 
 const rows = [];
 for (const g of gates) {

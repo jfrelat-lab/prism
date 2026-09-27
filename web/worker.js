@@ -17,6 +17,7 @@ import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js'
  */
 import { buildEnv, envHeaders, envBuiltins } from '../src/env/registry.js';
 import { installAsm } from '../src/asm/link.js';
+import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from '../src/asm/tasm-link.js';
 import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
@@ -144,6 +145,17 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
        * and the .S file is the artefact -- there is nothing pre-built to keep in step.
        */
       asmTranslate: t.asmTranslate ?? [],
+      /*
+       * The compiler options Node's build passes (src/target.js) and this side used to drop: the
+       * ABI model, C89, the sign of char, the size of enums, a stated sizeof for #if, the device
+       * window. An i386 target states none of them and compiles as before; a 16-bit one cannot be
+       * built without them.
+       */
+      compile: t.compile ?? {},
+      // Turbo Assembler modules and the object files the project links -- see src/asm/tasm-link.js.
+      tasm: t.tasm ?? [],
+      tasmFiles: t.tasmFiles ?? [],
+      dataObjects: t.dataObjects ?? [],
     };
   }
 
@@ -221,7 +233,35 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
     asmSources.push({ file: f, text });
   }
+  /*
+   * Turbo Assembler sources, read as LATIN-1 for the reason given above, keyed by their file name
+   * because a module INCLUDEs by name. And the data objects: from the player's own data when it
+   * brings a file of that name -- a data set may carry the headers that match it, as Keen Dreams
+   * 1.13 does (tools/keen-static.mjs) -- else from the source tree.
+   */
+  const latin1 = (bytes) => { let t = ''; for (let i = 0; i < bytes.length; i++) t += String.fromCharCode(bytes[i]); return t; };
+  const tasmText = new Map();
+  await Promise.all((program.tasmFiles ?? []).map(async (f) => {
+    const r = await fetch(`/${f}`);
+    if (r.ok) tasmText.set(f.replace(/^.*\//, '').toLowerCase(), latin1(new Uint8Array(await r.arrayBuffer())));
+  }));
+  const dataBytes = new Map();
+  await Promise.all((program.dataObjects ?? []).map(async (o) => {
+    const name = o.object ?? o.file;
+    const own = Object.entries(data || {}).find(([k]) => k.toLowerCase() === name.toLowerCase());
+    if (own) { dataBytes.set(name, new Uint8Array(own[1])); return; }
+    if (!o.path) throw new Error(`data object ${name} is in neither the source tree nor the data`);
+    const r = await fetch(`/${o.path}`);
+    if (!r.ok) throw new Error(`missing data object ${o.path}: ${r.status}`);
+    dataBytes.set(name, new Uint8Array(await r.arrayBuffer()));
+  }));
+  const tasmMods = tasmModules(program.tasm ?? [], (n) => tasmText.get(String(n).toLowerCase()) ?? null);
+  const externData = [
+    ...tasmExternData(tasmMods),
+    ...dataObjectBlocks(program.dataObjects ?? [], (o) => dataBytes.get(o.object ?? o.file)),
+  ];
   log(`fetched ${tree.size} source files` +
+    (tasmMods.length ? `, ${tasmMods.length} TASM module(s) and ${dataBytes.size} data object(s)` : '') +
     (asmSources.length ? ` and ${asmSources.length} assembly file(s)` : '') +
     ` (${(performance.now() - t0).toFixed(0)} ms)`);
 
@@ -242,6 +282,28 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
   // Built here, before the resolver runs, so a target that names two versions of one library is
   // refused with the same message Node gives rather than quietly taking whichever was spread last.
   const envTable = envHeaders(program.env ?? []);
+  /*
+   * PRISM's OWN headers by lower-cased name, for a caseInsensitive target -- the rule src/target.js
+   * makeResolver applies. Keen Dreams writes <STDIO.H> and <DOS.H>; DOS never distinguished the
+   * spellings, and a target that says it is a DOS tree says so about its system headers too. Two
+   * spellings that fold to one name are not chosen between: that include stays missing and is
+   * reported. Without this the page stubbed eleven of Keen's headers empty and the build failed on
+   * NULL, where Node's build of the same target is whole.
+   */
+  const foldTable = new Map();
+  if (program.caseInsensitive) {
+    for (const k of new Set([...Object.keys(envTable), ...Object.keys(HEADERS)])) {
+      const low = k.toLowerCase();
+      foldTable.set(low, [...(foldTable.get(low) ?? []), k]);
+    }
+  }
+  const folded = (name) => {
+    for (const n of [name, name.replace(/^.*\//, '')]) {
+      const keys = foldTable.get(n.toLowerCase());
+      if (keys?.length === 1) return envTable[keys[0]] ?? HEADERS[keys[0]];
+    }
+    return undefined;
+  };
   function resolve(name, angled, fromFile) {
     const tryPath = (p) => {
       /*
@@ -266,8 +328,11 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     // page and Node hand the same program the same declarations. Without this the browser would
     // still give every build SDL2's "SDL.h" whatever its env list says.
     const std = envTable[name] ?? envTable[name.replace(/^.*\//, '')]
-      ?? HEADERS[name] ?? HEADERS[name.replace(/^.*\//, '')];
+      ?? HEADERS[name] ?? HEADERS[name.replace(/^.*\//, '')] ?? folded(name);
     if (std !== undefined) return { path: `<${name}>`, text: std };
+    // A DOS path -- Keen Dreams' <SYS\STAT.H> -- is tried again with slashes, as Node's resolver does
+    // (src/target.js makeResolver), and only after the name as written has missed.
+    if (name.includes('\\')) return resolve(name.replace(/\\/g, '/'), angled, fromFile);
     // Stub and record, so one build reports every absent header rather than dying on the first.
     // Printed, never silent.
     missing.add(name);
@@ -321,7 +386,14 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
        * iteration of every loop, so this is per-program and not a default -- see the descriptor's
        * safepointsNote for why MAME needs them and Doom does not.
        */
-      safepoints: !!program.safepoints,
+      safepoints: !!(program.safepoints || program.compile?.safepoints),
+      c89: !!program.compile?.c89,
+      model: program.compile?.model ?? 'i386',
+      signedChar: program.compile?.signedChar,
+      enums: program.compile?.enums,
+      ppSizeof: program.compile?.ppSizeof ?? null,
+      window: program.compile?.window ?? (program.env ?? []).includes('ega'),
+      externData,
       // The environments' builtin signatures, as src/target.js passes them -- so a program compiled
       // in the page links against the same library version it would in Node.
       extraBuiltins: envBuiltins(program.env ?? []),
@@ -357,8 +429,12 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
    * the video menu -- and then the game dies naming a function whose absence was knowable before it
    * started.
    */
-  if (prog.undefined?.length) {
-    const names = prog.undefined.map(u => u.name.split('$').pop());
+  // A TASM module's public PROCs are bound after this, by the host (installTasm), so they are not
+  // missing -- counting them made Keen Dreams report its own seventeen assembly routines as absent.
+  const tasmPublics = new Set(tasmMods.flatMap(({ mod }) => [...mod.publics].map(p => (mod.model?.includes('c') ? p : p.replace(/^_/, '')))));
+  const unresolved = (prog.undefined ?? []).filter(u => !tasmPublics.has(u.name));
+  if (unresolved.length) {
+    const names = unresolved.map(u => u.name.split('$').pop());
     log(`${names.length} symbol${names.length === 1 ? '' : 's'} the build never resolved; anything ` +
       `that calls one throws: ${names.slice(0, 12).join(' ')}` +
       (names.length > 12 ? ` … and ${names.length - 12} more` : ''), 'warn');
@@ -811,6 +887,105 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     prog.F.VID_Update = w;
     prog.mod.bindFunc('VID_Update', w);
 
+  } else if (platform === 'borland16') {
+    /*
+     * A 16-BIT DOS PROGRAM ON THE BARE MACHINE -- Keen Dreams. Borland C++, its own TASM modules,
+     * and no library underneath: it installs its own timer interrupt, reads the keyboard from its own
+     * int 9 handler and writes the EGA's registers itself. The devices come from the target's env
+     * list through buildEnv, as in Node (tools/keen.mjs), so the two install the same machine.
+     *
+     * TIME. src/env/pcirq.js counts VIRTUAL microseconds, one per backward branch, and sets the
+     * safepoint budget to the edges left before the next interrupt, so M.sp_ runs exactly when one is
+     * due. Headless that runs as fast as the host can; in front of a person the virtual clock must
+     * not run ahead of the wall. So the safepoint is wrapped: pcirq does its work, then the worker
+     * sleeps for as long as virtual time is ahead. The interrupts stay where virtual time puts them
+     * -- deterministic -- and only the rate at which that time passes is tied to the real one.
+     */
+    buildEnv(prog.M, program.env ?? [], { stdio: { files, readChar: () => keyboard.read() } });
+    const bound = tasmMods.length ? installTasm(prog, tasmMods) : [];
+    log(`Turbo Assembler routines bound: ${bound.length}` +
+      (bound.refused?.length ? `; ${bound.refused.length} instruction(s) refused where they stand` : ''));
+    const ega = prog.M.ega, clock = prog.M.vclock;
+    if (!ega || !clock) throw new Error("host 'borland16' needs the ega and pcirq environments in the target's env list");
+
+    /*
+     * THE PICTURE is planes, not memory, so it is composed: palette indices into a buffer of this
+     * host's own, the attribute palette's sixteen colours into the page's palette. Text mode is the
+     * guest's own 0xB8000, which the page already draws.
+     *
+     * The buffer lives at 0xD0000, the upper-memory block where a PC keeps option ROMs: this machine
+     * puts none there and a 16-bit program's far data ends at 0xA0000 (src/link/module.js), while its
+     * whole space is the one megabyte. Not in the program's heap: under dos16m rt.malloc is DGROUP's
+     * near heap, 64K for everything, and the first frame's 64,000 bytes took it ("out of memory in
+     * malloc" on the first key).
+     */
+    const VIEW_AT = 0xd0000;
+    if (prog.M.u8.length < VIEW_AT + 320 * 200) throw new Error("host 'borland16': the guest image is too small for the display buffer");
+    let view = 0, graphics = false;
+    const lastPal = new Uint8Array(48);
+    const compose = () => {
+      if (ega.mode !== 0x0d) {
+        if (graphics) { Atomics.store(ctrl, SLOT.TEXTMODE, 1); graphics = false; }
+        return;
+      }
+      view = VIEW_AT;
+      const f = ega.indexed(prog.M.u8.subarray(view, view + 320 * 200));
+      if (!graphics) {
+        Atomics.store(ctrl, SLOT.WIDTH, 320);
+        Atomics.store(ctrl, SLOT.HEIGHT, 200);
+        Atomics.store(ctrl, SLOT.PIXELS, view);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        graphics = true;
+      }
+      let changed = false;
+      f.palette.forEach(([r, g, b], i) => {
+        if (lastPal[3 * i] !== r || lastPal[3 * i + 1] !== g || lastPal[3 * i + 2] !== b) changed = true;
+        lastPal[3 * i] = r; lastPal[3 * i + 1] = g; lastPal[3 * i + 2] = b;
+      });
+      if (changed) { pal.set(lastPal); Atomics.add(ctrl, SLOT.PALGEN, 1); }
+      Atomics.add(ctrl, SLOT.FRAME, 1);
+    };
+
+    /*
+     * THE KEYBOARD is a scancode through port 60h and IRQ1, scheduled at the CURRENT virtual time
+     * (pcirq latches one per interrupt, in order). An extended key is the two bytes the hardware
+     * sends. A release arriving in the same drain as its press is held back one drain, so a quick tap
+     * leaves a moment at which the program can see the key down -- the planar host found that.
+     */
+    const heldBack = [];
+    const drainKeys = () => {
+      const now = clock.us / 1000;
+      const send = (e) => {
+        const codes = e.extended ? [0xe0] : [];
+        codes.push(e.down ? e.scan : (e.scan | 0x80));
+        prog.M.keyboard.at(now, ...codes);
+      };
+      for (const e of heldBack) send(e);
+      heldBack.length = 0;
+      const pressedNow = new Set();
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        if (!e.down && pressedNow.has(e.scan)) { heldBack.push(e); continue; }
+        if (e.down) pressedNow.add(e.scan);
+        send(e);
+      }
+    };
+
+    const innerSp = prog.M.sp_;
+    let t0 = null, lastShow = 0;
+    prog.M.sp_ = (...a) => {
+      innerSp(...a);
+      if (Atomics.load(ctrl, SLOT.STOP)) throw new Error('__stopped');
+      while (Atomics.load(ctrl, SLOT.PAUSE) && park(50)) t0 = null;
+      const now = performance.now();
+      const pct = Atomics.load(ctrl, SLOT.SPEED);
+      const virt = clock.us / 1000 * (pct ? 100 / pct : 0);
+      if (t0 === null) t0 = now - virt;
+      const ahead = virt - (now - t0);
+      if (pct && ahead > 1) park(ahead);
+      else if (ahead < -250) t0 = now - virt;      // a slow host: resync rather than race to catch up
+      if (now - lastShow >= 16) { lastShow = now; drainKeys(); compose(); }
+    };
+
   } else if (platform === 'planar') {
     /*
      * A DOS HOST WITH UNCHAINED PLANAR VGA -- mode X. Jump 'n Bump.
@@ -846,7 +1021,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      */
     if (asmSources.length) {
       const bound = installAsm(prog, { sources: asmSources, machine: prog.M.machine ?? null });
-      log(`assembly translated and bound: ${bound.join(' ')}`);
+      log(`assembly translated and bound: ${bound.map((b) => b.name).join(" ")}`);
     }
 
     /*

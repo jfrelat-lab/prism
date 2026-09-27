@@ -1,0 +1,18 @@
+{
+  "title": "Keen Dreams",
+  "target": "keendreams",
+  "platform": "borland16",
+  "subtitle": "id Software / Softdisk, 1991 · Borland C++ 2.0, MODEL MEDIUM, three TASM modules · 16-bit real mode, EGA",
+  "needsData": {
+    "hint": "the shareware 1.13 data (KDREAMS.EGA, KDREAMS.MAP, KDREAMS.AUD, ...) with the static/ headers tools/keen-static.mjs extracts from its own KDREAMS.EXE",
+    "dir": "keendreams"
+  },
+  "controls": [
+    ["arrows", "move"],
+    ["Ctrl", "jump"],
+    ["Alt", "throw"],
+    ["Enter", "select"],
+    ["Esc", "menu"]
+  ],
+  "_data": "The 1.93 source's own static/MAPHEAD.KDR and MAPDICT.KDR do not describe the 1.13 maps (docs/COMPAT.md). A data directory that carries static/ -- written by tools/keen-static.mjs from the data set's own KDREAMS.EXE -- supplies the two that match, and the page takes a data object from the player's files before the source tree's."
+}

@@ -32,7 +32,7 @@ row. A row's story after that date is in its commit.
 
 | # | What | Rows | Effort |
 |---|---|---|---|
-| 1 | **A real clock for the programs that pace themselves through safepoints.** Keen Dreams played by a person in the browser, with sound; Hexen and Heretic at 35 Hz; OpenDUNE's intro that runs slow and then lurches. Three rows, one mechanism. | P11.5, P6.4, P7.11 | M |
+| 1 | **A real clock for the programs that pace themselves through safepoints.** Keen Dreams now plays in the browser on one (P11.5); next its sound, then Hexen and Heretic at 35 Hz and OpenDUNE's intro that runs slow and then lurches on the same mechanism. | P11.5, P6.4, P7.11 | M |
 | 2 | **Catacomb 3-D's code written at run time.** Define the seam `(memory, registers, io) => registers` now; whether a PRISM executor or MIRAGE fills it is the owner's decision, not the compiler's. | P11.4 | S, then M–L |
 | 3 | **Whether files should be fully buffered by default**, as C99 says; today a stream buffers only when `setvbuf` asks. A decision about all seventeen targets. (`atexit`, the other half of this row, is done: P8.12.) | P8.11 | S |
 | 4 | **Keen 4-6 reconstructed**, which compiles under Borland C++ 3.0 to the shipped executables byte for byte: the one oracle no other target offers. | P11.6 | L |
@@ -229,7 +229,7 @@ has to be faithful, and [TESTING.md](TESTING.md) for each gate and its mutations
 | P11.2 | ✅ | KEEN DREAMS PLAYS. | — | [log](LOG.md#p11-2) |
 | P11.3 | ✅ | Catacomb 3-D BUILDS | — | [log](LOG.md#p11-3) |
 | P11.4 | 🔴 | Catacomb 3-D's view needs code the program WRITES AT RUN TIME, and that is a boundary rather than a gap. | M | [log](LOG.md#p11-4) |
-| P11.5 | ⚪ | Keen Dreams in the browser, played by a person. | M | [log](LOG.md#p11-5) |
+| P11.5 | 🟡 | Keen Dreams PLAYS IN THE BROWSER, by a person: `KDREAMS` on the DOS shelf, a `borland16` host that ties pcirq's virtual clock to the wall (interrupts stay where virtual time puts them), real keys through port 60h and IRQ1, the EGA composed as palette indices. Title, control panel, world map, Keen walking. Not yet: sound (PC speaker, then an OPL2 neither project has). | M | [log](LOG.md#p11-5) |
 | P11.6 | ⚪ | Keen 4-6, for the oracle nothing else gives. | L | [log](LOG.md#p11-6) |
 | P11.7 | 🟡 | The data of the other 16-bit id titles, verified against their sources by decoding (done); the targets themselves (not started) | S | [log](LOG.md#p11-7) |
 | P11.8 | ⚪ | What is still open on the 16-bit runtime | M | [log](LOG.md#p11-8) |

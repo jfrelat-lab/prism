@@ -33,7 +33,8 @@
         { "program": "heretic", "file": "HERETIC", "ext": "EXE", "date": "1994-12-23" },
         { "program": "hexen", "file": "HEXEN", "ext": "EXE", "date": "1995-09-30" },
         { "program": "opendune", "file": "DUNE2", "ext": "EXE", "date": "1992-12-01" },
-        { "program": "jumpnbump", "file": "JUMPBUMP", "ext": "EXE", "date": "1998-01-01" }
+        { "program": "jumpnbump", "file": "JUMPBUMP", "ext": "EXE", "date": "1998-01-01" },
+        { "program": "keendreams", "file": "KDREAMS", "ext": "EXE", "date": "1991-09-01" }
       ],
       "_jumpbump": "The FILE NAME is derived, not copied, and this says so rather than letting it pass as evidence. The tree carries no makefile and names no executable anywhere in readme.txt or source.txt, so there is nothing to read it off; JUMPBUMP is taken from the one name the source does state -- main.c does strcpy(datfile_name, \"jumpbump.dat\"). The date is the year on the game's own title, 1998; the source release is a year later (source.txt: 'by Brainchild Design in 99') and the tree itself reaches us through a 2002 CVS import, so no file date in it means anything."
     },

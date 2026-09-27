@@ -173,6 +173,21 @@ const server = createServer(async (req, res) => {
            * reach that file cannot draw anything at all.
            */
           asmTranslate: (resolved.asmTranslate ?? []).map(f => `${rel(dir)}/${f}`),
+          /*
+           * Whole Turbo Assembler modules and the object files the project links (Keen Dreams,
+           * Catacomb 3-D): the module list as the target names it, every assembler source in the
+           * tree -- a module INCLUDEs by name, case-insensitively as DOS did -- and each data
+           * object with the repo path the page fetches. src/target.js builds the same blocks.
+           */
+          tasm: resolved.tasm ?? [],
+          tasmFiles: (resolved.tasm?.length ? readdirSync(dir) : [])
+            .filter(f => /\.(asm|equ|inc)$/i.test(f)).map(f => `${rel(dir)}/${f}`),
+          dataObjects: (resolved.dataObjects ?? []).map((o) => {
+            const name = o.object ?? o.file;
+            const found = readdirSync(dirname(join(dir, name)))
+              .find(f => f.toLowerCase() === name.replace(/^.*\//, '').toLowerCase());
+            return { ...o, path: found ? `${rel(dirname(join(dir, name)))}/${found}` : null };
+          }),
         }));
       } catch (e) {
         res.writeHead(404).end(JSON.stringify({ error: String(e.message) }));

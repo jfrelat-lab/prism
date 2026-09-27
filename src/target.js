@@ -21,8 +21,7 @@ import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
 import { installAsm } from './asm/link.js';
-import { tasmModules, tasmExternData, installTasm } from './asm/tasm-link.js';
-import { readOmf } from './asm/omf.js';
+import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from './asm/tasm-link.js';
 
 /**
  * @typedef {object} Target
@@ -381,25 +380,11 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const tasm = tasmModules(target.tasm ?? [], readIn);
   const externData = [
     ...tasmExternData(tasm),
-    ...(target.dataObjects ?? []).flatMap((o) => {
-      // An object file the project links as it stands (Catacomb 3-D's C3DEHEAD.OBJ): each segment
-      // is a block, near when the object puts it in DGROUP, and its publics are its names. Only
-      // pure data is taken -- an object with fixups or externals is code, or data holding
-      // addresses, and would need a linker.
-      if (o.object) {
-        const found = names.find((x) => x.toLowerCase() === o.object.toLowerCase()) ?? o.object;
-        const obj = readOmf(new Uint8Array(readFileSync(resolvePath(dir, found))), o.object);
-        if (obj.fixups.length || obj.externs.length) throw new Error(`${o.object}: an object with fixups or externals, which is more than data`);
-        const near = new Set(obj.groups.filter((g) => g.name === 'DGROUP').flatMap((g) => g.members));
-        return obj.segments.map((s) => {
-          const far = !near.has(s.name);
-          const publics = obj.publics.filter((p) => p.seg === s.name).map((p) => ({ name: p.name.replace(/^_/, ''), offset: p.offset }));
-          return { name: `${o.object}:${s.name}`, bytes: s.bytes, size: s.size, far, align: far ? 16 : 2, publics };
-        });
-      }
-      // Relative to the source tree, or absolute: a data set may bring the headers that match it.
-      const bytes = new Uint8Array(readFileSync(resolvePath(dir, o.file)));
-      return [{ name: o.file, bytes, size: bytes.length, far: !!o.far, align: o.far ? 16 : 2, publics: [{ name: o.symbol, offset: 0 }] }];
+    // Relative to the source tree, or absolute: a data set may bring the headers that match it.
+    ...dataObjectBlocks(target.dataObjects ?? [], (o) => {
+      const name = o.object ?? o.file;
+      const found = o.object ? (names.find((x) => x.toLowerCase() === name.toLowerCase()) ?? name) : name;
+      return new Uint8Array(readFileSync(resolvePath(dir, found)));
     }),
   ];
   const program = compileProgram(units, {
