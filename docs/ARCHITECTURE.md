@@ -99,6 +99,14 @@ measured is one link-time decision, not a runtime one: **direct calls** (P2.1), 
 Anyone describing PRISM to an outsider should say "a C compiler that runs in the page with no build
 step", and should not say "with runtime specialisation" until P2.3 exists.
 
+**And P2.3 itself was reconsidered (2026-09-27).** The JavaScript engine under PRISM is already a
+tiered, speculating JIT: it compiles lazily, re-optimises what is hot and specialises on what it
+observes. A PRISM-level tier would do that job again, one level up and with less knowledge of the
+machine. What the engine cannot see is C's memory semantics -- aliasing, alignment, a local that
+never escapes -- and that is STATIC knowledge, because PRISM always has the whole program. It
+belongs to an optimiser over an IR (ROADMAP P13.2), not to a runtime tier. Profile-guided
+re-emission stays possible, and should be taken only on a measurement the static pass cannot match.
+
 ## Target ABI
 
 **Two of them, and the model is a value rather than a module-scope constant.**

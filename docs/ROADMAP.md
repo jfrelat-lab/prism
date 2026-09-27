@@ -32,11 +32,15 @@ row. A row's story after that date is in its commit.
 
 | # | What | Rows | Effort |
 |---|---|---|---|
-| 1 | **A real clock for the programs that pace themselves through safepoints.** Keen Dreams now plays in the browser on one (P11.5); next its sound, then Hexen and Heretic at 35 Hz and OpenDUNE's intro that runs slow and then lurches on the same mechanism. | P11.5, P6.4, P7.11 | M |
-| 2 | **Catacomb 3-D's code written at run time.** Define the seam `(memory, registers, io) => registers` now; whether a PRISM executor or MIRAGE fills it is the owner's decision, not the compiler's. | P11.4 | S, then M–L |
-| 3 | **Whether files should be fully buffered by default**, as C99 says; today a stream buffers only when `setvbuf` asks. A decision about all seventeen targets. (`atexit`, the other half of this row, is done: P8.12.) | P8.11 | S |
-| 4 | **Keen 4-6 reconstructed**, which compiles under Borland C++ 3.0 to the shipped executables byte for byte: the one oracle no other target offers. | P11.6 | L |
-| 5 | **The word "dynamic".** Until tier-1 exists PRISM compiles in the page ahead of running; either the README says so, or tier-1 is built. Nothing in the corpus waits on tier-1. | P2.3 | S or L |
+| 1 | **A pixel oracle for every DOS target: the real binary under DOSBox-X.** `DX-CAPTURE /V` records the emulated framebuffer as ZMBV -- palette indices, unscaled -- and `tools/zmbv.mjs` reads it; `AUTOTYPE` drives the keys. It needs nothing from the guest, so a game that takes INT 8 unchained (Keen) cannot stop it. Keen Dreams first, then Heretic, Hexen, Jump 'n Bump, MAME and Quake on DOS: "it looks right" becomes "it draws what the shipped binary draws". | P11.8, P3.6 | M |
+| 2 | **Playable by a person, on one clock.** Keen Dreams plays in the browser (P11.5); next its sound (PC speaker, then an OPL2), then Hexen and Heretic at 35 Hz and OpenDUNE's intro that runs slow and then lurches. | P11.5, P6.4, P7.11 | M |
+| 3 | **A Borland far pointer's offset wraps at 64K and PRISM's does not** -- the one open item that could be a wrong answer rather than a refusal. Detect it, refuse it by name, then see whether Keen or Catacomb ever relies on it. | P11.8 | S |
+| 4 | **A static bundle of a whole program**, Emscripten's deliverable without Emscripten's port: the emitted JavaScript and the linked image, loadable without the compiler. Needs no IR. | P13.1 | S–M |
+| 5 | **Catacomb 3-D's code written at run time.** Define the seam `(memory, registers, io) => registers`; whether a PRISM executor or MIRAGE fills it is the owner's decision, not the compiler's. | P11.4 | S, then M–L |
+| 6 | **An IR, designed around separate objects** -- `.o`/`.obj`, archives, shared modules -- which is also what the whole-program optimiser and a WASM backend stand on. The structural chantier; P2.3 is reframed as part of it. | P13.2, P13.3, P2.3 | L |
+| 7 | **The compiler's own gaps**: `long double` and bitfields wider than 32 bits, most of the 118 torture programs left; or cheaper safepoints (only the loops that call nothing). | N2, N1, P0.5b, P2b.1 | M |
+| 8 | **A second renderer: OpenGL onto WebGL** -- GLQuake and Quake II's ref_gl, 63 GL functions, measured. The largest visible step, and half of IRIX's blocker. | P12.4 | L |
+| 9 | **Whether files should be fully buffered by default**, as C99 says; today a stream buffers only when `setvbuf` asks. A decision about every target at once. | P8.11 | S |
 
 ## P0 · Foundation and oracles (no game yet)
 
@@ -81,7 +85,7 @@ row. A row's story after that date is in its commit.
 |---|---|---|---|---|
 | P2.1 | 🟡 | Direct calls are on by default. | L | [log](LOG.md#p2-1) |
 | P2.2 | ⚪ | Alignment inference, GVN, LICM, inlining -- blocked on an IR (src/ir/ and src/opt/ are empty) | L | [log](LOG.md#p2-2) |
-| P2.3 | ⚪ | Tier-0 → tier-1 promotion | M | [log](LOG.md#p2-3) |
+| P2.3 | ⚪ | **Reframed 2026-09-27: a PRISM-level JIT mostly duplicates the JS engine's own.** V8 already compiles lazily, re-optimises hot code and specialises on what it observes. What it cannot see is C's memory semantics (aliasing, alignment, a local that never escapes) and that is STATIC knowledge, since PRISM always holds the whole program: it belongs to the IR's whole-program optimiser (P13.2), not to a tier. Profile-guided re-emission stays open, to be taken only when a measurement shows a gain the static pass cannot reach -- none does today (9.5x off clang -O2; Quake has 24x headroom). So "dynamic" should not be the word that defines the project. | L | [log](LOG.md#p2-3) |
 | P2.4 | ✅ | `tools/bench.mjs`, and it no longer needs a ROM (`--synthetic`). Two workloads published separately: ~9.5× slower than clang -O2 on MAME's Z80 core with Pac-Man, ~10× on … | M | [log](LOG.md#p2-4) |
 | P2.5 | ⚪ | Two load modes, over one serialised IR. | M | [log](LOG.md#p2-5) |
 
@@ -252,6 +256,21 @@ Two different kinds of thing, and the distinction is the same one the shell now 
 | P12.2 | 🔴 | IRIX is BLOCKED, and on two things rather than the one I thought. | L | [log](LOG.md#p12-2) |
 | P12.3 | ✅ | Quake on svgalib: the default mode is linear, not planar, so P3.5's blocker does not apply -- a fifth platform build | M | [log](LOG.md#p12-3) |
 | P12.4 | 🔴 | OPENGL -- `ref_gl` and Quake's sixteen `gl_*.c`. | L | [log](LOG.md#p12-4) |
+
+## P13 · Artefacts: a static bundle, an IR with objects, a second backend, and Live C
+
+Today PRISM has no artefact at all: the page compiles the source every time (Quake's 430 files in
+666 ms), `compileProgram` takes every unit at once and fixes every address at link, and the only
+output is the JavaScript it runs. That was the right bet for a compiler whose value was the chain
+from unmodified source to a running program. These rows are what comes after it -- in an order
+where each one is useful on its own and none closes a door the next needs.
+
+| # | | Task | Effort | |
+|---|---|---|---|---|
+| P13.1 | ⚪ | **A static bundle of a whole program**, loadable without the compiler: the emitted functions, the linked memory image, the environment list and a small loader, as `dist/<target>.js`. Emscripten's deliverable -- a game as one JavaScript file -- without Emscripten's porting, since the libraries are PRISM's and the game is still its own source. NEEDS NO IR: tier-0's output is already complete JavaScript and the image is bytes. Measure the start-up it saves (Quake ~1.8 MB of JS, ~0.7 s of compile), and hold it to the page with the pixel gate: same program, same frames. | S–M | — |
+| P13.2 | ⚪ | **An IR, designed around SEPARATE OBJECTS.** A per-unit "PRISM object" -- IR, symbols, relocations, data -- a linker over them, archives (`.lib`/`.a`) and shared modules (`.so`/`.dll`, whose namespaces and `.def` exports P7.3 already models). It buys incremental builds, a pre-built libc, libraries shipped as objects, and a serialised form for the second load mode of P2.5. And it is where the whole-program optimiser lives (P2.2: escape analysis, mem2reg, alignment, direct calls generalised), which is what P2.3 is really asking for. `src/ir/` and `src/opt/` are empty today. | L | — |
+| P13.3 | ⚪ | **A WASM backend, from that IR** -- a second backend, not a replacement. ARCHITECTURE's bet on readable JavaScript stands (it is the first debugging lever, and every gate reads emitted JS); WASM earns a place only by a number: `bench.mjs` against the JS backend on the same IR. Where it should win: 64-bit integers natively instead of BigInt (P0.5c), and memory accesses without a DataView call. What it must keep: the safepoint (a loop that calls nothing still has to be observable), the device windows (EGA at A000h becomes an import), and zero wrong answers. | L | — |
+| P13.4 | ⚪ | **Live C as a real sandbox.** `web/live/` exists (P1.6): files, Run, the program's output, the emitted JS beside it, stdin. What it lacks: choosing the ABI model (i386, dos16m), several files and headers, the refusals and unresolved symbols the shell already reports, a program shared by URL -- and later, an IR pane beside the JS one. | S–M | — |
 
 ## MIRAGE + PRISM: where the two projects meet
 
