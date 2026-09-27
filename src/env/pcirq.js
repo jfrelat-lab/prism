@@ -127,6 +127,7 @@ export function installPcIrq(M, { usPerEdge = 1, keys = [] } = {}) {
   const LINE_US = 1e6 / 31469, LINES = 449, FRAME_US = LINE_US * LINES, VRETRACE_LINES = 2;
   machine.onPortRead(0x3da, () => {
     sync();
+    M.ega?.resetFlipFlop();                  // reading 3DAh returns the attribute controller to index
     const inFrame = clock.us % FRAME_US;
     const line = Math.floor(inFrame / LINE_US);
     const vr = line >= LINES - VRETRACE_LINES;

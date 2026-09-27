@@ -182,14 +182,30 @@ export { accessor as accessorFor };
 let PAGED = false;
 export function setPaged(on) { PAGED = !!on; }
 
+/*
+ * A DEVICE WINDOW, for a real-mode program whose video memory is a device rather than memory: the
+ * EGA's A000h window, where a read loads four latches and a write lands on up to four planes through
+ * the bit mask and the logical function -- nothing an address translation (PAGED) can say. With the
+ * window on, every integer load and store is a call to _r8u/_r16s/_w16... (defined in the module's
+ * preamble, compile.js), which costs one comparison outside the window and hands the access to
+ * M.win inside it. Floating point and 64-bit values stay direct: nothing reads video memory as those.
+ * Off, the emitted text is exactly what it was.
+ */
+let WINDOW = false;
+export function setWindow(on) { WINDOW = !!on; }
+const WIN_GET = { getUint8: '_r8u', getInt8: '_r8s', getUint16: '_r16u', getInt16: '_r16s', getInt32: '_r32' };
+const WIN_SET = { setUint8: '_w8', setInt8: '_w8', setUint16: '_w16', setInt16: '_w16', setInt32: '_w32' };
+
 const loadExpr = (addr, t) => {
   const a = accessor(t);
   if (!a) unsup(`loading a ${T.typeName(t)}`);
+  if (WINDOW && WIN_GET[a.get]) return `${WIN_GET[a.get]}(${addr})`;
   return `D.${a.get}(${PAGED ? `xr(${addr})` : addr}${a.endian ? ',1' : ''})`;
 };
 const storeExpr = (addr, t, val) => {
   const a = accessor(t);
   if (!a) unsup(`storing a ${T.typeName(t)}`);
+  if (WINDOW && WIN_SET[a.set]) return `${WIN_SET[a.set]}(${addr},${val})`;
   return `D.${a.set}(${PAGED ? `xw(${addr})` : addr},${val}${a.endian ? ',1' : ''})`;
 };
 

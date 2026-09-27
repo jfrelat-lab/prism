@@ -34,7 +34,7 @@
   "_ppSizeof": "id_ca.c:1471 is `#if BUFFERSIZE < sizeof(maptype)`, inside `#ifdef MAPHEADERLINKED` -- which id_ca.h:37 defines, so the condition IS evaluated -- guarding a compile-time assertion whose body is an English sentence. Borland preprocessed and parsed in one pass and could answer it; a standalone preprocessor cannot. compile.ppSizeof STATES the answer, as an option and not a source change: maptype is 38 bytes. tools/gate-pp-sizeof.mjs holds the number to two references -- PRISM's own layout of maptype under this target's options, and Borland C++ 2.0's, measured by running it (goldens/borland-layout.json) -- so it cannot drift from either. 0x1000 < 38 is false, the sentence is skipped, and the unit compiles. HISTORY: this was a refusal by name, decided when no oracle could vouch for the number.",
   "compile": { "memory": 16, "c89": true, "model": "dos16m", "signedChar": false, "enums": "int", "ppSizeof": { "maptype": 38 }, "collect": true, "safepoints": true },
 
-  "env": ["stdio", "borland", "dos", "pcirq"],
+  "env": ["stdio", "borland", "dos", "pcirq", "ega"],
   "tasm": ["id_us_a.asm", "id_rf_a.asm", "id_vw_a.asm"],
   "_tasm": "The Turbo Assembler modules the project links (id_vw_a.asm includes id_vw_ae.asm, GRMODE being EGAGR), read by src/asm/tasm.js, translated by src/asm/tasm16.js and bound by src/asm/tasm-link.js: their _DATA in DGROUP with its publics (px, py, fontcolor, pdrawmode, bufferwidth, bufferheight, shifttabletable), their code in far memory, each public PROC a C function under Borland's calling convention.",
   "dataObjects": [

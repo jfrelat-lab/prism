@@ -7,7 +7,7 @@ import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap, vaReader } from './runtime/runtime.js';
-import { FunctionEmitter, EmitError , jsIdent, flexibleExtra, setPaged } from './backend/emit.js';
+import { FunctionEmitter, EmitError , jsIdent, flexibleExtra, setPaged, setWindow } from './backend/emit.js';
 import { compileAux, AuxError } from './asm/pragma-aux.js';
 import { HEADERS } from './env/headers.js';
 import { allegroBuiltins } from './env/allegro.js';
@@ -848,11 +848,12 @@ const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
  */
 export function compileProgram(units, opts = {}) {
   setPaged(!!opts.paged);
+  setWindow(!!opts.window);
   try { return compileProgramInner(units, opts); }
-  finally { setPaged(false); }
+  finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, ppSizeof = null, paged = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, ppSizeof = null, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -1210,7 +1211,20 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
    * nothing and -- more usefully -- emits a byte-for-byte identical program. That is checked rather
    * than trusted: MAME, Quake II/win32 and Jump 'n Bump all hash the same with this code present.
    */
-  const src = `"use strict";\nreturn function(M,F,D${paged ? ',xr,xw' : ''}){\n` + pieces.join('\n') + '\n' +
+  // The device window's accessors (emit.js setWindow): plain DataView calls outside A0000h-AFFFFh,
+  // M.win inside it -- looked up at each access, since the device is installed after this runs.
+  const WIN = window ? [
+    'const _iw=(a)=>a>=655360&&a<720896&&M.win;',
+    'const _r8u=(a)=>_iw(a)?M.win.r8(a):D.getUint8(a);',
+    'const _r8s=(a)=>_iw(a)?(M.win.r8(a)<<24>>24):D.getInt8(a);',
+    'const _r16u=(a)=>_iw(a)?(M.win.r8(a)|(M.win.r8(a+1)<<8)):D.getUint16(a,1);',
+    'const _r16s=(a)=>_iw(a)?((M.win.r8(a)|(M.win.r8(a+1)<<8))<<16>>16):D.getInt16(a,1);',
+    'const _r32=(a)=>_iw(a)?(M.win.r8(a)|(M.win.r8(a+1)<<8)|(M.win.r8(a+2)<<16)|(M.win.r8(a+3)<<24)):D.getInt32(a,1);',
+    'const _w8=(a,v)=>{if(_iw(a))M.win.w8(a,v&255);else D.setInt8(a,v);};',
+    'const _w16=(a,v)=>{if(_iw(a)){M.win.w8(a,v&255);M.win.w8(a+1,(v>>>8)&255);}else D.setUint16(a,v&65535,1);};',
+    'const _w32=(a,v)=>{if(_iw(a)){for(let k=0;k<4;k++)M.win.w8(a+k,(v>>>(8*k))&255);}else D.setInt32(a,v,1);};',
+  ].join('\n') + '\n' : '';
+  const src = `"use strict";\nreturn function(M,F,D${paged ? ',xr,xw' : ''}){\n` + WIN + pieces.join('\n') + '\n' +
     moduleEpilogue(emitted) + '};';
 
   let factory;

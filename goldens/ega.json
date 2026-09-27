@@ -1,0 +1,4 @@
+{
+ "_doc": "Borland C++  Version 2.0 Copyright (c) 1991 Borland International: tests/ega/ega.c run in DOSBox-X, whose VGA in mode 0Dh is the reference",
+ "stdout": "mapmask      a5 00 a5 00\nsetreset     00 ff 00 ff\nenable-sr    00 3c 00 3c\nbitmask      f0 f0 f0 f0\nand-rot1     90 90 90 90\nor           d5 d5 d5 d5\nxor-rot4     0f 0f 0f 0f\nlatchcopy    11 22 44 88\nmode2        c0 c0 00 c0\ncompare     00\ncompare-cdc 11\n"
+}

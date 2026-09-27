@@ -251,9 +251,10 @@ export function installBorlandLib(M) {
       return p;
     },
     farfree,
-    _fmemcpy: (d, s, n) => { M.copy(d, s, n & 0xffff); return d; },
-    _fmemset: (d, c, n) => { u8().fill(c & 255, d, d + (n & 0xffff)); return d; },
-    movedata: (ss, so, ds, dof, n) => { M.copy(((ds & 0xffff) << 4) + (dof & 0xffff), ((ss & 0xffff) << 4) + (so & 0xffff), n & 0xffff); },
+    // Through the device window when a range touches it (M.winCopy/winFill, runtime.js).
+    _fmemcpy: (d, s, n) => { M.blockCopy(d, s, n & 0xffff); return d; },
+    _fmemset: (d, c, n) => { M.rt.memset(d, c, n & 0xffff); return d; },
+    movedata: (ss, so, ds, dof, n) => { M.blockCopy(((ds & 0xffff) << 4) + (dof & 0xffff), ((ss & 0xffff) << 4) + (so & 0xffff), n & 0xffff); },
 
     findfirst: (pathPtr, blk, _attrib) => {
       if (!M.files) throw new Error('Borland findfirst: no file store (the stdio environment)');

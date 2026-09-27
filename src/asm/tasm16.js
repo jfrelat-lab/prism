@@ -505,10 +505,15 @@ let ax=0,bx=0,cx=0,dx=0,si=0,di=0,bp=0,sp=0,ds=0,es=0,ss=0;
 let _k=0,_a=0,_b=0,_c=0,_u=0,_r=0,_w=2,_fl=0x202,_t=0,_s=0,_v=0,_o=0,_f=0,_n=0,_xcs=0,_xip=0;
 const CLK=io.clock??{spBudget:0,sp_(){budget();}};
 const regsNow=()=>({ax,bx,cx,dx,si,di,bp,sp,ds,es,ss});
-const rb=(s,o)=>D.getUint8((s<<4)+o);
-const rw=(s,o)=>o===65535?(D.getUint8((s<<4)+o)|(D.getUint8(s<<4)<<8)):D.getUint16((s<<4)+o,true);
-const wb=(s,o,v)=>D.setUint8((s<<4)+o,v);
-const ww=(s,o,v)=>{if(o===65535){D.setUint8((s<<4)+o,v&255);D.setUint8(s<<4,v>>>8);}else D.setUint16((s<<4)+o,v,true);};
+// Memory, and the device window when the host has one (io.win: the EGA's A000h, src/env/ega.js).
+const W=io.win??null;
+const iw=(a)=>W!==null&&a>=655360&&a<720896;
+const b8=(a)=>iw(a)?W.r8(a):D.getUint8(a);
+const s8=(a,v)=>{if(iw(a))W.w8(a,v&255);else D.setUint8(a,v);};
+const rb=(s,o)=>b8((s<<4)+o);
+const rw=(s,o)=>{const a=(s<<4)+o;if(o===65535||iw(a))return b8(a)|(b8(o===65535?(s<<4):a+1)<<8);return D.getUint16(a,true);};
+const wb=(s,o,v)=>s8((s<<4)+o,v);
+const ww=(s,o,v)=>{const a=(s<<4)+o;if(o===65535||iw(a)){s8(a,v&255);s8(o===65535?(s<<4):a+1,(v>>>8)&255);}else D.setUint16(a,v,true);};
 const SIGN=[0,128,32768];
 function cf(){switch(_k){case ${K.CONST}:return _fl&1;case ${K.ADD}:return (_u>>>(8*_w))&1;case ${K.SUB}:return _u<0?1:0;`
     + `case ${K.INC}:case ${K.DEC}:return _c;case ${K.NEG}:return _a!==0?1:0;case ${K.SHL}:return _b<=8*_w?(_a>>>(8*_w-_b))&1:0;`

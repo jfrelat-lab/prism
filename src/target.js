@@ -420,6 +420,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
      * target that asks for neither emits, byte for byte, what it emitted before any of this.
      */
     paged: c.paged ?? (target.env ?? []).includes('vgaplanar'),
+    // ...and a DEVICE WINDOW for the EGA (env `ega`): every integer access tests for A000h (emit.js).
+    window: c.window ?? (target.env ?? []).includes('ega'),
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
   });
   /*

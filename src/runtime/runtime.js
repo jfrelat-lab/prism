@@ -108,6 +108,7 @@ export function makeMachine(mod = new Module()) {
      * writeSpans, so a copy into a multi-plane window reaches every masked plane.
      */
     blockCopy(dst, src, n) {
+      if (M.winTouches?.(dst, n) || M.winTouches?.(src, n)) return M.winCopy(dst, src, n);
       const map = M.memmap;
       if (!map) return M.copy(dst, src, n);
       const claimed = (a, len) => {
@@ -154,6 +155,21 @@ export function makeMachine(mod = new Module()) {
   M.storeInt = (a, v) => { if (M.abi.int === 2) M.mod.dv.setInt16(a, v, true); else M.mod.dv.setInt32(a, v | 0, true); };
   /** A reader over a caller-packed variadic buffer, at the model's widths. */
   M.va = (p) => vaReader(M, p);
+  /*
+   * A DEVICE WINDOW (the EGA's A000h), when an environment installs M.win: a block copy or fill that
+   * touches it goes byte by byte through the device, reading the whole source first as blockCopy does.
+   */
+  M.winTouches = (a, n) => !!M.win && n > 0 && a < 0xb0000 && a + n > 0xa0000;
+  M.winCopy = (d, s, n) => {
+    const inW = (a) => a >= 0xa0000 && a < 0xb0000;
+    const bytes = new Uint8Array(n);
+    for (let i = 0; i < n; i++) bytes[i] = inW(s + i) ? M.win.r8(s + i) : M.u8[s + i];
+    for (let i = 0; i < n; i++) { if (inW(d + i)) M.win.w8(d + i, bytes[i]); else M.u8[d + i] = bytes[i]; }
+    return d;
+  };
+  M.winFill = (d, v, n) => {
+    for (let i = 0; i < n; i++) { const a = d + i; if (a >= 0xa0000 && a < 0xb0000) M.win.w8(a, v & 255); else M.u8[a] = v & 255; }
+  };
   M.stackOverflow = (fp) => {
     throw new Trap(`stack overflow: a frame at ${fp} is below the ${M.mod.model} stack's floor at ${M.mod.stackLimit}`);
   };
@@ -811,6 +827,7 @@ function makeLibc(M) {
     memcpy: (d, s, n) => { M.blockCopy(d, s, n); return d; },
     memmove: (d, s, n) => { M.blockCopy(d, s, n); return d; },
     memset: (d, v, n) => {
+      if (M.winTouches?.(d, n)) { M.winFill(d, v, n); return d; }
       const map = M.memmap;
       if (!map) { u8().fill(v & 0xff, d, d + n); return d; }
       for (const sp of map.writeSpans(d, n)) u8().fill(v & 0xff, sp.to, sp.to + sp.len);

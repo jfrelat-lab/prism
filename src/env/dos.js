@@ -85,15 +85,22 @@ export function installDos(M, { keys = [] } = {}) {
   const int10 = (r) => {
     const ah = r.ax >>> 8, al = r.ax & 255;
     switch (ah) {
-      case 0x00: video.mode = al & 0x7f; return;
+      case 0x00: video.mode = al & 0x7f; M.ega?.setMode(al & 0x7f, !(al & 0x80)); return;
       case 0x02: video.cursor = { page: r.bx >>> 8, row: r.dx >>> 8, col: r.dx & 255 }; return;
       case 0x03: { const c = video.cursor ?? { row: 0, col: 0 }; r.dx = (c.row << 8) | c.col; r.cx = 0x0607; return; }
       case 0x0f: r.ax = ((video.mode === 0x0d || video.mode === 0x04 || video.mode === 0x05 || video.mode === 0x01 || video.mode === 0x00 ? 40 : 80) << 8) | video.mode;
         r.bx = r.bx & 0x00ff; return;
       case 0x10:
-        if (al === 0x00) { video.palette[r.bx & 15] = (r.bx >>> 8) & 0x3f; return; }
-        if (al === 0x01) { video.palette[16] = (r.bx >>> 8) & 0x3f; return; }
-        if (al === 0x02) { for (let k = 0; k < 17; k++) video.palette[k] = u8()[lin(r.es, r.dx) + k] & 0x3f; return; }
+        // The attribute controller's palette: sixteen registers and the overscan (the EGA's own, when
+        // the ega environment is installed, which is what its frames are coloured by).
+        if (al === 0x00) { video.palette[r.bx & 15] = (r.bx >>> 8) & 0x3f; if (M.ega) M.ega.attr[r.bx & 15] = (r.bx >>> 8) & 0x3f; return; }
+        if (al === 0x01) { video.palette[16] = (r.bx >>> 8) & 0x3f; if (M.ega) M.ega.attr[0x11] = (r.bx >>> 8) & 0x3f; return; }
+        if (al === 0x02) {
+          for (let k = 0; k < 17; k++) video.palette[k] = u8()[lin(r.es, r.dx) + k] & 0x3f;
+          if (M.ega) { for (let k = 0; k < 16; k++) M.ega.attr[k] = video.palette[k]; M.ega.attr[0x11] = video.palette[16]; }
+          return;
+        }
+        if (al === 0x03) return;          // blink/intensity: nothing a graphics frame shows
         return refuse(0x10, r);
       case 0x12:
         if ((r.bx & 255) === 0x10) { r.bx = 0x0003; r.cx = 0x0009; return; }   // colour, 256K, switches 9

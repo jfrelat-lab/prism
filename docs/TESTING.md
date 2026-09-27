@@ -3108,3 +3108,58 @@ Nine checks, all green; 10 mutations, all red. Three of them were not red at fir
 DemoLoop runs its screens and waits by TimeCount, which SDL_t0Service advances at 70 Hz. Two
 refusals remain, both deliberate: USL_HardError reads the DI a DOS critical error leaves, and
 sys_errlist is Borland's wording.
+
+## The EGA behind A000h (`src/env/ega.js`, `tools/gate-ega.mjs`), and Keen Dreams' first pictures
+
+In the EGA's window, an access does not mean what memory means. A read loads four latches and returns
+one plane, or colour-compare bits. A write reaches up to four planes through:
+* the Map Mask;
+* Set/Reset;
+* the data rotate and the logical function against the latch;
+* the Bit Mask;
+* or, in write mode 1, simply the latches.
+
+An address translation (the `paged` mechanism) can say none of that, so the window is a **device
+hook** that every path goes through:
+* **compiled C**, with the `window` compile option (on when the target names env `ega`): each integer
+  load or store is `_r8u/_r16s/_w16...`, one comparison outside A0000h–AFFFFh and `M.win` inside it.
+  Borland inline assembly goes through the same accessors;
+* **the TASM modules'** `rb/rw/wb/ww`;
+* **the runtime's block copies and fills** (`memcpy`/`memset`, `_fmemcpy`/`_fmemset`/`movedata`), byte
+  by byte when a range touches the window.
+
+The device keeps the four planes, the sequencer, the graphics controller, the CRTC's start address
+and offset, and the attribute controller: its index/data flip-flop, which a read of 3DAh resets, its
+palette and its pel panning. `frame()` renders mode 0Dh from these. int 10h sets modes and palettes
+through it.
+
+**The oracle is DOSBox's EGA.** `tests/ega/ega.c` sets mode 0Dh and exercises each path, then reads
+every plane back through Read Map Select:
+* Map Mask;
+* Set/Reset with and without Enable;
+* Bit Mask over latched data;
+* AND with rotate 1, OR, XOR with rotate 4;
+* write mode 1's latch copy;
+* write mode 2;
+* read mode 1 with and without Colour Don't Care.
+
+Borland C++ 2.0 builds it and DOSBox-X runs it; PRISM prints the same 11 lines. 7 mutations, all red:
+OR computed as XOR, rotate to the left, the bit mask ignored, mode 1 writing the CPU byte, the colour
+compare inverted, the map mask ignored, and the C window turned off.
+
+**Keen Dreams draws.** `tools/keen.mjs --data=<dir> --keys=2000:57,2100:185` runs it headless. The
+data directory holds the game's files, which are not in this repository. The run shows:
+1. the startup text screen;
+2. a space pressed;
+3. the title "Gamer's Edge presents Commander Keen in Keen Dreams", unpacked by gelib.c from
+   KDREAMS.CMP to an off-screen page and copied by VW_ScreenToScreen's latches;
+4. the high-score window, drawn in the proportional font by VW_DrawPropString. The DemoLoop
+   alternates the two on TimeCount.
+
+A picture taken while the leash cut the run showed the title in other colours. Taken right after each
+VW_ScreenToScreen, the title is identical every time. The first picture had been caught mid-draw;
+nothing is wrong with the colours.
+
+**Not yet referenced:** the pictures are held to DOSBox only through gate-ega's register paths, not
+pixel for pixel against the real KDREAMS.EXE. MIRAGE's grabber (a TSR on int 8) cannot reach Keen's
+screens, because Keen replaces int 8 without chaining it.

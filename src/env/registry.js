@@ -27,6 +27,7 @@ import { installWatcom } from './watcom.js';
 import { installBorland, BORLAND_DOS_H, BORLAND_VARS, BORLAND_BUILTINS } from './borland.js';
 import { installDos } from './dos.js';
 import { installPcIrq } from './pcirq.js';
+import { installEga } from './ega.js';
 import { installBorlandLib, BORLAND_LIB_HEADERS, BORLAND_LIB_BUILTINS } from './borland-lib.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
@@ -117,6 +118,8 @@ export const ENV = {
   // Hardware interrupts (src/env/pcirq.js): a virtual clock counted in back edges, the PIT's IRQ0,
   // the PIC, delivery to the program's int 8 handler. Needs compile.safepoints, which is the clock.
   pcirq: { install: (M, _c, o) => installPcIrq(M, o) },
+  // The EGA's planes behind A000h (src/env/ega.js); a target naming it is compiled with the window.
+  ega: { install: (M) => installEga(M) },
   // dj: Jump n Bump s DOS sound library, source-less and therefore answered rather than built.
   dj: { install: (M, _c, o) => installDj(M, o) },
 

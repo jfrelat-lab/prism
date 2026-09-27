@@ -79,6 +79,8 @@ export function installTasm(program, modules) {
   const io = {
     // The machine's clock, when interrupts are delivered (src/env/pcirq.js): TASM loops spend it too.
     clock: M.vclock ? M : undefined,
+    // ...and its video window (src/env/ega.js), which the modules' drawing goes through.
+    win: M.win ?? undefined,
     in: (port, w) => (machine ? machine.read(port, w) : 0xff),
     out: (port, w, v) => { if (machine) machine.write(port, w, v); },
     // M.interrupt speaks Borland's register file (cf/zf/sf flags); the machine a flags word.
