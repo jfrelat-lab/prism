@@ -28,6 +28,16 @@ export function tasmModules(files, read) {
   });
 }
 
+/**
+ * The name C knows a module's symbol by. Under `MODEL MEDIUM,C` TASM adds the underscore Borland's C
+ * puts on every name, so the source's name is C's; without the language (JABHACK.ASM's `MODEL MEDIUM`)
+ * the source spells the underscore itself, and a name without one is not C's at all.
+ */
+function cName(mod, name) {
+  if (mod.model?.includes('c')) return name;
+  return name.startsWith('_') ? name.slice(1) : null;
+}
+
 /** The blocks compile.js must place before the C resolves its externs. */
 export function tasmExternData(modules) {
   const out = [];
@@ -35,10 +45,12 @@ export function tasmExternData(modules) {
     const publics = [];
     for (const name of mod.publics) {
       const l = mod.data.labels.get(name);
-      if (l) publics.push({ name, offset: l.offset });
+      if (l && cName(mod, name)) publics.push({ name: cName(mod, name), offset: l.offset });
     }
     out.push({ name: `${file}:_DATA`, size: Math.max(mod.data.bytes.length, 2), far: false, align: 16, publics });
     out.push({ name: `${file}:_TEXT`, size: Math.max(lay.size, 2), far: true, align: 16, publics: [] });
+    // FARDATA is a segment of its own (Catacomb's rndtable), reached by SEG: a far block.
+    if (mod.fardata.bytes.length) out.push({ name: `${file}:FAR_DATA`, size: mod.fardata.bytes.length, far: true, align: 16, publics: [] });
   }
   return out;
 }
@@ -92,18 +104,24 @@ export function installTasm(program, modules) {
       R.flags = (f & ~0x6c1) | (R.cf & 1) | ((R.zf & 1) << 6) | ((R.sf & 1) << 7) | ((R.if & 1) << 9) | ((R.df & 1) << 10);
     },
   };
-  const symbol = (name) => M.mod.symbols.get(name)?.addr;
   const bound = [];
+  // The instructions translated to a refusal (tasm16.js): named here, thrown only if one runs.
+  bound.refused = [];
   for (const { file, mod, lay } of modules) {
+    const symbol = (name) => { const n = cName(mod, name); return n === null ? undefined : M.mod.symbols.get(n)?.addr; };
     const text = program.externPlaced.get(`${file}:_TEXT`), data = program.externPlaced.get(`${file}:_DATA`);
     if (text === undefined || data === undefined) throw new Error(`tasm-link: ${file} was not placed at compile time`);
     if (text & 15) throw new Error(`tasm-link: ${file}'s code is not paragraph-aligned`);
-    const place = { cs: text >>> 4, dgroup: 0, dataBase: data, symbol };
+    const far = program.externPlaced.get(`${file}:FAR_DATA`);
+    if (far !== undefined && (far & 15)) throw new Error(`tasm-link: ${file}'s FARDATA is not paragraph-aligned`);
+    const place = { cs: text >>> 4, dgroup: 0, dataBase: data, fardata: far === undefined ? undefined : far >>> 4, symbol };
     loadTasm(mod, lay, D, place);
     const machineOf = (0, eval)(translateTasm(mod, lay, place))(D, io);
+    bound.refused.push(...machineOf.refused);
     for (const p of mod.procs) {
       if (!mod.publics.has(p.name)) continue;
-      const ft = program.funcTypes.get(p.name);
+      const c = cName(mod, p.name);
+      const ft = c === null ? null : program.funcTypes.get(c);
       if (!ft) continue;                       // public, and no C declares it
       const entry = lay.labels.get(p.name).addr;
       const params = ft.params ?? [];
@@ -123,9 +141,9 @@ export function installTasm(program, modules) {
         if (!was && M.cpu.if) M.irqPoll?.();
         return result(ft.ret, R);
       };
-      program.F[p.name] = fn;
-      program.mod.bindFunc(p.name, fn);
-      bound.push({ name: p.name, from: file });
+      program.F[c] = fn;
+      program.mod.bindFunc(c, fn);
+      bound.push({ name: c, from: file });
     }
   }
   return bound;

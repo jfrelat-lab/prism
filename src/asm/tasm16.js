@@ -13,9 +13,12 @@
 import { parseOperand, splitOperands } from './borland.js';
 
 export class Tasm16Error extends Error {}
+/** An instruction that is translated to a refusal: it throws if it is ever executed. */
+class Tasm16Refusal extends Tasm16Error {}
 
 const REG16 = ['ax', 'cx', 'dx', 'bx', 'sp', 'bp', 'si', 'di'];
 const REG8 = ['al', 'cl', 'dl', 'bl', 'ah', 'ch', 'dh', 'bh'];
+const REG32 = ['eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'];
 const SREGS = ['es', 'cs', 'ss', 'ds'];
 const SIZE_OF_TYPE = { byte: 1, word: 2, dword: 4 };
 const ALU = new Set(['add', 'adc', 'sub', 'sbb', 'and', 'or', 'xor', 'cmp']);
@@ -30,6 +33,14 @@ const JCC = new Set(['jo', 'jno', 'jb', 'jc', 'jnae', 'jnb', 'jnc', 'jae', 'je',
 const REPS = new Set(['rep', 'repe', 'repz', 'repne', 'repnz']);
 
 const s16 = (v) => ((v & 0xffff) << 16) >> 16;
+// An instruction on 32 bits: a register operand fixes the size; else a DWORD memory operand does
+// (a far indirect JMP or CALL reads a DWORD pointer on 16 bits).
+const is32 = (op, ops) => {
+  if (op === 'cdq') return true;
+  const r = ops.find((o) => o.k === 'reg' || o.k === 'sreg');
+  if (r) return r.w === 4;
+  return ops.some((o) => o.k === 'mem' && o.w === 4) && op !== 'call' && op !== 'jmp';
+};
 
 /**
  * Resolve every instruction of `mod` and give it TASM's offset and length.
@@ -53,6 +64,8 @@ export function layoutTasm(mod) {
     if (c) return { name: c.name, space: 'code', type: c.type };
     const d = dataLabel(name);
     if (d) return { name: d.name, space: 'data', type: d.type };
+    const fd = mod.fardata.labels.get(name) ?? [...mod.fardata.labels.values()].find((l) => l.name.toLowerCase() === name.toLowerCase());
+    if (fd) return { name: fd.name, space: 'fardata', type: fd.type };
     const e = extern(name);
     if (e) return { name: e.name, space: 'extern', type: e.type };
     return fail(where, `the symbol '${name}', which is defined nowhere`);
@@ -64,6 +77,18 @@ export function layoutTasm(mod) {
     if (toks.length === 1 && toks[0].k === 'id' && /^@(code|data)$/i.test(toks[0].v)) {
       return { k: 'segaddr', group: toks[0].v.toLowerCase() === '@code' ? 'code' : 'data' };
     }
+    // SEG x: the paragraph of the segment x lives in.
+    if (toks.length === 2 && /^seg$/i.test(toks[0].v) && toks[1].k === 'id') {
+      const sym = symbol(toks[1].v, where);
+      return { k: 'segaddr', group: sym.space, sym };
+    }
+    // The 386's 32-bit registers (under .386 only).
+    if (toks.length === 1 && toks[0].k === 'id' && REG32.includes(toks[0].v.toLowerCase())) {
+      if (mod.cpu < 386) fail(where, `the register ${toks[0].v}, which needs .386`);
+      return { k: 'reg', r: toks[0].v.toLowerCase(), w: 4 };
+    }
+    // A distance on a memory operand (`[WORD FAR es:x]`) says nothing about its bytes.
+    toks = toks.filter((t) => !(t.k === 'id' && /^(far|near)$/i.test(t.v)));
     let x;
     try { x = parseOperand(toks); } catch (e) { fail(where, e.message); }
     if (x.kind === 'reg') return { k: 'reg', r: x.reg, w: 2 };
@@ -71,7 +96,16 @@ export function layoutTasm(mod) {
     if (x.kind === 'sreg') return { k: 'sreg', r: x.reg, w: 2 };
     if (x.kind === 'imm') return { k: 'imm', v: x.value, w: x.size };
     if (x.kind === 'offset') return { k: 'addr', sym: symbol(x.sym, where), add: x.c };
-    const sym = x.sym ? symbol(x.sym, where) : null;
+    let sym = x.sym ? symbol(x.sym, where) : null;
+    // A FARDATA variable's offset is final in its own segment: TASM writes it with no fixup, and a
+    // small one as a byte displacement (`mov al,[es:rndtable+bx]` is 26 8A 47 02).
+    let farType = null;
+    if (sym?.space === 'fardata') {
+      if (!x.seg) fail(where, `'${sym.name}' in FARDATA with no segment override`);
+      x = { ...x, c: x.c + mod.fardata.labels.get(sym.name).offset, sym: null };
+      farType = sym.type;
+      sym = null;
+    }
     const bracket = toks.some((t) => t.k === 'punct' && t.v === '[');
     // A bare code label with no register is a jump target, not a memory operand.
     if (sym && sym.space === 'code' && !bracket && !x.regs.length && !x.size && !x.seg && (sym.type === 'near' || sym.type === 'far')) {
@@ -79,7 +113,7 @@ export function layoutTasm(mod) {
     }
     // A structure field gives the operand its type, as a variable's declaration does.
     const field = toks.find((t) => t.fieldSize)?.fieldSize;
-    return { k: 'mem', w: x.size ?? SIZE_OF_TYPE[sym?.type] ?? field ?? null, seg: x.seg, regs: [...x.regs].sort(), disp: x.c, sym };
+    return { k: 'mem', w: x.size ?? SIZE_OF_TYPE[sym?.type ?? farType] ?? field ?? null, seg: x.seg, regs: [...x.regs].sort(), disp: x.c, sym };
   };
 
   /** The segment register a memory operand goes through, and whether TASM writes a prefix for it. */
@@ -87,7 +121,7 @@ export function layoutTasm(mod) {
     const dflt = m.regs.includes('bp') ? 'ss' : 'ds';
     if (m.seg) return { seg: m.seg, prefix: m.seg !== dflt };
     if (!m.sym) return { seg: dflt, prefix: false };
-    const group = m.sym.space === 'code' ? 'code' : 'data';
+    const group = m.sym.space === 'extern' ? 'data' : m.sym.space;
     if (assume[dflt] === group) return { seg: dflt, prefix: false };
     for (const r of ['cs', 'ss', 'ds', 'es']) if (assume[r] === group) return { seg: r, prefix: true };
     return fail(where, `'${m.sym.name}', which no segment register is assumed to reach`);
@@ -168,9 +202,11 @@ export function layoutTasm(mod) {
       if (a.k === 'imm' || a.k === 'addr') fail(where, `${op} of an immediate, which the 8086 has not`);
       len = a.k === 'mem' ? 2 + mb : 1;
     } else if (SHIFTS.has(op)) {
-      if (!(b.k === 'imm' && b.v === 1) && !(b.k === 'reg' && b.r === 'cl')) fail(where, `${op} by something other than 1 or CL`);
-      len = 2 + mb;
+      if (b.k === 'imm' && b.v !== 1 && mod.cpu >= 186) len = 3 + mb;               // C0/C1 ib
+      else if (!(b.k === 'imm' && b.v === 1) && !(b.k === 'reg' && b.r === 'cl')) fail(where, `${op} by something other than 1 or CL`);
+      else len = 2 + mb;
     } else if (GROUP3.has(op)) len = 2 + mb;
+    else if (op === 'cdq' && mod.cpu >= 386) len = 1;
     else if (op === 'xchg') len = (a.k === 'reg' && b.k === 'reg' && a.w === 2 && (a.r === 'ax' || b.r === 'ax')) ? 1 : 2 + mb;
     else if (op === 'lea') len = m.regs.length ? 2 + mb : 3;                         // TASM: MOV r,OFFSET
     else if (op === 'les' || op === 'lds') len = 2 + mb;
@@ -196,7 +232,20 @@ export function layoutTasm(mod) {
     } else if (JCC.has(op)) {
       if (a.k !== 'label') fail(where, `${op} to something other than a label`);
       len = 2;
+      // The 386 has a near conditional jump (0F 8x), and TASM reserves it for a forward one: the
+      // listing shows `jz not386` as 74 15 90 90. LOOP and JCXZ have no near form.
+      if (mod.cpu >= 386 && !short && !/^(loop|jcxz)/.test(op)) {
+        const t = labels.get(a.sym.name);
+        if (!t || s16(t.addr - (pc + prefix + 2)) < -128 || s16(t.addr - (pc + prefix + 2)) > 127) len = 4;
+      }
     } else fail(where, `the instruction '${op}'`);
+    // A 32-bit operand costs the operand-size prefix (66h).
+    // (LES/LDS and a far indirect jump or call read a DWORD pointer with no prefix.)
+    const wide = is32(op, ops);
+    if (wide) {
+      if (mod.cpu < 386) fail(where, `a 32-bit ${op}, which needs .386`);
+      len++;
+    }
     len += prefix;
     ins.push({ item: it, where, op, rep, ops, seg: seg?.seg ?? null, off: pc, len });
     pc += len;
@@ -247,13 +296,23 @@ const COND = {
  * Translate a laid-out module to JavaScript source: `(function(D, io){ ... return { run }; })`.
  *
  * `cs` and `dgroup` are the paragraphs the code segment and DGROUP are loaded at; `dataBase` is where
- * this module's _DATA starts inside DGROUP; `symbol(name)` gives an external's offset in DGROUP.
+ * this module's _DATA starts inside DGROUP; `fardata` the paragraph of its FARDATA segment, if it has
+ * one; `symbol(name)` gives an external's offset in DGROUP.
  * run(R) takes { ax..di, bp, sp, ds, es, ss, ip, flags } and runs from CS:ip until a far return
  * leaves the code segment, then writes the registers back into R (with R.cs and R.ip the address it
  * returned to). io = { in(port, width), out(port, width, value), interrupt(n, R) }.
+ *
+ * SOME INSTRUCTIONS ARE REFUSED WHERE THEY STAND, not for the whole module: the instruction becomes
+ * a throw, and the module's `refused` lists them. They are the ones this machine cannot give the
+ * meaning the program's author intended, reached only on a path the program itself rules out:
+ *   - a 386 instruction. The machine is a 286: PUSHF keeps FLAGS bits 12-15 clear, so a program's
+ *     own processor test (Catacomb 3-D's CheckIs386) reports "not a 386" and takes the 286 path;
+ *   - an external with no address: Borland's run-time helpers (LDIV@), which PRISM's C does not use;
+ *   - a read or write of the module's own instruction bytes, which are not encoded here.
  */
-export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
+export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol }) {
   const fail = (x, what) => { throw new Tasm16Error(`${x.where}: ${what}`); };
+  const refuse = (what) => { throw new Tasm16Refusal(what); };
   const CS = cs & 0xffff;
 
   const symOff = (sym) => {
@@ -263,10 +322,19 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
       return l.addr;
     }
     if (sym.space === 'data') return (dataBase + mod.data.labels.get(sym.name).offset) & 0xffff;
+    if (sym.space === 'fardata') return mod.fardata.labels.get(sym.name).offset & 0xffff;
     const v = symbol(sym.name);
-    if (v === undefined) throw new Tasm16Error(`the external '${sym.name}' has no address`);
+    if (v === undefined) refuse(`the external '${sym.name}', which nothing linked defines`);
     return v & 0xffff;
   };
+  const segOf = (o, x) => {
+    if (o.group === 'code') return CS;
+    if (o.group === 'data') return dgroup & 0xffff;
+    if (o.group === 'fardata') return fardata === undefined ? fail(x, 'SEG of FARDATA, which was not placed') : fardata & 0xffff;
+    return refuse(`SEG ${o.sym.name}: the segment of an external`);
+  };
+  // The instructions' own bytes: an operand addressing them without a register reads what is not there.
+  const insAt = (addr) => lay.ins.find((y) => addr >= y.off && addr < y.off + y.len);
   const segJs = (s) => (s === 'cs' ? String(CS) : s);
   const eaJs = (m) => {
     const c = ((m.sym ? symOff(m.sym) : 0) + m.disp) & 0xffff;
@@ -303,6 +371,7 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
   }
 
   const fns = [];
+  const refused = [];
   for (const [g, list] of groups) {
     const gi = groupIndex.get(g);
     const own = new Set(list.map((x) => x.off));
@@ -311,7 +380,14 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
     list.forEach((x, k) => {
       if (lay.pads.has(x.off - 1) && targets.has(x.off - 1)) out.push(`case ${x.off - 1}:`);
       if (targets.has(x.off)) out.push(`case ${x.off}:`);
-      out.push(`/* @${x.off} ${x.where}: ${x.item.toks.map((t) => t.v).join(' ')} */ ${statement(x, go)}`);
+      let s;
+      try { s = statement(x, go); } catch (e) {
+        if (!(e instanceof Tasm16Refusal)) throw e;
+        const why = `${x.where}: ${e.message}`;
+        refused.push(why);
+        s = `refused(${JSON.stringify(why)});`;
+      }
+      out.push(`/* @${x.off} ${x.where}: ${x.item.toks.map((t) => t.v).join(' ')} */ ${s}`);
       const next = list[k + 1];
       if (!next || next.off !== after(x)) {
         if (!isTerminal(x)) out.push(`return ${after(x)};`);
@@ -334,7 +410,7 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
     if (o.k === 'sreg') return segJs(o.r);
     if (o.k === 'imm') return String(o.v & MASK[w]);
     if (o.k === 'addr') return String((symOff(o.sym) + o.add) & 0xffff);
-    if (o.k === 'segaddr') return String(o.group === 'code' ? CS : dgroup & 0xffff);
+    if (o.k === 'segaddr') return String(segOf(o, x));
     if (o.k === 'mem') return w === 1 ? `rb(${segJs(x.seg)},${ea})` : `rw(${segJs(x.seg)},${ea})`;
     return fail(x, `reading a ${o.k}`);
   }
@@ -364,6 +440,13 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, symbol }) {
     const { op, ops } = x;
     const [a, b] = ops;
     const m = ops.find((o) => o.k === 'mem');
+    if (is32(op, ops)) {
+      refuse(`${op} on 32 bits: a 386 instruction, and this machine is a 286`);
+    }
+    if (m?.sym?.space === 'code' && !m.regs.length) {
+      const y = insAt((symOff(m.sym) + m.disp) & 0xffff);
+      if (y) refuse(`the bytes of the instruction at ${y.where}, which are not encoded`);
+    }
     // The effective address is computed once, before any register the instruction writes changes.
     const pre = m ? `const _e=${eaJs(m)};` : '';
     const ea = '_e';
@@ -527,12 +610,14 @@ function of(){const s=SIGN[_w];switch(_k){case ${K.CONST}:return (_fl>>>11)&1;ca
     + `case ${K.SUB}:return ((_a^_b)&(_a^_r)&s)?1:0;case ${K.INC}:return _r===s?1:0;case ${K.DEC}:return _r===s-1?1:0;`
     + `case ${K.NEG}:return _r===s?1:0;case ${K.SHL}:return (((_r&s)?1:0)^cf());case ${K.SHR}:return ((_a>>>(_b-1))^_r)&s?1:0;default:return 0;}}
 function mat(){if(_k!==${K.CONST}){_fl=(_fl&~0x8d5)|cf()|(pf()<<2)|(af()<<4)|(zf()<<6)|(sf()<<7)|(of()<<11);_k=${K.CONST};}}
+function refused(why){throw new Error('tasm16: refused: '+why);}
 function budget(){throw new Error('tasm16: the step budget ran out');}
 function nowhere(pc){throw new Error('tasm16: '+${JSON.stringify(mod.file)}+' reached '+pc.toString(16)+'h, which no jump or call in the source names');}
 function interrupt(n){mat();const R={ax,bx,cx,dx,si,di,bp,sp,ds,es,ss,cs:${CS},flags:_fl};io.interrupt(n,R);`
     + `ax=R.ax&65535;bx=R.bx&65535;cx=R.cx&65535;dx=R.dx&65535;si=R.si&65535;di=R.di&65535;bp=R.bp&65535;ds=R.ds&65535;es=R.es&65535;_fl=R.flags&65535;_k=${K.CONST};}
 ${fns.join('\n')}
 const ENTRY=new Map([${entries}]);
+const REFUSED=${JSON.stringify(refused)};
 function run(R,steps){
   ax=R.ax&65535;bx=R.bx&65535;cx=R.cx&65535;dx=R.dx&65535;si=R.si&65535;di=R.di&65535;bp=R.bp&65535;sp=R.sp&65535;
   ds=R.ds&65535;es=R.es&65535;ss=R.ss&65535;_fl=(R.flags??0x202)&65535;_k=${K.CONST};if(!io.clock)CLK.spBudget=steps??1e9;
@@ -542,20 +627,23 @@ function run(R,steps){
   Object.assign(R,{ax,bx,cx,dx,si,di,bp,sp,ds,es,ss,cs:_xcs,ip:_xip,flags:_fl});
   return R;
 }
-return { run, entries: ENTRY };
+return { run, entries: ENTRY, refused: REFUSED };
 })`;
 }
 
 /**
  * Load a laid-out module into memory D: the code segment's image at paragraph `cs` and _DATA at
- * `dataBase` inside DGROUP (paragraph `dgroup`), every address in them resolved as the linker would.
+ * `dataBase` inside DGROUP (paragraph `dgroup`), FARDATA at paragraph `fardata`, every address in them
+ * resolved as the linker would.
  */
-export function loadTasm(mod, lay, D, { cs, dgroup, dataBase, symbol }) {
+export function loadTasm(mod, lay, D, { cs, dgroup, dataBase, fardata, symbol }) {
   const resolve = (name) => {
     const c = lay.labels.get(name);
     if (c) return { off: c.addr, seg: cs };
     const d = mod.data.labels.get(name);
     if (d) return { off: dataBase + d.offset, seg: dgroup };
+    const fd = mod.fardata.labels.get(name);
+    if (fd) return { off: fd.offset, seg: fardata };
     const e = [...mod.externs.keys()].find((k) => k === name || k.toLowerCase() === name.toLowerCase());
     if (e !== undefined && symbol(e) !== undefined) return { off: symbol(e), seg: dgroup };
     throw new Tasm16Error(`${mod.file}: the address of '${name}', which is defined nowhere`);
@@ -571,4 +659,8 @@ export function loadTasm(mod, lay, D, { cs, dgroup, dataBase, symbol }) {
   };
   place(cs << 4, lay.image, lay.imageFixups);
   place((dgroup << 4) + dataBase, mod.data.bytes, mod.data.fixups);
+  if (mod.fardata.bytes.length) {
+    if (fardata === undefined) throw new Tasm16Error(`${mod.file}: FARDATA, and no paragraph to load it at`);
+    place(fardata << 4, mod.fardata.bytes, mod.fardata.fixups);
+  }
 }

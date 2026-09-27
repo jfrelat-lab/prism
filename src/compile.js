@@ -840,6 +840,16 @@ export { installPorts, installPIT };
 // must stay loadable in a browser: the web shell imports these modules directly, unbundled.
 const basename = (p) => String(p).replace(/\\/g, '/').replace(/^.*\//, '');
 
+/** The function declarations inside a body, at any depth. Types are not walked: they are not statements. */
+function blockFuncDecls(node, out = [], seen = new Set()) {
+  if (!node || typeof node !== 'object' || seen.has(node)) return out;
+  seen.add(node);
+  if (Array.isArray(node)) { for (const x of node) blockFuncDecls(x, out, seen); return out; }
+  if (node.n === 'vardecl' && node.type?.k === 'func') out.push(node);
+  for (const [k, v] of Object.entries(node)) if (k !== 'type' && v && typeof v === 'object') blockFuncDecls(v, out, seen);
+  return out;
+}
+
 /**
  * `paged` is a PLATFORM property, not a per-game favour: on DOS the low megabyte has devices in it.
  * It is a module-level flag inside the emitter (26 call sites would otherwise each need an extra
@@ -988,6 +998,19 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
         // program's own code or a runtime builtin of the same name.
         fn.defined = true;
         (isInternal ? p.funcs : home.funcs).set(d.name, fn);
+      }
+    }
+    /*
+     * A function DECLARED ONLY INSIDE A BLOCK still names the external function (C89 3.1.2.2): its
+     * linkage is the file's even though its scope is not. Catacomb 3-D's jabhack declares
+     * `extern int far CheckIs386(void);` in its body and nowhere else -- the definition is in
+     * JABHACK.ASM -- so the name reached no function table and the call was refused as undeclared.
+     */
+    for (const d of p.unit.decls) {
+      if (d.n !== 'func') continue;
+      for (const b of blockFuncDecls(d.body)) {
+        if (b.storage === 'static' || p.funcs.has(b.name) || home.funcs.has(b.name)) continue;
+        home.funcs.set(b.name, mod.defineFunc(qualify(b.name), b.type));
       }
     }
   }

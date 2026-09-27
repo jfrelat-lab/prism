@@ -1,0 +1,35 @@
+{
+  "name": "catacomb3d",
+  "title": "Catacomb 3-D: The Descent (id Software / Softdisk, Borland C++ / DOS)",
+  "dir": "corpus/Catacomb3D",
+  "fetch": "git clone --depth 1 https://github.com/CatacombGames/Catacomb3D.git corpus/Catacomb3D",
+
+  "_doc": "THE SECOND 16-BIT TARGET, built with Keen Dreams' recipe: the same id engine generation (ID_CA, ID_MM, ID_VW, ID_US, ID_SD, ID_IN), the same Borland C++ 2.0, the same MODEL MEDIUM. What it adds is a first-person view drawn by code the program writes at run time: C3_SCALE.C compiles a scaler per wall height (BuildCompScale: `mov al,[si+n]` / `and es:[di+ofs],al` / `retf`) and a drawing routine per shape (BuildCompShape), which ScaleWalls (C3_ASM.ASM) and ScaleShape's inline assembly enter with a far call.",
+
+  "_units": "The project's own item list, read out of CAT3D.PRJ in order. 17 units.",
+  "units": {
+    "list": [
+      "C3_MAIN.C", "C3_GAME.C", "C3_PLAY.C", "C3_DEBUG.C", "C3_STATE.C", "C3_TRACE.C", "C3_DRAW.C",
+      "C3_SCALE.C", "C3_WIZ.C", "C3_ACT1.C",
+      "ID_CA.C", "ID_IN.C", "ID_MM.C", "ID_SD.C", "ID_US_1.C", "ID_US_2.C", "ID_VW.C"
+    ]
+  },
+  "caseInsensitive": true,
+
+  "_compile": "The options PRJCFG reads out of CAT3D.PRJ (goldens/borland-prj.json, gate-borland-options): -mm -a and, unlike Keen Dreams, no -K, so plain char is SIGNED; enums are int by BCC's default.",
+  "compile": { "memory": 16, "c89": true, "model": "dos16m", "signedChar": true, "enums": "int", "collect": true, "safepoints": true },
+
+  "env": ["stdio", "borland", "dos", "pcirq", "ega"],
+  "tasm": ["C3_ASM.ASM", "ID_US_A.ASM", "ID_VW_A.ASM", "JABHACK.ASM"],
+  "_tasm": "The four Turbo Assembler modules CAT3D.PRJ builds (ID_VW_A.ASM includes ID_VW_AE.ASM), held to TASM 2.5 by gate-tasm-front. ID_US_A.ASM keeps its random-number table in FARDATA. JABHACK.ASM is `.386C`: CheckIs386 tests FLAGS bits 12-15 and, on a 386, jabhack2 patches Borland's long-division helper LDIV@ to an INT 60h handler that divides with IDIV on 32 bits. This machine is a 286 -- PUSHF keeps those bits clear -- so the program's own test answers no and the 386 path is never taken; its instructions are translated to refusals that name themselves if they ever run.",
+
+  "dataObjects": [
+    { "object": "INTROSCN.OBJ" },
+    { "object": "C3DADICT.OBJ" },
+    { "object": "C3DAHEAD.OBJ" },
+    { "object": "C3DEDICT.OBJ" },
+    { "object": "C3DEHEAD.OBJ" },
+    { "object": "C3DMHEAD.OBJ" }
+  ],
+  "_dataObjects": "The six data objects CAT3D.PRJ links, read as they stand in the tree (src/asm/omf.js): each is one segment holding one public at offset 0 and no fixups -- the dictionaries in DGROUP, the headers and the intro screen in far segments of their own. They describe the game data they were built with; the data itself is not in the tree."
+}

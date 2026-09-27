@@ -28,9 +28,14 @@ import { assembleTasm } from '../src/asm/tasm.js';
 import { parseOperand, splitOperands } from '../src/asm/borland.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const GOLDEN = join(ROOT, 'goldens', 'tasm-keen.json');
-const CORPUS = join(ROOT, 'corpus', 'KeenDreams');
-const FILES = ['id_us_a.asm', 'id_rf_a.asm', 'id_vw_a.asm'];
+// Each game's top-level modules, as its build assembles them (Keen's make.bat; Catacomb 3-D's
+// CAT3D.PRJ, whose ID_VW_A.ASM INCLUDEs ID_VW_AE.ASM the same way).
+const GAMES = [
+  { name: 'keen', title: 'Keen Dreams', corpus: 'KeenDreams', golden: 'tasm-keen.json', files: ['id_us_a.asm', 'id_rf_a.asm', 'id_vw_a.asm'] },
+  { name: 'cat3d', title: 'Catacomb 3-D', corpus: 'Catacomb3D', golden: 'tasm-cat3d.json', files: ['c3_asm.asm', 'id_us_a.asm', 'id_vw_a.asm', 'jabhack.asm'] },
+];
+const only = process.argv.find((a) => a.startsWith('--game='))?.slice(7);
+let GOLDEN, CORPUS, FILES, TITLE;
 
 const norm = (m) => (['ret', 'retf', 'retn'].includes(m) ? 'ret' : m);
 
@@ -44,27 +49,29 @@ function listingInstructions(text) {
   const expand = (l) => { let o = ''; for (const ch of l) { if (ch === '\t') o += ' '.repeat(8 - (o.length % 8)); else o += ch; } return o; };
   for (const raw of text.replace(/\r/g, '').split('\n')) {
     const l = expand(raw);
-    if (!/^[ 0-9]{7} [0-9A-F]{4}/.test(l)) continue;
-    if (!l.slice(14, 37).trim()) continue;                  // a label or a directive: no bytes
-    let src = l.slice(37).replace(/;.*/, '').trim();
+    // Under .386 the offset field is eight columns wide (a USE16 offset in its last four).
+    const sh = /^[ 0-9]{7}  {4}[0-9A-F]{4}/.test(l) ? 4 : 0;
+    if (!sh && !/^[ 0-9]{7} [0-9A-F]{4}/.test(l)) continue;
+    if (!l.slice(14 + sh, 37 + sh).trim()) continue;                  // a label or a directive: no bytes
+    let src = l.slice(37 + sh).replace(/;.*/, '').trim();
     src = src.replace(/^[A-Za-z_@?$][\w@?$]*:\s*/, '');
     const words = src.split(/\s+/);
     const first = (words[0] ?? '').toLowerCase();
     if (!first || ['db', 'dw', 'dd', 'even', 'label'].includes(first)) continue;
     if (['db', 'dw', 'dd', 'label'].includes((words[1] ?? '').toLowerCase())) continue;
     if ((words[2] ?? '').startsWith('<')) continue;          // a structure instance: `name TYPE <>`
-    // The object bytes: `26:` and `F3>` are prefixes, a 4-digit group is a little-endian word, and a
+    // The object bytes: `26:`, `F3>` and `66|` are prefixes, a 4-digit group is a little-endian word, and a
     // trailing r/e/s marks a fixup (an address the linker fills).
     const bytes = [];
     let fix = false;
-    for (const w of l.slice(14, 37).trim().split(/\s+/)) {
-      const m2 = /^([0-9A-F]{2})[:>]?$/.exec(w), m4 = /^([0-9A-F]{4})([res]?)$/.exec(w), m8 = /^([0-9A-F]{8})([res]?)$/.exec(w);
+    for (const w of l.slice(14 + sh, 37 + sh).trim().split(/\s+/)) {
+      const m2 = /^([0-9A-F]{2})[:>|]?$/.exec(w), m4 = /^([0-9A-F]{4})([res]?)$/.exec(w), m8 = /^([0-9A-F]{8})([res]?)$/.exec(w);
       if (m2) bytes.push(parseInt(m2[1], 16));
       else if (m4) { const v = parseInt(m4[1], 16); bytes.push(v & 255, v >> 8); if (m4[2]) fix = true; }
       else if (m8) { const v = parseInt(m8[1], 16); bytes.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, v >>> 24); if (m8[2]) fix = true; }
       else throw new Error(`listing: the object bytes '${w}' in: ${l}`);
     }
-    out.push({ m: norm(first), bytes, fix, off: parseInt(l.slice(8, 12), 16), src: l.trim() });
+    out.push({ m: norm(first), bytes, fix, off: parseInt(l.slice(8 + sh, 12 + sh), 16), src: l.trim() });
   }
   return out;
 }
@@ -127,7 +134,8 @@ function disassemble(list) {
 }
 
 const JUMPS = /^(j[a-z]+|loop[a-z]*|call)$/;
-const REGS = new Set(['ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'cs', 'ds', 'es', 'ss']);
+const REGS = new Set(['ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'sp', 'al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'cs', 'ds', 'es', 'ss',
+  'eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'esp']);
 
 /** ndisasm's operands, as comparable signatures. */
 function sigFromDisasm(text, fix) {
@@ -163,7 +171,7 @@ function mem(seg, regs, disp) {
 
 
 /** PRISM's operands for one instruction, as the same signatures. */
-function sigFromTokens(toks, fix) {
+function sigFromTokens(toks, fix, ctx = {}) {
   let t = toks;
   const w = (k) => (t[k] && t[k].k === 'id' ? t[k].v.toLowerCase() : null);
   if (/^rep[a-z]*$/.test(w(0) ?? '')) t = t.slice(1);
@@ -178,6 +186,9 @@ function sigFromTokens(toks, fix) {
   const sig = splitOperands(rest).map((o) => {
     // A segment's name is its paragraph, which only the linker knows.
     if (o.length === 1 && o[0].k === 'id' && /^@(data|code|fardata)$/i.test(o[0].v)) return 'imm:fix';
+    if (o.length === 2 && /^seg$/i.test(o[0].v)) return 'imm:fix';
+    if (o.length === 1 && o[0].k === 'id' && REGS.has(o[0].v.toLowerCase())) return `r:${o[0].v.toLowerCase()}`;
+    o = o.filter((t) => !(t.k === 'id' && /^(far|near)$/i.test(t.v)));
     let x;
     try { x = parseOperand(o); } catch (e) { throw new Error(`${toks.map((y) => y.v).join(' ')}: ${e.message}`); }
     if (x.kind === 'reg' || x.kind === 'reg8' || x.kind === 'sreg') return `r:${x.reg}`;
@@ -185,7 +196,10 @@ function sigFromTokens(toks, fix) {
     if (x.kind === 'offset') return 'imm:fix';
     // TASM assembles LEA of a plain address as MOV of its offset.
     if (mn === 'lea' && !x.regs.length) return 'imm:fix';
-    return mem(x.seg ?? '', x.regs, x.sym || fix ? 'fix' : x.c & 0xffff);
+    // A FARDATA variable is a final offset (no fixup); the segment an ASSUME supplies is the layout's.
+    const far = x.sym && ctx.far?.get(x.sym);
+    if (far) return mem(x.seg ?? '', x.regs, (x.c + far.offset) & 0xffff);
+    return mem(x.seg ?? ctx.seg ?? '', x.regs, x.sym || fix ? 'fix' : x.c & 0xffff);
   });
   return mn === 'xchg' ? sig.sort() : sig;
 }
@@ -213,8 +227,8 @@ async function capture() {
   if (r.status !== 0) throw new Error(`dosbox-x: ${r.stderr}`);
   const golden = {
     _doc: 'Turbo Assembler 2.5 (Borland C++ 2.0 floppies), `tasm /mx /zi /la`, run in DOSBox-X by '
-      + 'tools/gate-tasm-front.mjs --capture on the unmodified Keen Dreams sources. Per file: the object\'s '
-      + 'publics, its _DATA bytes (hash) and fixup positions, and the listing\'s instruction mnemonics.',
+      + `tools/gate-tasm-front.mjs --capture on the unmodified ${TITLE} sources. Per file: the object's `
+      + 'publics, its _DATA (and FAR_DATA) bytes (hash) and fixup positions, and the listing\'s instruction mnemonics.',
     files: {},
   };
   FILES.forEach((f, k) => {
@@ -230,6 +244,15 @@ async function capture() {
       dataSize: data.size,
       dataHash: createHash('sha256').update(masked).digest('hex'),
       dataFixups: fixups,
+      // FARDATA, a segment of its own (Catacomb's random-number table).
+      ...(() => {
+        const far = o.segments.find((s) => s.name === 'FAR_DATA');
+        if (!far) return {};
+        const farFixups = o.fixups.filter((x) => x.seg === 'FAR_DATA').map((x) => x.at).sort((a, b) => a - b);
+        const fm = Uint8Array.from(far.bytes);
+        for (const at of farFixups) { fm[at] = 0; fm[at + 1] = 0; }
+        return { farSize: far.size, farHash: createHash('sha256').update(fm).digest('hex'), farFixups };
+      })(),
       ...(() => {
         const ins = listingInstructions(readFileSync(join(work, `M${k}.LST`), 'latin1'));
         const dis = disassemble(ins);
@@ -271,25 +294,47 @@ async function capture() {
   });
   mkdirSync(dirname(GOLDEN), { recursive: true });
   writeFileSync(GOLDEN, `${JSON.stringify(golden)}\n`);
-  console.log(`captured ${FILES.length} files -> goldens/tasm-keen.json`);
+  console.log(`captured ${FILES.length} files -> goldens/${G_NAME}`);
 }
 
-if (process.argv.includes('--capture')) await capture();
-if (!existsSync(GOLDEN)) { console.log('no goldens/tasm-keen.json: run with --capture first'); process.exit(1); }
-const g = JSON.parse(readFileSync(GOLDEN, 'utf8'));
 let bad = 0;
 const report = (ok, what, detail = '') => {
   if (!ok) bad++;
   console.log(`${ok ? '  ok ' : ' BAD '} ${what.padEnd(56)} ${detail}`);
 };
+let G_NAME;
+for (const G of GAMES.filter((x) => !only || x.name === only)) {
+GOLDEN = join(ROOT, 'goldens', G.golden);
+CORPUS = join(ROOT, 'corpus', G.corpus);
+FILES = G.files;
+TITLE = G.title;
+G_NAME = G.golden;
+console.log(`${G.title}:`);
+if (process.argv.includes('--capture')) await capture();
+if (!existsSync(GOLDEN)) { console.log(`no goldens/${G.golden}: run with --capture first`); process.exit(1); }
+const g = JSON.parse(readFileSync(GOLDEN, 'utf8'));
 for (const f of FILES) {
   const want = g.files[f];
   let m;
   try { m = frontEnd(f); } catch (e) { report(false, `${f}: assembles`, e.message); continue; }
-  // Publics: TASM's C language convention prefixes an underscore.
-  const mine = [...m.publics].map((p) => `_${p}`).sort();
+  // Publics: TASM's C language convention (MODEL MEDIUM,C) prefixes an underscore; without it
+  // (JABHACK.ASM's MODEL MEDIUM) the source spells the underscore itself.
+  const cLang = m.model?.includes('c');
+  const objName = (p) => (cLang ? `_${p}` : p);
+  const mine = [...m.publics].map(objName).sort();
   const theirs = want.publics.map((p) => p.name).sort();
   report(JSON.stringify(mine) === JSON.stringify(theirs), `${f}: the ${theirs.length} public names`, mine.length === theirs.length ? '' : `${mine.length} vs ${theirs.length}`);
+  // FARDATA, when TASM made one: its bytes, fixups masked, and its address positions.
+  {
+    const fb = Uint8Array.from(m.fardata.bytes);
+    for (const at of want.farFixups ?? []) { fb[at] = 0; fb[at + 1] = 0; }
+    const fh = fb.length ? createHash('sha256').update(fb).digest('hex') : undefined;
+    const ff = m.fardata.fixups.map((x) => x.at).sort((a, b) => a - b);
+    if (want.farSize !== undefined || fb.length) {
+      report(fb.length === want.farSize && fh === want.farHash && JSON.stringify(ff) === JSON.stringify(want.farFixups),
+        `${f}: the FAR_DATA segment, ${want.farSize ?? 0} bytes`, fh === want.farHash ? '' : `${fb.length} bytes, hash differs`);
+    }
+  }
   // Data segment, fixups masked.
   const bytes = Uint8Array.from(m.data.bytes);
   for (const at of want.dataFixups) { bytes[at] = 0; bytes[at + 1] = 0; }
@@ -298,7 +343,7 @@ for (const f of FILES) {
   report(bytes.length === want.dataSize && hash === want.dataHash, `${f}: the data segment, ${want.dataSize} bytes`, hash === want.dataHash ? '' : `${bytes.length} bytes, hash differs`);
   report(JSON.stringify(myFix) === JSON.stringify(want.dataFixups), `${f}: the ${want.dataFixups.length} address positions in it`, `${myFix.length}`);
   const dataPubs = want.publics.filter((p) => p.seg === '_DATA');
-  const wrongOff = dataPubs.filter((p) => m.data.labels.get(p.name.slice(1))?.offset !== p.offset);
+  const wrongOff = dataPubs.filter((p) => m.data.labels.get(cLang ? p.name.slice(1) : p.name)?.offset !== p.offset);
   report(!wrongOff.length, `${f}: the offsets of its ${dataPubs.length} data publics`, wrongOff.map((p) => p.name).join(' '));
   // Instructions.
   const mn = m.code.items.filter((x) => x.kind === 'ins').map((x) => norm(x.toks[0].v.toLowerCase()));
@@ -315,9 +360,10 @@ for (const f of FILES) {
     let n = ins.length;
     for (let k = m.code.items.length; k >= 0; k--) { landing[k] = n; if (m.code.items[k - 1]?.kind === 'ins') n--; }
     let wrong = 0, first = null;
+    const early = (() => { try { return layoutTasm(m); } catch { return null; } })();
     ins.forEach((x, j) => {
       let theirs = sigFromDisasm(want.ins[j].dis, want.ins[j].fix);
-      let mine = sigFromTokens(x.toks, want.ins[j].fix);
+      let mine = sigFromTokens(x.toks, want.ins[j].fix, { far: m.fardata.labels, seg: early?.ins[j]?.seg });
       if (want.ins[j].to !== undefined && mine[0] === 'target') {
         const name = x.toks.slice(1).map((y) => y.v).find((v) => !/^(short|near)$/i.test(v));
         const label = m.code.labels.get(name);
@@ -375,6 +421,7 @@ for (const f of FILES) {
     report(lay && !offWrong, `${f}: the offset, length and segment of every instruction`, offFirst ? `${offWrong} differ; first ${offFirst}` : '');
     report(!gapWrong, `${f}: the ${want.codeGaps.length} runs of data and padding among the instructions`, gapWrong ? `${gapWrong} differ; first ${gapFirst}` : '');
   }
+}
 }
 console.log(bad ? `\n${bad} WRONG` : '\nthe front end sees each module exactly as Turbo Assembler assembled it.');
 process.exit(bad ? 1 : 0);

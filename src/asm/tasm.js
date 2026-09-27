@@ -7,7 +7,7 @@
 // and length TASM gives it, then translates it.
 //
 // COVERED, because Keen's four files use it, and nothing beyond it: IDEAL and MASM modes; INCLUDE;
-// `=` and EQU, numeric and textual; IF/IFE/IFDEF/IFNDEF/ELSE/ENDIF; MACRO/ENDM in both spellings, with
+// `=` and EQU, numeric and textual; IF/IFE/IFDEF/IFNDEF/ELSE/ENDIF; FARDATA and SEG; the .8086-.486 processor directives; MACRO/ENDM in both spellings, with
 // parameters; REPT; @@ local labels; MODEL; DATASEG/CODESEG; ASSUME (stamped on each instruction: it decides TASM's override prefixes); PROC/ENDP
 // with named arguments and USES, whose prologue and epilogue are generated as TASM generates them
 // (PUSH BP / MOV BP,SP / PUSH uses ... POP uses / POP BP / RET); DB/DW/DD with DUP, `?`, strings and
@@ -91,19 +91,22 @@ export function assembleTasm(file, { read }) {
     textEquates: new Map(),           // lowercased name -> tokens (MASM text substitution)
     structs: new Map(),               // lowercased name -> { size, fields: Map(name -> {offset, size, bytes}) }
     data: { bytes: [], labels: new Map(), fixups: [] },     // DATASEG, in DGROUP
+    fardata: { bytes: [], labels: new Map(), fixups: [] },  // FARDATA: a segment of its own, reached by SEG
     code: { items: [], labels: new Map(), bytes: [], fixups: [] }, // CODESEG: stream + its data area
     procs: [],
+    cpu: 86,                          // the processor directive in force (.386C: 386); TASM sizes jumps by it
     // What each segment register is assumed to hold: 'code', 'data' (DGROUP) or null. An instruction
     // carries the assumptions in force where it stands, because they decide TASM's override prefixes.
     assume: {},
   };
   const macros = new Map();           // lowercased name -> { params: [], body: [lines] }
-  let seg = null;                     // 'data' | 'code'
+  let seg = null;                     // 'data' | 'code' | 'fardata'
   let proc = null;                    // the PROC being assembled
   let localScope = 0;
   let curStruct = null;
 
   const fail = (where, what) => { throw new TasmError(`${where}: ${what}`); };
+  const segOf = (s) => (s === 'code' ? mod.code : s === 'fardata' ? mod.fardata : mod.data);
 
   // ---------------------------------------------------------------- expressions
   /** Evaluate tokens as a constant. Returns { value, sym } where sym is a relocated label (or null). */
@@ -135,9 +138,9 @@ export function assembleTasm(file, { read }) {
         // them: instructions are not encoded here, so their lengths are unknown.
         if (t.v === '$') {
           return seg === 'code' ? { value: 0, sym: '$', off: mod.code.bytes.length, seg, index: mod.code.items.length }
-            : { value: 0, sym: '$', off: mod.data.bytes.length, seg };
+            : { value: 0, sym: '$', off: segOf(seg).bytes.length, seg };
         }
-        const d = mod.data.labels.get(scoped(t.v)) ?? mod.code.labels.get(scoped(t.v));
+        const d = mod.data.labels.get(scoped(t.v)) ?? mod.code.labels.get(scoped(t.v)) ?? mod.fardata.labels.get(scoped(t.v));
         if (d) return { value: 0, sym: t.v, off: d.offset, seg: d.seg, index: d.index };
         for (const s of mod.structs.values()) if (s.fields.has(n)) return { value: s.fields.get(n).offset, sym: null };
         const s = mod.structs.get(n);
@@ -191,7 +194,7 @@ export function assembleTasm(file, { read }) {
   };
 
   // ---------------------------------------------------------------- data
-  const target = () => (curStruct ? curStruct : seg === 'code' ? mod.code : mod.data);
+  const target = () => (curStruct ? curStruct : segOf(seg));
   const here = () => target().bytes.length;
   const emitBytes = (bytes) => { target().bytes.push(...bytes); };
   /** DB/DW/DD values, with DUP and '?'. Returns [{bytes}] and records fixups. */
@@ -256,7 +259,7 @@ export function assembleTasm(file, { read }) {
   const defineLabel = (name, where, { type = 'near' } = {}) => {
     if (!name.startsWith('@@') && !proc) localScope++;
     const key = scoped(name);
-    const tgt = seg === 'code' ? mod.code : mod.data;
+    const tgt = segOf(seg);
     if (tgt.labels.has(key)) fail(where, `the label '${name}' defined twice`);
     const entry = { name: key, seg, type, offset: tgt.bytes.length, index: seg === 'code' ? mod.code.items.length : null };
     tgt.labels.set(key, entry);
@@ -379,7 +382,7 @@ export function assembleTasm(file, { read }) {
         if (parent) {
           if (first === 'ifdef' || first === 'ifndef') {
             const n = lc(toks[1]);
-            const def = mod.equates.has(n) || mod.textEquates.has(n) || mod.code.labels.has(n) || mod.data.labels.has(n);
+            const def = mod.equates.has(n) || mod.textEquates.has(n) || mod.code.labels.has(n) || mod.data.labels.has(n) || mod.fardata.labels.has(n);
             cond = first === 'ifdef' ? def : !def;
           } else {
             const v = evaluate(substitute(toks.slice(1)), where).value;
@@ -465,6 +468,12 @@ export function assembleTasm(file, { read }) {
   function directive(toks, where, lines, li) {
     const f = lc(toks[0]), second = lc(toks[1]);
     // Mode and model.
+    // The processor: `.386C` lets 386 instructions through and changes how TASM sizes a forward
+    // conditional jump (it reserves the 386's near form).
+    if (isP(toks[0], '.') && toks.length === 2 && /^(8086|186|286|386|486)[cp]?$/i.test(toks[1].v)) {
+      mod.cpu = parseInt(toks[1].v, 10) % 1000;
+      return;
+    }
     if (f === 'ideal') { mod.mode = 'ideal'; return; }
     if (f === 'masm') { mod.mode = 'masm'; return; }
     if (f === 'model') {
@@ -481,6 +490,7 @@ export function assembleTasm(file, { read }) {
     }
     if (f === 'dataseg') { seg = 'data'; return; }
     if (f === 'codeseg') { seg = 'code'; return; }
+    if (f === 'fardata') { seg = 'fardata'; return; }
     if (f === 'assume') {
       const next = { ...mod.assume };
       for (let k = 1; k < toks.length; k++) {
@@ -494,11 +504,12 @@ export function assembleTasm(file, { read }) {
     }
     if (f === 'end') return;
     if (f === 'even') {
-      // No Keen source aligns its data, so what TASM pads data with has never been observed. In
-      // CODESEG the pad depends on the lengths of the encoded instructions before it, which are not
+      // In CODESEG the pad depends on the lengths of the encoded instructions before it, which are not
       // known here: the item marks the place, and code.bytes holds only the data between instructions.
-      if (seg !== 'code') fail(where, 'EVEN outside CODESEG');
-      mod.code.items.push({ kind: 'even', where });
+      if (seg === 'code') { mod.code.items.push({ kind: 'even', where }); return; }
+      // In data only the aligned case has been observed (Catacomb 3-D's C3_ASM opens DATASEG with
+      // EVEN): what byte TASM pads data with is not known, so an odd offset is refused.
+      if (segOf(seg).bytes.length & 1) fail(where, 'EVEN at an odd data offset, whose pad byte TASM has not shown');
       return;
     }
     if (f === 'public' || f === 'global') {
