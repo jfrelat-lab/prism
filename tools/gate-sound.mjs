@@ -24,12 +24,12 @@ import { installAllegro, ALLEGRO_VARS } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
 import { HEADERS } from '../src/env/headers.js';
+import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(ROOT, 'corpus', 'mame05');
 if (!existsSync(join(SRC, 'src', 'msdos', 'msdos.c'))) {
-  console.error(`corpus missing: ${SRC}`);
-  process.exit(2);
+  skip(`corpus missing: ${SRC}`, 'fetch it with the `fetch` line of targets/mame05.json');
 }
 
 const RATE = 44100;

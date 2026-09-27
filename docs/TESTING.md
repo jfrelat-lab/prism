@@ -5,8 +5,10 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Fifty-two now, fifty green** — `gate-lua` and `gate-pixels` are red, and were before the 16-bit
-work began. This is the index of the ones that carry an external authority; the smaller seam gates
+**Fifty-two now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
+missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
+the run. This is the index of the ones that carry an external authority; the smaller seam gates
 (`gate-accessor`, `gate-layout`, `gate-memmap`, `gate-typemodel` and the like) are named in their
 own sections. The rule that shapes the list: **no gate answers its own question.** Each column names
 something outside PRISM that could contradict it.
@@ -29,7 +31,7 @@ something outside PRISM that could contradict it.
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
 | `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
-| `gate-run.mjs` | a native i386 gcc build | 62 programs behave identically |
+| `gate-run.mjs` | a native i386 gcc build | 63 programs behave identically |
 | `gate-suite.mjs` | c-testsuite, gcc torture | 213 / 219 and 1,438 of the torture corpus |
 | `csmith-diff.mjs` | Csmith + gcc `-O0`/`-O2` | unlimited random programs, zero divergence |
 | `gate-pixels.mjs` | PRISM against ITSELF on four platform layers | `x11 == dos == win == svgalib`, pixel for pixel |
@@ -3260,3 +3262,59 @@ time would have refused the whole module, and with it `CheckIs386`, which runs.
 | EVEN in data always pads | C3_ASM's data segment, 3,301 bytes against 3,300 |
 | publics always underscored | JABHACK's two public names |
 | `.386C` ignored | JABHACK's layout refuses `eax`; its operands |
+
+## Three verdicts, and what two permanently red gates were hiding (`tools/gates.mjs`, `tools/gate-skip.mjs`)
+
+For weeks the full run read "50 of 52 green", and the two reds were read as "the usual". That is the
+failure mode worth naming: a gate that is always red stops being read, and a real failure next to it
+goes unseen. So a gate now has three answers, not two. **PASS** (exit 0), **FAIL** (any other
+non-zero), and **SKIP** (exit 77, automake's code): *I could not run, for want of something this
+repository does not ship* — a corpus fetched separately, game data the user supplies, a package in
+the oracle container — said with what is missing and how to supply it. `tools/gates.mjs` runs every
+gate and exits non-zero only on a FAIL. A missing GOLDEN, which the repository does commit, or a
+probe that fails, stays a FAIL: those mean the tree is broken.
+
+The positive control: a gate that exits 1 is reported `FAIL` and the runner exits 1; the six
+converted sites each print `SKIP:` and exit 77 when their resource is absent.
+
+### The two reds, taken apart
+
+**`gate-pixels` was never failing.** It exited 2 for want of `--data`. Given Quake's data
+(`PRISM_QUAKE_DATA=<dir with id1/>`) it is green: all three asserted comparisons identical, SunOS
+reported and not asserted, as designed. Without the data it now SKIPS.
+
+**`gate-lua` was failing, and on a real defect — which was covering five more.** `files.lua:804`
+failed `checkDateTable(os.time())`. Taken apart one field at a time:
+
+1. **`mktime` did not write its argument.** C99 7.23.2.3: out-of-range fields are normalised and
+   `tm_wday`/`tm_yday` are filled in. Lua's `os.time` copies the normalised struct back into the
+   caller's table, so the weekday it read was whatever the stack held. A wrong answer, not a
+   refusal — `gate-run` now carries `mktime-normalises` (January 32nd, 25:61, against gcc), red
+   without the fix.
+
+With the dates right the failure moved to line 675, **inside the file tests — which had been
+SKIPPED ALL ALONG.** files.lua prints "'os.tmpname' file cannot be open; skipping file tests" and
+carries on; the verdict never saw it because the later failure came first. Four defects sat under it:
+
+2. **`/tmp` was seeded in the wrong namespace.** The store strips a path's leading slash, so
+   tmpnam's `/tmp/prismN` is looked up as `tmp/...` — and the directory set had been seeded with
+   `'/tmp'`. Every temporary file was refused, since the day directories were introduced.
+3. **A reader's bytes were a snapshot taken at open.** Two handles on one file are two descriptors
+   on one inode; a reader opened before a write never saw it. An open file's bytes are now read
+   through the store on every access.
+4. **`setvbuf` was ignored.** Buffering is now honoured when the program asks for it — full, line or
+   none, flushed on a full buffer, a newline, `fflush`, `fclose`, a seek, and the end of `run()` —
+   and the DEFAULT stays unbuffered, because C99's "fully buffered unless interactive" would change
+   every target at once (ROADMAP P8.11).
+5. **`tmpfile` answered NULL**, as something "this host genuinely cannot provide". Once (2) was
+   fixed it could: a unique name opened `w+b`, removed at close.
+
+What is left is pinned, not forgiven. files.lua's `if not _port` blocks assume a Linux host, and the
+first of them shells out to `cat`, `ls` and `kill` — the host's shell, which is why `main.lua` is
+skipped by name, and which a `LUA_USE_C89` build does not compile `popen` for. So files.lua must stop
+EXACTLY at line 732; stopping anywhere else is red, and passing is red too, so that the entry is
+deleted rather than left to excuse something later. And what that stop hides is still run: files.lua
+a second time with `_port = true`, the suite's own switch for a non-Linux host, reaches its last
+line.
+
+Found in passing, not fixed here: `atexit` records its handlers and nothing runs them (ROADMAP P8.12).

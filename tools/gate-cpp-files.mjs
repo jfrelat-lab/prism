@@ -24,6 +24,7 @@ import { tokenize } from '../src/cpp/lexer.js';
 import { EOF } from '../src/cpp/token.js';
 import { HEADERS } from '../src/env/headers.js';
 import { TARGET_DEFINES, mergeDefines } from '../src/compile.js';
+import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(new URL(import.meta.url).pathname));
 const VERBOSE = process.argv.includes('--verbose');
@@ -46,8 +47,7 @@ const TARGETS = [
 ].filter(t => existsSync(t.dir));
 
 if (!TARGETS.length) {
-  console.error('no corpus present; nothing to compare');
-  process.exit(2);
+  skip('no corpus present; nothing to compare', 'fetch any target with the `fetch` line of its targets/*.json');
 }
 
 // --- PRISM's headers, on disk, where gcc can read them.

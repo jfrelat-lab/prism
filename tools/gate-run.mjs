@@ -25,6 +25,27 @@ const C = (name, src) => cases.push({ name, src });
  * `x - 1 < 0` is false and `(x - 1) > 0` true. PRISM promoted every enum to a signed int and printed
  * "1 0" -- a wrong answer no case here asked about until the 16-bit enum work reached promote().
  */
+/*
+ * mktime WRITES its argument: out-of-range fields are normalised and tm_wday/tm_yday are filled in
+ * (C99 7.23.2.3). PRISM's returned the time and left the struct alone, so a caller reading it back
+ * got whatever it held -- Lua's os.time copies it into the caller's table, and files.lua's date
+ * round trip failed on garbage weekdays. January 32nd, 25:61, is February 2nd, 02:01.
+ */
+C('mktime-normalises', `
+#include <stdio.h>
+#include <time.h>
+int main(void)
+{
+    struct tm t = { 0 };
+    t.tm_year = 97; t.tm_mon = 0; t.tm_mday = 32; t.tm_hour = 25; t.tm_min = 61;
+    t.tm_wday = 99; t.tm_yday = 999; t.tm_isdst = 0;
+    long s = (long)mktime(&t);
+    printf("%ld %d-%d-%d %d:%d:%d wday=%d yday=%d\\n", s, t.tm_year, t.tm_mon, t.tm_mday,
+           t.tm_hour, t.tm_min, t.tm_sec, t.tm_wday, t.tm_yday);
+    return 0;
+}
+`);
+
 C('enum-promotion', `
 #include <stdio.h>
 enum e { A, B };

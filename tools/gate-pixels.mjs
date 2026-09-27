@@ -50,12 +50,13 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { writeIndexedPng } from './png.mjs';
+import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const opt = (n, d = null) => process.argv.find(a => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 
-const dataDir = opt('data');
-if (!dataDir) { console.error('need --data=<dir containing id1/>'); process.exit(2); }
+const dataDir = opt('data') ?? process.env.PRISM_QUAKE_DATA ?? null;
+if (!dataDir) skip("Quake's data: a directory containing id1/", 'pass --data=<dir>, or set PRISM_QUAKE_DATA');
 const FRAMES = +(opt('frames') ?? 200);
 const pngPrefix = opt('png');
 

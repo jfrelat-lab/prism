@@ -20,6 +20,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { spawnSync } from 'node:child_process';
+import { skip } from './gate-skip.mjs';
 
 /*
  * A BIGGER JAVASCRIPT STACK, and the gate asks for it itself rather than expecting to be run with a
@@ -62,9 +63,7 @@ const SKIP = {
 };
 
 if (!statSync(TESTES, { throwIfNoEntry: false })) {
-  console.error(`corpus missing: ${TESTES}\nFetch it with:\n` +
-    `  git clone --depth 1 -b v5.4.7 https://github.com/lua/lua.git corpus/lua`);
-  process.exit(2);
+  skip(`corpus missing: ${TESTES}`, 'fetch it: git clone --depth 1 -b v5.4.7 https://github.com/lua/lua.git corpus/lua');
 }
 
 const only = opt('only')?.split(',').map(s => s.trim()).filter(Boolean) ?? null;
@@ -87,16 +86,38 @@ const data = {};
   }
 })(TESTES);
 
+/*
+ * Failures that are the TARGET'S CHOICE, pinned to the exact place they stop. Each is known, not
+ * forgiven: it must fail HERE -- anywhere else is red -- and one that starts passing is red too, so
+ * the entry gets deleted rather than left to excuse a regression later.
+ *
+ * files.lua's `if not _port` blocks assume a Linux host (all.lua: "defaults are for Linux").
+ * The first to fail is at line 717: popen and os.execute of `cat`, `ls`, `kill` and the
+ * interpreter itself -- the HOST's shell, which is why main.lua is skipped by name above, and
+ * which targets/lua.json's LUA_USE_C89 build does not even compile popen for. (After it, line 843
+ * asks for POSIX strftime modifiers, which the C89 option list, loslib.c:37, rejects by itself.)
+ */
+const KNOWN = {
+  'files.lua': { at: 'files.lua:732', why: 'io.popen("cat ..."): the host shell, and no popen in the C89 build' },
+};
+/*
+ * ...and what the known stop hides is still run: files.lua again with `_port = true`, the suite's
+ * own switch for a non-Linux host, which steps over the non-portable blocks and reaches the hundred
+ * lines after them.
+ */
+const runs = files.map((f) => ({ name: f, argv: ['lua', f] }));
+if (files.includes('files.lua')) runs.push({ name: 'files.lua _port', argv: ['lua', '-e', '_port=true', 'files.lua'] });
+
 const target = loadTarget(join(ROOT, 'targets/lua.json'));
 const results = [];
 
-for (const f of files) {
+for (const { name: f, argv: args } of runs) {
   const out = [];
   let verdict, detail = '';
   try {
     const { program } = buildTarget(target, { root: ROOT, envExtra: { stdio: { files: { ...data } } } });
     program.M.write = (s) => out.push(s);
-    program.run(['lua', f]);
+    program.run(args);
     const text = out.join('');
     /*
      * These tests are built on `assert`, so REACHING THE END is what passing means -- the "OK" some
@@ -128,15 +149,16 @@ for (const f of files) {
     const at = lines.reverse().find(l => /\.lua:\d+/.test(l));
     detail = (at ?? String(e.message)).trim().slice(0, 110);
   }
+  const known = KNOWN[f];
+  if (known && verdict === 'failed' && detail.includes(known.at)) { verdict = 'known'; detail = `${known.at}: ${known.why}`; }
+  else if (known && verdict !== 'failed') { verdict = 'failed'; detail = `expected to stop at ${known.at} and did not: delete its KNOWN entry`; }
   results.push({ f, verdict, detail, out: out.join('') });
   if (verbose) console.log(`${verdict.padEnd(7)} ${f}${detail ? '  ' + detail : ''}`);
 }
 
-const ok = results.filter(r => r.verdict === 'ok');
-const skipped = results.filter(r => r.verdict === 'skipped');
-console.log(`\nLua ${results.length} test files: ${ok.length} pass, ` +
-  `${results.filter(r => r.verdict === 'failed').length} fail, ` +
-  `${skipped.length} skipped by the test itself`);
+const count = (v) => results.filter(r => r.verdict === v).length;
+console.log(`\nLua ${results.length} runs: ${count('ok')} pass, ${count('failed')} fail, ` +
+  `${count('known')} known and pinned, ${count('skipped')} skipped by the test itself`);
 
 for (const r of results.filter(x => x.verdict !== 'ok')) {
   console.log(`  ${r.f.padEnd(16)} ${r.verdict.padEnd(7)} ${r.detail}`);
@@ -146,5 +168,5 @@ if (Object.keys(SKIP).length && verbose) {
   for (const [f, why] of Object.entries(SKIP)) console.log(`  ${f.padEnd(16)} ${why}`);
 }
 
-// A gate is red when something that used to pass stops. The count is the number to watch.
-process.exit(ok.length + skipped.length === results.length ? 0 : 1);
+// A gate is red when something that used to pass stops, or a known failure moves or goes away.
+process.exit(count('failed') === 0 ? 0 : 1);

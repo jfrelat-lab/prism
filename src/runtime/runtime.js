@@ -727,7 +727,20 @@ function makeLibc(M) {
     mktime: (tmPtr) => {
       tmIsI386(M, 'mktime');
       const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);
-      return Math.floor(Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0)) / 1000) | 0;
+      const ms = Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0));
+      /*
+       * mktime WRITES the struct as well as reading it (C99 7.23.2.3): out-of-range fields are
+       * normalised and tm_wday/tm_yday are filled in, whatever they held. Lua's os.time relies on
+       * it -- it copies the normalised struct back into the table it was given -- so returning the
+       * time alone left the caller's wday and yday as whatever the stack held before.
+       */
+      const t = new Date(ms);
+      const y = t.getUTCFullYear();
+      const yday = (Date.UTC(y, t.getUTCMonth(), t.getUTCDate()) - Date.UTC(y, 0, 1)) / 86400000;
+      const f = [t.getUTCSeconds(), t.getUTCMinutes(), t.getUTCHours(), t.getUTCDate(), t.getUTCMonth(),
+        y - 1900, t.getUTCDay(), yday, 0];
+      for (let i = 0; i < 9; i++) d.setInt32(tmPtr + i * 4, f[i] | 0, true);
+      return Math.floor(ms / 1000) | 0;
     },
     difftime: (a, b) => (a | 0) - (b | 0),
     strftime: (dst, max, fmt, tmPtr) => {

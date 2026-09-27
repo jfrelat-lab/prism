@@ -21,6 +21,7 @@ import { compileRun, version } from './oracle.mjs';
 import { compileProgram, builtinHeaderResolver } from '../src/compile.js';
 import { envHeaders } from '../src/env/registry.js';
 import { installStdio } from '../src/env/stdio.js';
+import { skip } from './gate-skip.mjs';
 
 const PROBE = `
 #include <stdio.h>
@@ -100,10 +101,8 @@ const real = compileRun(PROBE, { extra: '-I/usr/include/SDL' });
 // name made this branch fire on every run -- and the mirror of that mistake, a check that can only
 // pass, is the one that would have let a wrong header through without a word.
 if (real.code !== 0) {
-  console.error('the oracle could not build the probe against the real SDL 1.2 headers:\n' +
-    `${real.stderr || real.stdout}\n` +
-    'The container needs libsdl1.2-dev:  docker exec prism-oracle apt-get -y install libsdl1.2-dev');
-  process.exit(2);
+  skip(`the oracle could not build the probe against the real SDL 1.2 headers: ${(real.stderr || real.stdout).split('\n')[0]}`,
+    'the container needs libsdl1.2-dev:  docker exec prism-oracle apt-get -y install libsdl1.2-dev');
 }
 
 // --- ours: the same source, through PRISM, with the sdl12 environment's headers.

@@ -150,7 +150,57 @@ export function installStdio(M, {
     for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('/') || '/');
     return out;
   };
-  const directories = new Set(['', '/', '.', '/tmp']);
+  // Seeded in the store's own namespace: norm() strips a leading slash, so tmpnam's `/tmp/prismN`
+  // is looked up as `tmp/...` and its directory as `tmp`. Seeded as '/tmp', every temporary file
+  // was refused, and files.lua skipped all of its i/o tests saying only "cannot be open".
+  const directories = new Set(['', '/', '.', norm('/tmp')]);
+  /*
+   * An open file's bytes are the STORE'S, read through on every access -- not a copy taken at open.
+   * Two handles on one file are two descriptors on one inode: what one writes, the other reads, and
+   * `fopen(name, "w")` truncates for every reader. A snapshot made a reader opened before the write
+   * see the file as it was when it opened, forever; files.lua:678 is exactly that test. A file
+   * removed while open keeps the last bytes its handle saw, as an unlinked file does on POSIX.
+   */
+  const openFile = (key, fields) => {
+    let last = store.get(key) ?? new Uint8Array(0);
+    return Object.assign({
+      key,
+      // A buffered writer's unflushed bytes live in its OWN shadow until a flush publishes them.
+      buf: 'none', bufSize: 0, pending: 0, shadow: null,
+      get bytes() {
+        if (this.shadow) return this.shadow;
+        const cur = store.get(key); if (cur) last = cur; return last;
+      },
+      set bytes(v) {
+        if (this.shadow) { this.shadow = v; return; }
+        last = v; store.set(key, v);
+      },
+    }, fields);
+  };
+  /*
+   * BUFFERING, only where the program asks for it. setvbuf/setbuf choose full, line or none; the
+   * bytes a buffered stream writes stay in its shadow copy, invisible to every other handle on the
+   * file, until C says they leave: the buffer fills, a newline in line mode, fflush, fclose, a seek,
+   * or the program ending. files.lua:675-692 tests exactly those four observations.
+   *
+   * The DEFAULT stays unbuffered. C99 7.19.3p7 makes a file fully buffered unless it is interactive,
+   * and adopting that everywhere would change when every target's files become visible; it is a
+   * decision of its own (ROADMAP), not a side effect of passing one test.
+   */
+  const beforeWrite = (h) => {
+    if (h.buf !== 'none' && !h.shadow) h.shadow = Uint8Array.from(store.get(h.key) ?? []);
+  };
+  const flush = (h) => {
+    if (!h?.shadow) return;
+    const out = h.shadow;
+    h.shadow = null; h.pending = 0;
+    h.bytes = out;
+  };
+  const afterWrite = (h, n, newline) => {
+    if (!h.shadow) return;
+    h.pending += n;
+    if ((h.buf === 'line' && newline) || h.pending >= h.bufSize) flush(h);
+  };
   for (const k of store.keys()) for (const d of dirsOf(k)) directories.add(d);
   const dirExists = (key) => {
     const i = key.lastIndexOf('/');
@@ -198,9 +248,8 @@ export function installStdio(M, {
      *   a   created.    write only. content kept, writes go to the end.
      *   a+  created.    read+write. content kept, writes go to the end.
      */
-    fopen: (namePtr, modePtr) => {
-      const name = M.mod.cstr(namePtr);
-      const mode = M.mod.cstr(modePtr);
+    fopen: (namePtr, modePtr) => openNamed(M.mod.cstr(namePtr), M.mod.cstr(modePtr)),
+    openNamed: (name, mode) => {
       const key = find(name);
       const update = mode.includes('+');
       const kind = mode[0];
@@ -210,8 +259,7 @@ export function installStdio(M, {
       if (kind === 'r') {
         if (key === null) return 0;                     // NULL: not found, which programs check
         const h = take();
-        handles.set(h, { key, bytes: store.get(key), pos: 0,
-                         read: true, write: update, eof: false });
+        handles.set(h, openFile(key, { pos: 0, read: true, write: update, eof: false }));
         return h;
       }
       // A new file can only be created in a directory that exists.
@@ -221,15 +269,18 @@ export function installStdio(M, {
       const k = key ?? norm(name);
       store.set(k, start);
       const h = take();
-      handles.set(h, { key: k, bytes: start, pos: kind === 'a' ? start.length : 0,
-                       read: readable, write: writable, append: kind === 'a', eof: false });
+      handles.set(h, openFile(k, { pos: kind === 'a' ? start.length : 0,
+                                   read: readable, write: writable, append: kind === 'a', eof: false }));
       return h;
     },
 
     fclose: (fp) => {
       const f = fp | 0;
       /* Closing a redirected standard stream puts it back where it belongs. */
-      if (redirected.has(f)) { handles.delete(redirected.get(f)); redirected.delete(f); return 0; }
+      if (redirected.has(f)) { flush(handles.get(redirected.get(f))); handles.delete(redirected.get(f)); redirected.delete(f); return 0; }
+      const h = handles.get(f);
+      flush(h);
+      if (h?.temporary) store.delete(h.key);
       handles.delete(f);
       return 0;
     },
@@ -282,9 +333,12 @@ export function installStdio(M, {
        * and asserts it fails with a message and an errno, which is the whole point of the test.
        */
       if (!h.write) { h.err = true; return 0; }
+      beforeWrite(h);
       grow(h, h.pos + n);
-      h.bytes.set(u8().slice(src, src + n), h.pos);
+      const data = u8().slice(src, src + n);
+      h.bytes.set(data, h.pos);
       h.pos += n;
+      afterWrite(h, n, data.includes(10));
       return count | 0;
     },
 
@@ -294,11 +348,12 @@ export function installStdio(M, {
       const base = whence === SEEK_CUR ? h.pos : whence === SEEK_END ? h.bytes.length : 0;
       const p = base + (off | 0);
       if (p < 0) return -1;
+      flush(h);
       h.pos = p; h.eof = false;
       return 0;
     },
     ftell: (fp) => { const h = fileOf(fp); return h ? h.pos : -1; },
-    rewind: (fp) => { const h = fileOf(fp); if (h) { h.pos = 0; h.eof = false; } },
+    rewind: (fp) => { const h = fileOf(fp); if (h) { flush(h); h.pos = 0; h.eof = false; } },
 
     fgetc: (fp) => readByte(fp),
     getc: (fp) => readByte(fp),
@@ -369,7 +424,24 @@ export function installStdio(M, {
     feof: (fp) => { const h = fileOf(fp); return h && h.eof ? 1 : 0; },
     ferror: (fp) => { const h = fileOf(fp); return h && h.err ? 1 : 0; },
     clearerr: (fp) => { const h = fileOf(fp); if (h) { h.eof = false; h.err = false; } },
-    fflush: () => 0,                        // every write is already visible; nothing is buffered
+    // fflush(NULL) flushes every stream; an unbuffered one has nothing waiting.
+    fflush: (fp) => {
+      if ((fp | 0) === 0) { for (const h of handles.values()) flush(h); return 0; }
+      flush(fileOf(fp));
+      return 0;
+    },
+    // _IOFBF 0, _IOLBF 1, _IONBF 2 (headers.js). A size of 0 means BUFSIZ; the caller's buffer, if
+    // any, is not used -- the shadow is where the bytes wait, and nothing reads the caller's array.
+    setvbuf: (fp, bufPtr, mode, size) => {
+      const h = fileOf(fp);
+      if (!h) return 0;
+      const m = ['full', 'line', 'none'][mode | 0];
+      if (!m) return -1;
+      flush(h);
+      h.buf = m; h.bufSize = (size >>> 0) || 8192;
+      return 0;
+    },
+    setbuf: (fp, bufPtr) => { api.setvbuf(fp, bufPtr, bufPtr ? 0 : 2, 8192); },
 
     unlink: (namePtr) => { const k = find(M.mod.cstr(namePtr)); if (k) store.delete(k); return k ? 0 : -1; },
     remove: (namePtr) => api.unlink(namePtr),
@@ -405,7 +477,6 @@ export function installStdio(M, {
     h.bytes = bigger.subarray(0, need);
     // The store must see the same object the handle grows into, or a re-open reads the old bytes.
     h.bytes = bigger.subarray(0, Math.max(need, h.pos));
-    store.set(h.key, h.bytes);
   }
 
   function readByte(fp) {
@@ -443,8 +514,10 @@ export function installStdio(M, {
     const h = fileOf(via ?? fp);
     if (!h) { M.write(String.fromCharCode(b)); return; }
     if (!h.write) { h.err = true; return; }        // see fwrite: an "r" stream is not writable
+    beforeWrite(h);
     grow(h, h.pos + 1);
     h.bytes[h.pos++] = b;
+    afterWrite(h, 1, b === 10);
   }
 
   function scan(getc, ungetc, fmtPtr, args) {
@@ -792,12 +865,15 @@ export function installStdio(M, {
      * in the drive, which the program already handles.
      */
     /*
-     * Four that this host genuinely cannot provide, answering the way a C library answers when it
-     * cannot either -- NULL, or a failure code. Lua checks every one of them, so a lie would be
-     * found: io.tmpfile() returning a bad handle would crash inside the test suite rather than
-     * report "cannot open".
+     * A temporary file is a unique name opened "w+" and removed when it is closed (C99 7.19.4.3).
+     * This answered NULL, as something "this host genuinely cannot provide" -- which stopped being
+     * true once tmpnam's names could be opened at all; files.lua:772 asserts io.tmpfile() is a file.
      */
-    tmpfile: () => 0,
+    tmpfile: () => {
+      const fp = openNamed(`/tmp/prism${String(++tmpSeq).padStart(6, '0')}`, 'w+b');
+      if (fp) fileOf(fp).temporary = true;
+      return fp;
+    },
     /*
      * A NAME, not NULL. C says tmpnam returns null only when it cannot make a unique name, and a
      * caller is entitled to use the result immediately -- gcc's gcc_tmpnam.h reads ret[0] on the
@@ -1009,7 +1085,12 @@ export function installStdio(M, {
     },
   });
 
+  // An internal helper, not a C name: taken out before the api becomes builtins.
+  const openNamed = api.openNamed;
+  delete api.openNamed;
   Object.assign(M.rt, api);
+  // Leaving the program flushes every stream, as exit() and a return from main do in C.
+  M.flushAll = () => { for (const h of handles.values()) flush(h); };
   M.files = { store, find, norm, isOpen: (h) => handles.has(h | 0) };
 
   // The three standard streams are ordinary globals a program can take the address of -- each a

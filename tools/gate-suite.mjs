@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -64,8 +65,7 @@ const GAPS_ONLY = process.argv.includes('--gaps');
 const LIMIT = +(process.argv.find(a => a.startsWith('--limit='))?.slice(8) ?? 0);
 
 if (!existsSync(SUITE)) {
-  console.error(`corpus missing: ${SUITE}\nFetch it with:\n  ${S.fetch}`);
-  process.exit(2);
+  skip(`corpus missing: ${SUITE}`, `fetch it with: ${S.fetch}`);
 }
 
 const tests = readdirSync(SUITE).filter(f => f.endsWith('.c')).sort();

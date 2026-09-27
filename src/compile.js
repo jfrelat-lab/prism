@@ -1338,9 +1338,10 @@ function makeRunner(M, F, mod, model = 'i386') {
     finalizeHeap(M);
     try {
       const code = main.length === 0 ? main() : main(ptrs.length, vec);
+      M.flushAll?.();
       return { code: (code | 0) & 0xff, stdout: M.output() };
     } catch (e) {
-      if (e instanceof ExitCalled) return { code: e.code & 0xff, stdout: M.output() };
+      if (e instanceof ExitCalled) { M.flushAll?.(); return { code: e.code & 0xff, stdout: M.output() }; }
       throw e;
     }
   };

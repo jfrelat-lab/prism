@@ -28,7 +28,7 @@ build), **Quake** on four platforms (DOS, X11, Win32, SunOS; its own timedemo re
 **Doom** with sound, **Quake II** rendering its demo, **Lua 5.4** running its own test suite, **PuTTY**
 connecting over real sockets — and **Keen Dreams**, the first 16-bit target, which plays.
 
-Measured against external oracles, never against itself — **52 gates, 50 green**:
+Measured against external oracles, never against itself — **52 gates, all green** (`node tools/gates.mjs`; the ones that need data you supply say SKIP rather than fail):
 
 | Gate | Result |
 |---|---|
@@ -89,5 +89,6 @@ tools/gate-*.mjs` run needs none of them.
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the design and the six hard parts
 - [docs/TESTING.md](docs/TESTING.md) — the oracles, and every measured fact behind the ABI
-- [docs/ROADMAP.md](docs/ROADMAP.md) — the task menu
+- [docs/ROADMAP.md](docs/ROADMAP.md) — the task menu, one line per task
+- [docs/LOG.md](docs/LOG.md) — the long form of every roadmap row: measurements, dead ends, defects found
 - [docs/COMPAT.md](docs/COMPAT.md) — what runs, and the verified state of the upstream sources
