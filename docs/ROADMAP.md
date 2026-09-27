@@ -34,7 +34,7 @@ row. A row's story after that date is in its commit.
 |---|---|---|---|
 | 1 | **A real clock for the programs that pace themselves through safepoints.** Keen Dreams played by a person in the browser, with sound; Hexen and Heretic at 35 Hz; OpenDUNE's intro that runs slow and then lurches. Three rows, one mechanism. | P11.5, P6.4, P7.11 | M |
 | 2 | **Catacomb 3-D's code written at run time.** Define the seam `(memory, registers, io) => registers` now; whether a PRISM executor or MIRAGE fills it is the owner's decision, not the compiler's. | P11.4 | S, then M–L |
-| 3 | **The end of a program, as C defines it.** `atexit` handlers are recorded and never run; and whether files should be fully buffered by default. | P8.12, P8.11 | S |
+| 3 | **Whether files should be fully buffered by default**, as C99 says; today a stream buffers only when `setvbuf` asks. A decision about all seventeen targets. (`atexit`, the other half of this row, is done: P8.12.) | P8.11 | S |
 | 4 | **Keen 4-6 reconstructed**, which compiles under Borland C++ 3.0 to the shipped executables byte for byte: the one oracle no other target offers. | P11.6 | L |
 | 5 | **The word "dynamic".** Until tier-1 exists PRISM compiles in the page ahead of running; either the README says so, or tier-1 is built. Nothing in the corpus waits on tier-1. | P2.3 | S or L |
 
@@ -178,7 +178,7 @@ second ABI — and the question "what else is DOS but flat?" had an answer.
 | P8.9 | ✅ | Six printf defects, from Lua's own assertions. | M | [log](LOG.md#p8-9) |
 | P8.10 | ✅ | files.lua's i/o tests had been SKIPPED since directories landed, and five stdio defects sat under them: `/tmp` seeded in the wrong namespace, so every temporary file was refused; a reader's bytes snapshotted at open, so it never saw another handle's writes; `mktime` not normalising its struct (a wrong-answer class, now a gate-run case); `tmpfile` answering NULL; `setvbuf` ignored. | S | — |
 | P8.11 | ⚪ | Should files be fully buffered by default, as C99 7.19.3p7 says? Today a stream buffers only when `setvbuf` asks, so every target's writes are visible at once; changing the default changes that for all seventeen. A decision, not a fix. | S | — |
-| P8.12 | ⚪ | `atexit` records its handlers and nothing ever runs them — `runtime.js` says "rt.exit runs the list", and neither `exit()` nor a return from `main` does. Quake registers `Sys_Shutdown` this way. | S | — |
+| P8.12 | ✅ | `atexit` handlers run: in reverse order of registration, on `exit()` and on a return from `main`, then every stream is flushed; `_exit` does neither (C99 7.20.4.3). They had been recorded and never run. gate-run: `atexit-reverse-order`, `atexit-from-exit`. | S | — |
 
 ## P9 · One engine, more platforms: X11, Win32, SunOS, and sound
 

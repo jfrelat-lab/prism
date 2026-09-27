@@ -31,7 +31,7 @@ something outside PRISM that could contradict it.
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
 | `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
-| `gate-run.mjs` | a native i386 gcc build | 63 programs behave identically |
+| `gate-run.mjs` | a native i386 gcc build | 65 programs behave identically |
 | `gate-suite.mjs` | c-testsuite, gcc torture | 213 / 219 and 1,438 of the torture corpus |
 | `csmith-diff.mjs` | Csmith + gcc `-O0`/`-O2` | unlimited random programs, zero divergence |
 | `gate-pixels.mjs` | PRISM against ITSELF on four platform layers | `x11 == dos == win == svgalib`, pixel for pixel |

@@ -26,6 +26,42 @@ const C = (name, src) => cases.push({ name, src });
  * "1 0" -- a wrong answer no case here asked about until the 16-bit enum work reached promote().
  */
 /*
+ * Leaving the program runs the atexit handlers, in the REVERSE order of registration (C99
+ * 7.20.4.3), for exit() and for a return from main alike. PRISM recorded them and never ran them.
+ * (No _exit case: gcc's stdout is block-buffered into a pipe, so what _exit leaves unflushed is a
+ * buffering difference, not an atexit one.)
+ */
+C('atexit-reverse-order', `
+#include <stdio.h>
+#include <stdlib.h>
+static int n;
+static void a(void) { printf("a %d\\n", n++); }
+static void b(void) { printf("b %d\\n", n++); }
+static void c(void) { printf("c %d\\n", n++); }
+static void deep(int k) { if (k) deep(k - 1); else exit(7); }
+int main(int argc, char **argv)
+{
+    atexit(a); atexit(b); atexit(c);
+    printf("main\\n");
+    if (argc > 5) deep(3);
+    return 3;
+}
+`);
+C('atexit-from-exit', `
+#include <stdio.h>
+#include <stdlib.h>
+static void bye(void) { printf("bye\\n"); }
+static void deep(int k) { if (k) deep(k - 1); else exit(7); }
+int main(void)
+{
+    atexit(bye);
+    deep(3);
+    printf("not reached\\n");
+    return 0;
+}
+`);
+
+/*
  * mktime WRITES its argument: out-of-range fields are normalised and tm_wday/tm_yday are filled in
  * (C99 7.23.2.3). PRISM's returned the time and left the struct alone, so a caller reading it back
  * got whatever it held -- Lua's os.time copies it into the caller's table, and files.lua's date

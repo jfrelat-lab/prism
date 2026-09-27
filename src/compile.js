@@ -851,6 +851,26 @@ function blockFuncDecls(node, out = [], seen = new Set()) {
 }
 
 /**
+ * Leaving the program, as exit() and a return from main do (C99 7.20.4.3 and 5.1.2.2.3): the atexit
+ * handlers in the REVERSE order they were registered, each once, then every stream flushed. It used
+ * to do neither -- atexit recorded its handlers and the comment beside it said "rt.exit runs the
+ * list", which nothing did. A handler that calls exit itself ends the list with that status; the
+ * standard leaves it undefined, and stopping is the answer that cannot loop.
+ */
+function leave(M, status) {
+  const list = M.atexitList ?? [];
+  while (list.length) {
+    const fn = list.pop();
+    try { M.icall(fn, []); } catch (e) {
+      if (e instanceof ExitCalled) { status = e.code; if (e.quick) return status; list.length = 0; break; }
+      throw e;
+    }
+  }
+  M.flushAll?.();
+  return status;
+}
+
+/**
  * `paged` is a PLATFORM property, not a per-game favour: on DOS the low megabyte has devices in it.
  * It is a module-level flag inside the emitter (26 call sites would otherwise each need an extra
  * argument), so it is set here and cleared in a finally -- a compilation that throws must not leave
@@ -1338,10 +1358,13 @@ function makeRunner(M, F, mod, model = 'i386') {
     finalizeHeap(M);
     try {
       const code = main.length === 0 ? main() : main(ptrs.length, vec);
-      M.flushAll?.();
-      return { code: (code | 0) & 0xff, stdout: M.output() };
+      const status = leave(M, code | 0);
+      return { code: status & 0xff, stdout: M.output() };
     } catch (e) {
-      if (e instanceof ExitCalled) { M.flushAll?.(); return { code: e.code & 0xff, stdout: M.output() }; }
+      if (e instanceof ExitCalled) {
+        const status = e.quick ? e.code : leave(M, e.code);
+        return { code: status & 0xff, stdout: M.output() };
+      }
       throw e;
     }
   };

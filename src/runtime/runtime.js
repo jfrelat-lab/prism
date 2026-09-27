@@ -9,7 +9,8 @@ import { MODELS } from '../sema/abi.js';
 
 export class Trap extends Error {}
 export class ExitCalled extends Error {
-  constructor(code) { super(`exit(${code})`); this.code = code; }
+  // `quick` is _exit: the program leaves without its atexit handlers and without flushing.
+  constructor(code, quick = false) { super(`exit(${code})`); this.code = code; this.quick = quick; }
 }
 
 /*
@@ -428,10 +429,9 @@ function makeLibc(M) {
     malloc, free, realloc,
     calloc: (n, sz) => { const p = malloc(Math.imul(n, sz)); M.zero(p, Math.imul(n, sz)); return p; },
     exit: (code) => { throw new ExitCalled(code | 0); },
-    // _exit skips atexit handlers and stdio flushing. Neither survives leaving the program here, so
-    // the distinction has no observable effect -- but the name has to exist, because Quake II's
-    // signal handler calls it rather than exit, deliberately.
-    _exit: (code) => { throw new ExitCalled(code | 0); },
+    // _exit skips the atexit handlers and stdio's flush, which exit and a return from main run
+    // (M.leave). Quake II's signal handler calls _exit rather than exit, deliberately.
+    _exit: (code) => { throw new ExitCalled(code | 0, true); },
     abort: () => { throw new Trap('abort() called'); },
     /*
      * The DOS string family. Not any one library's -- Watcom, Borland and DJGPP all ship them, and
@@ -474,8 +474,9 @@ function makeLibc(M) {
     },
 
     /*
-     * atexit RECORDS rather than ignores, and rt.exit runs the list: a program that cleans up on the
-     * way out is entitled to have that happen. Quake's Sys_Shutdown is registered this way.
+     * atexit RECORDS rather than ignores, and leaving the program runs the list (compile.js leave):
+     * a program that cleans up on the way out is entitled to have that happen. Quake's Sys_Shutdown
+     * is registered this way.
      */
     atexit: (fn) => { (M.atexitList ??= []).push(fn >>> 0); return 0; },
     /*
