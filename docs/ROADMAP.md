@@ -32,7 +32,7 @@ row. A row's story after that date is in its commit.
 
 | # | What | Rows | Effort |
 |---|---|---|---|
-| 1 | **A pixel oracle for every DOS target: the real binary under DOSBox-X.** `DX-CAPTURE /V` records the emulated framebuffer as ZMBV -- palette indices, unscaled -- and `tools/zmbv.mjs` reads it; `AUTOTYPE` drives the keys. It needs nothing from the guest, so a game that takes INT 8 unchained (Keen) cannot stop it. **Keen Dreams: done** (`gate-keen-pixels`, 35 of 35 stable screens are the real binary's, and the first run found three defects no other gate saw). Next Heretic, Hexen, Jump 'n Bump, MAME and Quake on DOS: "it looks right" becomes "it draws what the shipped binary draws". | P11.8, P3.6 | M |
+| 1 | **A pixel oracle for every DOS target: the real binary under DOSBox-X.** `DX-CAPTURE /V` records the emulated framebuffer as ZMBV -- palette indices, unscaled -- and `tools/zmbv.mjs` reads it; `AUTOTYPE` drives the keys. It needs nothing from the guest, so a game that takes INT 8 unchained (Keen) cannot stop it. **Keen Dreams: done** (`gate-keen-pixels`, 35 of 35 stable screens are the real binary's, and the first run found three defects no other gate saw). **OpenDUNE: done** against DUNE2.EXE 1.07 (`gate-dune-pixels`, 123 of 123 over the first 900 ticks; past them the oracle measures P7.11's clock). Heretic and Hexen need their DOS executables, which are not on disk. Next Jump 'n Bump, Quake and MAME on DOS: "it looks right" becomes "it draws what the shipped binary draws". | P11.8, P3.6 | M |
 | 2 | **Playable by a person, on one clock.** Keen Dreams plays in the browser (P11.5); next its sound (PC speaker, then an OPL2), then Hexen and Heretic at 35 Hz and OpenDUNE's intro that runs slow and then lurches. | P11.5, P6.4, P7.11 | M |
 | 3 | **NetHack**, from its own tree and its own `sys/` ports: a large program with NO proprietary data, that stresses the libc, the file layer and the terminal where the games stress devices. | P7.12 | M |
 | 4 | **OpenGL onto WebGL, from the small end**: Brian Paul's `gears` first (a few GL calls, the classic smoke test; `glxgears` adds GLX on the X11 shim), then GLQuake and Quake II's `ref_gl` (63 GL functions, measured). | P12.5, P12.4 | M, then L |
@@ -166,7 +166,7 @@ second ABI — and the question "what else is DOS but flat?" had an answer.
 | P7.8 | ✅ | The assembly cross-reference: 298 exported symbols, 1 missing. | S | [log](LOG.md#p7-8) |
 | P7.9 | ✅ | `#pragma aux` routine bodies compile. | M | [log](LOG.md#p7-9) |
 | P7.10 | ✅ | Heretic was never broken — the harness needs `--safepoints`. | S | [log](LOG.md#p7-10) |
-| P7.11 | 🟡 | OpenDUNE's animations run slow and then lurch. | M | [log](LOG.md#p7-11) |
+| P7.11 | 🟡 | OpenDUNE's animations run slow and then lurch -- now MEASURED by `gate-dune-pixels`: past tick 900 only 40 of 173 stable screens are DUNE2.EXE's, every miss a skipped fade, a cut animation or a mid-dissolve state, none a wrong drawing. | M | [log](LOG.md#p7-11) |
 | P7.12 | ⚪ | **NetHack.** 133 units in `src/` and its own `sys/msdos` and `sys/unix` ports: pick the platform layer the way Quake's were picked, from the tree's own makefiles. No game data to fetch or license -- the dungeon is the program -- and no graphics: it stresses what the games do not, the libc, the file layer (save files, bones, the high-score file with its locking) and a terminal (tty, termcap/curses or the DOS console). A tty on the page is the text surface the shell already has. | M | — |
 
 ## P8 · Semantic oracles: Lua, the MAME releases, and what they found

@@ -1,7 +1,10 @@
-// zmbv.mjs — read the frames of a DOSBox(-X) ZMBV capture (`DX-CAPTURE /V`), as palette indices.
+// zmbv.mjs — read the frames of a DOSBox(-X) ZMBV capture (`DX-CAPTURE /V`): palette indices, or 32-bit pixels.
 //
 // DOSBox records the EMULATED framebuffer, before any scaling, so an 8-bit capture is exactly the
 // guest's pixels and palette: for an EGA or VGA game that is a pixel reference PRISM can be held to.
+// Some machine types (DOSBox-X's vgaonly and svga_*) record 32 bpp instead, format 8: four bytes a
+// pixel, B G R and one unused (a little-endian 0x00RRGGBB), no palette;
+// the frame then says `bpp: 32` and `palette` is null.
 //
 // The format, as DOSBox's own encoder writes it (src/libs/zmbv): each video chunk starts with a
 // flags byte -- bit 0 a keyframe, bit 1 a palette change. A keyframe carries a 6-byte header
@@ -18,7 +21,7 @@
 // a minute of 640x350 is a third of a gigabyte of pixels.
 //
 //   import { zmbvFrames } from './zmbv.mjs';
-//   for (const f of zmbvFrames(bytes)) f.index, f.width, f.height, f.pix, f.palette
+//   for (const f of zmbvFrames(bytes)) f.index, f.width, f.height, f.bpp, f.pix, f.palette
 import zlib from 'node:zlib';
 
 function chunks(buf) {
@@ -53,27 +56,29 @@ export function* zmbvFrames(bytes) {
     segments.at(-1).frames.push(c);
   }
 
-  let index = 0, pix = null, palette = null;
+  let index = 0, pix = null, palette = null, bpp = 8;
   for (const seg of segments) {
     const [, , comp, fmt, bw, bh] = seg.start.data.subarray(1, 7);
     if (comp !== 1) throw new Error(`zmbv: compression ${comp}`);
-    if (fmt !== 4) throw new Error(`zmbv: pixel format ${fmt}, only 8 bpp is read`);
+    if (fmt !== 4 && fmt !== 8) throw new Error(`zmbv: pixel format ${fmt}, only 8 and 32 bpp are read`);
+    bpp = fmt === 4 ? 8 : 32;
+    const B = bpp / 8;
     const payloads = seg.frames.filter((c) => c.data.length)
       .map((c, k) => (k === 0 ? c.data.subarray(7) : c.data.subarray(1)));
     const body = zlib.inflateSync(Buffer.concat(payloads), { finishFlush: zlib.constants.Z_SYNC_FLUSH });
     const bx = Math.ceil(width / bw), by = Math.ceil(height / bh);
     let p = 0;
     for (const c of seg.frames) {
-      if (!c.data.length) { yield { index: index++, width, height, pix, palette }; continue; }
+      if (!c.data.length) { yield { index: index++, width, height, bpp, pix, palette }; continue; }
       const flags = c.data[0];
       if (flags & 1) {
-        palette = Uint8Array.from(body.subarray(p, p + 768)); p += 768;
-        pix = Uint8Array.from(body.subarray(p, p + width * height)); p += width * height;
+        if (bpp === 8) { palette = Uint8Array.from(body.subarray(p, p + 768)); p += 768; } else palette = null;
+        pix = Uint8Array.from(body.subarray(p, p + width * height * B)); p += width * height * B;
       } else {
         if (flags & 2) { palette = Uint8Array.from(palette); for (let i = 0; i < 768; i++) palette[i] ^= body[p++]; }
         const vecAt = p;
         p += (bx * by * 2 + 3) & ~3;
-        const old = pix, next = new Uint8Array(width * height);
+        const old = pix, next = new Uint8Array(width * height * B);
         for (let j = 0; j < by; j++) {
           for (let i = 0; i < bx; i++) {
             const k = j * bx + i;
@@ -83,17 +88,18 @@ export function* zmbvFrames(bytes) {
             for (let y = y0; y < y1; y++) {
               for (let x = x0; x < x1; x++) {
                 const sx = x + dx, sy = y + dy;
-                next[y * width + x] = (sx >= 0 && sx < width && sy >= 0 && sy < height) ? old[sy * width + sx] : 0;
+                const inside = sx >= 0 && sx < width && sy >= 0 && sy < height;
+                for (let b = 0; b < B; b++) next[(y * width + x) * B + b] = inside ? old[(sy * width + sx) * B + b] : 0;
               }
             }
             if (vx & 1) {
-              for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) next[y * width + x] ^= body[p++];
+              for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) for (let b = 0; b < B; b++) next[(y * width + x) * B + b] ^= body[p++];
             }
           }
         }
         pix = next;
       }
-      yield { index: index++, width, height, pix, palette };
+      yield { index: index++, width, height, bpp, pix, palette };
     }
     if (p !== body.length) throw new Error(`zmbv: segment at frame ${index} read ${p} of ${body.length} bytes -- the frame layout is misread`);
   }

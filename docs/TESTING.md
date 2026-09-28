@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Fifty-four now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Fifty-five now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -31,6 +31,7 @@ something outside PRISM that could contradict it.
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
 | `gate-ega-rom.mjs` | **SeaVGABIOS** (QEMU's VGA ROM) setting the modes up on MIRAGE's machine | 0Dh, 0Eh, 10h, 12h: the attribute palette a mode set loads, and all 64 attribute values' colours |
+| `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds for 2 ticks in its first 900 is one the real binary showed; the rest reported |
 | `gate-keen-pixels.mjs` | **the shipped `KDREAMS.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen PRISM's Keen Dreams holds for 3 frames is one the real binary showed, pixel for pixel |
 | `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
 | `gate-run.mjs` | a native i386 gcc build | 65 programs behave identically |
@@ -79,6 +80,18 @@ Borland inline asm's views of a far pointer re-normalised the offset on every re
 MemDrawChar loads ES once and steps the offset by a plane's size -- planes 1-3 of every digit landed on
 plane 0. That last one is also a `gate-dos16-run` case now (`tests/dos16/farview.c`, Borland C++
 2.0's output captured), red without the fix.
+
+**OpenDUNE against the program it was reverse-engineered from (`tools/gate-dune-pixels.mjs`).** The
+same claim, on VGA: DUNE2.EXE 1.07 on a `vgaonly` DOSBox-X, whose capture is 32 bpp (B, G, R, unused
+-- `tools/zmbv.mjs` reads both formats) at 640x400 with every mode-13h pixel doubled, which the
+capture asserts per frame; both sides reduce to six-bit r,g,b, the DAC's width. Over the first 900
+Video_Ticks -- the Westwood logo, the credits, Arrakis and its captions -- **123 of 123** stable
+screens are the real binary's. Past that the gate REPORTS instead of asserting, because what differs
+there is time, not drawing: the planet's fade-in skipped (the copyright line still up when Arrakis
+appears), the moon's orbit run at one position per tick and cut seven short, dissolves held at
+intermediate states. That is ROADMAP P7.11, now a number (40 of 173). Two DAC mutations (five-bit
+components, r and b swapped) turn it red. Two captures of the same run are not bit-identical --
+Keen's differ by four or five of ~60 screens -- which is one more reason the claim is an inclusion.
 
 **A second lineage for the colours (`tools/gate-ega-rom.mjs`).** DOSBox-X's video BIOS and its EGA
 model are the same code, so the two colour fixes rested on one source. SeaVGABIOS -- QEMU's
