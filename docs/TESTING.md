@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Fifty-three now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Fifty-four now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -30,6 +30,7 @@ something outside PRISM that could contradict it.
 | `gate-tasm-run.mjs` | **Unicorn executing TASM's own object code** | registers, flags, 1,088 KB page by page, port writes |
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
+| `gate-ega-rom.mjs` | **SeaVGABIOS** (QEMU's VGA ROM) setting the modes up on MIRAGE's machine | 0Dh, 0Eh, 10h, 12h: the attribute palette a mode set loads, and all 64 attribute values' colours |
 | `gate-keen-pixels.mjs` | **the shipped `KDREAMS.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen PRISM's Keen Dreams holds for 3 frames is one the real binary showed, pixel for pixel |
 | `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
 | `gate-run.mjs` | a native i386 gcc build | 65 programs behave identically |
@@ -78,6 +79,17 @@ Borland inline asm's views of a far pointer re-normalised the offset on every re
 MemDrawChar loads ES once and steps the offset by a plane's size -- planes 1-3 of every digit landed on
 plane 0. That last one is also a `gate-dos16-run` case now (`tests/dos16/farview.c`, Borland C++
 2.0's output captured), red without the fix.
+
+**A second lineage for the colours (`tools/gate-ega-rom.mjs`).** DOSBox-X's video BIOS and its EGA
+model are the same code, so the two colour fixes rested on one source. SeaVGABIOS -- QEMU's
+`vgabios-stdvga.bin`, which MIRAGE already runs as its hardware oracle -- is POSTed on MIRAGE's
+machine and sets each mode through its own INT 10h, writing the attribute palette and the DAC. A VGA
+BIOS loads, per mode, the DAC table that makes a VGA show what an EGA showed, so DAC[value] must be
+the colour PRISM gives the same attribute value: for 0Dh, 0Eh, 10h and 12h, the 16 defaults and all
+64 values agree. Two controls run with it and must differ (the 64-colour reading on a 200-line mode:
+49 of 64; the 350-line palette loaded for one: 9 of 16), and removing brown from `ega200Rgb` turns
+it red on 06h, 0Eh, 26h and 2Eh. It SKIPS without MIRAGE (`PRISM_MIRAGE`) or the ROM
+(`PRISM_VGA_ROM`). PRISM has no CGA graphics mode, so there is nothing of CGA's to hold yet.
 
 ## The oracle (`tools/oracle.mjs`, `tools/oracle/Dockerfile`)
 
