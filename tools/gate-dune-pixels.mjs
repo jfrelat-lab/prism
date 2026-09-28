@@ -1,9 +1,8 @@
 // gate-dune-pixels.mjs — OpenDUNE's intro, held to the REAL DUNE2.EXE running under DOSBox-X.
 //
 // THE REFERENCE is Dune II 1.07's own executable, the program OpenDUNE was reverse-engineered from,
-// on a VGA-only DOSBox-X recorded by `DX-CAPTURE /V`. That machine type records 32 bpp, 640x400,
-// each mode-13h pixel doubled both ways -- which the capture ASSERTS per frame rather than assumes
-// (text-mode frames fail it and are left out). Each frame is reduced to 320x200 of six-bit r,g,b,
+// on a VGA-only DOSBox-X recorded by `DX-CAPTURE /V` (tools/dosref.mjs: 32 bpp, 640x400, each
+// mode-13h pixel doubled both ways -- asserted per frame, not assumed). Each frame is reduced to 320x200 of six-bit r,g,b,
 // the DAC's own width; PRISM's frame is 0xA0000 through its DAC (src/env/vgadac.js), the same six
 // bits. No game data enters the repository: the golden holds hashes.
 //
@@ -24,13 +23,10 @@
 //
 //   node tools/gate-dune-pixels.mjs --capture     # the real binary, into goldens/dune-pixels.json
 //   node tools/gate-dune-pixels.mjs               # PRISM against it
-import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdtempSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { zmbvFrames } from './zmbv.mjs';
+import { dbxRun, vgaScreens, vgaHash as hash, sixBit } from './dosref.mjs';
 import { skip } from './gate-skip.mjs';
 import { loadTarget, buildTarget } from '../src/target.js';
 
@@ -38,49 +34,20 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'dune-pixels.json');
 const DATA = process.env.PRISM_DUNE2_DATA ?? join(process.env.HOME ?? '', 'games', 'dune2');
 const HELD = 2, TICKS = 3000, ASSERTED_TICKS = 900, MIN_SCREENS = 100;
-const hash = (a) => createHash('sha1').update(a).digest('hex').slice(0, 16);
 
 function capture() {
   if (!existsSync(join(DATA, 'data', 'DUNE2.EXE'))) throw new Error(`--capture needs DUNE2.EXE at ${join(DATA, 'data')}`);
-  const work = mkdtempSync(join(tmpdir(), 'duneref-'));
-  mkdirSync(join(work, 'game')); mkdirSync(join(work, 'cap'));
-  const src = join(DATA, 'data');
-  for (const f of readdirSync(src)) if (statSync(join(src, f)).isFile()) copyFileSync(join(src, f), join(work, 'game', f));
-  const r = spawnSync('dosbox-x', ['-silent', '-nogui', '-nomenu', '-time-limit', '60',
-    '-set', `dosbox captures=${join(work, 'cap')}`, '-set', 'dosbox machine=vgaonly', '-set', 'cpu cycles=20000',
-    '-set', 'sblaster sbtype=none', '-set', 'speaker pcspeaker=false',
-    '-c', `mount c "${join(work, 'game')}"`, '-c', 'c:', '-c', 'dx-capture /v dune2', '-c', 'exit'],
-  { encoding: 'utf8', env: { ...process.env, SDL_VIDEODRIVER: 'dummy', SDL_AUDIODRIVER: 'dummy' } });
-  if (r.status !== 0) throw new Error(`dosbox-x: ${r.stderr}`);
-  const screens = new Set();
-  let frames = 0, text = 0;
-  for (const f of readdirSync(join(work, 'cap')).filter((x) => x.endsWith('.avi')).sort()) {
-    for (const fr of zmbvFrames(readFileSync(join(work, 'cap', f)))) {
-      if (!fr.pix) continue;
-      if (fr.width === 720 && fr.height === 400) { text++; continue; }   // the DOS prompt, 9-dot text
-      if (fr.bpp !== 32 || fr.width !== 640 || fr.height !== 400) throw new Error(`unexpected capture ${fr.width}x${fr.height}x${fr.bpp}`);
-      const c = new Uint8Array(64000 * 3);
-      let doubled = true;
-      for (let y = 0; y < 200 && doubled; y++) {
-        for (let x = 0; x < 320; x++) {
-          const o = (2 * y * 640 + 2 * x) * 4;
-          for (const q of [o + 4, o + 640 * 4]) for (let b = 0; b < 3; b++) if (fr.pix[q + b] !== fr.pix[o + b]) doubled = false;
-          const i = (y * 320 + x) * 3;            // B G R X -> six-bit r g b
-          c[i] = fr.pix[o + 2] >> 2; c[i + 1] = fr.pix[o + 1] >> 2; c[i + 2] = fr.pix[o] >> 2;
-        }
-      }
-      if (!doubled) { text++; continue; }
-      frames++;
-      screens.add(hash(c));
-    }
-  }
+  const files = dbxRun({ dir: join(DATA, 'data'), command: 'dune2', seconds: 60, cycles: 20000 });
+  const screens = new Set(), stats = { frames: 0, text: 0 };
+  for (const c of vgaScreens(files, 320, 200, stats)) screens.add(hash(c));
+  const { frames, text, torn } = stats;
   writeFileSync(GOLDEN, `${JSON.stringify({
     _doc: 'Dune II 1.07, the real DUNE2.EXE under DOSBox-X (machine=vgaonly, cycles=20000, 60 s, no '
       + 'keys), recorded with DX-CAPTURE /V and read by tools/zmbv.mjs. Each entry is the hash of one '
       + 'distinct 320x200 screen, every pixel six-bit r,g,b. Captured by tools/gate-dune-pixels.mjs --capture.',
-    frames, textFrames: text, screens: [...screens].sort(),
+    frames, textFrames: text, tornFrames: torn, screens: [...screens].sort(),
   })}\n`);
-  console.log(`captured ${frames} frames (${text} text-mode left out), ${screens.size} distinct screens -> goldens/dune-pixels.json`);
+  console.log(`captured ${frames} frames (${text} text-mode and ${torn} torn left out), ${screens.size} distinct screens -> goldens/dune-pixels.json`);
 }
 
 if (process.argv.includes('--capture')) capture();
@@ -100,10 +67,8 @@ let ticks = 0, last = null, run = 0;
 const tick = program.F.Video_Tick;
 program.F.Video_Tick = function (...a) {
   const r = tick.apply(this, a);
-  const px = program.M.u8.subarray(0xa0000, 0xa0000 + 64000), pal = env.vgadac.palette;
-  const c = new Uint8Array(64000 * 3);
-  for (let i = 0; i < 64000; i++) { const k = px[i] * 3; c[3 * i] = pal[k] >> 2; c[3 * i + 1] = pal[k + 1] >> 2; c[3 * i + 2] = pal[k + 2] >> 2; }
-  const h = hash(c);
+  const u8 = program.M.u8;
+  const h = hash(sixBit((i) => u8[0xa0000 + i], 64000, env.vgadac.palette));
   run = h === last ? run + 1 : 1; last = h;
   const s = seen.get(h) ?? { first: ticks, held: 0 };
   s.held = Math.max(s.held, run); seen.set(h, s);

@@ -348,12 +348,21 @@ function makeLibc(M) {
     return out;
   }
 
+  /*
+   * DJGPP's libc keeps the 4.3BSD seeding, and a DJGPP environment (src/env/go32.js) says so through
+   * M.randSeeding = 'bsd43': r[0] = seed as given, r[i] = 1103515245 * r[i-1] + 12345 wrapping at 32
+   * bits, then the same 310 discarded outputs. The generator after that is glibc's word for word.
+   * Transcribed from the libc linked into Jump 'n Bump's own jumpbump.exe (srandom at 0x139dc,
+   * random at 0x13d04 once its DJP/LZO packing is undone), not from a manual.
+   */
   function randSeed(seed) {
     let v = seed | 0;
-    if (v === 0) v = 1;                       // glibc maps a zero seed to 1
+    const bsd = M.randSeeding === 'bsd43';
+    if (v === 0 && !bsd) v = 1;               // glibc maps a zero seed to 1
     randTable = new Int32Array(RAND_DEG);
     randTable[0] = v;
     for (let i = 1; i < RAND_DEG; i++) {
+      if (bsd) { randTable[i] = (Math.imul(randTable[i - 1], 1103515245) + 12345) | 0; continue; }
       /*
        * r[i] = 16807 * r[i-1] mod 2147483647, by Schrage: the product is split so that neither half
        * exceeds 31 bits. Written with plain division rather than Math.imul because the intermediate

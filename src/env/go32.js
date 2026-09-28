@@ -32,6 +32,8 @@ const S_SIZE = 0, S_PM_OFFSET = 4, S_PM_SELECTOR = 8, S_RM_OFFSET = 10, S_RM_SEG
 
 export function installGo32(M, { onVideoMode = null, mouse = null } = {}) {
   const dv = () => M.mod.dv;
+  // A DJGPP program: its libc seeds random() the 4.3BSD way (src/runtime/runtime.js, randSeed).
+  M.randSeeding = 'bsd43';
   const state = {
     mode: null,
     vectors: new Map(),      // interrupt number -> the guest handler's pm_offset

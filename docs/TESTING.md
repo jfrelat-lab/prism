@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Fifty-five now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Fifty-six now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -32,6 +32,7 @@ something outside PRISM that could contradict it.
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
 | `gate-ega-rom.mjs` | **SeaVGABIOS** (QEMU's VGA ROM) setting the modes up on MIRAGE's machine | 0Dh, 0Eh, 10h, 12h: the attribute palette a mode set loads, and all 64 attribute values' colours |
 | `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds for 2 ticks in its first 900 is one the real binary showed; the rest reported |
+| `gate-jnb-pixels.mjs` | **the game's own `jumpbump.exe`** (DJGPP) under DOSBox-X, DOS clock set to PRISM's | every one of 300 pages PRISM flips is a page the real binary showed |
 | `gate-keen-pixels.mjs` | **the shipped `KDREAMS.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen PRISM's Keen Dreams holds for 3 frames is one the real binary showed, pixel for pixel |
 | `gate-pcirq.mjs`, `gate-dosint.mjs` | the PC's documented rules; a Borland program doing `int 21h` | PIT, 8259 priority and EOI, IRQ delivery; DOS and BIOS services |
 | `gate-run.mjs` | a native i386 gcc build | 65 programs behave identically |
@@ -92,6 +93,21 @@ appears), the moon's orbit run at one position per tick and cut seven short, dis
 intermediate states. That is ROADMAP P7.11, now a number (40 of 173). Two DAC mutations (five-bit
 components, r and b swapped) turn it red. Two captures of the same run are not bit-identical --
 Keen's differ by four or five of ~60 screens -- which is one more reason the claim is an inclusion.
+
+**Jump 'n Bump against its own jumpbump.exe (`tools/gate-jnb-pixels.mjs`), page for page.** Here
+the claim can be the strong one -- EVERY page flipped, fade-in, bunnies and flies included, not just
+the held ones -- because the program's only source of variety is `srandom(time(0))`, and both clocks
+can be made to agree: PRISM's `time()` is a fixed 1997-01-01 00:00:00, and the reference run sets
+the DOS date and time to that before the game starts (`date 01/01/1997` -- DOSBox-X ignores the
+dashed form without a word). **300 of 300.** Getting there found a real defect: PRISM seeded
+`random()` the glibc way (16807, by Schrage) for every program, and DJGPP's libc keeps 4.3BSD's
+(`r[i] = 1103515245 r[i-1] + 12345`, zero not remapped); the generator after seeding is the same.
+That was read out of the libc linked into jumpbump.exe itself -- the executable is DJP-packed, so
+its LZO1X stream was unpacked first -- not assumed from a manual. A DJGPP environment
+(`src/env/go32.js`) now says `M.randSeeding = 'bsd43'`; Quake, the other go32 target, never seeds.
+With glibc's seeding 1 page of 300 matches; a five-bit DAC, 32. The capture is shared with
+`gate-dune-pixels` in `tools/dosref.mjs`, which also sets aside TORN frames -- DOSBox renders line
+by line, so a frame caught mid-change can differ between the two lines of a doubled pair.
 
 **A second lineage for the colours (`tools/gate-ega-rom.mjs`).** DOSBox-X's video BIOS and its EGA
 model are the same code, so the two colour fixes rested on one source. SeaVGABIOS -- QEMU's
