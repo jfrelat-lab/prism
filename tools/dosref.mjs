@@ -40,8 +40,12 @@ export function dbxRun({ dir, command, seconds, machine = 'vgaonly', cycles = 'm
 /** Every graphics frame of the captures as `width` x `height` six-bit r,g,b, plus the text-frame count. */
 export function* vgaScreens(files, width, height, stats = { frames: 0, text: 0, torn: 0 }) {
   stats.torn ??= 0; stats.other ??= 0;
+  // stats.at: this frame's index in the whole capture, every mode and every dropped frame counted --
+  // divided by the capture's frame rate it is the time the guest showed it.
+  stats.at = -1;
   for (const f of files) {
     for (const fr of zmbvFrames(readFileSync(f))) {
+      stats.at++;
       if (!fr.pix) continue;
       if (fr.width === 720 && fr.height === 400) { stats.text++; continue; }   // 9-dot text mode
       if (fr.bpp !== 32) throw new Error(`capture frame ${fr.index} is ${fr.bpp} bpp; a vgaonly machine records 32`);

@@ -726,6 +726,20 @@ in PRISM's compile of the game's own C, or a Watcom behaviour it does not reprod
 
 **Why / unblocks:** The same two mechanisms pace every DOS program here, so whatever this turns out to be is not OpenDUNE's alone.
 
+**2026-09-30 — neither of the two; the clock's GRAIN.** Measured against the real DUNE2.EXE under
+DOSBox-X by scene timing -- for each screen both show, the time it first appears -- PRISM ran the
+intro at 0.587x the real one's time, at any DOSBox cycle count. OpenDUNE's DOS build times itself
+with `clock() * 1000 / CLOCKS_PER_SEC`, and Open Watcom's own libc, run under DOSBox-X, says what that
+is: CLOCKS_PER_SEC 1000, values from 0 in BIOS-tick lumps (55, 110, 164, 219 ... ms). PRISM gave
+glibc's 1000000 and a clock that moved every call, so every wait advanced one timer period;
+OpenDUNE's "callonce" timers fire at most once per Timer_InterruptRun, so with 55 ms lumps the
+real game drops ticks PRISM did not -- its animations ran fast and scenes were cut. Now `<time.h>`
+says 1000 under __WATCOMC__, and the Watcom environment reports the runtime's clock (deterministic
+or real) through `watcomClock`, the same lumps: the intro runs at 1.010x, and past 28 s 86 of 91
+stable screens are the real binary's (40 of 173 before). `gate-watcom-clock` holds the constant and
+the values to Open Watcom; `gate-dune-pixels` asserts the slope within 0.08, and both clock
+mutations turn it red (0.584 and 0.063). The spin damping and installRealClock were not involved.
+
 ## P8 · Semantic oracles: Lua, the MAME releases, and what they found
 
 <a id="p8-1"></a>

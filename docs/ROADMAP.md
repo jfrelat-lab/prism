@@ -167,7 +167,7 @@ second ABI — and the question "what else is DOS but flat?" had an answer.
 | P7.8 | ✅ | The assembly cross-reference: 298 exported symbols, 1 missing. | S | [log](LOG.md#p7-8) |
 | P7.9 | ✅ | `#pragma aux` routine bodies compile. | M | [log](LOG.md#p7-9) |
 | P7.10 | ✅ | Heretic was never broken — the harness needs `--safepoints`. | S | [log](LOG.md#p7-10) |
-| P7.11 | 🟡 | OpenDUNE's animations run slow and then lurch -- now MEASURED by `gate-dune-pixels`: past tick 900 only 40 of 173 stable screens are DUNE2.EXE's, every miss a skipped fade, a cut animation or a mid-dissolve state, none a wrong drawing. | M | [log](LOG.md#p7-11) |
+| P7.11 | ✅ | OpenDUNE's intro ran at 0.59x the real binary's time: Watcom's DOS clock() counts ms (CLOCKS_PER_SEC 1000) in ~55 ms BIOS-tick lumps, and OpenDUNE's callonce timers fire once per lump. Now PRISM's under the Watcom toolchain (`gate-watcom-clock`, against Open Watcom's libc); the intro runs at 1.01x (`gate-dune-pixels` asserts the slope). | M | [log](LOG.md#p7-11) |
 | P7.12 | ⚪ | **NetHack.** 133 units in `src/` and its own `sys/msdos` and `sys/unix` ports: pick the platform layer the way Quake's were picked, from the tree's own makefiles. No game data to fetch or license -- the dungeon is the program -- and no graphics: it stresses what the games do not, the libc, the file layer (save files, bones, the high-score file with its locking) and a terminal (tty, termcap/curses or the DOS console). A tty on the page is the text surface the shell already has. | M | — |
 
 ## P8 · Semantic oracles: Lua, the MAME releases, and what they found

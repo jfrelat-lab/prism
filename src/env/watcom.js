@@ -38,12 +38,23 @@ import { SLOT } from './webhost.js';
  */
 const R_EAX = 0, R_EBX = 4, R_ECX = 8, R_EDX = 12, R_ESI = 16, R_EDI = 20, R_CFLAG = 24;
 
+/*
+ * Watcom's DOS clock(), measured with Open Watcom's own libc under DOSBox-X: CLOCKS_PER_SEC is 1000,
+ * it starts at 0, and it steps by the BIOS tick -- 55, 110, 165, ... 439 (54 ms there), 494 --
+ * i.e. round(ticks * 54.9254), a tick being 65536 PIT periods. A program that times itself with it
+ * sees time move in lumps of ~55 ms; OpenDUNE's Timer_InterruptRun runs its "callonce" timers at
+ * most once per lump, so a finer clock ran its intro's animations fast and cut them short.
+ */
+const BIOS_TICK_US = 65536 / 1193182 * 1e6;
+export const watcomClock = (us) => Math.round(Math.floor(us / BIOS_TICK_US) * (BIOS_TICK_US / 1000));
+
 export function installWatcom(M, {
   publish = null,
   keys = () => 0,            // scan code -> held?
   onPresent = null,
   stopAfterFrames = 0,
 } = {}) {
+  M.clockOf = watcomClock;
   const mod = M.mod;
   const dv = () => mod.dv;
 

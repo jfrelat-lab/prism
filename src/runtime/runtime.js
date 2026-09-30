@@ -1044,7 +1044,9 @@ function makeLibc(M) {
      * it did not. Determinism is bought by neutralising the program's own timing, and something else
      * then has to do the pacing. See `installRealClock` for the interactive answer.
      */
-    clock: () => { M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockTicks; },
+    // The time source is microseconds; M.clockOf, when a toolchain's libc counts otherwise (Watcom's
+    // does, src/env/watcom.js), turns it into that libc's clock_t.
+    clock: () => { M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockOf ? M.clockOf(M.clockTicks) >>> 0 : M.clockTicks; },
     // uclock returns a 64-bit count, so a BigInt — see the i64 note in emit.js.
     uclock: () => { M.uclockTicks += 19886n; return M.uclockTicks; },
     time: (p) => { const t = 852076800; if (p) dv().setInt32(p, t, true); return t; },
@@ -1632,7 +1634,7 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
     return micros;
   }
 
-  M.rt.clock = () => (advance() >>> 0);
+  M.rt.clock = () => { const us = advance(); return (M.clockOf ? M.clockOf(us) : us) >>> 0; };
   /*
    * gettimeofday too, from the same scaled clock. Doom times itself with it rather than with clock(),
    * so leaving it on the deterministic counter meant Doom ran as fast as the host could go — the same

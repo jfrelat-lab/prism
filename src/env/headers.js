@@ -550,7 +550,12 @@ int utimes(const char *path, const struct timeval *times);
 #define _PRISM_TIME_H
 typedef unsigned long clock_t;
 typedef long time_t;
+/* Watcom's DOS libc counts clock() in milliseconds, stepping by the BIOS tick (src/env/watcom.js). */
+#ifdef __WATCOMC__
+#define CLOCKS_PER_SEC 1000
+#else
 #define CLOCKS_PER_SEC 1000000
+#endif
 #define UCLOCKS_PER_SEC 1000000
 clock_t clock(void);
 time_t time(time_t *t);
