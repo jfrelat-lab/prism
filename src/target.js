@@ -15,6 +15,7 @@
 // Putting them in JSON would move game logic into a config file and call it generic.
 
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { toolchainCompile } from './toolchain.js';
 import { join, basename, dirname, resolve as resolvePath } from 'node:path';
 import { compileProgram } from './compile.js';
 import { HEADERS } from './env/headers.js';
@@ -363,7 +364,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const missing = new Set();
   const dosPaths = new Set();
   const casePaths = new Set();
-  const c = { ...(target.compile ?? {}), ...overrides };
+  const c = { ...toolchainCompile(target.env), ...(target.compile ?? {}), ...overrides };
   // What each extra module makes visible to the main one, from the program's own .def file.
   const moduleExports = moduleExportsOf(target, dir);
   /*
@@ -408,6 +409,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // ...and whether its compiler made plain char signed. Absent means "what the model's oracle
     // measured"; see types.js makeTypes.
     signedChar: c.signedChar,
+    // ...and the order its code evaluates a call's arguments in, which C leaves unspecified. 'rtl'
+    // is Watcom's (see backend/emit.js #callArgs); absent is left to right.
+    argOrder: c.argOrder,
     // ...and whether it sized enums as ints (Borland's -b) or by their constants (the model's rule).
     enums: c.enums,
     // ...and, for a compiler that could answer sizeof inside #if, the sizes it would have given.

@@ -883,7 +883,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, ppSizeof = null, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, ppSizeof = null, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -1197,6 +1197,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       directCalls,
       model,              // this ctx carried neither, so every target's emitter typed for i386
       signedChar,
+      argOrder,
       builtinRefs,
       undefinedCalls,
       unit: basename(p.file),

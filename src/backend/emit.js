@@ -106,6 +106,18 @@ function describeExpr(e) {
   }
 }
 
+/** Whether evaluating an expression can change state or observe a change: a call, an assignment, ++/--. */
+function sideEffects(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.n === 'call' || node.n === 'assign' || node.n === 'preinc' || node.n === 'postinc') return true;
+  for (const k of Object.keys(node)) {
+    if (k === 'type') continue;
+    const v = node[k];
+    if (Array.isArray(v) ? v.some(sideEffects) : (v && typeof v === 'object' && v.n && sideEffects(v))) return true;
+  }
+  return false;
+}
+
 export class EmitError extends Error {}
 
 const unsup = (what) => { throw new EmitError(`tier-0 does not support ${what} yet`); };
@@ -2674,6 +2686,23 @@ export class FunctionEmitter {
         : (!want && node.type && T.isRecord(node.type) ? node.type : null);
       args.push(asRecord ? this.#structArg(node, asRecord) : this.#rvalForCall(node, want));
     }
+    /*
+     * RIGHT TO LEFT when the target's compiler did so and it can be seen: C leaves the order
+     * unspecified, and a demo replays only if the random numbers land where the original build put
+     * them. Heretic's `P_SpawnMobj(x + ((P_Random()-P_Random())<<11), y + (...), ...)` gives the
+     * FIRST pair to y in HERETIC.EXE (Watcom 10: y's calls, then x's, then the call). Only when two
+     * or more arguments have side effects -- otherwise the order cannot be observed and the plain
+     * form is kept. A variadic tail is the last element here and is packed last-first itself. The later arguments go to temporaries, evaluated inside the first argument's
+     * slot, since JavaScript itself evaluates left to right.
+     */
+    if (this.ctx.argOrder === 'rtl' && args.length > 1
+      && e.args.filter((n) => sideEffects(n)).length > 1) {
+      const tmps = args.map(() => { const t = this.newTmp(); this.#declareTmp(t); return t; });
+      const order = [];
+      for (let i = args.length - 1; i >= 1; i--) order.push(`${tmps[i]}=${args[i]}`);
+      args[0] = `(${order.join(',')},${args[0]})`;
+      for (let i = 1; i < args.length; i++) args[i] = tmps[i];
+    }
     if (ft && T.isRecord(ft.ret)) {
       const off = this.slot(ft.ret.size, ft.ret.align);
       args.unshift(`(_fp+${off}|0)`);
@@ -2718,6 +2747,8 @@ export class FunctionEmitter {
         parts.push(storeExpr(addr, it.type, this.#rvalCoerced(it.node, it.type)));
       }
     }
+    // Right to left too when the target's compiler did so (see #callArgs).
+    if (this.ctx.argOrder === 'rtl') parts.reverse();
     const t = this.newTmp(); this.#declareTmp(t);
     return `(${parts.join(',')},${t}=(_fp+${base}|0),${t})`;
   }

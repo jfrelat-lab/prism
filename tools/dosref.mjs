@@ -6,7 +6,8 @@
 // guest's own resolution in six-bit r,g,b -- the DAC's width -- and ASSERTS the doubling rather than
 // assuming it. Text-mode frames (720x400) are counted and left out, and so are TORN frames: DOSBox
 // renders line by line, so a frame caught while the palette or the page changes can differ between
-// the two lines of a pair. Those are never a screen a game holds; they are counted, not compared.
+// the two lines of a pair. Those are never a screen a game holds; they are counted, not compared,
+// as are frames of any other graphics mode.
 //
 //   import { dbxRun, vgaScreens, vgaHash } from './dosref.mjs';
 import { readdirSync, readFileSync, mkdtempSync, mkdirSync, copyFileSync, statSync } from 'node:fs';
@@ -38,14 +39,14 @@ export function dbxRun({ dir, command, seconds, machine = 'vgaonly', cycles = 'm
 
 /** Every graphics frame of the captures as `width` x `height` six-bit r,g,b, plus the text-frame count. */
 export function* vgaScreens(files, width, height, stats = { frames: 0, text: 0, torn: 0 }) {
-  stats.torn ??= 0;
+  stats.torn ??= 0; stats.other ??= 0;
   for (const f of files) {
     for (const fr of zmbvFrames(readFileSync(f))) {
       if (!fr.pix) continue;
       if (fr.width === 720 && fr.height === 400) { stats.text++; continue; }   // 9-dot text mode
-      if (fr.bpp !== 32 || fr.width !== 2 * width || fr.height !== 2 * height) {
-        throw new Error(`capture frame ${fr.width}x${fr.height}x${fr.bpp}, expected ${2 * width}x${2 * height}x32`);
-      }
+      if (fr.bpp !== 32) throw new Error(`capture frame ${fr.index} is ${fr.bpp} bpp; a vgaonly machine records 32`);
+      // Another graphics mode (Hexen's 640x480 start-up screen): counted, not compared.
+      if (fr.width !== 2 * width || fr.height !== 2 * height) { stats.other++; continue; }
       const c = new Uint8Array(width * height * 3), W = 2 * width;
       let torn = false;
       for (let y = 0; y < height && !torn; y++) {

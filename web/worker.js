@@ -9,6 +9,7 @@
 // handoff of the shared image.
 
 import { compileProgram } from '../src/compile.js';
+import { toolchainCompile } from '../src/toolchain.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 /*
  * The registry and the assembler, both pure JS. The planar branch below builds its devices from the
@@ -390,6 +391,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       c89: !!program.compile?.c89,
       model: program.compile?.model ?? 'i386',
       signedChar: program.compile?.signedChar,
+      argOrder: program.compile?.argOrder ?? toolchainCompile(program.env).argOrder,
       enums: program.compile?.enums,
       ppSizeof: program.compile?.ppSizeof ?? null,
       window: program.compile?.window ?? (program.env ?? []).includes('ega'),
