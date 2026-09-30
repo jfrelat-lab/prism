@@ -34,6 +34,7 @@ something outside PRISM that could contradict it.
 | `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds in its first 28 s is one the real binary showed, and its scenes come at the real binary's times (slope within 0.08) |
 | `gate-jnb-pixels.mjs` | **the game's own `jumpbump.exe`** (DJGPP) under DOSBox-X, DOS clock set to PRISM's | every one of 300 pages PRISM flips is a page the real binary showed |
 | `gate-gears.mjs` | **Mesa 22 (llvmpipe)** drawing the same gears.c, in the oracle container, on a surfaceless-EGL GLUT harness | frames 0, 25 and 50: at most 0.1% of pixels differ beyond 8 levels (2-3 of 90,000 do) |
+| WebGL in the page (browser check, no CLI gate) | **Mesa's frames** from `gate-gears`, fetched by the page from `.oracle/gears/` | `?machine=linux&program=gears&glcheck=0,25,50&run=1` posts frames 0, 25 and 50 to `window.PRISM_DIAG.glframes`; 1-4 of 90,000 pixels differ, by at most one level (frame 25 against Mesa's frame 0: 9,028) |
 | `gate-gl-abi.mjs` | **Mesa's `<GL/gl.h>`** | every constant and type PRISM's `<GL/gl.h>` declares |
 | `gate-watcom-clock.mjs` | **Open Watcom's DOS libc**, run under DOSBox-X | `CLOCKS_PER_SEC` and the BIOS-tick steps of `clock()` under the Watcom toolchain |
 | `gate-watcom-argorder.mjs` | **Open Watcom `wcc386`**, run in the oracle, plain and with Heretic's CCOPTS | a call's arguments are evaluated right to left under the Watcom toolchain, in eight call shapes |

@@ -55,7 +55,8 @@ function normalMatrix(m) {
 }
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 
-export function installGL(M, { onFrame = null } = {}) {
+export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
+  let webgl = null;                         // the WebGL2 rasteriser when backend is 'webgl' (makeWebGL)
   const dv = () => M.mod.dv;
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
   const light = () => ({ enabled: false, ambient: [0, 0, 0, 1], diffuse: [0, 0, 0, 1], specular: [0, 0, 0, 1], position: [0, 0, 1, 0] });
@@ -85,6 +86,7 @@ export function installGL(M, { onFrame = null } = {}) {
     s.width = w; s.height = h;
     s.color = new Uint8Array(w * h * 4); s.depth = new Float32Array(w * h).fill(1);
     s.viewport = [0, 0, w, h];
+    if (backend === 'webgl') { webgl = makeWebGL(w, h); webgl.viewport(0, 0, w, h); }
   }
 
   // --- per-vertex work: position to window space, colour through lighting
@@ -135,6 +137,8 @@ export function installGL(M, { onFrame = null } = {}) {
     if (area === 0) return;
     const front = (area > 0) === (s.frontFace === CCW);
     if (s.caps.has(CAP.CULL_FACE) && (s.cullFace === FRONT_AND_BACK || (s.cullFace === BACK) === !front)) { s.stats.culled++; return; }
+    // On the GPU path the triangle leaves here, already lit, culled and in clip space.
+    if (webgl) { webgl.tri(a, b, c, flatColour, s.caps.has(CAP.DEPTH_TEST)); return; }
     // Orient counter-clockwise so every edge function is positive inside.
     const [P, Q, R] = area > 0 ? [A, B, C] : [A, C, B];
     const ar = Math.abs(area);
@@ -186,6 +190,7 @@ export function installGL(M, { onFrame = null } = {}) {
   // --- the commands. Each runs, or is recorded into the display list being compiled.
   const exec = {
     glClear: (mask) => {
+      if (webgl) { webgl.clear(mask, s.clear); return; }
       if (mask & 0x4000) for (let i = 0; i < s.color.length; i += 4) for (let k = 0; k < 4; k++) s.color[i + k] = Math.round(s.clear[k] * 255);
       if (mask & 0x100) s.depth.fill(1);
     },
@@ -195,7 +200,7 @@ export function installGL(M, { onFrame = null } = {}) {
     glShadeModel: (m) => { s.shade = m; },
     glCullFace: (m) => { s.cullFace = m; },
     glFrontFace: (m) => { s.frontFace = m; },
-    glViewport: (x, y, w, h) => { s.viewport = [x, y, w, h]; },
+    glViewport: (x, y, w, h) => { s.viewport = [x, y, w, h]; if (webgl) webgl.viewport(x, y, w, h); },
     glMatrixMode: (m) => { s.mode = m; },
     glLoadIdentity: () => setTop(ident()),
     glPushMatrix: () => { s.stacks[s.mode].push(Float64Array.from(top())); },
@@ -284,14 +289,70 @@ export function installGL(M, { onFrame = null } = {}) {
     state: s, resize,
     /** The picture, top row first, RGBA -- GL's framebuffer is bottom row first. */
     readPixels() {
-      const out = new Uint8Array(s.width * s.height * 4);
-      for (let y = 0; y < s.height; y++) out.set(s.color.subarray((s.height - 1 - y) * s.width * 4, (s.height - y) * s.width * 4), y * s.width * 4);
+      const out = new Uint8Array(s.width * s.height * 4), src = webgl ? webgl.read() : s.color;
+      for (let y = 0; y < s.height; y++) out.set(src.subarray((s.height - 1 - y) * s.width * 4, (s.height - y) * s.width * 4), y * s.width * 4);
       return out;
     },
     onFrame,
+    get backend() { return webgl ? 'webgl' : 'soft'; },
   };
   M.gl = gl;
   return gl;
+}
+
+/*
+ * THE GPU PATH. Everything up to rasterisation stays in JavaScript -- transformation, lighting,
+ * culling, the provoking vertex -- because that is the part gate-gears holds to Mesa; WebGL2 is
+ * handed the result as triangles in CLIP space with their colours (a flat triangle carries its
+ * provoking colour on all three vertices) and does only what a GPU is for: rasterise, interpolate
+ * perspective-correctly, test depth. A pass-through shader pair, one vertex buffer, no culling or
+ * blending of its own. Draws are batched and flushed on a clear, a viewport change, a change of the
+ * depth test, and when the picture is read back.
+ */
+function makeWebGL(w, h) {
+  const canvas = new OffscreenCanvas(w, h);
+  const g = canvas.getContext('webgl2', { antialias: false, depth: true, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
+  if (!g) throw new Error('gl: this browser has no WebGL2 for an OffscreenCanvas');
+  const shader = (type, src) => {
+    const sh = g.createShader(type);
+    g.shaderSource(sh, src); g.compileShader(sh);
+    if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) throw new Error(`gl: shader: ${g.getShaderInfoLog(sh)}`);
+    return sh;
+  };
+  const prog = g.createProgram();
+  g.attachShader(prog, shader(g.VERTEX_SHADER, '#version 300 es\nin vec4 pos; in vec4 col; out vec4 v;\nvoid main() { gl_Position = pos; v = col; }'));
+  g.attachShader(prog, shader(g.FRAGMENT_SHADER, '#version 300 es\nprecision highp float; in vec4 v; out vec4 o;\nvoid main() { o = v; }'));
+  g.bindAttribLocation(prog, 0, 'pos'); g.bindAttribLocation(prog, 1, 'col');
+  g.linkProgram(prog);
+  if (!g.getProgramParameter(prog, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(prog)}`);
+  g.useProgram(prog);
+  g.bindBuffer(g.ARRAY_BUFFER, g.createBuffer());
+  g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 4, g.FLOAT, false, 32, 0);
+  g.enableVertexAttribArray(1); g.vertexAttribPointer(1, 4, g.FLOAT, false, 32, 16);
+  g.disable(g.CULL_FACE); g.disable(g.BLEND); g.depthFunc(g.LESS); g.depthRange(0, 1);
+  const MAXV = 3 * 65536, data = new Float32Array(MAXV * 8);
+  let n = 0, depthOn = null;
+  const flush = () => {
+    if (!n) return;
+    g.bufferData(g.ARRAY_BUFFER, data.subarray(0, n * 8), g.STREAM_DRAW);
+    g.drawArrays(g.TRIANGLES, 0, n);
+    n = 0;
+  };
+  return {
+    tri(a, b, c, flat, depth) {
+      if (depth !== depthOn) { flush(); depthOn = depth; if (depth) g.enable(g.DEPTH_TEST); else g.disable(g.DEPTH_TEST); }
+      if (n + 3 > MAXV) flush();
+      for (const v of [a, b, c]) { data.set(v.clip, n * 8); data.set(flat ?? v.colour, n * 8 + 4); n++; }
+    },
+    viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); },
+    clear(mask, colour) {
+      flush();
+      g.clearColor(colour[0], colour[1], colour[2], colour[3]); g.clearDepth(1); g.depthMask(true);
+      g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0));
+    },
+    /** The framebuffer, bottom row first, as GL's own is. */
+    read() { flush(); const px = new Uint8Array(w * h * 4); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, px); return px; },
+  };
 }
 
 /** The builtin signatures, from headers-gl.js. */

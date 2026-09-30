@@ -70,7 +70,7 @@ self.onmessage = async (e) => {
   }
 };
 
-async function start({ program, control, data, argv, pipeSab = null, screen = null }) {
+async function start({ program, control, data, argv, pipeSab = null, screen = null, options = {} }) {
   /*
    * A descriptor may carry the BUILD or merely name a target that does.
    *
@@ -1197,10 +1197,17 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      */
     const t0 = performance.now();
     let out = 0;
+    // WebGL2 on an OffscreenCanvas when the worker has one; ?gl=soft asks for the software rasteriser.
+    const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
+    // ?glcheck=0,25,50: the fixed 40 ms schedule gate-gears uses, and those frames posted back.
+    const check = options.glcheck ? options.glcheck.split(',').map(Number) : null;
     const env = buildEnv(prog.M, program.env ?? [], {
       stdio: { files, readChar: () => keyboard.read() },
+      gl: { backend },
       glut: {
-        now: () => performance.now() - t0,
+        now: check ? null : () => performance.now() - t0,
+        frames: check,
+        onFrame: check ? (n, rgba, w, h) => post('diag', { glframe: n, w, h, rgba, backend }) : null,
         stop: () => Atomics.load(ctrl, SLOT.STOP) !== 0,
         onSwap: (_n, gl) => {
           const { width: w, height: h } = gl.state;
@@ -1211,7 +1218,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
             Atomics.store(ctrl, SLOT.PIXELS, out);
             Atomics.store(ctrl, SLOT.PIXFMT, 32);
             Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-            log(`GL display ${w}x${h}, software rasteriser`);
+            log(`GL display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
           }
           const px = gl.readPixels(), u8 = prog.M.u8;
           for (let i = 0; i < w * h; i++) {

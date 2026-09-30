@@ -1106,6 +1106,7 @@ async function startRun(typedAs = null) {
       log(`guest memory: ${(guest.length / 1048576).toFixed(0)} MB shared with the page`);
     }
     else if (m.type === 'failed') log(`build failed: ${m.message}`, 'error');
+    else if (m.type === 'diag' && m.glframe !== undefined) ((window.PRISM_DIAG ??= {}).glframes ??= {})[m.glframe] = m;
     else if (m.type === 'diag') window.PRISM_DIAG = m;
   };
   worker.onerror = (e) => log(`worker error: ${e.message}`, 'error');
@@ -1127,7 +1128,7 @@ async function startRun(typedAs = null) {
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
   worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
-                       control, data: dataFiles, argv, pipeSab,
+                       control, data: dataFiles, argv, pipeSab, options: pageOptions,
                        /* The machine's own screen, so the program's output continues under the
                           command line instead of starting on a blank page. */
                        screen: machine.kind === 'desktop' ? null
@@ -1410,8 +1411,15 @@ function finish(state) {
  * is too fast" and "?machine=dos&program=mame-0.4&args=pengo&speed=50" are not the same bug report.
  * The MACHINE is in it because the same program on two machines is two different builds.
  */
+/*
+ * Options for the worker that are not the program's arguments: ?gl=webgl|soft picks the GL
+ * rasteriser (src/env/gl.js), and ?glcheck=0,25,50 runs a GLUT program on a fixed 40 ms step and
+ * hands those frames back (window.PRISM_DIAG.glframes), for comparing the page's GL with Mesa's.
+ */
+let pageOptions = {};
 function applyQuery() {
   const q = new URLSearchParams(location.search);
+  pageOptions = { gl: q.get('gl'), glcheck: q.get('glcheck') };
   const want = q.get('program') || q.get('p');
   const wantMachine = q.get('machine') || q.get('m');
   const m = machines.find(x => x.id === wantMachine)
@@ -1434,6 +1442,7 @@ function publishQuery() {
   q.set('program', entry().program);
   if ($('args').value.trim()) q.set('args', $('args').value.trim());
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
+  for (const k of ['gl', 'glcheck']) if (pageOptions[k]) q.set(k, pageOptions[k]);
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 
