@@ -287,8 +287,12 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     const [P, Q, R] = area > 0 ? [A, B, C] : [A, C, B];
     const ar = Math.abs(area);
     const W = s.width, H = s.height;
-    const x0 = Math.max(0, Math.floor(Math.min(P.x, Q.x, R.x))), x1 = Math.min(W - 1, Math.ceil(Math.max(P.x, Q.x, R.x)));
-    const y0 = Math.max(0, Math.floor(Math.min(P.y, Q.y, R.y))), y1 = Math.min(H - 1, Math.ceil(Math.max(P.y, Q.y, R.y)));
+    // The view volume's x and y planes, clipped here as the viewport rectangle they map to: GLQuake's
+    // 3-D view is 432 lines over a 480-line window, and a floor that ran past it painted over the
+    // status bar below.
+    const [vx, vy, vw, vh] = s.viewport, bx0 = Math.max(0, vx), by0 = Math.max(0, vy), bx1 = Math.min(W, vx + vw) - 1, by1 = Math.min(H, vy + vh) - 1;
+    const x0 = Math.max(bx0, Math.floor(Math.min(P.x, Q.x, R.x))), x1 = Math.min(bx1, Math.ceil(Math.max(P.x, Q.x, R.x)));
+    const y0 = Math.max(by0, Math.floor(Math.min(P.y, Q.y, R.y))), y1 = Math.min(by1, Math.ceil(Math.max(P.y, Q.y, R.y)));
     // Top-left rule, in GL's bottom-up window space: an edge owns its pixels if it goes down
     // (a left edge of a CCW triangle) or is horizontal going left (a top edge).
     const owns = (u, v) => { const dy = v.y - u.y, dx = v.x - u.x; return dy < 0 || (dy === 0 && dx < 0); };
@@ -353,7 +357,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     const n = Math.max(1, Math.ceil(Math.max(Math.abs(B.x - A.x), Math.abs(B.y - A.y))));
     for (let k = 0; k < n; k++) {
       const t = (k + 0.5) / n, x = Math.floor(A.x + (B.x - A.x) * t), y = Math.floor(A.y + (B.y - A.y) * t);
-      if (x < 0 || y < 0 || x >= s.width || y >= s.height) continue;
+      const [vx, vy, vw, vh] = s.viewport;
+      if (x < Math.max(0, vx) || y < Math.max(0, vy) || x >= Math.min(s.width, vx + vw) || y >= Math.min(s.height, vy + vh)) continue;
       fragment(y * s.width + x, A.z + (B.z - A.z) * t, a.colour.map((v, i) => v + (b.colour[i] - v) * t), 0);
     }
   }
