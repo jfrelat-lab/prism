@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Fifty-eight now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Sixty now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -33,6 +33,8 @@ something outside PRISM that could contradict it.
 | `gate-ega-rom.mjs` | **SeaVGABIOS** (QEMU's VGA ROM) setting the modes up on MIRAGE's machine | 0Dh, 0Eh, 10h, 12h: the attribute palette a mode set loads, and all 64 attribute values' colours |
 | `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds in its first 28 s is one the real binary showed, and its scenes come at the real binary's times (slope within 0.08) |
 | `gate-jnb-pixels.mjs` | **the game's own `jumpbump.exe`** (DJGPP) under DOSBox-X, DOS clock set to PRISM's | every one of 300 pages PRISM flips is a page the real binary showed |
+| `gate-gears.mjs` | **Mesa 22 (llvmpipe)** drawing the same gears.c, in the oracle container, on a surfaceless-EGL GLUT harness | frames 0, 25 and 50: at most 0.1% of pixels differ beyond 8 levels (2-3 of 90,000 do) |
+| `gate-gl-abi.mjs` | **Mesa's `<GL/gl.h>`** | every constant and type PRISM's `<GL/gl.h>` declares |
 | `gate-watcom-clock.mjs` | **Open Watcom's DOS libc**, run under DOSBox-X | `CLOCKS_PER_SEC` and the BIOS-tick steps of `clock()` under the Watcom toolchain |
 | `gate-watcom-argorder.mjs` | **Open Watcom `wcc386`**, run in the oracle, plain and with Heretic's CCOPTS | a call's arguments are evaluated right to left under the Watcom toolchain, in eight call shapes |
 | `gate-keen-pixels.mjs` | **the shipped `KDREAMS.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen PRISM's Keen Dreams holds for 3 frames is one the real binary showed, pixel for pixel |

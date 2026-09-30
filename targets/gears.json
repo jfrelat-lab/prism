@@ -1,0 +1,10 @@
+{
+  "name": "gears",
+  "title": "gears (Brian Paul's 3-D gear wheels, GLUT version by Mark J. Kilgard; Mesa demos)",
+  "dir": "corpus/gears",
+  "fetch": "mkdir -p corpus/gears && curl -sL -o corpus/gears/gears.c https://gitlab.freedesktop.org/mesa/demos/-/raw/main/src/demos/gears.c && curl -sL -o corpus/gears/glut_wrap.h https://gitlab.freedesktop.org/mesa/demos/-/raw/main/src/util/glut_wrap.h",
+  "_doc": "The smoke test every OpenGL implementation has run: public domain, 405 lines, 37 GL and GLUT entry points -- display lists, lighting, flat and smooth shading, quad strips, a rotation. It is the first program on PRISM's GL layer (src/env/gl.js, glut.js), held to Mesa by tools/gate-gears.mjs.",
+  "units": { "list": ["gears.c"] },
+  "compile": { "memory": 16, "collect": true },
+  "env": ["stdio", "gl", "glut"]
+}

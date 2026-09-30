@@ -47,6 +47,9 @@ import { installSvgalib } from './svgalib.js';
 import { installConsole } from './console.js';
 import { installVgaFont } from './vgafont.js';
 import { installWsock } from './wsock.js';
+import { installGL, glBuiltins } from './gl.js';
+import { installGlut, glutBuiltins } from './glut.js';
+import { GL_HEADERS } from './headers-gl.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
 const machineOf = (M) => (M.machine ?? installPorts(M));
@@ -194,6 +197,14 @@ export const ENV = {
     headers: { ...SDL12_HEADERS, ...MIXER_HEADERS },
     builtins: { ...sdl12Builtins(T), ...mixerBuiltins(T) },
   },
+
+  /*
+   * OpenGL 1.1's fixed-function pipeline and the GLUT on top of it (src/env/gl.js, glut.js). The
+   * headers and signatures travel with them, as SDL's do; gl.h's values are held to Mesa's by
+   * tools/gate-gl-abi.mjs.
+   */
+  gl: { install: (M, _c, o) => installGL(M, o), headers: GL_HEADERS, builtins: glBuiltins(T) },
+  glut: { needs: ['gl'], install: (M, _c, o) => installGlut(M, o), builtins: glutBuiltins(T) },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
   svgalib: { needs: ['ports'], install: (M, _c, o) => installSvgalib(M, o) },
