@@ -1,0 +1,10 @@
+{
+  "title": "GEARS",
+  "subtitle": "Brian Paul's three gear wheels, the OpenGL smoke test — Mesa demos, GLUT version",
+  "target": "gears",
+  "host": "glut",
+  "fps": 60,
+  "controls": [],
+  "_why": "The first program on PRISM's OpenGL layer (src/env/gl.js): GL 1.1's fixed-function pipeline -- display lists, lighting, flat and smooth shading, quad strips -- drawn by a software rasteriser that tools/gate-gears.mjs holds to Mesa (2-3 of 90,000 pixels differ per frame). The page shows that rasteriser's picture; a WebGL backend is the next step.",
+  "_date": "The date on the shelf is the day the file was fetched from the repository head, not a release date: gears.c carries none."
+}

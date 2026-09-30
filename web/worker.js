@@ -1188,6 +1188,43 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       return r;
     };
 
+  } else if (platform === 'glut') {
+    /*
+     * A GLUT PROGRAM ON PRISM'S GL (src/env/gl.js, glut.js). The picture is gl.js's framebuffer --
+     * the software rasteriser gate-gears holds to Mesa -- copied at every glutSwapBuffers into a
+     * buffer in guest memory, top row first and B,G,R,A, which is the layout the page already reads
+     * for SDL 2. GLUT_ELAPSED_TIME is real time here, so the program animates at its own speed.
+     */
+    const t0 = performance.now();
+    let out = 0;
+    const env = buildEnv(prog.M, program.env ?? [], {
+      stdio: { files, readChar: () => keyboard.read() },
+      glut: {
+        now: () => performance.now() - t0,
+        stop: () => Atomics.load(ctrl, SLOT.STOP) !== 0,
+        onSwap: (_n, gl) => {
+          const { width: w, height: h } = gl.state;
+          if (!out) {
+            out = prog.M.rt.malloc(w * h * 4);
+            Atomics.store(ctrl, SLOT.WIDTH, w);
+            Atomics.store(ctrl, SLOT.HEIGHT, h);
+            Atomics.store(ctrl, SLOT.PIXELS, out);
+            Atomics.store(ctrl, SLOT.PIXFMT, 32);
+            Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+            log(`GL display ${w}x${h}, software rasteriser`);
+          }
+          const px = gl.readPixels(), u8 = prog.M.u8;
+          for (let i = 0; i < w * h; i++) {
+            u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
+            u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
+          }
+          reader.endFrame();
+          pace();
+        },
+      },
+    });
+    if (!env.glut) throw new Error("host 'glut' needs the gl and glut environments. Name them in the target's env list.");
+
   } else if (platform === 'sdl') {
     /*
      * AN SDL 1.2 HOST. The simplest display path in this file, and deliberately so: the program

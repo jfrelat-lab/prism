@@ -8,11 +8,13 @@
 //   program that animates by elapsed time draws the same scene at the same frame on both sides.
 // `frames`, a list of frame numbers (counted at swap, from 0), hands each of those pictures to
 // `onFrame(index, rgba, width, height)`; the loop ends after the last one. With none it runs until
-// the program exits or `stop()` answers true (the page's host).
+// the program exits or `stop()` answers true (the page's host). `now()`, when given, is the elapsed
+// time in ms instead of the fixed step -- the page passes real time, so the gears turn at 70 degrees
+// a second whatever the frame rate.
 
 const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1;
 
-export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, stop = () => false, onSwap = null } = {}) {
+export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, stop = () => false, onSwap = null, now = null } = {}) {
   const gl = M.gl;
   if (!gl) throw new Error('glut: needs the gl environment');
   const want = frames ? new Set(frames) : null;
@@ -32,7 +34,7 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
     glutKeyboardFunc: (p) => { s.cb.keyboard = p; },
     glutSpecialFunc: (p) => { s.cb.special = p; },
     glutPostRedisplay: () => { s.redisplay = true; },
-    glutGet: (what) => (what === GLUT_ELAPSED_TIME ? s.swaps * stepMs : what === GLUT_WINDOW_WIDTH ? s.w : what === GLUT_WINDOW_HEIGHT ? s.h : 0),
+    glutGet: (what) => (what === GLUT_ELAPSED_TIME ? (now ? Math.floor(now()) : s.swaps * stepMs) : what === GLUT_WINDOW_WIDTH ? s.w : what === GLUT_WINDOW_HEIGHT ? s.h : 0),
     glutSwapBuffers: () => {
       if (want?.has(s.swaps) && onFrame) onFrame(s.swaps, gl.readPixels(), gl.state.width, gl.state.height);
       if (onSwap) onSwap(s.swaps, gl);
