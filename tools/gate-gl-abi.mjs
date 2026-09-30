@@ -1,19 +1,19 @@
-// gate-gl-abi.mjs — every constant PRISM's <GL/gl.h> defines, held to Mesa's <GL/gl.h>.
+// gate-gl-abi.mjs — every constant PRISM's <GL/gl.h> and <GL/glx.h> define, held to Mesa's.
 //
 // src/env/headers-gl.js transcribes OpenGL 1.1's values. A slip there (GL_QUAD_STRIP 7 for 8) would
 // not fail to compile; it would draw the wrong primitive. So each #define PRISM declares is printed
 // by a program compiled against Mesa's own header in the oracle container, and must be equal; and
 // the types PRISM declares must have the sizes Mesa's do on i386.
-import { GL_H } from '../src/env/headers-gl.js';
+import { GL_H, GLX_H } from '../src/env/headers-gl.js';
 import { up, put, sh } from './oracle.mjs';
 
-const names = [...GL_H.matchAll(/^#define\s+(GL_[A-Z0-9_]+)\s+(\S+)/gm)].map((m) => [m[1], Number(m[2])]);
+const names = [...(GL_H + GLX_H).matchAll(/^#define\s+(GLX?_[A-Z0-9_]+)\s+(\S+)/gm)].map((m) => [m[1], Number(m[2])]);
 const types = ['GLenum', 'GLboolean', 'GLbitfield', 'GLbyte', 'GLshort', 'GLint', 'GLsizei', 'GLubyte', 'GLushort', 'GLuint', 'GLfloat', 'GLclampf', 'GLdouble', 'GLclampd'];
 const sizeOf = { GLenum: 4, GLboolean: 1, GLbitfield: 4, GLbyte: 1, GLshort: 2, GLint: 4, GLsizei: 4, GLubyte: 1, GLushort: 2, GLuint: 4, GLfloat: 4, GLclampf: 4, GLdouble: 8, GLclampd: 8 };
 const mine = new Map(GL_H.matchAll(/^typedef\s+(.+?)\s+(GL\w+);/gm).map((m) => [m[2], m[1]]));
 
 up();
-put('glabi.c', `#include <GL/gl.h>\n#include <stdio.h>\nint main(void) {\n${names.map(([n]) => `  printf("%s %ld\\n", "${n}", (long)(${n}));`).join('\n')}\n${types.map((t) => `  printf("%s %d\\n", "${t}", (int)sizeof(${t}));`).join('\n')}\n  return 0;\n}\n`);
+put('glabi.c', `#include <GL/gl.h>\n#include <GL/glx.h>\n#include <stdio.h>\nint main(void) {\n${names.map(([n]) => `  printf("%s %ld\\n", "${n}", (long)(${n}));`).join('\n')}\n${types.map((t) => `  printf("%s %d\\n", "${t}", (int)sizeof(${t}));`).join('\n')}\n  return 0;\n}\n`);
 const r = sh('cd /work && gcc -o glabi glabi.c && ./glabi');
 if (r.code !== 0) throw new Error(r.stderr || r.stdout);
 const mesa = new Map(r.stdout.trim().split('\n').map((l) => { const [k, v] = l.split(' '); return [k, Number(v)]; }));

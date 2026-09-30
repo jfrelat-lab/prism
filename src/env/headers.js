@@ -1122,6 +1122,16 @@ typedef struct {
     Bool override_redirect;
 } XConfigureEvent;
 
+typedef struct {
+    int type;
+    unsigned long serial;
+    Bool send_event;
+    Display *display;
+    Window parent, window;
+    int x, y, width, height, border_width;
+    Bool override_redirect;
+} XCreateWindowEvent;
+
 /*
  * A CLIENT MESSAGE, which is how a window manager tells a client to close itself: the client interns
  * WM_DELETE_WINDOW, asks for it with XSetWMProtocols, and the manager sends it here. Quake's SUN
@@ -1146,6 +1156,7 @@ typedef union _XEvent {
     XMotionEvent xmotion;
     XExposeEvent xexpose;
     XConfigureEvent xconfigure;
+    XCreateWindowEvent xcreatewindow;
     XClientMessageEvent xclient;
     long pad[24];
 } XEvent;
@@ -1206,6 +1217,13 @@ typedef union _XEvent {
 #define DoBlue 4
 #define CWBackPixel (1L<<1)
 #define CWBorderPixel (1L<<3)
+#define CWBackingStore (1L<<6)
+#define CWOverrideRedirect (1L<<9)
+#define CWSaveUnder (1L<<10)
+/* backing_store (X.h) */
+#define NotUseful 0
+#define WhenMapped 1
+#define Always 2
 #define CWEventMask (1L<<11)
 #define CWColormap (1L<<13)
 #define NoEventMask 0L
@@ -1313,6 +1331,11 @@ int XStoreColors(Display *d, Colormap c, XColor *colors, int n);
 int XPending(Display *d);
 int XNextEvent(Display *d, XEvent *ev);
 KeySym XKeycodeToKeysym(Display *d, unsigned int keycode, int index);
+KeySym XLookupKeysym(XKeyEvent *ev, int index);
+int XGrabKeyboard(Display *d, Window w, Bool owner, int pmode, int kmode, Time t);
+int XUngrabKeyboard(Display *d, Time t);
+int XMoveWindow(Display *d, Window w, int x, int y);
+int XRaiseWindow(Display *d, Window w);
 int XLookupString(XKeyEvent *ev, char *buf, int n, KeySym *ks, void *status);
 
 /*
@@ -1710,6 +1733,8 @@ int raise(int sig);
 #define SIGINT 2
 #define SIGQUIT 3
 #define SIGILL 4
+#define SIGTRAP 5
+#define SIGIOT 6
 #define SIGABRT 6
 #define SIGBUS 7
 #define SIGFPE 8

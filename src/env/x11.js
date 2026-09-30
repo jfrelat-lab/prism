@@ -100,6 +100,12 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XFillRectangle: () => 0,
     XGrabPointer: () => 0,
     XUngrabPointer: () => 0,
+    // GLQuake's GLX layer (gl_vidlinuxglx.c) grabs the keyboard and places its window; there is one
+    // window and nothing else to take focus from, so each succeeds (GrabSuccess is 0).
+    XGrabKeyboard: () => 0,
+    XUngrabKeyboard: () => 0,
+    XMoveWindow: () => 0,
+    XRaiseWindow: () => 0,
     /*
      * XWarpPointer MOVES THE POINTER, and here that is the whole mechanism rather than a courtesy.
      *
@@ -337,6 +343,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * the Latin-1 keysyms; anything else composes to no characters, and saying 0 there is not a
      * shortcut -- it is what a real Xlib answers for a function key.
      */
+    // The keysym of a key event's keycode, the same table XLookupString reads (index 0: unshifted).
+    XLookupKeysym: (ev) => keysymFor(ev ? dv().getInt32(ev + XKEY_KEYCODE, true) : 0),
     XLookupString: (ev, buf, n, ksOut, _status) => {
       const scan = ev ? dv().getInt32(ev + XKEY_KEYCODE, true) : 0;
       const ks = keysymFor(scan);

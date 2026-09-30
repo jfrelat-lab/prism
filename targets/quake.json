@@ -236,6 +236,78 @@
         "x11"
       ],
       "_in": "in_sun.c is NOT built, and that is a selection id's own tree offers: vid_sunx.c defines IN_Init, IN_Shutdown, IN_Commands and IN_Move itself -- exactly as vid_x.c does for the Linux build -- while in_sun.c is the fuller alternative, reaching for gethrtime and XChangePointerControl. Building both defines each of the four twice."
+    },
+    "glx": {
+      "host": "glx",
+      "title": "GLQUAKE (Linux/GLX, id386=0)",
+      "_doc": "glquake.glx in the game's own Makefile.linuxi386: GLQUAKE_OBJS plus GLX_OBJS (gl_vidlinuxglx.c), compiled with GLCFLAGS' -DGLQUAKE. The same substitutions as the x11 variant, for the same reasons: cd_null.c for cd_linux.c and net_none.c for net_udp.c/net_bsd.c. The four .s objects are the id386=1 build; with id386=0 the C files listed already carry their equivalents. OpenGL is src/env/gl.js; GLX is the glx environment beside the X11 shim.",
+      "units": {
+        "list": [
+          "cl_demo.c",
+          "cl_input.c",
+          "cl_main.c",
+          "cl_parse.c",
+          "cl_tent.c",
+          "chase.c",
+          "cmd.c",
+          "common.c",
+          "console.c",
+          "crc.c",
+          "cvar.c",
+          "gl_draw.c",
+          "gl_mesh.c",
+          "gl_model.c",
+          "gl_refrag.c",
+          "gl_rlight.c",
+          "gl_rmain.c",
+          "gl_rmisc.c",
+          "gl_rsurf.c",
+          "gl_screen.c",
+          "gl_test.c",
+          "gl_warp.c",
+          "host.c",
+          "host_cmd.c",
+          "keys.c",
+          "menu.c",
+          "mathlib.c",
+          "net_dgrm.c",
+          "net_loop.c",
+          "net_main.c",
+          "net_vcr.c",
+          "net_none.c",
+          "pr_cmds.c",
+          "pr_edict.c",
+          "pr_exec.c",
+          "r_part.c",
+          "sbar.c",
+          "sv_main.c",
+          "sv_phys.c",
+          "sv_move.c",
+          "sv_user.c",
+          "zone.c",
+          "view.c",
+          "wad.c",
+          "world.c",
+          "cd_null.c",
+          "sys_linux.c",
+          "snd_dma.c",
+          "snd_mem.c",
+          "snd_mix.c",
+          "snd_linux.c",
+          "gl_vidlinuxglx.c"
+        ]
+      },
+      "defines": {
+        "GLQUAKE": "1"
+      },
+      "env": [
+        "stdio",
+        "x11",
+        "dsp",
+        "dl",
+        "gl",
+        "glx"
+      ]
     }
   }
 }

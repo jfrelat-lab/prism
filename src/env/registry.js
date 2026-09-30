@@ -49,7 +49,8 @@ import { installVgaFont } from './vgafont.js';
 import { installWsock } from './wsock.js';
 import { installGL, glBuiltins } from './gl.js';
 import { installGlut, glutBuiltins } from './glut.js';
-import { GL_HEADERS } from './headers-gl.js';
+import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
+import { installGlx, glxBuiltins } from './glx.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
 const machineOf = (M) => (M.machine ?? installPorts(M));
@@ -205,6 +206,8 @@ export const ENV = {
    */
   gl: { install: (M, _c, o) => installGL(M, o), headers: GL_HEADERS, builtins: glBuiltins(T) },
   glut: { needs: ['gl'], install: (M, _c, o) => installGlut(M, o), builtins: glutBuiltins(T) },
+  // GLX on the X11 shim, for GLQuake's gl_vidlinuxglx.c. See src/env/glx.js.
+  glx: { needs: ['gl', 'x11'], install: (M, _c, o) => installGlx(M, o), headers: GLX_HEADERS, builtins: glxBuiltins(T) },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.
   svgalib: { needs: ['ports'], install: (M, _c, o) => installSvgalib(M, o) },
