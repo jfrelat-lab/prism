@@ -572,6 +572,48 @@ Each entry is a row of [ROADMAP.md](ROADMAP.md), verbatim, as it stood when the 
 
 **Why / unblocks:** Same host contract as MAME and Doom; the descriptor is the only new thing.
 
+<a id="p6-5"></a>
+
+### P6.5
+
+🟡 **The demos desync against the real executables** (2026-09-30). The references: Heretic v1.3
+(archive.org `heretic-v-1.3`, a 1996 CD image; its startup screen says v1.3, the source's VERSION 130)
+and Hexen 1.1 (archive.org `hexen-and-deathkings-0mhz`, the HEXEN.EXE on a MiSTer disk image; the
+WAD is md5-identical to PRISM's). MIRAGE's Heretic is the v1.2 shareware and its Hexen the 1.0 demo,
+so neither matches the source. Both run on a vgaonly DOSBox-X, compared with the pixel tools of
+P11.8 (`tools/dosref.mjs`); PRISM's side is bounded by frame count, a wall-clock deadline in the
+safepoint that delivers the timer, and an external kill.
+
+**Heretic, measured.** The attract loop reaches the first demo on both sides. Comparing only the
+status bar (life, ammo, weapon -- the game's state, free of the renderer's own differences), 38
+consecutive states agree from the demo's start. The first sharp jump in the view is at PRISM frame
+632: the same monster in the same place, the same health, the same crossbow bolt -- and the PLAYER
+somewhere else. PRISM's own state there shows the momentum vector rotating at a fixed angle with x,
+then y, pinned: sliding along a wall (P_SlideMove) or being pushed. Hexen diverges too.
+
+**Ruled out, each by measurement:** the random numbers (Heretic uses only P_Random, whose 256-byte
+table is byte-identical inside HERETIC.EXE at 0x9adb0; no libc rand); PRISM's timing (the same run at
+two timer rates gives identical frames); the order of `a() - b()` (Watcom: left to right, read in the
+EXE); the order of a call's arguments (Watcom: right to left -- a real difference, now PRISM's for
+every Watcom target, ad23e50, but not this cause); FixedMul/FixedDiv2 (the intrinsics match the
+`#pragma aux` bodies). Chocolate Heretic, which replays vanilla demos exactly, emulates no spechit or
+intercepts overrun; its one vanilla-memory note (PTR_AimTraverse reading a NULL backsector) needs a
+map defect.
+
+**Also seen:** with the game in sync, ~2,000-6,000 pixels of the VIEW still differ -- the right edge
+and the floor spans. PRISM compiles R_DrawColumn and R_DrawSpan from their C fallbacks where the
+EXE runs LINEAR.ASM; that is a rendering difference, not a desync.
+
+**Next:** a per-tic STATE oracle, since pixels cannot say which computation differs. Heretic's own
+source built by Open Watcom wcc386 for Linux in the oracle container, headless, with a stub platform
+layer in place of I_IBM.C, replaying the same demo and printing the player's x, y, angle and momentum
+each tic; PRISM prints the same; the first differing tic names the function.
+
+**Effort:** L
+
+**Why / unblocks:** A Doom-engine demo is deterministic; one that desyncs is a wrong answer somewhere
+in PRISM's compile of the game's own C, or a Watcom behaviour it does not reproduce.
+
 ## P7 · Targets as data, and the programs they brought
 
 <a id="p7-1"></a>

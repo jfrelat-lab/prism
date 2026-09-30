@@ -151,6 +151,7 @@ second ABI — and the question "what else is DOS but flat?" had an answer.
 | P6.2 | ✅ | Hexen RUNS, on the retail v1.1 WAD. | S | [log](LOG.md#p6-2) |
 | P6.3 | ✅ | Heretic is interactive. | S | [log](LOG.md#p6-3) |
 | P6.4 | ⚪ | Pace it, and put it in the browser. | M | [log](LOG.md#p6-4) |
+| P6.5 | 🟡 | Heretic 1.3 and Hexen 1.1 DEMOS DESYNC against the real EXEs under DOSBox-X: Heretic agrees tic for tic (38 status-bar states) until PRISM frame 632, where the player's MOVEMENT differs (wall sliding or a push). Ruled out: RNG, timing, operand and argument order (now Watcom's, `gate-watcom-argorder`), FixedMul/FixedDiv2. Next: a Watcom-built headless Heretic as a per-tic state oracle. | L | [log](LOG.md#p6-5) |
 
 ## P7 · Targets as data, and the programs they brought
 
