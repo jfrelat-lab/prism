@@ -1432,10 +1432,12 @@ function applyQuery() {
   pageOptions = { gl: q.get('gl'), glcheck: q.get('glcheck') };
   const want = q.get('program') || q.get('p');
   const wantMachine = q.get('machine') || q.get('m');
+  // A variant shares its program name with the base build, so a link names it by its shelf file.
+  const named = (e) => (e.variant ? e.file : e.program) === want;
   const m = machines.find(x => x.id === wantMachine)
-    ?? (want ? machines.find(x => x.programs.some(e => e.program === want)) : null);
+    ?? (want ? machines.find(x => x.programs.some(named)) : null);
   if (m) {
-    const i = Math.max(0, m.programs.findIndex(e => e.program === want));
+    const i = Math.max(0, m.programs.findIndex(named));
     pick(m, i);
   }
   const args = q.get('args');
@@ -1449,7 +1451,7 @@ function applyQuery() {
 function publishQuery() {
   const q = new URLSearchParams();
   q.set('machine', machine.id);
-  q.set('program', entry().program);
+  q.set('program', entry().variant ? entry().file : entry().program);
   if ($('args').value.trim()) q.set('args', $('args').value.trim());
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
   for (const k of ['gl', 'glcheck']) if (pageOptions[k]) q.set(k, pageOptions[k]);

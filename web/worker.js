@@ -138,6 +138,9 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       title: program.title ?? t.title,
       // The resolved variant's host wins: the descriptor names a GAME, the variant a PLATFORM.
       host: t.host ?? program.host,
+      // ...and its frame-rate cap: quake2:gl draws at 115-120 fps unpaced where the descriptor's 30 was
+      // set for the software renderer.
+      fps: t.fps ?? program.fps,
       // ...and which devices it asked for, so the branch below installs what the build wants
       // rather than what its host usually implies.
       env: t.env ?? [],

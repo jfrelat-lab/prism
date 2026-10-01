@@ -513,7 +513,9 @@
         "/etc/quake2.conf": ".",
         "./ref_gl.so": "(linked into this program; the file is what the package installs, and vid_so.c stat()s it and wants it owned by root)"
       },
-      "_files": "The installation, as for the base target: /etc/quake2.conf names the ref directory, and ref_gl.so is there because the package put it there. vid_so.c stat()s every ref but softx and refuses one not owned by root -- svgalib needs root -- so the file must exist; PRISM's only user is root."
+      "_files": "The installation, as for the base target: /etc/quake2.conf names the ref directory, and ref_gl.so is there because the package put it there. vid_so.c stat()s every ref but softx and refuses one not owned by root -- svgalib needs root -- so the file must exist; PRISM's only user is root.",
+      "fps": 60,
+      "_fps": "The page paces this variant at 60 frames a second. The descriptor's 30 was set for the software renderer; ref_gl on WebGL2 draws demo1 at 115-120 unpaced (measured in the page with speed unlimited), and Quake II's own cl_maxfps defaults to 90."
     }
   }
 }

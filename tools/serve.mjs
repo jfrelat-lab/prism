@@ -154,6 +154,8 @@ const server = createServer(async (req, res) => {
           // Which shell branch presents it; a variant may set its own.
           host: resolved.host ?? null,
           args: resolved.args ?? null,
+          // A variant's frame-rate cap, when its renderer is not the one the descriptor was paced for.
+          fps: resolved.fps ?? null,
           modules: Object.fromEntries(Object.entries(resolved.modules ?? {})
             .filter(([k]) => !k.startsWith('_'))
             .map(([k, m]) => [k, { soname: m.soname ?? null }])),
