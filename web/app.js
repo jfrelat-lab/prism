@@ -547,20 +547,30 @@ function desktopScreen(m) {
  * Both are real and neither subsumes the other: `quake:dos` needs `-nosound` and the Quake
  * descriptor suggests `+host_framerate 0.0138`. But `putty:tel` names `-telnet localhost` and so
  * does its descriptor, and concatenating gave `-telnet localhost -telnet localhost` -- which PuTTY
- * parsed, argued with, and exited over. A flag already present in the program's own arguments is
- * dropped from the variant's, along with the value that follows it.
+ * parsed, argued with, and exited over. So arguments are taken as GROUPS -- a flag and the values
+ * after it -- and a group the variant gives is not repeated from the program's.
+ *
+ * On a conflict the VARIANT wins: its arguments are what its build requires, the program's are
+ * suggestions. And Quake's `+set` names a variable, so its identity is `+set <name>`, not `+set`:
+ * taken as one flag, any `+set` in the descriptor dropped every `+set` of the variant, and
+ * `quake2:gl` started with the descriptor's `+set vid_ref softx` instead of its own `vid_ref gl`
+ * (and `quake2:win32` lost its `+set vid_fullscreen 0`).
  */
 function mergeArgs(variantArgs, programArgs) {
-  const mine = tokenise(programArgs || '');
-  const flags = new Set(mine.filter(t => /^[-+]/.test(t)));
-  const out = [];
-  const theirs = tokenise(variantArgs || '');
-  for (let i = 0; i < theirs.length; i++) {
-    if (!/^[-+]/.test(theirs[i])) { out.push(theirs[i]); continue; }
-    if (!flags.has(theirs[i])) { out.push(theirs[i]); continue; }
-    while (i + 1 < theirs.length && !/^[-+]/.test(theirs[i + 1])) i++;   // and its value
-  }
-  return [...out, ...mine].join(' ').trim();
+  const groups = (s) => {
+    const t = tokenise(s || ''), out = [];
+    for (let i = 0; i < t.length; i++) {
+      if (!/^[-+]/.test(t[i])) { out.push({ key: null, tokens: [t[i]] }); continue; }
+      const g = { key: t[i], tokens: [t[i]] };
+      while (i + 1 < t.length && !/^[-+]/.test(t[i + 1])) g.tokens.push(t[++i]);
+      if (g.key === '+set' && g.tokens[1]) g.key = `+set ${g.tokens[1]}`;
+      out.push(g);
+    }
+    return out;
+  };
+  const theirs = groups(variantArgs), keys = new Set(theirs.map((g) => g.key).filter(Boolean));
+  const mine = groups(programArgs).filter((g) => !g.key || !keys.has(g.key));
+  return [...theirs, ...mine].flatMap((g) => g.tokens).join(' ').trim();
 }
 
 function describe() {

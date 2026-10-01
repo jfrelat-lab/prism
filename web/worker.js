@@ -8,7 +8,7 @@
 // The only messages sent back are things the page cannot read for itself: log lines, and the one-off
 // handoff of the shared image.
 
-import { compileProgram } from '../src/compile.js';
+import { compileProgram, bindLateBuiltins } from '../src/compile.js';
 import { toolchainCompile } from '../src/toolchain.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 /*
@@ -26,6 +26,7 @@ import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
 import { installGL } from '../src/env/gl.js';
 import { installGlx } from '../src/env/glx.js';
+import { installFxMesa } from '../src/env/fxmesa.js';
 import { installDsp } from '../src/env/dsp.js';
 import { installPopen } from '../src/env/popen.js';
 import { installConsole } from '../src/env/console.js';
@@ -523,6 +524,48 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       mouse,
       onFrame: () => { reader.endFrame(); pace(); },
     });
+  } else if (platform === 'fxmesa') {
+    /*
+     * QUAKE II'S OWN LINUX GL BUILD: ref_gl.so on Mesa's full-screen 3Dfx context (linux/gl_fxmesa.c,
+     * src/env/fxmesa.js), keys and the mouse through svgalib (linux/rw_in_svgalib.c, on the svgalib
+     * shim's input half -- it draws nothing here). The picture is gl.js's, WebGL2 when the worker has
+     * an OffscreenCanvas, read back at every fxMesaSwapBuffers as the glx host does.
+     *
+     * bindLateBuiltins comes LAST: qgl_linux.c took the address of every GL 1.1 entry point, and the
+     * slots of the ones gl.js implements can only be filled once gl.js is installed.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
+    installPortMachine(prog.M);
+    installSvgalib(prog.M, { keyboard: { next: () => keyboard.nextEvent() }, mouse });
+    const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
+    installGL(prog.M, { backend });
+    let out = 0, since = performance.now(), count = 0;
+    installFxMesa(prog.M, {
+      onSwap: (_n, gl) => {
+        count++;
+        const now = performance.now();
+        if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
+        const { width: w, height: h } = gl.state;
+        if (!out) {
+          out = prog.M.rt.malloc(w * h * 4);
+          Atomics.store(ctrl, SLOT.WIDTH, w);
+          Atomics.store(ctrl, SLOT.HEIGHT, h);
+          Atomics.store(ctrl, SLOT.PIXELS, out);
+          Atomics.store(ctrl, SLOT.PIXFMT, 32);
+          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+          log(`fxMesa display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
+        }
+        const px = gl.readPixels(), u8 = prog.M.u8;
+        for (let i = 0; i < w * h; i++) {
+          u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
+          u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
+        }
+        reader.endFrame();
+        pace();
+      },
+    });
+    bindLateBuiltins(prog);
   } else if (platform === 'glx') {
     /*
      * AN X CLIENT THAT DRAWS WITH GL: GLQuake's gl_vidlinuxglx.c. Everything an X11 host has -- the
