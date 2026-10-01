@@ -24,6 +24,8 @@ import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
 import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
+import { installGL } from '../src/env/gl.js';
+import { installGlx } from '../src/env/glx.js';
 import { installDsp } from '../src/env/dsp.js';
 import { installPopen } from '../src/env/popen.js';
 import { installConsole } from '../src/env/console.js';
@@ -520,6 +522,50 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       /* The same channel the DOS host reads through INT 33h, delivered here as X events instead. */
       mouse,
       onFrame: () => { reader.endFrame(); pace(); },
+    });
+  } else if (platform === 'glx') {
+    /*
+     * AN X CLIENT THAT DRAWS WITH GL: GLQuake's gl_vidlinuxglx.c. Everything an X11 host has -- the
+     * files, dlopen for its extension probe, /dev/dsp, keys and the mouse as X events -- and the
+     * picture from src/env/gl.js instead of an XImage: WebGL2 on an OffscreenCanvas when the worker
+     * has one (?gl=soft for the software rasteriser gate-glquake holds to Mesa), read back at every
+     * glXSwapBuffers into a guest buffer the page reads as it reads an SDL 2 texture. GL and GLX come
+     * after X11 because GLX takes the window's size from the program's own XCreateWindow.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
+    if ((program.env ?? []).includes('dsp')) installDsp(prog.M, { publish: { ctrl, audio } });
+    installX11(prog.M, {
+      keyboard: { pending: () => keyboard.pending(), next: () => keyboard.nextEvent() },
+      mouse,
+    });
+    const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
+    installGL(prog.M, { backend });
+    let out = 0, since = performance.now(), count = 0;
+    installGlx(prog.M, {
+      onSwap: (_n, gl) => {
+        // The frame rate, said every five seconds: GLX has no other place a person could read it.
+        count++;
+        const now = performance.now();
+        if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
+        const { width: w, height: h } = gl.state;
+        if (!out) {
+          out = prog.M.rt.malloc(w * h * 4);
+          Atomics.store(ctrl, SLOT.WIDTH, w);
+          Atomics.store(ctrl, SLOT.HEIGHT, h);
+          Atomics.store(ctrl, SLOT.PIXELS, out);
+          Atomics.store(ctrl, SLOT.PIXFMT, 32);
+          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+          log(`GLX display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
+        }
+        const px = gl.readPixels(), u8 = prog.M.u8;
+        for (let i = 0; i < w * h; i++) {
+          u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
+          u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
+        }
+        reader.endFrame();
+        pace();
+      },
     });
   } else if (platform === 'quake') {
     installQuake(prog.M, {

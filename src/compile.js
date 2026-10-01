@@ -171,6 +171,12 @@ export const BUILTINS = new Map(Object.entries({
   XFillRectangle: { ret: I, params: [P, U, P, I, I, U, U] },
   XGrabPointer: { ret: I, params: [P, U, I, U, I, I, U, U, U] },
   XUngrabPointer: { ret: I, params: [P, U] },
+  /* What GLQuake's GLX layer adds (gl_vidlinuxglx.c); see src/env/x11.js. */
+  XGrabKeyboard: { ret: I, params: [P, U, I, I, I, U] },
+  XUngrabKeyboard: { ret: I, params: [P, U] },
+  XMoveWindow: { ret: I, params: [P, U, I, I] },
+  XRaiseWindow: { ret: I, params: [P, U] },
+  XLookupKeysym: { ret: U, params: [P, I] },
   XWarpPointer: { ret: I, params: [P, U, U, I, I, U, U, I, I] },
   XSelectInput: { ret: I, params: [P, U, I] },
   XStoreName: { ret: I, params: [P, U, P] },

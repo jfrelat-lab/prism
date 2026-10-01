@@ -50,6 +50,7 @@
       "programs": [
         { "program": "doom", "file": "doom", "date": "Dec 23  1997" },
         { "program": "quake", "variant": "x11", "file": "quake", "date": "Aug  1  1996" },
+        { "program": "quake", "variant": "glx", "file": "glquake.glx", "date": "Dec 21  1999" },
         { "program": "quake-svgalib", "file": "quake.svga", "date": "Aug  1  1996" },
         { "program": "quake2", "file": "quake2", "date": "Dec  9  1997" },
         { "program": "lua", "file": "lua", "date": "May  2  2023" },
@@ -58,6 +59,7 @@
         { "program": "opentyrian", "file": "opentyrian", "date": "Aug 15  2026" },
         { "program": "gears", "file": "gears", "date": "Sep 30  2026" }
       ],
+      "_glquake": "glquake.glx is Makefile.linuxi386's own name for the GLX build. Its date is the day id released the source under the GPL, which is when that makefile target reached anyone outside id; the 1997 GLQuake binaries were Windows ones.",
       "_jumpnbump": "The SAME GAME as the DOS shelf's JUMPBUMP.EXE, over the other platform layer -- which is why it earns a second slot rather than replacing the first. Its build is a Linux one (the Makefile calls sdl-config and links -lSDL), so this is where it belongs. The date is the tag's own tree, the 2002 CVS import; the game is 1998 and the DOS entry says so.",
       "_jumpnbump_sdl2": "AND THE THIRD LAYER BESIDE IT, whose file name is the SHELF's and not the program's. Both Makefiles build a binary called `jumpnbump`, so a real Linux box could not hold the two in one directory and a listing showing both already compresses reality; saying so is cheaper than pretending otherwise. The convention is quake.svga's, three rows up. What actually separates them is recorded rather than invented: one links -lSDL and -lSDL_mixer, the other -lSDL2 and -lSDL2_mixer -- which is what ldd would show -- and each prints its own version on its credits line, measured on screen rather than read off a tag: 1.51 there, 1.80-dev here."
     },
