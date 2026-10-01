@@ -539,6 +539,7 @@ struct tm {
 struct timespec { long tv_sec; long tv_nsec; };
 struct tm *localtime(const long *t);
 struct tm *gmtime(const long *t);
+char *asctime(const struct tm *tm);
 long mktime(struct tm *tm);
 double difftime(long a, long b);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);

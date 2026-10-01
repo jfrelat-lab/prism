@@ -31,8 +31,9 @@
 const MODELVIEW = 0x1700, PROJECTION = 0x1701;
 const CAP = {
   CULL_FACE: 0x0b44, LIGHTING: 0x0b50, DEPTH_TEST: 0x0b71, NORMALIZE: 0x0ba1, LIGHT0: 0x4000,
-  TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60,
+  TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60, SCISSOR_TEST: 0x0c11,
 };
+const ARRAY = { 0x8074: 'vertex', 0x8076: 'color', 0x8078: 'tex' };
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
 const COMPILE_AND_EXECUTE = 0x1301;
@@ -113,6 +114,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     envMode: TEX.MODULATE,
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
     textures: new Map([[0, newTexture()]]), bound: 0,
+    arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false } },
+    scissor: [0, 0, 0, 0], pointSize: 1,
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
     stats: { triangles: 0, culled: 0, clipped: 0, fragments: 0 },
@@ -184,6 +187,16 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
   }
 
   // --- rasterisation
+  /** The pixels a fragment may land on: the viewport the view volume maps to, cut by the scissor box. */
+  function drawBox() {
+    const [vx, vy, vw, vh] = s.viewport;
+    let x0 = Math.max(0, vx), y0 = Math.max(0, vy), x1 = Math.min(s.width, vx + vw) - 1, y1 = Math.min(s.height, vy + vh) - 1;
+    if (s.caps.has(CAP.SCISSOR_TEST)) {
+      const [sx, sy, sw, sh] = s.scissor;
+      x0 = Math.max(x0, sx); y0 = Math.max(y0, sy); x1 = Math.min(x1, sx + sw - 1); y1 = Math.min(y1, sy + sh - 1);
+    }
+    return [x0, y0, x1, y1];
+  }
   function toWindow(v) {
     const [x, y, z, w] = v.clip, [vx, vy, vw, vh] = s.viewport, [n, f] = s.depthRange;
     return { x: (x / w + 1) * vw / 2 + vx, y: (y / w + 1) * vh / 2 + vy, z: n + (f - n) * (z / w + 1) / 2, iw: 1 / w, v };
@@ -290,7 +303,7 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     // The view volume's x and y planes, clipped here as the viewport rectangle they map to: GLQuake's
     // 3-D view is 432 lines over a 480-line window, and a floor that ran past it painted over the
     // status bar below.
-    const [vx, vy, vw, vh] = s.viewport, bx0 = Math.max(0, vx), by0 = Math.max(0, vy), bx1 = Math.min(W, vx + vw) - 1, by1 = Math.min(H, vy + vh) - 1;
+    const [bx0, by0, bx1, by1] = drawBox();
     const x0 = Math.max(bx0, Math.floor(Math.min(P.x, Q.x, R.x))), x1 = Math.min(bx1, Math.ceil(Math.max(P.x, Q.x, R.x)));
     const y0 = Math.max(by0, Math.floor(Math.min(P.y, Q.y, R.y))), y1 = Math.min(by1, Math.ceil(Math.max(P.y, Q.y, R.y)));
     // Top-left rule, in GL's bottom-up window space: an edge owns its pixels if it goes down
@@ -357,8 +370,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     const n = Math.max(1, Math.ceil(Math.max(Math.abs(B.x - A.x), Math.abs(B.y - A.y))));
     for (let k = 0; k < n; k++) {
       const t = (k + 0.5) / n, x = Math.floor(A.x + (B.x - A.x) * t), y = Math.floor(A.y + (B.y - A.y) * t);
-      const [vx, vy, vw, vh] = s.viewport;
-      if (x < Math.max(0, vx) || y < Math.max(0, vy) || x >= Math.min(s.width, vx + vw) || y >= Math.min(s.height, vy + vh)) continue;
+      const [bx0, by0, bx1, by1] = drawBox();
+      if (x < bx0 || y < by0 || x > bx1 || y > by1) continue;
       fragment(y * s.width + x, A.z + (B.z - A.z) * t, a.colour.map((v, i) => v + (b.colour[i] - v) * t), 0);
     }
   }
@@ -391,6 +404,7 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
       alpha: s.caps.has(CAP.ALPHA_TEST) ? `${s.alphaFunc},${s.alphaRef}` : '',
       depth: s.caps.has(CAP.DEPTH_TEST) ? `${s.depthFunc},${s.depthMask}` : '',
       range: `${s.depthRange[0]},${s.depthRange[1]}`,
+      scissor: s.caps.has(CAP.SCISSOR_TEST) ? s.scissor.join(',') : '',
       fog: s.caps.has(CAP.FOG) ? `${s.fog.mode},${s.fog.density},${s.fog.start},${s.fog.end},${s.fog.colour.join(',')}` : '',
     };
   }
@@ -414,9 +428,16 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
   // --- the commands. Each runs, or is recorded into the display list being compiled.
   const exec = {
     glClear: (mask) => {
-      if (webgl) { webgl.clear(mask, s.clear, s.clearDepth); return; }
-      if (mask & 0x4000) { const c = s.clear.map((x) => Math.round(clamp01(x) * 255)); for (let i = 0; i < s.color.length; i += 4) for (let k = 0; k < 4; k++) s.color[i + k] = c[k]; }
-      if ((mask & 0x100) && s.depthMask) s.depth.fill(s.clearDepth);
+      const sc = s.caps.has(CAP.SCISSOR_TEST) ? s.scissor : null;
+      if (webgl) { webgl.clear(mask, s.clear, s.clearDepth, sc); return; }
+      const x0 = sc ? Math.max(0, sc[0]) : 0, y0 = sc ? Math.max(0, sc[1]) : 0;
+      const x1 = sc ? Math.min(s.width, sc[0] + sc[2]) : s.width, y1 = sc ? Math.min(s.height, sc[1] + sc[3]) : s.height;
+      const c = s.clear.map((x) => Math.round(clamp01(x) * 255));
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const i = y * s.width + x;
+        if (mask & 0x4000) for (let k = 0; k < 4; k++) s.color[i * 4 + k] = c[k];
+        if ((mask & 0x100) && s.depthMask) s.depth[i] = s.clearDepth;
+      }
     },
     glClearColor: (r, g, b, a) => { s.clear = [r, g, b, a].map(clamp01); },
     glEnable: (cap) => { s.caps.add(cap); },
@@ -507,6 +528,27 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
       else throw new Error(`gl: glTexParameter 0x${p.toString(16)}`);
       t.dirty = true;
     },
+    glScissor: (x, y, w, h) => { s.scissor = [x, y, w, h]; },
+    glPointSize: (v) => { s.pointSize = v; },
+    glColor3fv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
+    glColor4ubv: (v) => { s.colour = [v[0] / 255, v[1] / 255, v[2] / 255, v[3] / 255]; },
+    glEnableClientState: (cap) => { s.arrays[ARRAY[cap]].on = true; },
+    glDisableClientState: (cap) => { s.arrays[ARRAY[cap]].on = false; },
+    glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ptr }); },
+    glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ptr }); },
+    glTexCoordPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.tex, { size, type, stride, ptr }); },
+    // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
+    glArrayElement: (i) => {
+      const read = (a) => {
+        const width = a.type === 0x1401 ? 1 : 4;               // GL_UNSIGNED_BYTE or GL_FLOAT
+        const base = a.ptr + i * (a.stride || a.size * width);
+        return Array.from({ length: a.size }, (_, k) => (a.type === 0x1401 ? M.u8[base + k] / 255 : dv().getFloat32(base + 4 * k, true)));
+      };
+      const { vertex: va, color: ca, tex: ta } = s.arrays;
+      if (ca.on) { const c = read(ca); s.colour = [c[0], c[1], c[2], c.length > 3 ? c[3] : 1]; }
+      if (ta.on) { const t = read(ta); s.tex = [t[0], t[1]]; }
+      if (va.on) { const v = read(va); vertex(v[0], v[1], v.length > 2 ? v[2] : 0); }
+    },
     glTexEnvf: (target, p, v) => { if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`); },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
   };
@@ -517,6 +559,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     glFogfv: (a) => [a[0], f32(a[1], a[0] === FOG.COLOR ? 4 : 1)],
     glVertex3fv: (a) => [f32(a[0], 3)], glTexCoord2fv: (a) => [f32(a[0], 2)], glColor4fv: (a) => [f32(a[0], 4)],
     glColor3ubv: (a) => [[M.u8[a[0]], M.u8[a[0] + 1], M.u8[a[0] + 2]]],
+    glColor4ubv: (a) => [[M.u8[a[0]], M.u8[a[0] + 1], M.u8[a[0] + 2], M.u8[a[0] + 3]]],
+    glColor3fv: (a) => [f32(a[0], 3)],
     glLoadMatrixf: (a) => [f32(a[0], 16)],
   };
   const api = {};
@@ -564,6 +608,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
         for (let k = 0; k < n; k++) M.u8[d + k] = fb[o + k];
       }
     },
+    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); if (s.bound === id) s.bound = 0; } } },
+    glGetError: () => 0,
     glPolygonMode: (face, mode) => { if (mode !== 0x1b02) throw new Error('gl: glPolygonMode other than GL_FILL is not implemented'); },
     glHint: () => {}, glDrawBuffer: () => {}, glReadBuffer: () => {},
     glFinish: () => {}, glFlush: () => {},
@@ -670,6 +716,7 @@ void main() {
     if (st.alpha) { const [f, r] = st.alpha.split(','); g.uniform1i(U.alphaFn, f - 0x200); g.uniform1f(U.alphaRef, +r); } else g.uniform1i(U.alphaFn, -1);
     if (st.depth) { const [f, m] = st.depth.split(','); g.enable(g.DEPTH_TEST); g.depthFunc(+f); g.depthMask(m === 'true'); } else g.disable(g.DEPTH_TEST);
     const [dn, df] = st.range.split(',').map(Number); g.depthRange(dn, df);
+    if (st.scissor) { const [x, y, sw, sh] = st.scissor.split(',').map(Number); g.enable(g.SCISSOR_TEST); g.scissor(x, y, sw, sh); } else g.disable(g.SCISSOR_TEST);
     if (st.fog) {
       const [m, d, s0, e0, r, gg, b, a] = st.fog.split(',').map(Number);
       g.uniform1i(U.fogMode, m === 0x2601 ? 1 : m === 0x0800 ? 2 : 3); g.uniform1f(U.fogDensity, d); g.uniform1f(U.fogStart, s0); g.uniform1f(U.fogEnd, e0); g.uniform4f(U.fogColour, r, gg, b, a);
@@ -701,8 +748,9 @@ void main() {
     tri(a, b, c, flat, st) { begin(st, g.TRIANGLES, 3); push(a, flat); push(b, flat); push(c, flat); },
     line(a, b, st) { begin(st, g.LINES, 2); push(a); push(b); },
     viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); },
-    clear(mask, colour, depth) {
+    clear(mask, colour, depth, scissor) {
       flush();
+      if (scissor) { g.enable(g.SCISSOR_TEST); g.scissor(...scissor); } else g.disable(g.SCISSOR_TEST);
       g.clearColor(colour[0], colour[1], colour[2], colour[3]); g.clearDepth(depth); g.depthMask(true);
       g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0));
       key = null;
@@ -732,6 +780,10 @@ export function glBuiltins(T) {
     glTexImage2D: f(V, U, I, I, I, I, I, U, U, P), glTexSubImage2D: f(V, U, I, I, I, I, I, U, U, P),
     glReadPixels: f(V, I, I, I, I, U, U, P), glPolygonMode: f(V, U, U), glHint: f(V, U, U),
     glDrawBuffer: f(V, U), glReadBuffer: f(V, U),
+    glScissor: f(V, I, I, I, I), glPointSize: f(V, F), glColor3fv: f(V, P), glColor4ubv: f(V, P),
+    glEnableClientState: f(V, U), glDisableClientState: f(V, U), glVertexPointer: f(V, I, U, I, P),
+    glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I),
+    glDeleteTextures: f(V, I, P), glGetError: f(U),
     glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I),
     glGetString: f(P, U), glFinish: f(V), glFlush: f(V),
   };

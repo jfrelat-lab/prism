@@ -402,6 +402,7 @@ export const BUILTINS = new Map(Object.entries({
   localeconv: { ret: P, params: [] }, setlocale: { ret: P, params: [I, P] },
   mktime: { ret: T.LONG, params: [P] }, difftime: { ret: D, params: [T.LONG, T.LONG] },
   strftime: { ret: U, params: [P, U, P, P] },
+  asctime: { ret: P, params: [P] },
   freopen: { ret: P, params: [P, P, P] }, tmpfile: { ret: P, params: [] },
   tmpnam: { ret: P, params: [P] }, system: { ret: I, params: [P] },
   strtoul: { ret: T.ULONG, params: [P, P, I] },
@@ -680,6 +681,32 @@ export class CompileError extends Error {}
  * back together. c-testsuite's 00189 exists for exactly this: it calls fprintf ONLY through a
  * pointer, so nothing else would notice.
  */
+/**
+ * Bind the function-table slots of library functions whose address was taken but whose
+ * implementation did not exist yet at link time. An ENVIRONMENT's functions are installed after the
+ * program is compiled (src/target.js buildEnv, web/worker.js), so a slot for one of them stays empty
+ * -- and Quake II's qgl_linux.c takes the address of all 336 GL 1.1 entry points before calling any.
+ * Call once the environments are in place; a slot already bound, or a name nothing implements, is
+ * left alone (an unimplemented one still throws when called through).
+ */
+export function bindLateBuiltins(program) {
+  let n = 0;
+  for (const [name, f] of program.mod.funcs) {
+    // Inside a module an external name carries the module's prefix (`ref_gl$glGetString`); the
+    // library function is the unprefixed one.
+    const base = name.slice(name.lastIndexOf('$') + 1);
+    const impl = program.M.rt[base];
+    if (f.fn || typeof impl !== 'function') continue;
+    const b = BUILTINS.get(base);
+    if (b?.variadic) {
+      const fixed = b.params?.length ?? 0;
+      program.mod.bindFunc(name, (...args) => impl(...args.slice(0, fixed), vaReader(program.M, args[fixed])));
+    } else program.mod.bindFunc(name, impl);
+    n++;
+  }
+  return n;
+}
+
 function bindBuiltinAddr(mod, M, name) {
   const b = BUILTINS.get(name);
   const impl = M.rt[b?.impl ?? name];

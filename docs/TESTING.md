@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Sixty-two now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Sixty-three now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -36,6 +36,7 @@ something outside PRISM that could contradict it.
 | `gate-gears.mjs` | **Mesa 22 (llvmpipe)** drawing the same gears.c, in the oracle container, on a surfaceless-EGL GLUT harness | frames 0, 25 and 50: at most 0.1% of pixels differ beyond 8 levels (2-3 of 90,000 do) |
 | WebGL in the page (browser check, no CLI gate) | **Mesa's frames** from `gate-gears`, fetched by the page from `.oracle/gears/` | `?machine=linux&program=gears&glcheck=0,25,50&run=1` posts frames 0, 25 and 50 to `window.PRISM_DIAG.glframes`; 1-4 of 90,000 pixels differ, by at most one level (frame 25 against Mesa's frame 0: 9,028) |
 | `gate-glquake.mjs` | **the same GLQuake source built against Mesa 22** in the oracle, on a GLX-over-EGL harness (tools/oracle/glx-egl.c) | world frame 40 of the demo: at most 0.2% of pixels off by more than 8 (1 of 307,200 is) |
+| `gate-quake2-gl.mjs` | **Quake II 3.19 built as linux/Makefile.i386 builds its GL client** (quake2, ref_gl.so, gamei386.so) against Mesa 22, on tools/oracle/q2-fxmesa-egl.c | swap 120 of demo1: at most 0.2% of pixels off by more than 8 (3 of 307,200 are) |
 | `gate-gl-scenes.mjs` | **Mesa 22**, eleven scenes of tests/gl/scenes.c | textures and the mipmap filters, lightmap blending, alpha test, blending, fog, near-plane clipping, depth range: at most 0.5% of pixels off by more than 8 |
 | `gate-gl-abi.mjs` | **Mesa's `<GL/gl.h>`** | every constant and type PRISM's `<GL/gl.h>` declares |
 | `gate-watcom-clock.mjs` | **Open Watcom's DOS libc**, run under DOSBox-X | `CLOCKS_PER_SEC` and the BIOS-tick steps of `clock()` under the Watcom toolchain |

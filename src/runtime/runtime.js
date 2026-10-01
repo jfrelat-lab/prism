@@ -753,6 +753,20 @@ function makeLibc(M) {
       return Math.floor(ms / 1000) | 0;
     },
     difftime: (a, b) => (a | 0) - (b | 0),
+    /*
+     * asctime, in the exact form the C standard writes it out as code (7.23.3.1):
+     * "%.3s %.3s%3d %.2d:%.2d:%.2d %d\n", into one static buffer that the next call overwrites.
+     */
+    asctime: (tmPtr) => {
+      const dv = M.mod.dv, g = (k) => dv.getInt32(tmPtr + 4 * k, true);
+      const DAY = 'SunMonTueWedThuFriSat', MON = 'JanFebMarAprMayJunJulAugSepOctNovDec';
+      const two = (n) => String(n).padStart(2, '0');
+      const text = `${DAY.substr(3 * g(6), 3)} ${MON.substr(3 * g(4), 3)}${String(g(3)).padStart(3)} ${two(g(2))}:${two(g(1))}:${two(g(0))} ${1900 + g(5)}\n`;
+      M.asctimeBuf ??= M.rt.malloc(64);
+      for (let i = 0; i < text.length; i++) M.u8[M.asctimeBuf + i] = text.charCodeAt(i);
+      M.u8[M.asctimeBuf + text.length] = 0;
+      return M.asctimeBuf;
+    },
     strftime: (dst, max, fmt, tmPtr) => {
       tmIsI386(M, 'strftime');
       const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);

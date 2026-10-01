@@ -90,6 +90,12 @@ int keyboard_init(void);
 void keyboard_close(void);
 void keyboard_seteventhandler(__keyboard_handler handler);
 int keyboard_update(void);
+/* svgalib's translation flags; Quake II's rw_in_svgalib.c asks for DONT_CATCH_CTRLC alone. */
+#define TRANSLATE_CURSORKEYS 1
+#define TRANSLATE_DIAGONAL 2
+#define TRANSLATE_KEYPADENTER 4
+#define DONT_CATCH_CTRLC 8
+int keyboard_translatekeys(int mask);
 #endif
 `;
 

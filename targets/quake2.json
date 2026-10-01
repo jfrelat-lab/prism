@@ -50,6 +50,7 @@
       "server/sv_world.c",
       "game/q_shared.c",
       "linux/vid_so.c",
+      "linux/vid_menu.c",
       "null/snddma_null.c",
       "null/cd_null.c",
       "linux/sys_linux.c",
@@ -421,6 +422,98 @@
       ],
       "_args": "demo1 is the map the DATA here has, and it is what web/programs/quake2.json already uses for the Linux client. This variant said base1 for a while, copied from the solaris one -- which is a DEDICATED SERVER and so never had to draw what it loaded. vid_fullscreen 0 is the real branch selector: rw_imp.c takes DIB_Init when windowed and DDRAW_Init when not, and DirectDraw is declared here and refused.",
       "_modules": "BOTH modules, because a variant's block REPLACES the base's rather than extending it -- declaring only ref_soft dropped `game`, LoadLibrary found no gamex86.dll and Quake II said so: 'failed to load game DLL'. The soname is the Win32 one from sys_win.c:479; the same module is gamei386.so on Linux and the .def file it exports from is the same either way."
+    },
+    "gl": {
+      "title": "QUAKE II 3.19 (Linux, ref_gl on fxMesa, C_ONLY)",
+      "host": "fxmesa",
+      "_doc": "The client the base target is, with the renderer linux/Makefile.i386 builds as ref_gl.so: REF_GL_OBJS -- the nine ref_gl/*.c, linux/qgl_linux.c, linux/gl_fxmesa.c (Mesa's full-screen 3Dfx context; that build has no GLX) and linux/rw_in_svgalib.c for keys and the mouse. q_shared.c, q_shlinux.c and glob.c are in REF_GL_OBJS too but, as for ref_soft, a module sees the main one's copies. OpenGL is src/env/gl.js, fxMesa src/env/fxmesa.js, svgalib src/env/svgalib.js. vid_so.c loads ref_<vid_ref>.so, so +set vid_ref gl selects it.",
+      "args": "+set vid_ref gl",
+      "env": [
+        "stdio",
+        "dl",
+        "svgalib",
+        "gl",
+        "fxmesa"
+      ],
+      "modules": {
+        "ref_gl": {
+          "units": [
+            "ref_gl/gl_draw.c",
+            "ref_gl/gl_image.c",
+            "ref_gl/gl_light.c",
+            "ref_gl/gl_mesh.c",
+            "ref_gl/gl_model.c",
+            "ref_gl/gl_rmain.c",
+            "ref_gl/gl_rmisc.c",
+            "ref_gl/gl_rsurf.c",
+            "ref_gl/gl_warp.c",
+            "linux/qgl_linux.c",
+            "linux/gl_fxmesa.c",
+            "linux/rw_in_svgalib.c"
+          ],
+          "soname": "ref_gl.so",
+          "exportsFrom": "ref_gl/ref_gl.def"
+        },
+        "game": {
+          "_doc": "linux/Makefile.i386's GAME_OBJS. q_shared.c and m_flash.c are NOT repeated here even though the real build compiles them into the game too: a module already sees the main one's symbols, which is where those live.",
+          "units": [
+            "game/g_ai.c",
+            "game/p_client.c",
+            "game/g_chase.c",
+            "game/g_cmds.c",
+            "game/g_svcmds.c",
+            "game/g_combat.c",
+            "game/g_func.c",
+            "game/g_items.c",
+            "game/g_main.c",
+            "game/g_misc.c",
+            "game/g_monster.c",
+            "game/g_phys.c",
+            "game/g_save.c",
+            "game/g_spawn.c",
+            "game/g_target.c",
+            "game/g_trigger.c",
+            "game/g_turret.c",
+            "game/g_utils.c",
+            "game/g_weapon.c",
+            "game/m_actor.c",
+            "game/m_berserk.c",
+            "game/m_boss2.c",
+            "game/m_boss3.c",
+            "game/m_boss31.c",
+            "game/m_boss32.c",
+            "game/m_brain.c",
+            "game/m_chick.c",
+            "game/m_flipper.c",
+            "game/m_float.c",
+            "game/m_flyer.c",
+            "game/m_gladiator.c",
+            "game/m_gunner.c",
+            "game/m_hover.c",
+            "game/m_infantry.c",
+            "game/m_insane.c",
+            "game/m_medic.c",
+            "game/m_move.c",
+            "game/m_mutant.c",
+            "game/m_parasite.c",
+            "game/m_soldier.c",
+            "game/m_supertank.c",
+            "game/m_tank.c",
+            "game/p_hud.c",
+            "game/p_trail.c",
+            "game/p_view.c",
+            "game/p_weapon.c"
+          ],
+          "soname": "gamei386.so",
+          "exportsFrom": "game/game.def",
+          "_newer": "g_chase.c is not in GAME_OBJS either, and g_cmds.c and p_client.c call four of its functions. Same finding as cl_newfx.c: linux/Makefile.i386 is older than the source beside it."
+        }
+      },
+      "files": {
+        "/etc/quake2.conf": ".",
+        "./ref_gl.so": "(linked into this program; the file is what the package installs, and vid_so.c stat()s it and wants it owned by root)"
+      },
+      "_files": "The installation, as for the base target: /etc/quake2.conf names the ref directory, and ref_gl.so is there because the package put it there. vid_so.c stat()s every ref but softx and refuses one not owned by root -- svgalib needs root -- so the file must exist; PRISM's only user is root."
     }
   }
 }

@@ -17,7 +17,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { toolchainCompile } from './toolchain.js';
 import { join, basename, dirname, resolve as resolvePath } from 'node:path';
-import { compileProgram } from './compile.js';
+import { compileProgram, bindLateBuiltins } from './compile.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
@@ -441,6 +441,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   }
   const env = buildEnv(program.M, target.env ?? ['stdio'],
     { ...envExtra, dl: { modules: sonames, ...(envExtra.dl ?? {}) } });
+  // Slots of environment functions whose address the program took, now that they exist.
+  bindLateBuiltins(program);
   /*
    * And the same answer for a Win32 program, through the table src/env/win32-app.c already walks.
    * A no-op unless the image actually declares `prism_extra_exports`, so every other target is

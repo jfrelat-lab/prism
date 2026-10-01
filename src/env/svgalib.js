@@ -159,6 +159,9 @@ export function installSvgalib(M, { publish = null, keyboard = null, mouse = nul
     keyboard_init: () => 0,
     keyboard_close: () => 0,
     keyboard_seteventhandler: (fn) => { state.keyHandler = fn | 0; return 0; },
+    // The raw scan codes PRISM delivers are already untranslated; a flag other than
+    // DONT_CATCH_CTRLC (which only stops svgalib trapping Ctrl-C) would change them, so it is refused.
+    keyboard_translatekeys: (mask) => { if ((mask | 0) & ~8) throw new Error(`svgalib: keyboard_translatekeys(${mask}) translation is not implemented`); return 0; },
     /*
      * ONE event per call, and non-zero while there might be more: the client's loop is
      * `while (keyboard_update());`, so a function that drained everything and returned 1 would spin
@@ -233,6 +236,7 @@ export function svgalibBuiltins(T) {
     keyboard_init: f(I),
     keyboard_close: f(V),
     keyboard_seteventhandler: f(V, P),
+    keyboard_translatekeys: f(I, I),
     keyboard_update: f(I),
     outb: f(V, I, I),
     outw: f(V, I, I),
