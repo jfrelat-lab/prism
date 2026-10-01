@@ -58,7 +58,9 @@
         { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" },
         { "program": "jumpnbump-sdl2", "file": "jumpnbump.sdl2", "date": "Sep 16  2025" },
         { "program": "opentyrian", "file": "opentyrian", "date": "Aug 15  2026" },
-        { "program": "gears", "file": "gears", "date": "Sep 30  2026" }
+        { "program": "gears", "file": "gears", "date": "Sep 30  2026" },
+        { "program": "morph3d", "file": "morph3d", "date": "Jul 13  2010" },
+        { "program": "texobj", "file": "texobj", "date": "Jul 13  2010" }
       ],
       "_quake2gl": "quake2.gl is the same quake2 binary with ref_gl.so beside it (vid_ref gl), the renderer the 3.19 Makefile.i386 built; the file name is the shelf's, so the two renderers can sit side by side.",
       "_glquake": "glquake.glx is Makefile.linuxi386's own name for the GLX build. Its date is the day id released the source under the GPL, which is when that makefile target reached anyone outside id; the 1997 GLQuake binaries were Windows ones.",

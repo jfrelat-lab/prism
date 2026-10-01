@@ -1,0 +1,22 @@
+{
+  "name": "texobj",
+  "title": "texobj (Brian Paul; Mesa tests)",
+  "dir": "corpus/mesademos",
+  "fetch": "mkdir -p corpus/mesademos && curl -sfL -o corpus/mesademos/texobj.c https://gitlab.freedesktop.org/mesa/demos/-/raw/mesa-demos-8.0.1/src/tests/texobj.c",
+  "_version": "mesa-demos 8.0.1 (2010-07-13), the first release of the demos as their own repository: GL 1.x and GLUT only, before the GLEW and later glad loaders and PNG textures arrived.",
+  "_doc": "Two texture objects bound in turn onto two spinning quads -- glGenTextures, glBindTexture, glTexImage2D with NEAREST and LINEAR filters, glIsTexture. Held to Mesa by tools/gate-mesa-demos.mjs.",
+  "units": {
+    "list": [
+      "texobj.c"
+    ]
+  },
+  "compile": {
+    "memory": 16,
+    "collect": true
+  },
+  "env": [
+    "stdio",
+    "gl",
+    "glut"
+  ]
+}

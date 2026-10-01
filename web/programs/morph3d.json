@@ -1,0 +1,15 @@
+{
+  "title": "MORPH3D",
+  "subtitle": "Five morphing platonic polyhedra, two-sided lighting — Mesa demos 8.0.1",
+  "target": "morph3d",
+  "host": "glut",
+  "fps": 60,
+  "controls": [
+    [
+      "1 to 5",
+      "tetrahedron, cube, octahedron, dodecahedron, icosahedron"
+    ]
+  ],
+  "_why": "A second whole GLUT program on PRISM's GL after gears: two-sided lighting with one material on both faces, two lights, a glLightModel ambient. Held to Mesa by tools/gate-mesa-demos.mjs (at most 1 of 307,200 pixels per frame).",
+  "_date": "mesa-demos 8.0.1 was tagged on 13 July 2010."
+}

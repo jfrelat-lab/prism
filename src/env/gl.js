@@ -36,6 +36,7 @@ const CAP = {
 const ARRAY = { 0x8074: 'vertex', 0x8076: 'color', 0x8078: 'tex' };
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
+const LIGHT_MODEL = { LOCAL_VIEWER: 0x0b51, TWO_SIDE: 0x0b52, AMBIENT: 0x0b53 };
 const COMPILE_AND_EXECUTE = 0x1301;
 const TEX = {
   MAG: 0x2800, MIN: 0x2801, WRAP_S: 0x2802, WRAP_T: 0x2803,
@@ -90,10 +91,16 @@ function baseFormat(internal) {
   }
 }
 
-export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
+/*
+ * `version` is what glGetString(GL_VERSION) says. A program may pick its path by it -- Mesa's texobj
+ * uses texture objects on "1.1" and display lists otherwise -- so a gate can ask for either, as
+ * MESA_GL_VERSION_OVERRIDE does on the reference side.
+ */
+export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM' } = {}) {
   let webgl = null;                         // the WebGL2 rasteriser when backend is 'webgl' (makeWebGL)
   const dv = () => M.mod.dv;
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
+  const material = () => ({ ambient: [0.2, 0.2, 0.2, 1], diffuse: [0.8, 0.8, 0.8, 1], specular: [0, 0, 0, 1], emission: [0, 0, 0, 1], shininess: 0 });
   const light = () => ({ ambient: [0, 0, 0, 1], diffuse: [0, 0, 0, 1], specular: [0, 0, 0, 1], position: [0, 0, 1, 0] });
   const newTexture = () => ({ levels: [], base: 'RGBA', min: TEX.NL, mag: TEX.LINEAR, wrapS: TEX.REPEAT, wrapT: TEX.REPEAT, gpu: null, dirty: true });
   const s = {
@@ -102,8 +109,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     mode: MODELVIEW, stacks: { [MODELVIEW]: [ident()], [PROJECTION]: [ident()] },
     caps: new Set(), shade: 0x1d01, frontFace: CCW, cullFace: BACK,
     normal: [0, 0, 1], colour: [1, 1, 1, 1], tex: [0, 0],
-    material: { ambient: [0.2, 0.2, 0.2, 1], diffuse: [0.8, 0.8, 0.8, 1], specular: [0, 0, 0, 1], emission: [0, 0, 0, 1], shininess: 0 },
-    sceneAmbient: [0.2, 0.2, 0.2, 1],
+    material: material(), backMaterial: material(),
+    sceneAmbient: [0.2, 0.2, 0.2, 1], twoSide: false,
     lights: Array.from({ length: 8 }, (_, k) => {
       const l = light();
       if (k === 0) { l.diffuse = [1, 1, 1, 1]; l.specular = [1, 1, 1, 1]; }
@@ -113,7 +120,7 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     alphaFunc: 0x207, alphaRef: 0, blend: [1, 0],
     envMode: TEX.MODULATE,
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
-    textures: new Map([[0, newTexture()]]), bound: 0,
+    textures: new Map([[0, newTexture()]]), bound: 0, nextTexture: 1, genTextures: new Set(),
     arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false } },
     scissor: [0, 0, 0, 0], pointSize: 1,
     prim: null, verts: [],
@@ -134,8 +141,8 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
   }
 
   // --- per-vertex work
-  function litColour(eyeNormal) {
-    const m = s.material, out = [0, 0, 0, m.diffuse[3]];
+  function litColour(m, eyeNormal) {
+    const out = [0, 0, 0, m.diffuse[3]];
     for (let k = 0; k < 3; k++) out[k] = m.emission[k] + s.sceneAmbient[k] * m.ambient[k];
     for (let li = 0; li < 8; li++) {
       const L = s.lights[li];
@@ -156,20 +163,24 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
     const eye = xform(mv, x, y, z, 1);
     const clip = xform(pr, eye[0], eye[1], eye[2], eye[3]);
-    let colour;
+    let colour, back = null;
     if (s.caps.has(CAP.LIGHTING)) {
       const nm = normalMatrix(mv), n = s.normal;
       let en = [nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]];
       if (s.caps.has(CAP.NORMALIZE)) en = norm3(en);
-      colour = litColour(en);
+      colour = litColour(s.material, en);
+      // Two-sided: the colour a back face shows, lit with the back material and the normal reversed.
+      // Which of the two a triangle gets is known only once its window-space winding is (triangle()).
+      if (s.twoSide) back = litColour(s.backMaterial, [-en[0], -en[1], -en[2]]);
     } else colour = s.colour.map(clamp01);
-    s.verts.push({ clip, colour, tex: [s.tex[0], s.tex[1]], eyeZ: Math.abs(eye[2] / (eye[3] || 1)) });
+    s.verts.push({ clip, colour, back, tex: [s.tex[0], s.tex[1]], eyeZ: Math.abs(eye[2] / (eye[3] || 1)) });
   }
 
   // --- clipping against the near plane (z + w >= 0), every attribute linear in clip space
   const lerpV = (a, b, t) => ({
     clip: a.clip.map((v, k) => v + (b.clip[k] - v) * t),
     colour: a.colour.map((v, k) => v + (b.colour[k] - v) * t),
+    back: a.back && a.back.map((v, k) => v + (b.back[k] - v) * t),
     tex: [a.tex[0] + (b.tex[0] - a.tex[0]) * t, a.tex[1] + (b.tex[1] - a.tex[1]) * t],
     eyeZ: a.eyeZ + (b.eyeZ - a.eyeZ) * t,
   });
@@ -348,17 +359,22 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
       }
     }
   }
-  function triangle(a, b, c, flatColour) {
+  function triangle(a, b, c, provoking) {
     s.stats.triangles++;
     const poly = clipNear([a, b, c]);
     if (poly.length < 3) return;
+    const asBack = (v) => ({ ...v, colour: v.back });
     for (let k = 1; k + 1 < poly.length; k++) {
-      const A = toWindow(poly[0]), B = toWindow(poly[k]), C = toWindow(poly[k + 1]);
+      let p0 = poly[0], p1 = poly[k], p2 = poly[k + 1];
+      let A = toWindow(p0), B = toWindow(p1), C = toWindow(p2);
       const area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
       if (area === 0) continue;
       const front = (area > 0) === (s.frontFace === CCW);
       if (s.caps.has(CAP.CULL_FACE) && (s.cullFace === FRONT_AND_BACK || (s.cullFace === BACK) === !front)) { s.stats.culled++; continue; }
-      if (webgl) webgl.tri(poly[0], poly[k], poly[k + 1], flatColour, gpuState());
+      const back = !front && p0.back;
+      if (back) { p0 = asBack(p0); p1 = asBack(p1); p2 = asBack(p2); A = toWindow(p0); B = toWindow(p1); C = toWindow(p2); }
+      const flatColour = provoking ? (back ? provoking.back : provoking.colour) : null;
+      if (webgl) webgl.tri(p0, p1, p2, flatColour, gpuState());
       else rasterTriangle(A, B, C, flatColour);
     }
   }
@@ -377,7 +393,7 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
   }
   function assemble(mode, v) {
     const flat = s.shade === FLAT;
-    const tri = (a, b, c, provoking) => triangle(v[a], v[b], v[c], flat ? v[provoking].colour : null);
+    const tri = (a, b, c, provoking) => triangle(v[a], v[b], v[c], flat ? v[provoking] : null);
     switch (mode) {
       case 0x0001: for (let i = 0; i + 1 < v.length; i += 2) line(v[i], v[i + 1]); break;
       case 0x0003: for (let i = 0; i + 1 < v.length; i++) line(v[i], v[i + 1]); break;
@@ -449,6 +465,7 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     glDepthFunc: (f) => { s.depthFunc = f; },
     glDepthMask: (m) => { s.depthMask = !!m; },
     glDepthRange: (n, f) => { s.depthRange = [clamp01(n), clamp01(f)]; },
+    glClearDepth: (d) => { s.clearDepth = clamp01(d); },
     glAlphaFunc: (f, ref) => { s.alphaFunc = f; s.alphaRef = clamp01(ref); },
     glBlendFunc: (sf, df) => { s.blend = [sf, df]; },
     glMatrixMode: (m) => { s.mode = m; },
@@ -503,16 +520,24 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
       else throw new Error(`gl: glLightfv pname 0x${pname.toString(16)}`);
     },
     glMaterialfv: (face, pname, v) => {
-      if (face === BACK) return;                           // one-sided lighting: back is never shown lit
-      const m = s.material;
-      if (pname === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = v; m.diffuse = v; }
-      else if (pname === PNAME.AMBIENT) m.ambient = v;
-      else if (pname === PNAME.DIFFUSE) m.diffuse = v;
-      else if (pname === PNAME.SPECULAR) m.specular = v;
-      else if (pname === PNAME.EMISSION) m.emission = v;
-      else if (pname === PNAME.SHININESS) m.shininess = v[0];
-      else throw new Error(`gl: glMaterialfv pname 0x${pname.toString(16)}`);
+      for (const m of face === FRONT ? [s.material] : face === BACK ? [s.backMaterial] : [s.material, s.backMaterial]) {
+        if (pname === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = v; m.diffuse = v; }
+        else if (pname === PNAME.AMBIENT) m.ambient = v;
+        else if (pname === PNAME.DIFFUSE) m.diffuse = v;
+        else if (pname === PNAME.SPECULAR) m.specular = v;
+        else if (pname === PNAME.EMISSION) m.emission = v;
+        else if (pname === PNAME.SHININESS) m.shininess = v[0];
+        else throw new Error(`gl: glMaterialfv pname 0x${pname.toString(16)}`);
+      }
     },
+    glLightModelfv: (pname, v) => {
+      if (pname === LIGHT_MODEL.AMBIENT) s.sceneAmbient = v;
+      else if (pname === LIGHT_MODEL.TWO_SIDE) s.twoSide = v[0] !== 0;
+      else if (pname === LIGHT_MODEL.LOCAL_VIEWER) { if (v[0] !== 0) throw new Error('gl: GL_LIGHT_MODEL_LOCAL_VIEWER is not implemented'); }
+      else throw new Error(`gl: glLightModel pname 0x${pname.toString(16)}`);
+    },
+    glLightModelf: (pname, v) => exec.glLightModelfv(pname, [v]),
+    glLightModeli: (pname, v) => exec.glLightModelfv(pname, [v]),
     glFogf: (p, v) => { if (p === FOG.MODE) s.fog.mode = v; else if (p === FOG.DENSITY) s.fog.density = v; else if (p === FOG.START) s.fog.start = v; else if (p === FOG.END) s.fog.end = v; },
     glFogi: (p, v) => exec.glFogf(p, v),
     glFogfv: (p, v) => { if (p === FOG.COLOR) s.fog.colour = v.map(clamp01); else exec.glFogf(p, v[0]); },
@@ -550,6 +575,14 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
       if (va.on) { const v = read(va); vertex(v[0], v[1], v.length > 2 ? v[2] : 0); }
     },
     glTexEnvf: (target, p, v) => { if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`); },
+    glTexEnvi: (target, p, v) => exec.glTexEnvf(target, p, v),
+    glTexParameteri: (target, p, v) => exec.glTexParameterf(target, p, v),
+    glTexImage2D: (target, level, internal, w, h, border, format, type, texels) => {
+      const t = texture();
+      t.base = baseFormat(internal);
+      t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4) };
+      t.dirty = true;
+    },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
   };
   // Array arguments are read at CALL time, so a display list keeps the values (the spec's copy rule).
@@ -557,11 +590,16 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     glLightfv: (a) => [a[0], a[1], f32(a[2], a[1] === PNAME.SHININESS ? 1 : 4)],
     glMaterialfv: (a) => [a[0], a[1], f32(a[2], a[1] === PNAME.SHININESS ? 1 : 4)],
     glFogfv: (a) => [a[0], f32(a[1], a[0] === FOG.COLOR ? 4 : 1)],
+    glLightModelfv: (a) => [a[0], f32(a[1], a[0] === LIGHT_MODEL.AMBIENT ? 4 : 1)],
     glVertex3fv: (a) => [f32(a[0], 3)], glTexCoord2fv: (a) => [f32(a[0], 2)], glColor4fv: (a) => [f32(a[0], 4)],
     glColor3ubv: (a) => [[M.u8[a[0]], M.u8[a[0] + 1], M.u8[a[0] + 2]]],
     glColor4ubv: (a) => [[M.u8[a[0]], M.u8[a[0] + 1], M.u8[a[0] + 2], M.u8[a[0] + 3]]],
     glColor3fv: (a) => [f32(a[0], 3)],
     glLoadMatrixf: (a) => [f32(a[0], 16)],
+    glTexImage2D: (a) => {
+      if (a[7] !== 0x1401) throw new Error(`gl: texel type 0x${a[7].toString(16)} (only GL_UNSIGNED_BYTE)`);
+      return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8]) : null];
+    },
   };
   const api = {};
   for (const name of Object.keys(exec)) {
@@ -578,7 +616,7 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
     glEndList: () => { s.lists.set(s.recordingId, s.recording); s.recording = null; },
     glDeleteLists: (n, range) => { for (let k = 0; k < range; k++) s.lists.delete(n + k); },
     glGetString: (name) => {
-      const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: '1.1 PRISM', 0x1f03: '' }[name];
+      const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: version, 0x1f03: '' }[name];
       if (text === undefined) return 0;
       if (!s.strings.has(name)) s.strings.set(name, M.mod.intern([...new TextEncoder().encode(text), 0]));
       return s.strings.get(name);
@@ -587,13 +625,6 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
       const m = p === 0x0ba6 ? s.stacks[MODELVIEW].at(-1) : p === 0x0ba7 ? s.stacks[PROJECTION].at(-1) : null;
       if (!m) throw new Error(`gl: glGetFloatv 0x${p.toString(16)}`);
       for (let k = 0; k < 16; k++) dv().setFloat32(out + 4 * k, m[k], true);
-    },
-    glTexImage2D: (target, level, internal, w, h, border, format, type, ptr) => {
-      if (type !== 0x1401) throw new Error(`gl: texel type 0x${type.toString(16)} (only GL_UNSIGNED_BYTE)`);
-      const t = texture();
-      t.base = baseFormat(internal);
-      t.levels[level] = { w, h, data: ptr ? toRGBA(format, w, h, ptr) : new Uint8Array(w * h * 4) };
-      t.dirty = true;
     },
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr);
@@ -608,8 +639,17 @@ export function installGL(M, { onFrame = null, backend = 'soft' } = {}) {
         for (let k = 0; k < n; k++) M.u8[d + k] = fb[o + k];
       }
     },
-    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); if (s.bound === id) s.bound = 0; } } },
+    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; } } },
     glGetError: () => 0,
+    glIsTexture: (id) => (id && s.textures.has(id) ? 1 : 0),
+    // Names no texture uses and none handed out before; they become textures when first bound (GL 1.1, 3.8.8).
+    glGenTextures: (n, out) => {
+      for (let k = 0; k < n; k++) {
+        while (s.textures.has(s.nextTexture) || s.genTextures.has(s.nextTexture)) s.nextTexture++;
+        s.genTextures.add(s.nextTexture);
+        dv().setUint32(out + 4 * k, s.nextTexture, true);
+      }
+    },
     glPolygonMode: (face, mode) => { if (mode !== 0x1b02) throw new Error('gl: glPolygonMode other than GL_FILL is not implemented'); },
     glHint: () => {}, glDrawBuffer: () => {}, glReadBuffer: () => {},
     glFinish: () => {}, glFlush: () => {},
@@ -767,7 +807,7 @@ export function glBuiltins(T) {
   return {
     glClear: f(V, U), glClearColor: f(V, F, F, F, F), glEnable: f(V, U), glDisable: f(V, U),
     glShadeModel: f(V, U), glCullFace: f(V, U), glFrontFace: f(V, U), glViewport: f(V, I, I, I, I),
-    glDepthFunc: f(V, U), glDepthMask: f(V, U), glDepthRange: f(V, D, D), glAlphaFunc: f(V, U, F), glBlendFunc: f(V, U, U),
+    glDepthFunc: f(V, U), glDepthMask: f(V, U), glDepthRange: f(V, D, D), glClearDepth: f(V, D), glAlphaFunc: f(V, U, F), glBlendFunc: f(V, U, U),
     glMatrixMode: f(V, U), glLoadIdentity: f(V), glLoadMatrixf: f(V, P), glPushMatrix: f(V), glPopMatrix: f(V),
     glTranslatef: f(V, F, F, F), glRotatef: f(V, F, F, F, F), glScalef: f(V, F, F, F),
     glFrustum: f(V, D, D, D, D, D, D), glOrtho: f(V, D, D, D, D, D, D), glGetFloatv: f(V, U, P),
@@ -775,15 +815,16 @@ export function glBuiltins(T) {
     glNormal3f: f(V, F, F, F), glColor3f: f(V, F, F, F), glColor4f: f(V, F, F, F, F), glColor4fv: f(V, P), glColor3ubv: f(V, P),
     glTexCoord2f: f(V, F, F), glTexCoord2fv: f(V, P),
     glLightfv: f(V, U, U, P), glMaterialfv: f(V, U, U, P),
+    glLightModelfv: f(V, U, P), glLightModelf: f(V, U, F), glLightModeli: f(V, U, I), glIsTexture: f(U, U),
     glFogf: f(V, U, F), glFogi: f(V, U, I), glFogfv: f(V, U, P),
-    glBindTexture: f(V, U, U), glTexParameterf: f(V, U, U, F), glTexEnvf: f(V, U, U, F),
+    glBindTexture: f(V, U, U), glTexParameterf: f(V, U, U, F), glTexEnvf: f(V, U, U, F), glTexParameteri: f(V, U, U, I), glTexEnvi: f(V, U, U, I),
     glTexImage2D: f(V, U, I, I, I, I, I, U, U, P), glTexSubImage2D: f(V, U, I, I, I, I, I, U, U, P),
     glReadPixels: f(V, I, I, I, I, U, U, P), glPolygonMode: f(V, U, U), glHint: f(V, U, U),
     glDrawBuffer: f(V, U), glReadBuffer: f(V, U),
     glScissor: f(V, I, I, I, I), glPointSize: f(V, F), glColor3fv: f(V, P), glColor4ubv: f(V, P),
     glEnableClientState: f(V, U), glDisableClientState: f(V, U), glVertexPointer: f(V, I, U, I, P),
     glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I),
-    glDeleteTextures: f(V, I, P), glGetError: f(U),
+    glDeleteTextures: f(V, I, P), glGenTextures: f(V, I, P), glGetError: f(U),
     glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I),
     glGetString: f(P, U), glFinish: f(V), glFlush: f(V),
   };

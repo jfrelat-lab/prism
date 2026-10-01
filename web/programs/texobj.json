@@ -1,0 +1,10 @@
+{
+  "title": "TEXOBJ",
+  "subtitle": "Two quads, two texture objects — Mesa tests 8.0.1",
+  "target": "texobj",
+  "host": "glut",
+  "fps": 60,
+  "controls": [],
+  "_why": "Texture objects (glGenTextures, glBindTexture, glIsTexture) on the path a GL 1.1 implementation gets, and textures compiled into display lists on the one any other version gets; both held to Mesa by tools/gate-mesa-demos.mjs.",
+  "_date": "mesa-demos 8.0.1 was tagged on 13 July 2010."
+}

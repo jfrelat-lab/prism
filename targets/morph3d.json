@@ -1,0 +1,22 @@
+{
+  "name": "morph3d",
+  "title": "morph3d (Marcelo Fernandes Vianna, 1997; Mesa demos)",
+  "dir": "corpus/mesademos",
+  "fetch": "mkdir -p corpus/mesademos && curl -sfL -o corpus/mesademos/morph3d.c https://gitlab.freedesktop.org/mesa/demos/-/raw/mesa-demos-8.0.1/src/demos/morph3d.c",
+  "_version": "mesa-demos 8.0.1 (2010-07-13), the first release of the demos as their own repository: GL 1.x and GLUT only, before the GLEW and later glad loaders and PNG textures arrived.",
+  "_doc": "Five morphing polyhedra drawn face by face with glBegin(GL_TRIANGLES): two-sided lighting, GL_LIGHT_MODEL_LOCAL_VIEWER off, specular, and a projection rebuilt by glFrustum on every reshape. A second whole program on the GL layer after gears, held to Mesa by tools/gate-mesa-demos.mjs.",
+  "units": {
+    "list": [
+      "morph3d.c"
+    ]
+  },
+  "compile": {
+    "memory": 16,
+    "collect": true
+  },
+  "env": [
+    "stdio",
+    "gl",
+    "glut"
+  ]
+}
