@@ -609,11 +609,13 @@ typedef enum {
 
 /* ---- the base types. i386 Windows: long is 32 bits, as it is here. */
 typedef unsigned char BYTE, *LPBYTE, *PBYTE;
+/* rpcndr.h's, which windows.h brings in: Hexen II's mstrconv.c uses byte with no header of its own. */
+typedef unsigned char byte;
 typedef unsigned short WORD, *LPWORD;
 typedef unsigned long DWORD, *LPDWORD, *PDWORD;
 typedef int BOOL, *LPBOOL, INT, *LPINT;
 typedef unsigned int UINT, *LPUINT;
-typedef long LONG, *LPLONG;
+typedef long LONG, *LPLONG, *PLONG;
 typedef unsigned long ULONG, *PULONG;
 typedef short SHORT;
 typedef unsigned short USHORT;
@@ -1128,6 +1130,13 @@ typedef struct _WIN32_FIND_DATAA {
 } WIN32_FIND_DATAA, WIN32_FIND_DATA;
 HANDLE WINAPI FindFirstFileW(LPCWSTR name, WIN32_FIND_DATAW *out);
 HANDLE WINAPI FindFirstFileA(LPCSTR name, WIN32_FIND_DATAA *out);
+BOOL WINAPI FindNextFileA(HANDLE h, WIN32_FIND_DATAA *out);
+#define FindFirstFile FindFirstFileA
+#define FindNextFile FindNextFileA
+int WINAPIV wsprintfA(LPSTR, LPCSTR, ...);
+#define wsprintf wsprintfA
+void WINAPI DebugBreak(void);
+BOOL WINAPI CopyFile(LPCSTR, LPCSTR, BOOL);
 BOOL WINAPI FindClose(HANDLE h);
 
 /* Owner draw: what WM_DRAWITEM's lParam points at. */
@@ -2300,6 +2309,16 @@ BOOL WINAPI FreeConsole(void);
 HANDLE WINAPI GetStdHandle(DWORD);
 BOOL WINAPI WriteFile(HANDLE, LPCVOID, DWORD, LPDWORD, LPVOID);
 BOOL WINAPI ReadFile(HANDLE, LPVOID, DWORD, LPDWORD, LPVOID);
+#define FILE_BEGIN 0
+#define FILE_CURRENT 1
+#define FILE_END 2
+#define INVALID_SET_FILE_POINTER ((DWORD)-1)
+#define INVALID_FILE_SIZE ((DWORD)0xFFFFFFFF)
+DWORD WINAPI SetFilePointer(HANDLE, LONG, PLONG, DWORD);
+DWORD WINAPI GetFileSize(HANDLE, LPDWORD);
+HGLOBAL WINAPI GlobalHandle(LPCVOID);
+#define GHND (GMEM_MOVEABLE | GMEM_ZEROINIT)
+#define GPTR (0x0000 | GMEM_ZEROINIT)
 BOOL WINAPI GetConsoleScreenBufferInfo(HANDLE, PCONSOLE_SCREEN_BUFFER_INFO);
 BOOL WINAPI SetConsoleScreenBufferSize(HANDLE, COORD);
 BOOL WINAPI SetConsoleCursorPosition(HANDLE, COORD);
@@ -2485,6 +2504,10 @@ DWORD WINAPI timeEndPeriod(UINT period);
    * entry's except a single macro, kept below. So this is now one key.
    */
   'winsock.h': `#include <winsock2.h>
+/* Winsock 1.1's blocking hooks, which WinSock 2 retired; Hexen II's net_wins.c calls both. */
+int WINAPI WSACancelBlockingCall(void);
+FARPROC WINAPI WSASetBlockingHook(FARPROC);
+int WINAPI WSAUnhookBlockingHook(void);
 /* winquake.h calls MAKEWORD to build its version word; this is that macro under a name that cannot
    collide with the windows.h one. */
 #ifndef MAKEWORD_WSA
@@ -2814,7 +2837,30 @@ struct IDirectDrawPalette { IDirectDrawPaletteVtbl *lpVtbl; };
 HRESULT WINAPI DirectDrawCreate(void *lpGUID, LPDIRECTDRAW *lplpDD, void *pUnkOuter);
 #endif
 `,
-  'windowsx.h': '#include <windows.h>\n',
+  /* MSVC's <memory.h> is the mem* half of <string.h>. */
+  'memory.h': '#include <string.h>\n',
+  /* mmreg.h extends mmsystem.h's wave formats; nothing Hexen II's midi.c reads is beyond it. */
+  'mmreg.h': '#include <mmsystem.h>\n',
+  /* IPX addresses, for net_wipx.c. PRISM's sockets refuse AF_IPX, so the driver stands down. */
+  'wsipx.h': `#ifndef _PRISM_WSIPX_H
+#define _PRISM_WSIPX_H
+typedef struct sockaddr_ipx {
+    short sa_family; char sa_netnum[4]; char sa_nodenum[6]; unsigned short sa_socket;
+} SOCKADDR_IPX, *PSOCKADDR_IPX, *LPSOCKADDR_IPX;
+#define NSPROTO_IPX 1000
+#define NSPROTO_SPX 1256
+#define NSPROTO_SPXII 1257
+#endif
+`,
+  'windowsx.h': `#include <windows.h>
+/* The global-memory pointer macros, as the SDK's windowsx.h defines them. */
+#define GlobalPtrHandle(lp) ((HGLOBAL)GlobalHandle(lp))
+#define GlobalLockPtr(lp) ((BOOL)GlobalLock(GlobalPtrHandle(lp)))
+#define GlobalUnlockPtr(lp) GlobalUnlock(GlobalPtrHandle(lp))
+#define GlobalAllocPtr(flags, cb) (GlobalLock(GlobalAlloc((flags), (cb))))
+#define GlobalReAllocPtr(lp, cbNew, flags) (GlobalUnlockPtr(lp), GlobalLock(GlobalReAlloc(GlobalPtrHandle(lp), (cbNew), (flags))))
+#define GlobalFreePtr(lp) (GlobalUnlockPtr(lp), (BOOL)(long)GlobalFree(GlobalPtrHandle(lp)))
+`,
   'objbase.h': '#include <windows.h>\n',
   'mmsystem.h': `
 #ifndef _PRISM_MMSYSTEM_H
@@ -2828,6 +2874,8 @@ typedef DWORD MMRESULT;
 #define MMSYSERR_ALLOCATED 4
 #define MMSYSERR_ERROR 1
 #define MMSYSERR_BADDEVICEID 2
+#define MMSYSERR_INVALHANDLE 5
+#define MMSYSERR_INVALPARAM 11
 #define JOYERR_NOERROR 0
 #define JOYERR_UNPLUGGED 167
 #define JOYCAPS_HASZ 0x0001
@@ -2945,6 +2993,80 @@ MMRESULT WINAPI waveOutUnprepareHeader(HWAVEOUT, LPWAVEHDR, UINT);
 MMRESULT WINAPI waveOutWrite(HWAVEOUT, LPWAVEHDR, UINT);
 MMRESULT WINAPI waveOutGetNumDevs(void);
 UINT WINAPI joyGetNumDevs(void);
+
+/* MIDI output and streams (Hexen II's music), and the auxiliary devices (its CD volume): the SDK's
+   layouts and values. src/env/win32.c answers that there is no MIDI device and no aux device. */
+#define MAXPNAMELEN 32
+#define MAXERRORLENGTH 256
+#define MIDI_MAPPER ((UINT)-1)
+#define MIDIERR_BASE 64
+#define MIDIERR_NODEVICE (MIDIERR_BASE + 4)
+#define CALLBACK_TYPEMASK 0x00070000
+#define CALLBACK_NULL 0x00000000
+#define CALLBACK_WINDOW 0x00010000
+#define CALLBACK_THREAD 0x00020000
+#define CALLBACK_FUNCTION 0x00030000
+#define CALLBACK_EVENT 0x00050000
+#define MOM_OPEN 0x3C7
+#define MOM_CLOSE 0x3C8
+#define MOM_DONE 0x3C9
+#define MOM_POSITIONCB 0x3CA
+#define MHDR_DONE 0x00000001
+#define MHDR_PREPARED 0x00000002
+#define MHDR_INQUEUE 0x00000004
+#define MHDR_ISSTRM 0x00000008
+#define MEVT_F_SHORT 0x00000000L
+#define MEVT_F_LONG 0x80000000L
+#define MEVT_F_CALLBACK 0x40000000L
+#define MEVT_EVENTTYPE(x) ((BYTE)(((x) >> 24) & 0xFF))
+#define MEVT_EVENTPARM(x) ((DWORD)((x) & 0x00FFFFFFL))
+#define MEVT_SHORTMSG ((BYTE)0x00)
+#define MEVT_TEMPO ((BYTE)0x01)
+#define MEVT_NOP ((BYTE)0x02)
+#define MEVT_LONGMSG ((BYTE)0x80)
+#define MEVT_COMMENT ((BYTE)0x82)
+#define MEVT_VERSION ((BYTE)0x84)
+#define MIDIPROP_SET 0x80000000L
+#define MIDIPROP_GET 0x40000000L
+#define MIDIPROP_TIMEDIV 0x00000001L
+#define MIDIPROP_TEMPO 0x00000002L
+#define AUXCAPS_CDAUDIO 1
+#define AUXCAPS_AUXIN 2
+#define AUXCAPS_VOLUME 0x0001
+#define AUXCAPS_LRVOLUME 0x0002
+typedef struct HMIDIOUT__ *HMIDIOUT;
+typedef struct HMIDIIN__ *HMIDIIN;
+typedef struct HMIDISTRM__ *HMIDISTRM;
+typedef HMIDIOUT *LPHMIDIOUT;
+typedef HMIDISTRM *LPHMIDISTRM;
+typedef struct midihdr_tag {
+    LPSTR lpData; DWORD dwBufferLength, dwBytesRecorded, dwUser, dwFlags;
+    struct midihdr_tag *lpNext; DWORD reserved, dwOffset, dwReserved[8];
+} MIDIHDR, *PMIDIHDR, *LPMIDIHDR;
+typedef struct midievent_tag { DWORD dwDeltaTime, dwStreamID, dwEvent, dwParms[1]; } MIDIEVENT;
+typedef struct midiproptimediv_tag { DWORD cbStruct, dwTimeDiv; } MIDIPROPTIMEDIV, *LPMIDIPROPTIMEDIV;
+typedef struct midiproptempo_tag { DWORD cbStruct, dwTempo; } MIDIPROPTEMPO, *LPMIDIPROPTEMPO;
+typedef struct tagAUXCAPS {
+    WORD wMid, wPid; UINT vDriverVersion; char szPname[MAXPNAMELEN];
+    WORD wTechnology, wReserved1; DWORD dwSupport;
+} AUXCAPS, *PAUXCAPS, *LPAUXCAPS;
+MMRESULT WINAPI midiStreamOpen(LPHMIDISTRM, LPUINT, DWORD, DWORD, DWORD, DWORD);
+MMRESULT WINAPI midiStreamClose(HMIDISTRM);
+MMRESULT WINAPI midiStreamOut(HMIDISTRM, LPMIDIHDR, UINT);
+MMRESULT WINAPI midiStreamPause(HMIDISTRM);
+MMRESULT WINAPI midiStreamRestart(HMIDISTRM);
+MMRESULT WINAPI midiStreamStop(HMIDISTRM);
+MMRESULT WINAPI midiStreamProperty(HMIDISTRM, LPBYTE, DWORD);
+MMRESULT WINAPI midiOutPrepareHeader(HMIDIOUT, LPMIDIHDR, UINT);
+MMRESULT WINAPI midiOutUnprepareHeader(HMIDIOUT, LPMIDIHDR, UINT);
+MMRESULT WINAPI midiOutShortMsg(HMIDIOUT, DWORD);
+MMRESULT WINAPI midiOutReset(HMIDIOUT);
+MMRESULT WINAPI midiOutSetVolume(HMIDIOUT, DWORD);
+MMRESULT WINAPI midiOutGetErrorText(MMRESULT, LPSTR, UINT);
+UINT WINAPI auxGetNumDevs(void);
+MMRESULT WINAPI auxGetDevCaps(UINT, LPAUXCAPS, UINT);
+MMRESULT WINAPI auxGetVolume(UINT, LPDWORD);
+MMRESULT WINAPI auxSetVolume(UINT, DWORD);
 DWORD WINAPI timeGetTime(void);
 #define MCI_MAKE_TMSF(t, m, s, f) ((DWORD)(((BYTE)(t)) | ((WORD)(m) << 8) | (((DWORD)(BYTE)(s)) << 16) | (((DWORD)(BYTE)(f)) << 24)))
 #endif

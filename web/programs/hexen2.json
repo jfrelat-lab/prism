@@ -1,0 +1,33 @@
+{
+  "title": "GLHEXEN II",
+  "subtitle": "Raven Software, 1997 · 1.12 (the GPL mission-pack source), the Win32 OpenGL build",
+  "target": "hexen2",
+  "host": "wgl",
+  "args": "-window -nomidi",
+  "argsHint": "-window keeps it in a window (gl_vidnt.c would otherwise ask for a fullscreen mode the page cannot give); -nomidi skips the music, which has no MIDI device to play on here.",
+  "fps": 60,
+  "needsData": {
+    "dir": "hexen2",
+    "hint": "data1/ from the retail CD patched to 1.11 (pak0.pak, pak1.pak, progs.dat, progs2.dat, strings.txt), plus infolist.txt from the GPL source release"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "~",
+      "console"
+    ]
+  ],
+  "_why": "Raven's Quake-derived engine, from its 2000 GPL release: Winquake.dsp's GL Release configuration on src/env/opengl32.c, the same WGL layer GLQuake's and Quake II's Win32 builds draw through.",
+  "_data": "The 1.12 code refuses the 1997 demo's pak0 (its count and checksum say modified, and the demo is not registered), so it runs on the retail data: the CD's data1 patched by Raven's own H2_Patch_v111.exe, run under Wine."
+}

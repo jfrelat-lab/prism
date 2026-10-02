@@ -20,6 +20,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <ctype.h>
+#include <dirent.h>
+#include <stdio.h>
+#include <stdarg.h>
 
 static DWORD prism_last_error = 0;
 
@@ -364,7 +368,145 @@ HANDLE WINAPI CreateFile(LPCSTR name, DWORD access, DWORD share, void *sa,
     SetLastError(2 /* ERROR_FILE_NOT_FOUND */);
     return INVALID_HANDLE_VALUE;
 }
-BOOL WINAPI DeleteFile(LPCSTR name) { (void)name; return 0; }
+/* Files through the stdio layer, which owns PRISM's file table: a Windows path is a stdio path with
+   its separators turned. */
+static void prism_posix_path(char *out, const char *in, int n)
+{
+    int i;
+    for (i = 0; in && in[i] && i < n - 1; i++) out[i] = in[i] == '\\' ? '/' : in[i];
+    out[i] = 0;
+}
+BOOL WINAPI DeleteFile(LPCSTR name)
+{
+    char p[MAX_PATH];
+    prism_posix_path(p, name, sizeof p);
+    if (remove(p) != 0) { SetLastError(2 /* ERROR_FILE_NOT_FOUND */); return 0; }
+    return 1;
+}
+BOOL WINAPI CopyFile(LPCSTR from, LPCSTR to, BOOL failIfExists)
+{
+    char a[MAX_PATH], b[MAX_PATH], buf[4096];
+    FILE *in, *out;
+    size_t n;
+    prism_posix_path(a, from, sizeof a); prism_posix_path(b, to, sizeof b);
+    if (failIfExists && (out = fopen(b, "rb")) != NULL) { fclose(out); SetLastError(80 /* ERROR_FILE_EXISTS */); return 0; }
+    if ((in = fopen(a, "rb")) == NULL) { SetLastError(2 /* ERROR_FILE_NOT_FOUND */); return 0; }
+    if ((out = fopen(b, "wb")) == NULL) { fclose(in); SetLastError(5 /* ERROR_ACCESS_DENIED */); return 0; }
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in); fclose(out);
+    return 1;
+}
+
+/*
+ * ---- THE DIRECTORY WALK, over the stdio layer's opendir (src/env/stdio.js), which derives a
+ * directory's entries from PRISM's file table. Shared by FindFirstFile and MSVC's _findfirst
+ * (src/env/win32.c). The pattern is the last path component, matched the DOS way: case does not
+ * matter, '?' is one character, '*' any run, and "*.*" means every name, dotted or not.
+ */
+struct prism_find { DIR *d; char dir[MAX_PATH]; char pat[MAX_PATH]; };
+
+static int prism_wild(const char *p, const char *s)
+{
+    for (; *p; p++, s++) {
+        if (*p == '*') {
+            for (p++; ; s++) { if (prism_wild(p, s)) return 1; if (!*s) return 0; }
+        }
+        if (!*s) return 0;
+        if (*p != '?' && tolower((unsigned char)*p) != tolower((unsigned char)*s)) return 0;
+    }
+    return !*s;
+}
+
+/* Opens a walk for a Windows path spec; NULL if its directory does not exist. */
+void *prism_find_open(const char *spec)
+{
+    struct prism_find *f;
+    char path[MAX_PATH], *slash = NULL, *q;
+    strncpy(path, spec ? spec : "", sizeof path - 1); path[sizeof path - 1] = 0;
+    for (q = path; *q; q++) { if (*q == '\\') *q = '/'; if (*q == '/') slash = q; }
+    f = (struct prism_find *)calloc(1, sizeof *f);
+    if (!f) return NULL;
+    if (slash) { *slash = 0; strcpy(f->dir, path[0] ? path : "/"); strcpy(f->pat, slash + 1); }
+    else { strcpy(f->dir, "."); strcpy(f->pat, path); }
+    if (!strcmp(f->pat, "*.*")) strcpy(f->pat, "*");
+    f->d = opendir(f->dir);
+    if (!f->d) { free(f); return NULL; }
+    return f;
+}
+/* The next matching name: 1 and fills name/isdir/size, or 0 at the end. */
+int prism_find_next(void *h, char *name, int n, int *isdir, unsigned long *size)
+{
+    struct prism_find *f = (struct prism_find *)h;
+    struct dirent *e;
+    while ((e = readdir(f->d)) != NULL) {
+        char full[MAX_PATH * 2];
+        DIR *sub;
+        FILE *fp;
+        if (!prism_wild(f->pat, e->d_name)) continue;
+        strncpy(name, e->d_name, n - 1); name[n - 1] = 0;
+        sprintf(full, "%s/%s", f->dir, e->d_name);
+        sub = opendir(full);
+        *isdir = sub != NULL;
+        if (sub) closedir(sub);
+        *size = 0;
+        if (!*isdir && (fp = fopen(full, "rb")) != NULL) {
+            fseek(fp, 0, SEEK_END); *size = (unsigned long)ftell(fp); fclose(fp);
+        }
+        return 1;
+    }
+    return 0;
+}
+void prism_find_close(void *h)
+{
+    struct prism_find *f = (struct prism_find *)h;
+    if (!f) return;
+    closedir(f->d);
+    free(f);
+}
+
+static BOOL prism_find_fill(void *h, WIN32_FIND_DATAA *out)
+{
+    int isdir; unsigned long size;
+    char name[MAX_PATH];
+    if (!prism_find_next(h, name, sizeof name, &isdir, &size)) return FALSE;
+    memset(out, 0, sizeof *out);
+    out->dwFileAttributes = isdir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    out->nFileSizeLow = (DWORD)size;
+    strcpy(out->cFileName, name);
+    return TRUE;
+}
+HANDLE WINAPI FindFirstFileA(LPCSTR name, WIN32_FIND_DATAA *out)
+{
+    void *h = prism_find_open(name);
+    if (!h) { SetLastError(3 /* ERROR_PATH_NOT_FOUND */); return INVALID_HANDLE_VALUE; }
+    if (!prism_find_fill(h, out)) { prism_find_close(h); SetLastError(2 /* ERROR_FILE_NOT_FOUND */); return INVALID_HANDLE_VALUE; }
+    return (HANDLE)h;
+}
+BOOL WINAPI FindNextFileA(HANDLE h, WIN32_FIND_DATAA *out)
+{
+    if (!h || h == INVALID_HANDLE_VALUE) return FALSE;
+    if (!prism_find_fill((void *)h, out)) { SetLastError(18 /* ERROR_NO_MORE_FILES */); return FALSE; }
+    return TRUE;
+}
+BOOL WINAPI FindClose(HANDLE h)
+{
+    if (!h || h == INVALID_HANDLE_VALUE) return FALSE;
+    prism_find_close((void *)h);
+    return TRUE;
+}
+
+/* user32's sprintf: its format language is a subset of C's, so C's formats it. */
+int WINAPIV wsprintfA(LPSTR buf, LPCSTR fmt, ...)
+{
+    va_list ap;
+    int n;
+    va_start(ap, fmt);
+    n = vsprintf(buf, fmt, ap);
+    va_end(ap);
+    return n;
+}
+/* A breakpoint with no debugger attached: Windows ends the process, and so does this. */
+void WINAPI DebugBreak(void) { fprintf(stderr, "DebugBreak: breakpoint with no debugger\n"); abort(); }
 DWORD WINAPI GetTempPath(DWORD n, LPSTR buf)
 {
     const char *d = "C:\\TEMP\\";

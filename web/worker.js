@@ -892,6 +892,17 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       if (gen !== lastDrag && move) { lastDrag = gen; move(Atomics.load(ctrl, SLOT.DRAG_X), Atomics.load(ctrl, SLOT.DRAG_Y)); }
       if (Atomics.load(ctrl, SLOT.WIN_CLOSE) && closeWin) { Atomics.store(ctrl, SLOT.WIN_CLOSE, 0); closeWin(); }
     };
+    // Input through the program's own message queue, as the mgl host delivers it.
+    const pumpInput = () => {
+      if (key) for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+      if (activate) { const f = Atomics.load(ctrl, SLOT.FOCUS); if (f !== lastFocus) { activate(f); lastFocus = f; } }
+      if (mouseIn) {
+        const { dx, dy } = mouse.take();
+        const b = mouse.state();
+        if (dx || dy || b !== lastButtons) { mouseIn(dx, dy, b); lastButtons = b; }
+      }
+      pumpWindow();
+    };
     let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
     installWgl(prog.M, {
       onSwap: (_n, gl) => {
@@ -913,19 +924,23 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
           u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
           u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
         }
-        // Input through the program's own message queue, at the frame boundary, as the mgl host does.
-        if (key) for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
-        if (activate) { const f = Atomics.load(ctrl, SLOT.FOCUS); if (f !== lastFocus) { activate(f); lastFocus = f; } }
-        if (mouseIn) {
-          const { dx, dy } = mouse.take();
-          const b = mouse.state();
-          if (dx || dy || b !== lastButtons) { mouseIn(dx, dy, b); lastButtons = b; }
-        }
-        pumpWindow();
+        pumpInput();
         reader.endFrame();
         pace();
       },
     });
+    /*
+     * AND AT THE IDLE BOUNDARY. A game whose window is not active stops drawing and sleeps in
+     * MsgWaitForMultipleObjects until input arrives (sys_win.c's SleepUntilInput, in GLQuake and
+     * Hexen II alike). Delivering focus only at SwapBuffers then deadlocks: no frame, so no
+     * WM_ACTIVATE, so no frame. Hexen II started with the page unfocused and never drew a second one.
+     */
+    const wait = prog.F.MsgWaitForMultipleObjects;
+    if (wait) {
+      const wrappedWait = function (...a) { pumpInput(); reader.endFrame(); pace(); return wait.apply(this, a); };
+      prog.F.MsgWaitForMultipleObjects = wrappedWait;
+      prog.mod.bindFunc('MsgWaitForMultipleObjects', wrappedWait);
+    }
     // Last: opengl32.c took the address of every GL entry point, which exist only now; then the modules.
     bindLateBuiltins(prog);
     bindWin32Modules();

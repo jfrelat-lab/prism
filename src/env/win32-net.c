@@ -119,6 +119,12 @@ void prism_net_pump(void)
 int WINAPI WSAGetLastError(void) { return prism_wsa_error; }
 void WINAPI WSASetLastError(int e) { prism_wsa_error = e; }
 
+/* Winsock 1.1's blocking hooks. No call here blocks in the 1.1 sense, so there is never one to
+   cancel, and the hook in place before any program set one is the default: NULL. */
+int WINAPI WSACancelBlockingCall(void) { return 0; }
+FARPROC WINAPI WSASetBlockingHook(FARPROC hook) { (void)hook; return (FARPROC)0; }
+int WINAPI WSAUnhookBlockingHook(void) { return 0; }
+
 int WINAPI WSAStartup(WORD version, LPWSADATA data)
 {
     if (!data) return WSAEFAULT;

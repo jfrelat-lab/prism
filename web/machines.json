@@ -98,6 +98,8 @@
           "icon": "corpus/quake2/win32/q2.ico" },
         { "program": "quake2-win32", "variant": "win32gl", "name": "QUAKE II GL", "file": "quake2.gl.exe", "date": "Dec  9  1997",
           "icon": "corpus/quake2/win32/q2.ico" },
+        { "program": "hexen2", "name": "GLHEXEN II", "file": "glh2.exe", "date": "Mar  9  1998",
+          "icon": "corpus/hexen2-master/H2MP/code/qe3.ico" },
         { "program": "quake", "variant": "wgl", "name": "GLQUAKE", "file": "glquake.exe",
           "icon": "corpus/Quake/WinQuake/quake.ico" }
       ],

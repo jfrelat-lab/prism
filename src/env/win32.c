@@ -151,6 +151,8 @@ HGLOBAL WINAPI GlobalAlloc(UINT flags, DWORD bytes)
 LPVOID WINAPI GlobalLock(HGLOBAL h) { return (LPVOID)h; }
 BOOL WINAPI GlobalUnlock(HGLOBAL h) { (void)h; return TRUE; }
 HGLOBAL WINAPI GlobalFree(HGLOBAL h) { if (h) free((void *)h); return NULL; }
+/* GlobalLock hands back the handle itself, so the handle of a locked pointer is that pointer. */
+HGLOBAL WINAPI GlobalHandle(LPCVOID p) { return (HGLOBAL)p; }
 
 /* Every page is already writable here; there is no protection to change. */
 BOOL WINAPI VirtualProtect(LPVOID addr, DWORD size, DWORD prot, LPDWORD old)
@@ -1219,24 +1221,31 @@ DWORD WINAPI FormatMessage(DWORD flags, const void *src, DWORD id, DWORD lang,
 }
 
 /*
- * The directory walk, and it finds nothing -- which is a state Quake II is written for, not a
- * refusal dressed up.
- *
- * Sys_FindFirst drives the MENU's lists: saved games, demos, the map list. The DATA does not come
- * through here, because qcommon/files.c:535 adds pak files by numbered name in a loop rather than
- * by scanning, so a game whose directory walk returns nothing still loads every pak it has and
- * plays. What is empty is the file list in a menu nobody has opened yet.
- *
- * Making it real would mean enumerating PRISM's virtual filesystem from C, which needs a primitive
- * the stdio layer does not expose today. That is a small piece of work and it is not this one.
+ * MSVC's directory walk, which q_shwin.c's Sys_FindFirst uses for the menus' lists (saved games,
+ * demos, maps). The same walk as FindFirstFile, in src/env/win32-app.c, over the stdio layer's
+ * opendir; it used to find nothing, because that primitive did not exist yet.
  */
+void *prism_find_open(const char *spec);
+int prism_find_next(void *h, char *name, int n, int *isdir, unsigned long *size);
+void prism_find_close(void *h);
+static int prism_find_info(void *h, struct _finddata_t *info)
+{
+    int isdir; unsigned long size;
+    if (!prism_find_next(h, info->name, sizeof info->name, &isdir, &size)) return -1;
+    info->attrib = isdir ? 0x10 /* _A_SUBDIR */ : 0;
+    info->size = (long)size;
+    info->time_create = info->time_access = info->time_write = 0;
+    return 0;
+}
 long _findfirst(const char *spec, struct _finddata_t *info)
 {
-    (void)spec; (void)info;
-    return -1;
+    void *h = prism_find_open(spec);
+    if (!h) return -1;
+    if (prism_find_info(h, info) < 0) { prism_find_close(h); return -1; }
+    return (long)h;
 }
-int _findnext(long handle, struct _finddata_t *info) { (void)handle; (void)info; return -1; }
-int _findclose(long handle) { (void)handle; return 0; }
+int _findnext(long handle, struct _finddata_t *info) { return handle == -1 ? -1 : prism_find_info((void *)handle, info); }
+int _findclose(long handle) { if (handle != -1) prism_find_close((void *)handle); return 0; }
 
 /*
  * timeGetTime, the multimedia clock Sys_Milliseconds is built on. Milliseconds since the process
@@ -1299,6 +1308,11 @@ BOOL WINAPI WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, LPVOID ov
     if (written) *written = n;
     return TRUE;
 }
+/* No CreateFile here ever opens a file, so every handle these receive is one they must refuse. */
+DWORD WINAPI SetFilePointer(HANDLE h, LONG lo, PLONG hi, DWORD how)
+{ (void)h; (void)lo; (void)hi; (void)how; SetLastError(6 /* ERROR_INVALID_HANDLE */); return INVALID_SET_FILE_POINTER; }
+DWORD WINAPI GetFileSize(HANDLE h, LPDWORD hi)
+{ (void)h; if (hi) *hi = 0; SetLastError(6 /* ERROR_INVALID_HANDLE */); return INVALID_FILE_SIZE; }
 BOOL WINAPI ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPVOID ov)
 {
     (void)h; (void)buf; (void)n; (void)ov;
@@ -1369,6 +1383,37 @@ MMRESULT WINAPI waveOutUnprepareHeader(HWAVEOUT h, LPWAVEHDR hd, UINT n) { (void
 MMRESULT WINAPI waveOutWrite(HWAVEOUT h, LPWAVEHDR hd, UINT n) { (void)h; (void)hd; (void)n; return MMSYSERR_ERROR; }
 
 UINT WINAPI joyGetNumDevs(void) { return 0; }
+
+/*
+ * MIDI and the auxiliary devices: there are none, said the way winmm says it. Hexen II opens a MIDI
+ * stream at start-up, takes MIDIERR_NODEVICE as "no music", and finds no aux device for its CD
+ * volume; midiOutGetErrorText gives the text a real system gives for that error.
+ */
+MMRESULT WINAPI midiStreamOpen(LPHMIDISTRM h, LPUINT dev, DWORD n, DWORD cb, DWORD inst, DWORD flags)
+{ (void)dev; (void)n; (void)cb; (void)inst; (void)flags; if (h) *h = NULL; return MIDIERR_NODEVICE; }
+MMRESULT WINAPI midiStreamClose(HMIDISTRM h) { (void)h; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiStreamOut(HMIDISTRM h, LPMIDIHDR hdr, UINT n) { (void)h; (void)hdr; (void)n; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiStreamPause(HMIDISTRM h) { (void)h; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiStreamRestart(HMIDISTRM h) { (void)h; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiStreamStop(HMIDISTRM h) { (void)h; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiStreamProperty(HMIDISTRM h, LPBYTE p, DWORD f) { (void)h; (void)p; (void)f; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiOutPrepareHeader(HMIDIOUT h, LPMIDIHDR hdr, UINT n) { (void)h; (void)hdr; (void)n; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiOutUnprepareHeader(HMIDIOUT h, LPMIDIHDR hdr, UINT n) { (void)h; (void)hdr; (void)n; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiOutShortMsg(HMIDIOUT h, DWORD m) { (void)h; (void)m; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiOutReset(HMIDIOUT h) { (void)h; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiOutSetVolume(HMIDIOUT h, DWORD v) { (void)h; (void)v; return MMSYSERR_INVALHANDLE; }
+MMRESULT WINAPI midiOutGetErrorText(MMRESULT err, LPSTR text, UINT n)
+{
+    const char *msg = err == MIDIERR_NODEVICE ? "No MIDI port was found."
+                    : "An unknown error occurred.";
+    if (!text || !n) return MMSYSERR_INVALPARAM;
+    strncpy(text, msg, n - 1); text[n - 1] = 0;
+    return MMSYSERR_NOERROR;
+}
+UINT WINAPI auxGetNumDevs(void) { return 0; }
+MMRESULT WINAPI auxGetDevCaps(UINT id, LPAUXCAPS caps, UINT n) { (void)id; (void)caps; (void)n; return MMSYSERR_BADDEVICEID; }
+MMRESULT WINAPI auxGetVolume(UINT id, LPDWORD v) { (void)id; (void)v; return MMSYSERR_BADDEVICEID; }
+MMRESULT WINAPI auxSetVolume(UINT id, DWORD v) { (void)id; (void)v; return MMSYSERR_BADDEVICEID; }
 MMRESULT WINAPI joyGetDevCaps(UINT id, LPJOYCAPS caps, UINT n) { (void)id; (void)caps; (void)n; return JOYERR_UNPLUGGED; }
 MMRESULT WINAPI joyGetPosEx(UINT id, LPJOYINFOEX info) { (void)id; (void)info; return JOYERR_UNPLUGGED; }
 
