@@ -181,9 +181,12 @@ function uniquifyLocals(body) {
       } finally { stack.pop(); }
     }
     if (node.n === 'vardecl') {
-      const rename = stack.length > 1 && node.storage !== 'extern';
+      // A FUNCTION declared in a block has linkage, as an extern does (C11 6.2.2p5): it names the
+      // file-scope one. Either way the name still hides an outer local of the same spelling.
+      const linked = node.storage === 'extern' || (node.type?.k === 'func' && node.storage !== 'static');
+      const rename = stack.length > 1 && !linked;
       const name = rename ? `${node.name}$b${n++}` : node.name;
-      if (rename) stack[stack.length - 1].set(node.name, name);
+      if (stack.length > 1) stack[stack.length - 1].set(node.name, name);
       // C puts the name in scope at its declarator, so `int x = x;` reads the new one: declare first.
       return { ...node, name, type: cloneType(node.type), init: clone(node.init) };
     }

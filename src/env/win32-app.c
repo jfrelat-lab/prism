@@ -156,16 +156,47 @@ HANDLE WINAPI LocalAlloc(UINT flags, SIZE_T bytes)
 }
 HANDLE WINAPI LocalFree(HANDLE h) { free((void *)h); return (HANDLE)0; }
 
+/*
+ * Reserve, then commit INSIDE the reservation. Quake II's Hunk_Begin reserves the most a model may
+ * need and Hunk_Alloc commits from its base again with every allocation, growing; each of those
+ * calls must answer the address it was given, not new memory, or the hunk is somewhere else after
+ * each one and the reservations leak until malloc runs dry. A region is allocated, zeroed, when it
+ * is reserved (or committed with no address); committing inside one is a no-op that names it.
+ * Decommitting keeps the memory: nothing here can tell a program that the pages went away.
+ */
+#define PRISM_MAX_REGIONS 512
+static struct { char *base; SIZE_T size; } prism_regions[PRISM_MAX_REGIONS];
+
 LPVOID WINAPI VirtualAlloc(LPVOID addr, SIZE_T size, DWORD type, DWORD protect)
 {
-    (void)addr; (void)type; (void)protect;
-    return calloc(1, size ? size : 1);
+    int i, free_slot = -1;
+    (void)protect;
+    if (addr) {
+        char *a = (char *)addr;
+        for (i = 0; i < PRISM_MAX_REGIONS; i++)
+            if (prism_regions[i].base && a >= prism_regions[i].base
+                && a + size <= prism_regions[i].base + prism_regions[i].size)
+                return (type & MEM_COMMIT) ? addr : NULL;   /* reserving twice is an error */
+        return NULL;                                        /* no address PRISM can place on request */
+    }
+    for (i = 0; i < PRISM_MAX_REGIONS; i++) if (!prism_regions[i].base) { free_slot = i; break; }
+    if (free_slot < 0) return NULL;
+    prism_regions[free_slot].base = calloc(1, size ? size : 1);
+    prism_regions[free_slot].size = size;
+    return prism_regions[free_slot].base;
 }
 BOOL WINAPI VirtualFree(LPVOID addr, SIZE_T size, DWORD type)
 {
-    (void)size; (void)type;
-    free(addr);
-    return 1;
+    int i;
+    (void)size;
+    if (!(type & MEM_RELEASE)) return 1;                   /* MEM_DECOMMIT */
+    for (i = 0; i < PRISM_MAX_REGIONS; i++)
+        if (prism_regions[i].base == (char *)addr) {
+            free(addr);
+            prism_regions[i].base = NULL;
+            return 1;
+        }
+    return 0;
 }
 BOOL WINAPI VirtualLock(LPVOID a, SIZE_T n) { (void)a; (void)n; return 1; }
 BOOL WINAPI VirtualUnlock(LPVOID a, SIZE_T n) { (void)a; (void)n; return 1; }
@@ -211,24 +242,38 @@ static const char *prism_basename(const char *p)
  * A module handle IS the module name in the table. That makes it non-null, stable, unique per
  * module and directly comparable, without a registry of handles to keep in step.
  */
+/*
+ * SYSTEM DLLs a shim file implements -- opengl32.dll is src/env/opengl32.c -- answer through one
+ * function rather than rows in the table: (module, NULL) is the module's handle or NULL, (handle,
+ * name) an export. Null when no such file is linked, like the table.
+ */
+extern void *(*prism_system_lookup)(const char *module, const char *name);
+
 HMODULE WINAPI LoadLibraryA(const char *name)
 {
     const char *base = prism_basename(name);
+    char withext[260];
     int i;
+    /* A name without an extension means NAME.dll -- Quake II asks for "opengl32". */
+    if (!strchr(base, '.') && strlen(base) + 5 <= sizeof withext) {
+        strcpy(withext, base); strcat(withext, ".dll"); base = withext;
+    }
     for (i = 0; i < prism_extra_export_count; i++)
         if (!strcasecmp(prism_extra_exports[i].module, base))
             return (HMODULE)prism_extra_exports[i].module;
+    if (prism_system_lookup) return (HMODULE)prism_system_lookup(base, NULL);
     return (HMODULE)0;
 }
 
 void *WINAPI GetProcAddress(HMODULE mod, const char *name)
 {
     int i;
-    if (!mod || !name || !prism_extra_exports) return NULL;
-    for (i = 0; i < prism_extra_export_count; i++)
+    if (!mod || !name) return NULL;
+    for (i = 0; prism_extra_exports && i < prism_extra_export_count; i++)
         if ((const char *)mod == prism_extra_exports[i].module
             && !strcmp(prism_extra_exports[i].name, name))
             return prism_extra_exports[i].fn;
+    if (prism_system_lookup) return prism_system_lookup((const char *)mod, name);
     return NULL;
 }
 

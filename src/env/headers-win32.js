@@ -839,6 +839,7 @@ typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #define MB_ICONEXCLAMATION 0x30
 #define SW_SHOWDEFAULT 10
 #define SW_SHOWNORMAL 1
+#define SW_SHOW 5
 #define SW_HIDE 0
 #define SW_SHOWMINIMIZED 2
 #define SW_RESTORE 9
@@ -2163,6 +2164,75 @@ int WINAPI ReleaseDC(HWND, HDC);
 HDC WINAPI BeginPaint(HWND, LPPAINTSTRUCT);
 BOOL WINAPI EndPaint(HWND, const PAINTSTRUCT *);
 int WINAPI GetDeviceCaps(HDC, int);
+
+/*
+ * wingdi.h's OpenGL half: pixel formats (GDI) and the wgl context calls (opengl32.dll). The layouts
+ * are the SDK's, field for field; src/env/opengl32.c implements them.
+ */
+typedef struct HGLRC__ *HGLRC;
+typedef struct tagPIXELFORMATDESCRIPTOR {
+    WORD nSize, nVersion; DWORD dwFlags;
+    BYTE iPixelType, cColorBits, cRedBits, cRedShift, cGreenBits, cGreenShift, cBlueBits, cBlueShift,
+         cAlphaBits, cAlphaShift, cAccumBits, cAccumRedBits, cAccumGreenBits, cAccumBlueBits,
+         cAccumAlphaBits, cDepthBits, cStencilBits, cAuxBuffers, iLayerType, bReserved;
+    DWORD dwLayerMask, dwVisibleMask, dwDamageMask;
+} PIXELFORMATDESCRIPTOR, *PPIXELFORMATDESCRIPTOR, *LPPIXELFORMATDESCRIPTOR;
+typedef struct tagLAYERPLANEDESCRIPTOR {
+    WORD nSize, nVersion; DWORD dwFlags;
+    BYTE iPixelType, cColorBits, cRedBits, cRedShift, cGreenBits, cGreenShift, cBlueBits, cBlueShift,
+         cAlphaBits, cAlphaShift, cAccumBits, cAccumRedBits, cAccumGreenBits, cAccumBlueBits,
+         cAccumAlphaBits, cDepthBits, cStencilBits, cAuxBuffers, iLayerPlane, bReserved;
+    COLORREF crTransparent;
+} LAYERPLANEDESCRIPTOR, *PLAYERPLANEDESCRIPTOR, *LPLAYERPLANEDESCRIPTOR;
+typedef struct _POINTFLOAT { FLOAT x, y; } POINTFLOAT, *PPOINTFLOAT;
+typedef struct _GLYPHMETRICSFLOAT {
+    FLOAT gmfBlackBoxX, gmfBlackBoxY; POINTFLOAT gmfptGlyphOrigin; FLOAT gmfCellIncX, gmfCellIncY;
+} GLYPHMETRICSFLOAT, *PGLYPHMETRICSFLOAT, *LPGLYPHMETRICSFLOAT;
+#define PFD_TYPE_RGBA 0
+#define PFD_TYPE_COLORINDEX 1
+#define PFD_MAIN_PLANE 0
+#define PFD_OVERLAY_PLANE 1
+#define PFD_UNDERLAY_PLANE (-1)
+#define PFD_DOUBLEBUFFER 0x00000001
+#define PFD_STEREO 0x00000002
+#define PFD_DRAW_TO_WINDOW 0x00000004
+#define PFD_DRAW_TO_BITMAP 0x00000008
+#define PFD_SUPPORT_GDI 0x00000010
+#define PFD_SUPPORT_OPENGL 0x00000020
+#define PFD_GENERIC_FORMAT 0x00000040
+#define PFD_NEED_PALETTE 0x00000080
+#define PFD_NEED_SYSTEM_PALETTE 0x00000100
+#define PFD_SWAP_EXCHANGE 0x00000200
+#define PFD_SWAP_COPY 0x00000400
+#define PFD_SWAP_LAYER_BUFFERS 0x00000800
+#define PFD_GENERIC_ACCELERATED 0x00001000
+#define PFD_DEPTH_DONTCARE 0x20000000
+#define PFD_DOUBLEBUFFER_DONTCARE 0x40000000
+#define PFD_STEREO_DONTCARE 0x80000000
+#define WGL_SWAP_MAIN_PLANE 0x00000001
+int WINAPI ChoosePixelFormat(HDC, CONST PIXELFORMATDESCRIPTOR *);
+int WINAPI DescribePixelFormat(HDC, int, UINT, LPPIXELFORMATDESCRIPTOR);
+int WINAPI GetPixelFormat(HDC);
+BOOL WINAPI SetPixelFormat(HDC, int, CONST PIXELFORMATDESCRIPTOR *);
+BOOL WINAPI SwapBuffers(HDC);
+HGLRC WINAPI wglCreateContext(HDC);
+HGLRC WINAPI wglCreateLayerContext(HDC, int);
+BOOL WINAPI wglCopyContext(HGLRC, HGLRC, UINT);
+BOOL WINAPI wglDeleteContext(HGLRC);
+HGLRC WINAPI wglGetCurrentContext(VOID);
+HDC WINAPI wglGetCurrentDC(VOID);
+PROC WINAPI wglGetProcAddress(LPCSTR);
+BOOL WINAPI wglMakeCurrent(HDC, HGLRC);
+BOOL WINAPI wglShareLists(HGLRC, HGLRC);
+BOOL WINAPI wglUseFontBitmapsA(HDC, DWORD, DWORD, DWORD);
+BOOL WINAPI wglUseFontOutlinesA(HDC, DWORD, DWORD, DWORD, FLOAT, FLOAT, int, LPGLYPHMETRICSFLOAT);
+BOOL WINAPI wglDescribeLayerPlane(HDC, int, int, UINT, LPLAYERPLANEDESCRIPTOR);
+int WINAPI wglSetLayerPaletteEntries(HDC, int, int, int, CONST COLORREF *);
+int WINAPI wglGetLayerPaletteEntries(HDC, int, int, int, COLORREF *);
+BOOL WINAPI wglRealizeLayerPalette(HDC, int, BOOL);
+BOOL WINAPI wglSwapLayerBuffers(HDC, UINT);
+#define wglUseFontBitmaps wglUseFontBitmapsA
+#define wglUseFontOutlines wglUseFontOutlinesA
 HICON WINAPI LoadIcon(HINSTANCE, LPCSTR);
 HCURSOR WINAPI LoadCursor(HINSTANCE, LPCSTR);
 HGDIOBJ WINAPI GetStockObject(int);

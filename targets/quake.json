@@ -308,6 +308,92 @@
         "gl",
         "glx"
       ]
+    },
+    "wgl": {
+      "host": "wgl",
+      "title": "GLQUAKE (Win32, opengl32, id386=0)",
+      "_doc": "glquake.exe: WinQuake.dsp's GL configuration (/D GLQUAKE), which compiles the twelve gl_* units instead of the software renderer and vid_win.c. So it is the GLX variant's engine list with its four Linux platform files (sys_linux, snd_linux, cd_null, gl_vidlinuxglx) swapped for the Win32 ones the win variant already uses, and gl_vidnt.c -- which links opengl32 directly, calling wgl* and gl* by name, and with no texture-object extension advertised takes glBindTexture from LoadLibrary(\"opengl32.dll\")/GetProcAddress. opengl32.dll is src/env/opengl32.c over src/env/gl.js. net_none.c as in the win variant.",
+      "units": {
+        "list": [
+          "cl_demo.c",
+          "cl_input.c",
+          "cl_main.c",
+          "cl_parse.c",
+          "cl_tent.c",
+          "chase.c",
+          "cmd.c",
+          "common.c",
+          "console.c",
+          "crc.c",
+          "cvar.c",
+          "gl_draw.c",
+          "gl_mesh.c",
+          "gl_model.c",
+          "gl_refrag.c",
+          "gl_rlight.c",
+          "gl_rmain.c",
+          "gl_rmisc.c",
+          "gl_rsurf.c",
+          "gl_screen.c",
+          "gl_test.c",
+          "gl_warp.c",
+          "host.c",
+          "host_cmd.c",
+          "keys.c",
+          "menu.c",
+          "mathlib.c",
+          "net_dgrm.c",
+          "net_loop.c",
+          "net_main.c",
+          "net_vcr.c",
+          "net_none.c",
+          "pr_cmds.c",
+          "pr_edict.c",
+          "pr_exec.c",
+          "r_part.c",
+          "sbar.c",
+          "sv_main.c",
+          "sv_phys.c",
+          "sv_move.c",
+          "sv_user.c",
+          "zone.c",
+          "view.c",
+          "wad.c",
+          "world.c",
+          "snd_dma.c",
+          "snd_mem.c",
+          "snd_mix.c",
+          "sys_win.c",
+          "in_win.c",
+          "conproc.c",
+          "snd_win.c",
+          "cd_win.c",
+          "gl_vidnt.c"
+        ]
+      },
+      "generated": [
+        "tools/quake-win-vars.c",
+        "src/env/win32-app.c",
+        "src/env/win32.c",
+        "src/env/opengl32.c"
+      ],
+      "_generated": "The win variant's Win32 shim without mgl.c, which is the software renderer's display boundary; the GL build draws through WGL instead.",
+      "include": [
+        "dxsdk/SDK/INC",
+        "scitech/INCLUDE"
+      ],
+      "defines": {
+        "_WIN32": "1",
+        "WIN32": "1",
+        "GLQUAKE": "1"
+      },
+      "env": [
+        "stdio",
+        "gl",
+        "wgl"
+      ],
+      "args": "-window",
+      "_args": "-window: gl_vidnt.c otherwise asks ChangeDisplaySettings for a fullscreen mode, which the page refuses (it cannot change a display mode), and the windowed mode is the one id offers for that case."
     }
   }
 }

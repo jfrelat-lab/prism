@@ -223,7 +223,8 @@ async function discover() {
     for (const x of m.programs) {
       const p = programs[x.program];
       x.desc = p;
-      x.name = p.title || x.program;
+      // An entry may name itself: two builds of one program on one desktop need two labels.
+      x.name = x.name || p.title || x.program;
       x.target = x.variant ? `${(p.target || '').split(':')[0]}:${x.variant}` : (p.target ?? null);
       const base = (x.target || '').split(':')[0];
       x.present = base ? (targetInfo[base]?.present ?? true) : true;
@@ -232,6 +233,9 @@ async function discover() {
       if (Array.isArray(p.units)) x.units = p.units.length;
       x.file = x.file || x.program;
     }
+    // A desktop's icons in alphabetical order of their labels, as Windows arranges them by name. The
+    // list itself is sorted, so every index into it -- the selection, a double-click -- still agrees.
+    if (m.kind === 'desktop') m.programs.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
   }
   renderMachines();
   pick(machines[0], 0);

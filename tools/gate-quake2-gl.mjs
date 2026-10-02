@@ -18,6 +18,15 @@
 // THE CLAIM: at most MAX_OFF of the pixels differ by more than TOL. On the first run: 3 of 307,200.
 // Controls, which must be red: lightmaps not applied, and texture filtering forced to NEAREST.
 //
+// AND THE WIN32 BUILD (quake2:win32gl) against the SAME Mesa frame: id's Win32 client, with ref_gl.dll
+// built from the same renderer plus win32/glw_imp.c and win32/qgl_win.c, which LoadLibrary
+// ("opengl32") and take every gl and wgl entry point by GetProcAddress -- src/env/opengl32.c. The
+// renderer is one source, so its picture of the same game moment must be the Linux build's. One
+// thing differs in how the moment is reached: sys_win.c reads its frame time from timeGetTime where
+// sys_linux.c calls Sys_Milliseconds, so on Win32 BOTH are the stepped clock -- every read of the
+// system clock steps it, on either platform. With timeGetTime left real the two builds see different
+// game times at the same swap, and the weapon is drawn in another pose (13,697 pixels off).
+//
 // Needs Quake II's data (PRISM_QUAKE2_DATA, a directory with baseq2/pak0.pak) and SKIPS without it.
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync, writeFileSync, cpSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -34,6 +43,7 @@ if (!existsSync(join(DATA, 'baseq2', 'pak0.pak'))) skip("Quake II's data: baseq2
 const SWAP = 120, STEP = 25, TOL = 8, MAX_OFF = 0.002;
 const ARGS = ['+set', 'vid_ref', 'gl', '+map', 'demo1'];
 const target = loadTarget(join(ROOT, 'targets', 'quake2.json'), 'gl');
+const winTarget = loadTarget(join(ROOT, 'targets', 'quake2.json'), 'win32gl');
 
 // --- Mesa
 up();
@@ -70,15 +80,17 @@ const files = {};
   for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p, `${pre}${f}/`); else if (!/\.exe$/i.test(f)) files[pre + f] = new Uint8Array(readFileSync(p)); }
 })(DATA);
 for (const [name, text] of Object.entries(target.files ?? {})) if (!(name in files)) files[name] = new TextEncoder().encode(`${text}\n`);
-function prism(mutate = null) {
+function prism(mutate = null, win = false) {
   let pic = null;
-  const { program } = buildTarget(target, { root: ROOT, envExtra: { stdio: { files }, fxmesa: {
-    onSwap: (n, gl) => { if (n >= SWAP) { pic = gl.readPixels(); throw new Error('__done'); } } } } });
+  const onSwap = (n, gl) => { if (n >= SWAP) { pic = gl.readPixels(); throw new Error('__done'); } };
+  const { program } = buildTarget(win ? winTarget : target, { root: ROOT,
+    envExtra: { stdio: { files }, ...(win ? { wgl: { onSwap } } : { fxmesa: { onSwap } }) } });
   program.M.write = () => {};
   let now = 0;
   const cur = program.mod.symbols.get('curtime')?.addr;
   const ms = () => { now += STEP; if (cur) program.mod.dv.setInt32(cur, now, true); return now; };
   program.F.Sys_Milliseconds = ms; program.mod.bindFunc('Sys_Milliseconds', ms);
+  if (win) { program.F.timeGetTime = ms; program.mod.bindFunc('timeGetTime', ms); }
   if (mutate) {
     mutate(program.M);
     // ref_gl calls GL through pointers whose slots were bound before the mutation: point them at it.
@@ -87,7 +99,7 @@ function prism(mutate = null) {
       if (base === 'glBlendFunc' || base === 'glTexParameterf') program.mod.bindFunc(name, program.M.rt[base]);
     }
   }
-  try { program.run(['quake2', ...ARGS]); } catch (e) { if (e.message !== '__done') throw e; }
+  try { program.run(['quake2', ...(win ? ['+set', 'vid_fullscreen', '0'] : []), ...ARGS]); } catch (e) { if (e.message !== '__done') throw e; }
   return pic;
 }
 const N = mesa.w * mesa.h;
@@ -114,5 +126,11 @@ for (const [name, mutate] of CONTROLS) {
   const k = compare(prism(mutate));
   report(k.off / N > MAX_OFF, `control: ${name} is told apart`, `${k.off} off`);
 }
-console.log(bad ? `\n${bad} WRONG` : "\nQuake II's ref_gl draws on PRISM what it draws on Mesa.");
+const w = compare(prism(null, true));
+report(w.off / N <= MAX_OFF, `Win32 build (ref_gl.dll on opengl32.dll): Mesa's picture too`, `${w.off} of ${N} pixels off by more than ${TOL} (${w.any} differ at all)`);
+for (const [name, mutate] of CONTROLS) {
+  const k = compare(prism(mutate, true));
+  report(k.off / N > MAX_OFF, `control (Win32): ${name} is told apart`, `${k.off} off`);
+}
+console.log(bad ? `\n${bad} WRONG` : "\nQuake II's ref_gl draws on PRISM what it draws on Mesa, from its Linux build and from its Win32 one.");
 process.exit(bad ? 1 : 0);

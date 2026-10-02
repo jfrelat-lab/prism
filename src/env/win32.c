@@ -906,6 +906,8 @@ BOOL WINAPI SystemParametersInfo(UINT action, UINT param, LPVOID data, UINT win)
 /* ---------------------------------------------------------------- GDI */
 
 HDC WINAPI GetDC(HWND w) { (void)w; return HANDLE_OF(HDC); }
+/* comctl32 registers its control classes here; gl_vidnt.c calls it and then creates none of them. */
+void WINAPI InitCommonControls(void) { }
 int WINAPI ReleaseDC(HWND w, HDC dc) { (void)w; (void)dc; return 1; }
 /*
  * BeginPaint VALIDATES. That is the half of this that is easy to leave out and impossible to notice
@@ -993,8 +995,9 @@ BOOL WINAPI DeleteDC(HDC dc) { (void)dc; return TRUE; }
 
 /*
  * The surface. A DIB's rows are padded to a DWORD -- vid.rowbytes downstream is this pitch, so the
- * renderer strides by it -- and a NEGATIVE biHeight means the rows run top-down, which is what
- * Quake II asks for and what a host wants to read.
+ * renderer strides by it -- and a NEGATIVE biHeight means the rows run top-down. Quake II asks for
+ * the other kind (rw_dib.c sets a positive height and renders with a negative rowbytes), so its
+ * rows are stored bottom-up and prism_dib_topdown tells a host to turn them over.
  */
 HBITMAP WINAPI CreateDIBSection(HDC dc, LPBITMAPINFO bmi, UINT usage,
                                 void **bits, HANDLE section, DWORD offset)

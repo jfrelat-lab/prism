@@ -52,6 +52,7 @@ import { installGlut, glutBuiltins } from './glut.js';
 import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
 import { installGlx, glxBuiltins } from './glx.js';
 import { installFxMesa, fxmesaBuiltins, FXMESA_H } from './fxmesa.js';
+import { installWgl, wglBuiltins } from './wgl.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
 const machineOf = (M) => (M.machine ?? installPorts(M));
@@ -210,6 +211,8 @@ export const ENV = {
   // GLX on the X11 shim, for GLQuake's gl_vidlinuxglx.c. See src/env/glx.js.
   // Mesa's 3Dfx context API, for Quake II's own Linux GL build (linux/gl_fxmesa.c). See src/env/fxmesa.js.
   fxmesa: { needs: ['gl'], install: (M, _c, o) => installFxMesa(M, o), headers: { 'GL/fxmesa.h': FXMESA_H }, builtins: fxmesaBuiltins(T) },
+  // The host half of src/env/opengl32.c (Win32 GL): framebuffer size and SwapBuffers. See src/env/wgl.js.
+  wgl: { needs: ['gl'], install: (M, _c, o) => installWgl(M, o), headers: {}, builtins: wglBuiltins(T) },
   glx: { needs: ['gl', 'x11'], install: (M, _c, o) => installGlx(M, o), headers: GLX_HEADERS, builtins: glxBuiltins(T) },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.

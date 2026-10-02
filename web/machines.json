@@ -95,8 +95,13 @@
         { "program": "putty", "variant": "tel", "file": "putty.exe",
           "icon": "corpus/putty/windows/putty.ico" },
         { "program": "quake2-win32", "file": "quake2.exe", "date": "Dec  9  1997",
-          "icon": "corpus/quake2/win32/q2.ico" }
+          "icon": "corpus/quake2/win32/q2.ico" },
+        { "program": "quake2-win32", "variant": "win32gl", "name": "QUAKE II GL", "file": "quake2.gl.exe", "date": "Dec  9  1997",
+          "icon": "corpus/quake2/win32/q2.ico" },
+        { "program": "quake", "variant": "wgl", "name": "GLQUAKE", "file": "glquake.exe",
+          "icon": "corpus/Quake/WinQuake/quake.ico" }
       ],
+      "_names": "An icon is labelled with the program's title, and the two GL builds share theirs with the software ones, so they name themselves: GLQUAKE is id's own name for glquake.exe; QUAKE II GL is the same quake2.exe set to load ref_gl.dll.",
       "_icons": "The icons are the PROGRAM's own files, pointed at where they sit in its source tree -- a browser decodes .ico natively, so there is no conversion step and no build artefact to keep in step. And they are here and on no other machine because an icon is a Windows idea: a DOS or X11 program never had one, and drawing something for it would be inventing evidence."
     }
   ]

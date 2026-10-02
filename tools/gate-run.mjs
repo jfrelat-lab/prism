@@ -1662,6 +1662,40 @@ int main(void)
  * seeds, including 0 (which glibc maps to 1) -- and note that it can only pass against a glibc
  * reference, which is exactly what the oracle is.
  */
+// A FUNCTION declared inside a block names the file-scope one (C11 6.2.2p5), as an extern does.
+// Quake II's MainWndProc declares CDAudio_MessageHandler
+// in a case block; the flattening pass renamed it as a local and the whole window procedure was lost.
+C('flatten-block-function-decl', `#include <stdio.h>
+int triple(int x) { return 3 * x; }
+static int wndproc(int msg, int k)
+{
+    int r = 0;
+    switch (msg) {
+    case 1:
+        {
+            int triple(int);
+            r = triple(k);
+        }
+        break;
+    case 2:
+        r = 7;
+        goto forward;     /* a label inside the switch is what sends it through the flattening pass */
+    case 3:
+    forward:
+        r += 100;
+        break;
+    default:
+        r = -1;
+    }
+    return r + 1;
+}
+int main(void)
+{
+    printf("%d %d %d %d\\n", wndproc(1, 5), wndproc(2, 0), wndproc(3, 0), wndproc(9, 0));
+    return 0;
+}
+`);
+
 C('rand-matches-the-reference', `#include <stdio.h>
 #include <stdlib.h>
 

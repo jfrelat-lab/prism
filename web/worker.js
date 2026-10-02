@@ -41,7 +41,8 @@ import { installSvgalib } from '../src/env/svgalib.js';
 import { installWatcom } from '../src/env/watcom.js';
 import { installVgaFont } from '../src/env/vgafont.js';
 import { installWsock } from '../src/env/wsock.js';
-import { installDl } from '../src/env/dl.js';
+import { installDl, bindWin32Exports } from '../src/env/dl.js';
+import { installWgl } from '../src/env/wgl.js';
 import { HEADERS } from '../src/env/headers.js';
 import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeMouse, makeParker, SLOT, STATE }
   from '../src/env/webhost.js';
@@ -476,6 +477,15 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
    * one -- Quake has four platform layers over one engine -- and from the descriptor otherwise.
    */
   const platform = program.host ?? program.platform ?? 'allegro';
+  /*
+   * THE WIN32 MODULE TABLE, filled as src/target.js fills it: LoadLibrary("ref_gl.dll") and
+   * GetProcAddress("GetRefAPI") answer from it. Node always did this and the page never did, so in
+   * the page Quake II's Win32 client could not load a renderer at all.
+   */
+  const bindWin32Modules = () => bindWin32Exports(prog,
+    Object.fromEntries(Object.entries(program.sonames ?? {}).map(([so, name]) => [name, { soname: so }])),
+    program.moduleExports ?? {});
+
   if (platform === 'x11') {
     /*
      * A UNIX host: the program is an X client, and Xlib is shimmed at the library boundary. Doom
@@ -850,6 +860,164 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       prog.mod.bindFunc(name, w);
     }
 
+  } else if (platform === 'wgl') {
+    /*
+     * A WIN32 GL host: GLQuake (gl_vidnt.c) and Quake II's ref_gl.dll (win32/glw_imp.c, qgl_win.c).
+     * The window, its messages, the keys and the mouse are src/env/win32.c's, as for WinQuake; the
+     * picture is gl.js's, which src/env/opengl32.c sized at wglMakeCurrent and src/env/wgl.js hands
+     * over at every SwapBuffers -- read back into the image as the fxmesa host does, WebGL2 when
+     * the worker has an OffscreenCanvas. The frame boundary is SwapBuffers.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    if ((program.env ?? []).includes('wsock')) installWsock(prog.M);
+    const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
+    installGL(prog.M, { backend });
+    const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
+    const key = prog.F.prism_win32_key, mouseIn = prog.F.prism_win32_mouse, activate = prog.F.prism_win32_activate;
+    const win = { x: sym('prism_win32_x'), y: sym('prism_win32_y'), w: sym('prism_win32_w'), h: sym('prism_win32_h'), title: sym('prism_win32_title') };
+    const move = prog.F.prism_win32_move, closeWin = prog.F.prism_win32_close;
+    let lastDrag = 0, lastTitle = '', lastButtons = 0, lastFocus = 1;
+    Atomics.store(ctrl, SLOT.WIN_HAS, win.x ? 1 : 0);
+    const pumpWindow = () => {
+      if (!win.x) return;
+      const dvv = prog.mod.dv;
+      Atomics.store(ctrl, SLOT.WIN_X, dvv.getInt32(win.x, true));
+      Atomics.store(ctrl, SLOT.WIN_Y, dvv.getInt32(win.y, true));
+      Atomics.store(ctrl, SLOT.WIN_W, dvv.getInt32(win.w, true));
+      Atomics.store(ctrl, SLOT.WIN_H, dvv.getInt32(win.h, true));
+      let title = '';
+      for (let i = 0; i < 127 && prog.M.u8[win.title + i]; i++) title += String.fromCharCode(prog.M.u8[win.title + i]);
+      if (title !== lastTitle) { lastTitle = title; post('window', { title }); }
+      const gen = Atomics.load(ctrl, SLOT.DRAG_GEN);
+      if (gen !== lastDrag && move) { lastDrag = gen; move(Atomics.load(ctrl, SLOT.DRAG_X), Atomics.load(ctrl, SLOT.DRAG_Y)); }
+      if (Atomics.load(ctrl, SLOT.WIN_CLOSE) && closeWin) { Atomics.store(ctrl, SLOT.WIN_CLOSE, 0); closeWin(); }
+    };
+    let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
+    installWgl(prog.M, {
+      onSwap: (_n, gl) => {
+        count++;
+        const now = performance.now();
+        if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
+        const { width: w, height: h } = gl.state;
+        if (w !== outW || h !== outH) {                 // a mode change resizes the window, and the picture
+          out = prog.M.rt.malloc(w * h * 4); outW = w; outH = h;
+          Atomics.store(ctrl, SLOT.WIDTH, w);
+          Atomics.store(ctrl, SLOT.HEIGHT, h);
+          Atomics.store(ctrl, SLOT.PIXELS, out);
+          Atomics.store(ctrl, SLOT.PIXFMT, 32);
+          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+          log(`WGL display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
+        }
+        const px = gl.readPixels(), u8 = prog.M.u8;
+        for (let i = 0; i < w * h; i++) {
+          u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
+          u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
+        }
+        // Input through the program's own message queue, at the frame boundary, as the mgl host does.
+        if (key) for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+        if (activate) { const f = Atomics.load(ctrl, SLOT.FOCUS); if (f !== lastFocus) { activate(f); lastFocus = f; } }
+        if (mouseIn) {
+          const { dx, dy } = mouse.take();
+          const b = mouse.state();
+          if (dx || dy || b !== lastButtons) { mouseIn(dx, dy, b); lastButtons = b; }
+        }
+        pumpWindow();
+        reader.endFrame();
+        pace();
+      },
+    });
+    // Last: opengl32.c took the address of every GL entry point, which exist only now; then the modules.
+    bindLateBuiltins(prog);
+    bindWin32Modules();
+  } else if ((platform === 'gdi' || platform === 'win32')
+             && prog.mod.symbols.get('prism_dib_surface')?.addr && !prog.mod.symbols.get('prism_gdi_surface')?.addr) {
+    /*
+     * A WIN32 PROGRAM THAT PRESENTS A DIB SECTION: Quake II's ref_soft (win32/rw_dib.c). It draws
+     * into the buffer CreateDIBSection returned and BitBlts it to the window, so src/env/win32.c
+     * publishes that buffer, its geometry and the palette SetDIBColorTable set, and counts the
+     * blits -- the same bargain as MGL for WinQuake. A PuTTY-style GUI program links win32-gui.c and
+     * paints through GDI instead; that is the branch below, and this build used to fall into it and
+     * stop at "no Win32 GDI layer". The frame boundary is BitBlt.
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    if ((program.env ?? []).includes('wsock')) installWsock(prog.M);
+    bindWin32Modules();
+    const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
+    const at = {
+      surface: sym('prism_dib_surface'), width: sym('prism_dib_width'), height: sym('prism_dib_height'),
+      pitch: sym('prism_dib_pitch'), topdown: sym('prism_dib_topdown'),
+      palette: sym('prism_dib_palette'), palgen: sym('prism_dib_palgen'), frames: sym('prism_dib_frames'),
+    };
+    if (at.frames) Atomics.store(ctrl, SLOT.FRAME_ADDR, at.frames);
+    const key = prog.F.prism_win32_key, mouseIn = prog.F.prism_win32_mouse, activate = prog.F.prism_win32_activate;
+    const win = { x: sym('prism_win32_x'), y: sym('prism_win32_y'), w: sym('prism_win32_w'), h: sym('prism_win32_h'), title: sym('prism_win32_title') };
+    const move = prog.F.prism_win32_move, closeWin = prog.F.prism_win32_close;
+    let lastDrag = 0, lastTitle = '', lastButtons = 0, lastFocus = 1, lastPalGen = -1, warned = false;
+    let flip = 0, flipW = 0, flipH = 0;
+    Atomics.store(ctrl, SLOT.WIN_HAS, win.x ? 1 : 0);
+    const dv = prog.mod.dv;
+    const pumpWindow = () => {
+      if (!win.x) return;
+      Atomics.store(ctrl, SLOT.WIN_X, dv.getInt32(win.x, true));
+      Atomics.store(ctrl, SLOT.WIN_Y, dv.getInt32(win.y, true));
+      Atomics.store(ctrl, SLOT.WIN_W, dv.getInt32(win.w, true));
+      Atomics.store(ctrl, SLOT.WIN_H, dv.getInt32(win.h, true));
+      let title = '';
+      for (let i = 0; i < 127 && prog.M.u8[win.title + i]; i++) title += String.fromCharCode(prog.M.u8[win.title + i]);
+      if (title !== lastTitle) { lastTitle = title; post('window', { title }); }
+      const gen = Atomics.load(ctrl, SLOT.DRAG_GEN);
+      if (gen !== lastDrag && move) { lastDrag = gen; move(Atomics.load(ctrl, SLOT.DRAG_X), Atomics.load(ctrl, SLOT.DRAG_Y)); }
+      if (Atomics.load(ctrl, SLOT.WIN_CLOSE) && closeWin) { Atomics.store(ctrl, SLOT.WIN_CLOSE, 0); closeWin(); }
+    };
+    const inner = prog.F.BitBlt;
+    if (!inner) throw new Error('this build has no BitBlt to present from');
+    const wrapped = function (...a) {
+      const r = inner.apply(this, a);
+      const surface = dv.getInt32(at.surface, true);
+      const w = dv.getInt32(at.width, true), h = dv.getInt32(at.height, true), pitch = dv.getInt32(at.pitch, true);
+      /*
+       * The page reads an 8-bit surface as w*h contiguous bytes, TOP row first. A DIB with a positive
+       * biHeight is stored BOTTOM-UP -- rw_dib.c asks for exactly that and renders with a negative
+       * rowbytes -- so its rows are copied into a buffer of the page's order at every blit; a
+       * top-down DIB with unpadded rows is shown in place. Rows are padded to four bytes: Quake II's
+       * modes are all multiples of four wide, and a padded one is said rather than shown sheared.
+       */
+      if (surface && pitch !== w && !warned) { warned = true; log(`DIB ${w}x${h} has padded rows (pitch ${pitch}); the page shows it unpadded`, 'warn'); }
+      let shown = surface;
+      if (surface && !dv.getInt32(at.topdown, true)) {
+        if (flipW !== w || flipH !== h) { flip = prog.M.rt.malloc(w * h); flipW = w; flipH = h; }
+        const u8 = prog.M.u8;
+        for (let y = 0; y < h; y++) u8.copyWithin(flip + y * w, surface + (h - 1 - y) * pitch, surface + (h - 1 - y) * pitch + w);
+        shown = flip;
+      }
+      if (surface) {
+        Atomics.store(ctrl, SLOT.WIDTH, w);
+        Atomics.store(ctrl, SLOT.HEIGHT, h);
+        Atomics.store(ctrl, SLOT.PIXELS, shown);
+        Atomics.store(ctrl, SLOT.PIXFMT, 0);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        // SetDIBColorTable's quads, already full 0..255 r,g,b triples in win32.c.
+        const pg = dv.getInt32(at.palgen, true);
+        if (pg !== lastPalGen) {
+          lastPalGen = pg;
+          for (let i = 0; i < 768; i++) pal[i] = prog.M.u8[at.palette + i];
+          Atomics.add(ctrl, SLOT.PALGEN, 1);
+        }
+      }
+      if (key) for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) key(e.scan, e.down ? 1 : 0);
+      if (activate) { const f = Atomics.load(ctrl, SLOT.FOCUS); if (f !== lastFocus) { activate(f); lastFocus = f; } }
+      if (mouseIn) {
+        const { dx, dy } = mouse.take();
+        const b = mouse.state();
+        if (dx || dy || b !== lastButtons) { mouseIn(dx, dy, b); lastButtons = b; }
+      }
+      pumpWindow();
+      reader.endFrame();
+      pace();
+      return r;
+    };
+    prog.F.BitBlt = wrapped;
+    prog.mod.bindFunc('BitBlt', wrapped);
   } else if (platform === 'gdi' || platform === 'win32') {
     /*
      * A WIN32 GUI host: PuTTY. The target calls this platform `win32` and the page called it `gdi`
@@ -874,6 +1042,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      */
     installVgaFont(prog.M, { bytes: vgaFont });
     installWsock(prog.M);
+    bindWin32Modules();
     const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
     const at = { surface: sym('prism_gdi_surface'), w: sym('prism_gdi_w'), h: sym('prism_gdi_h') };
     const key = prog.F.prism_win32_key;

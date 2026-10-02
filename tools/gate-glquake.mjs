@@ -13,6 +13,13 @@
 // 1 of 307,200. Two real defects are red controls: lightmaps not applied (their blend ignored), and
 // texture filtering forced to NEAREST.
 //
+// AND THE WIN32 BUILD (quake:wgl, glquake.exe's units: gl_vidnt.c on src/env/opengl32.c) against the
+// SAME Mesa frame: the renderer is one source. One input differs, and it is id's code that differs:
+// gl_vidnt.c calls Check_Gamma, which raises the palette to vid_gamma 0.7 on any card that is not a
+// 3Dfx, and gl_vidlinuxglx.c defines the same function and never calls it. So the Win32 build is run
+// with its own -gamma 1, which leaves each palette entry within one level of itself (it maps p to
+// (p+1)*255/256 + 0.5, truncated); without it, 132,033 pixels are brighter than the GLX build's.
+//
 // Needs the data (PRISM_QUAKE_DATA, a directory with id1/ or ID1/) and SKIPS without it.
 import { readFileSync, readdirSync, statSync, existsSync, mkdirSync, copyFileSync, writeFileSync, cpSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -38,6 +45,7 @@ copyFileSync(join(ROOT, 'tools', 'oracle', 'glx-egl.c'), join(work, 'glx-egl.c')
 for (const h of ['xf86dga.h', 'xf86vmode.h']) writeFileSync(join(work, 'inc', 'X11', 'extensions', h), GLX_HEADERS[`X11/extensions/${h}`]);
 if (!existsSync(join(work, 'id1'))) cpSync(id1, join(work, 'id1'), { recursive: true });
 const target = loadTarget(join(ROOT, 'targets', 'quake.json'), 'glx');
+const winTarget = loadTarget(join(ROOT, 'targets', 'quake.json'), 'wgl');
 const units = target.units.list.map((u) => `src/${u}`).join(' ');
 const build = sh(`cd /work/glquake && gcc -w -O0 -fcommon -DGLQUAKE -U__i386__ -Ui386 -Iinc -Isrc -o glquake ${units} glx-egl.c `
   + '-Wl,--wrap=R_RenderView -Wl,--wrap=Sys_FloatTime -Wl,--wrap=glDrawBuffer -Wl,--wrap=glReadBuffer -lEGL -lOpenGL -lm', { timeout: 600000 });
@@ -52,10 +60,11 @@ const files = {};
 (function walk(d, pre = '') {
   for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p, `${pre}${f}/`); else files[pre + f] = new Uint8Array(readFileSync(p)); }
 })(DATA);
-function prism(mutate = null) {
+function prism(mutate = null, win = false) {
   let world = 0, pic = null;
-  const { program } = buildTarget(target, { root: ROOT, envExtra: { stdio: { files }, glx: {
-    onSwap: (_n, gl) => { if (world >= WORLD) { pic = gl.readPixels(); throw new Error('__done'); } } } } });
+  const onSwap = (_n, gl) => { if (world >= WORLD) { pic = gl.readPixels(); throw new Error('__done'); } };
+  const { program } = buildTarget(win ? winTarget : target, { root: ROOT,
+    envExtra: { stdio: { files }, ...(win ? { wgl: { onSwap } } : { glx: { onSwap } }) } });
   program.M.write = () => {};
   let ticks = 0;
   const fake = () => ++ticks / 72;
@@ -63,8 +72,17 @@ function prism(mutate = null) {
   const rv = program.F.R_RenderView;
   const rvw = function (...a) { const r = rv.apply(this, a); world++; return r; };
   program.F.R_RenderView = rvw; program.mod.bindFunc('R_RenderView', rvw);
-  if (mutate) mutate(program.M);
-  try { program.run(['quake', ...ARGS]); } catch (e) { if (e.message !== '__done') throw e; }
+  if (mutate) {
+    const before = { ...program.M.rt };
+    mutate(program.M);
+    // gl_vidnt.c's build calls GL by name, bound at link time: point what changed at the mutation.
+    for (const [name] of program.mod.funcs) {
+      const base = name.slice(name.lastIndexOf('$') + 1);
+      if (program.M.rt[base] !== before[base]) program.mod.bindFunc(name, program.M.rt[base]);
+    }
+  }
+  const args = win ? ['-window', '-gamma', '1', ...ARGS] : ARGS;
+  try { program.run(['quake', ...args]); } catch (e) { if (e.message !== '__done') throw e; }
   return pic;
 }
 const compare = (p) => {
@@ -90,5 +108,11 @@ for (const [name, mutate] of CONTROLS) {
   const k = compare(prism(mutate));
   report(k.off / N > MAX_OFF, `control: ${name} is told apart`, `${k.off} off`);
 }
-console.log(bad ? `\n${bad} WRONG` : '\nGLQuake draws on PRISM what it draws on Mesa.');
+const w = compare(prism(null, true));
+report(w.off / N <= MAX_OFF, `Win32 build (gl_vidnt.c on opengl32.dll): Mesa's picture too`, `${w.off} of ${N} pixels off by more than ${TOL} (${w.any} differ at all)`);
+for (const [name, mutate] of CONTROLS) {
+  const k = compare(prism(mutate, true));
+  report(k.off / N > MAX_OFF, `control (Win32): ${name} is told apart`, `${k.off} off`);
+}
+console.log(bad ? `\n${bad} WRONG` : '\nGLQuake draws on PRISM what it draws on Mesa, from its GLX build and from its Win32 one.');
 process.exit(bad ? 1 : 0);
