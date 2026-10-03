@@ -87,7 +87,13 @@ BOOL WINAPI wglDeleteContext(HGLRC rc)
 }
 HGLRC WINAPI wglGetCurrentContext(VOID) { return current_rc; }
 HDC WINAPI wglGetCurrentDC(VOID) { return current_dc; }
-PROC WINAPI wglGetProcAddress(LPCSTR name) { (void)name; return NULL; }
+/* The extension functions, for the one extension gl.js advertises (GL_EXT_compiled_vertex_array). */
+PROC WINAPI wglGetProcAddress(LPCSTR name)
+{
+    if (!strcmp(name, "glLockArraysEXT")) return (PROC)glLockArraysEXT;
+    if (!strcmp(name, "glUnlockArraysEXT")) return (PROC)glUnlockArraysEXT;
+    return NULL;
+}
 BOOL WINAPI wglCopyContext(HGLRC a, HGLRC b, UINT mask) { (void)a; (void)b; (void)mask; return FALSE; }
 HGLRC WINAPI wglCreateLayerContext(HDC dc, int layer) { return layer == 0 ? wglCreateContext(dc) : NULL; }
 BOOL WINAPI wglShareLists(HGLRC a, HGLRC b) { (void)a; (void)b; return FALSE; }

@@ -712,6 +712,11 @@ void glDisableClientState(GLenum cap);
 void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 void glDrawBuffer(GLenum mode);
 void glDrawElements(GLenum mode, GLsizei count, GLenum type, const GLvoid *indices);
+/* GL_EXT_compiled_vertex_array, the one extension PRISM advertises: a lock is a promise not to change
+   the locked arrays, which an implementation MAY use and need not, so both calls do nothing. */
+#define GL_EXT_compiled_vertex_array 1
+void glLockArraysEXT(GLint first, GLsizei count);
+void glUnlockArraysEXT(void);
 void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const GLvoid *pixels);
 void glEdgeFlag(GLboolean flag);
 void glEdgeFlagPointer(GLsizei stride, const GLvoid *ptr);

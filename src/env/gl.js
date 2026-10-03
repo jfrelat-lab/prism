@@ -120,6 +120,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
   // exports (src/env/dl.js), as opengl32.dll does for GetProcAddress (src/env/opengl32.c).
   M.glNames = new Set([...GL_H.matchAll(/\b(gl[A-Z]\w*)\s*\(/g)].map((m) => m[1]));
+  const drawSeen = [], drawStamp = [];      // glDrawElements' vertex per index (see there)
+  let drawGen = 0;
   let gpuCache = null;                      // gpuState until a command that is not a vertex runs (see exec)
   let webgl = null;                         // the WebGL2 rasteriser when backend is 'webgl' (makeWebGL)
   const dv = () => M.mod.dv;
@@ -230,7 +232,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    */
   const userPlanes = () => s.clipPlanes.map((p, i) => (p && s.caps.has(CAP.CLIP_PLANE0 + i) ? p : null)).filter(Boolean);
   const dotEye = (p, v) => p[0] * v.eye[0] + p[1] * v.eye[1] + p[2] * v.eye[2] + p[3] * v.eye[3];
+  // Whether any user plane is on, without building the list: asked once per triangle.
+  const anyUserPlane = () => { for (let i = 0; i < s.clipPlanes.length; i++) if (s.clipPlanes[i] && s.caps.has(CAP.CLIP_PLANE0 + i)) return true; return false; };
   function clipUser(poly) {
+    if (!anyUserPlane()) return poly;
     for (const p of userPlanes()) {
       if (poly.length < 3) break;
       if (poly.every((v) => dotEye(p, v) >= 0)) continue;
@@ -430,13 +435,22 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const asBack = (v) => ({ ...v, colour: v.back });
     for (let k = 1; k + 1 < poly.length; k++) {
       let p0 = poly[0], p1 = poly[k], p2 = poly[k + 1];
-      let A = toWindow(p0), B = toWindow(p1), C = toWindow(p2);
-      const area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
+      // The GPU path needs only the winding: toWindow's own arithmetic, without its three objects.
+      let A = null, B = null, C = null, area;
+      if (webgl) {
+        const [vx, vy, vw, vh] = s.viewport;
+        const wx = (v) => (v.clip[0] / v.clip[3] + 1) * vw / 2 + vx, wy = (v) => (v.clip[1] / v.clip[3] + 1) * vh / 2 + vy;
+        const ax = wx(p0), ay = wy(p0);
+        area = (wx(p1) - ax) * (wy(p2) - ay) - (wx(p2) - ax) * (wy(p1) - ay);
+      } else {
+        A = toWindow(p0); B = toWindow(p1); C = toWindow(p2);
+        area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
+      }
       if (area === 0) continue;
       const front = (area > 0) === (s.frontFace === CCW);
       if (s.caps.has(CAP.CULL_FACE) && (s.cullFace === FRONT_AND_BACK || (s.cullFace === BACK) === !front)) { s.stats.culled++; continue; }
       const back = !front && p0.back;
-      if (back) { p0 = asBack(p0); p1 = asBack(p1); p2 = asBack(p2); A = toWindow(p0); B = toWindow(p1); C = toWindow(p2); }
+      if (back) { p0 = asBack(p0); p1 = asBack(p1); p2 = asBack(p2); if (!webgl) { A = toWindow(p0); B = toWindow(p1); C = toWindow(p2); } }
       const flatColour = provoking ? (back ? provoking.back : provoking.colour) : null;
       if (webgl) webgl.tri(p0, p1, p2, flatColour, gpuState());
       else rasterTriangle(A, B, C, flatColour);
@@ -642,6 +656,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (ta.on) s.tex = [at(ta, 0), at(ta, 1)];
       if (va.on) vertex(at(va, 0), at(va, 1), va.size > 2 ? at(va, 2) : 0);
     },
+    // GL_EXT_compiled_vertex_array: a lock is a promise the program makes, which nothing here relies on.
+    glLockArraysEXT: () => {},
+    glUnlockArraysEXT: () => {},
     glTexEnvf: (target, p, v) => { if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`); },
     glTexEnvi: (target, p, v) => exec.glTexEnvf(target, p, v),
     glTexParameteri: (target, p, v) => exec.glTexParameterf(target, p, v),
@@ -693,7 +710,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // Only these leave the fragment state alone; every other command may change it, display lists included.
   const VERTEX_ONLY = new Set(['glBegin', 'glEnd', 'glVertex2f', 'glVertex3f', 'glVertex3fv', 'glNormal3f',
     'glColor3f', 'glColor4f', 'glColor3fv', 'glColor4fv', 'glColor3ubv', 'glColor4ubv', 'glTexCoord2f', 'glTexCoord2fv',
-    'glArrayElement']);
+    'glArrayElement', 'glLockArraysEXT', 'glUnlockArraysEXT']);
   for (const name of Object.keys(exec)) {
     if (VERTEX_ONLY.has(name)) continue;
     const run = exec[name];
@@ -714,7 +731,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glEndList: () => { s.lists.set(s.recordingId, s.recording); s.recording = null; },
     glDeleteLists: (n, range) => { for (let k = 0; k < range; k++) s.lists.delete(n + k); },
     glGetString: (name) => {
-      const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: version, 0x1f03: '' }[name];
+      const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: version, 0x1f03: 'GL_EXT_compiled_vertex_array' }[name];
       if (text === undefined) return 0;
       if (!s.strings.has(name)) s.strings.set(name, M.mod.intern([...new TextEncoder().encode(text), 0]));
       return s.strings.get(name);
@@ -755,9 +772,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
       if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
       exec.glBegin(mode);
+      /*
+       * One index is one vertex: within a call the arrays cannot change, so an index met again reuses
+       * the vertex already transformed and lit (the front end never alters a vertex once made). Quake
+       * III's triangle lists name most vertices several times.
+       */
+      // Reused across calls and stamped with a generation, so a call allocates nothing.
+      const gen = ++drawGen;
       for (let i = 0; i < count; i++) {
         const at = ptr + i * size;
-        exec.glArrayElement(size === 4 ? dv().getUint32(at, true) : size === 2 ? dv().getUint16(at, true) : M.u8[at]);
+        const ix = size === 4 ? dv().getUint32(at, true) : size === 2 ? dv().getUint16(at, true) : M.u8[at];
+        if (drawStamp[ix] === gen) { s.verts.push(drawSeen[ix]); continue; }
+        const before = s.verts.length;
+        exec.glArrayElement(ix);
+        if (s.verts.length > before) { drawStamp[ix] = gen; drawSeen[ix] = s.verts.at(-1); }   // no vertex array, no vertex
       }
       exec.glEnd();
     },
@@ -950,7 +978,7 @@ export function glBuiltins(T) {
     glDrawBuffer: f(V, U), glReadBuffer: f(V, U),
     glScissor: f(V, I, I, I, I), glPointSize: f(V, F), glColor3fv: f(V, P), glColor4ubv: f(V, P),
     glEnableClientState: f(V, U), glDisableClientState: f(V, U), glVertexPointer: f(V, I, U, I, P),
-    glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I),
+    glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I), glLockArraysEXT: f(V, I, I), glUnlockArraysEXT: f(V),
     glDeleteTextures: f(V, I, P), glGenTextures: f(V, I, P), glGetError: f(U),
     glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I),
     glGetString: f(P, U), glFinish: f(V), glFlush: f(V),
