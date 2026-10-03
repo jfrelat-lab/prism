@@ -341,6 +341,10 @@ float logf(float x);
 float log10f(float x);
 float powf(float x, float y);
 float floorf(float x);
+/* C99: to the nearest integer in the current rounding mode (to nearest, ties to even; PRISM has no
+   fesetround), as a long. Enemy Territory's myftol is lrintf. */
+long lrintf(float x);
+long lrint(double x);
 float ceilf(float x);
 float fabsf(float x);
 float fmodf(float x, float y);
@@ -1457,6 +1461,19 @@ Status XSetWMProtocols(Display *d, Window w, Atom *protocols, int count);
 int XConfigureWindow(Display *d, Window w, unsigned int mask, XWindowChanges *changes);
 int XUndefineCursor(Display *d, Window w);
 int XFree(void *data);
+/* Core fonts, in Xlib's layout. PRISM's server has none: XLoadQueryFont answers NULL for every
+   pattern, as a server with an empty font path does (ET's linux_glimp.c then skips its debug font). */
+typedef unsigned long Font;
+typedef struct { short lbearing, rbearing, width, ascent, descent; unsigned short attributes; } XCharStruct;
+typedef struct { Atom name; unsigned long card32; } XFontProp;
+typedef struct {
+  void *ext_data; Font fid; unsigned direction;
+  unsigned min_char_or_byte2, max_char_or_byte2, min_byte1, max_byte1;
+  Bool all_chars_exist; unsigned default_char; int n_properties; XFontProp *properties;
+  XCharStruct min_bounds, max_bounds; XCharStruct *per_char; int ascent, descent;
+} XFontStruct;
+XFontStruct *XLoadQueryFont(Display *d, const char *name);
+int XFreeFont(Display *d, XFontStruct *f);
 #endif
 `;
 
@@ -1598,6 +1615,9 @@ const KEYSYMDEF = `
 #define XK_minus 0x002d
 #define XK_equal 0x003d
 #define XK_asciitilde 0x007e
+#define XK_grave 0x0060
+#define XK_Caps_Lock 0xffe5
+#define XK_Num_Lock 0xff7f
 #define XK_KP_Subtract 0xffad
 /*
  * The navigation and keypad block, from keysymdef.h. Doom read the keyboard through a dozen keysyms;

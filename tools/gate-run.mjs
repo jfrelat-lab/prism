@@ -1711,6 +1711,21 @@ int main(void)
 }
 `);
 
+// ET's engine calls each module's non-variadic vmMain through `int (*)(int, ...)`; cdecl lays both
+// out alike, so the arguments arrive -- including (&callnum)[i] read straight off the caller's frame.
+C('variadic-pointer-to-plain-function', `#include <stdio.h>
+static int vmMain(int command, int a0, int a1, int a2) { return command * 1000 + a0 * 100 + a1 * 10 + a2; }
+static int mixed(int a, double d, const char *s, long long q) { return a + (int)(d * 10) + s[0] + (int)(q >> 32); }
+static int (*entry)(int, ...) = (int (*)(int, ...))vmMain;
+static int vm_call(int callnum, ...) { return entry((&callnum)[0], (&callnum)[1], (&callnum)[2], (&callnum)[3]); }
+int main(void)
+{
+    int (*m)(int, ...) = (int (*)(int, ...))mixed;
+    printf("%d %d %d\\n", entry(7, 1, 2, 3), vm_call(4, 5, 6, 7), m(1, 2.5, "A", 3LL << 32));
+    return 0;
+}
+`);
+
 C('rand-matches-the-reference', `#include <stdio.h>
 #include <stdlib.h>
 

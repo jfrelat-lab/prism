@@ -155,6 +155,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XAllocSizeHints: () => M.rt.calloc(1, 80),
     XAllocClassHint: () => M.rt.calloc(1, 8),
     XFree: (p) => { if (p) M.rt.free(p); return 1; },
+    XLoadQueryFont: () => 0,   // no core fonts on this server (see <X11/Xlib.h>)
+    XFreeFont: () => 1,
     /*
      * The window's NAME, which is the one part of this a page can act on: XTextProperty's first
      * field is the string. It goes where XStoreName's would, so a shell that shows a title shows

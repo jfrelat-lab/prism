@@ -1641,6 +1641,7 @@ export class FunctionEmitter {
           }
           return;
         }
+        if (this.#gccAsmMoves(text, [...outputs, ...inputs])) return;
         return unsup('inline assembly');
       }
     }
@@ -1651,6 +1652,35 @@ export class FunctionEmitter {
    * Evaluate an lvalue ONCE and keep where it lands, so a later store does not re-run the address.
    * `*bar()` must call bar exactly once however many times the place is written.
    */
+  /**
+   * GCC inline assembly, its smallest honest subset: AT&T `rdtsc` and `movl` from %eax or %edx into a
+   * MEMORY operand ("m"). That is ET's unix_shared.c GetClockTicks -- rdtsc, then edx:eax stored into
+   * two locals, both passed as "m" inputs and written anyway, as gcc lets them be. Any other template
+   * is refused as before. Returns false, emitting nothing, when the template is outside the subset.
+   */
+  #gccAsmMoves(text, operands) {
+    const bare = (c) => String(c ?? '').replace(/^L?"|"$/g, '');
+    const plan = [];
+    for (const l of text.split(/[;\n]/).map((x) => x.trim()).filter(Boolean)) {
+      if (l === 'rdtsc') { plan.push({ op: 'rdtsc' }); continue; }
+      const m = /^movl\s+%%(eax|edx)\s*,\s*%(\d+)$/.exec(l);
+      if (!m || !operands[+m[2]] || !/m/.test(bare(operands[+m[2]].constraint))) return false;
+      plan.push({ op: 'store', reg: m[1], n: +m[2] });
+    }
+    if (!plan.length) return false;
+    const reg = { eax: this.newTmp(), edx: this.newTmp() };
+    this.#declareTmp(reg.eax); this.#declareTmp(reg.edx);
+    this.out.push(`${reg.eax}=0;${reg.edx}=0;`);
+    for (const p of plan) {
+      if (p.op === 'rdtsc') {
+        this.out.push(`{const _t=M.rt.__prism_rdtsc();${reg.eax}=Number(_t&0xffffffffn)>>>0;${reg.edx}=Number(_t>>32n&0xffffffffn)>>>0;}`);
+      } else {
+        this.#storeAt(this.#lvalPlace(operands[p.n].expr), reg[p.reg], this.ty.UINT);
+      }
+    }
+    return true;
+  }
+
   #lvalPlace(e) {
     const l = this.#lval(e);
     if (l.varJs) return { varJs: l.varJs, type: l.type };
@@ -2681,7 +2711,9 @@ export class FunctionEmitter {
     let ft = this.ty.decay(p.type);
     if (ft.k === 'ptr' && ft.to.k === 'func') ft = ft.to;
     const args = this.#callArgs(e, ft);
-    return { js: `M.icall(${p.js},[${args.join(',')}])`, type: ft?.ret ?? this.ty.INT };
+    // Through a VARIADIC pointer type the last argument is the packed tail, which the runtime unpacks
+    // when the function actually called is not variadic (M.icall).
+    return { js: `M.icall(${p.js},[${args.join(',')}]${ft?.variadic ? ',1' : ''})`, type: ft?.ret ?? this.ty.INT };
   }
 
   /**

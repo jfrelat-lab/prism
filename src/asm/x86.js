@@ -87,6 +87,11 @@ export function translate(parsed, name, { symbols = {}, dataBase = 0, paged = fa
       if (o.sym in symbols) return String(symbols[o.sym]);
       throw new EmitError(`no address for symbol ${o.sym}`);
     }
+    if (o.index) {
+      const sym = o.symBase === undefined ? 0 : slots.has(o.symBase) ? slots.get(o.symBase) : o.symBase in symbols ? symbols[o.symBase] : null;
+      if (sym === null) throw new EmitError(`no address for symbol ${o.symBase}`);
+      return `((${o.base ?? 0}+Math.imul(${o.index},${o.scale})+${sym + o.disp})|0)`;
+    }
     return o.disp ? `((${o.base}+${o.disp})|0)` : `(${o.base}|0)`;
   };
   /*

@@ -34,7 +34,12 @@ export function installGlx(M, { frames = null, onFrame = null, onSwap = null } =
     },
     glXCreateContext: () => 1,
     glXMakeCurrent: (_d, _w, ctx) => {
-      if (ctx && !s.current) { gl.resize(s.window.w, s.window.h); s.current = true; }
+      // Again whenever the window bound now has another size: ET's vid_restart destroys its 800x600
+      // window and context and makes a 1024x768 pair current, and a framebuffer sized only once
+      // left the game drawing 1024x768 into 800x600 (the top of its menu cut off).
+      if (ctx && (!s.current || gl.state.width !== s.window.w || gl.state.height !== s.window.h)) {
+        gl.resize(s.window.w, s.window.h); s.current = true;
+      }
       return 1;
     },
     glXSwapBuffers: () => {

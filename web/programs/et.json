@@ -1,0 +1,16 @@
+{
+  "title": "WOLFENSTEIN: ENEMY TERRITORY",
+  "subtitle": "Splash Damage / id Software, 2003 · 2.60, the GPL source — Linux/GLX, native cgame, qagame and ui",
+  "target": "et",
+  "host": "glx",
+  "args": "+set com_introplayed 1 +set net_noudp 1",
+  "argsHint": "`+map <name>` loads a map (oasis, battery, goldrush, radar, railgun, fueldump); without it the game opens on its menu. net_noudp 1: the page has no sockets.",
+  "fps": 85,
+  "_fps": "85 is com_maxfps's default in qcommon/common.c.",
+  "needsData": {
+    "dir": "et",
+    "hint": "etmain/ of the free 2.60b release: pak0.pk3, pak1.pk3, pak2.pk3"
+  },
+  "controls": [["arrows", "move"], ["Ctrl", "fire"], ["Esc", "menu"], ["~", "console"]],
+  "_why": "id Tech 3 again, but its game logic is native code, not QVM: cgame, qagame and ui are shared objects the engine dlopens, built here by PRISM as three modules with their own namespaces."
+}

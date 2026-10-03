@@ -69,6 +69,17 @@ function parseOperand(text, sizeHint) {
       return { k: 'mem', base: r[1].toLowerCase(), disp: (r[2] === '-' ? -1 : 1) * Number(r[3]),
                size: sizeHint ?? null };
     }
+    // [base+index*scale], [base+index*scale+disp], [index*scale+disp], with an optional symbol: what
+    // gas's disp(%base,%index,scale) becomes (src/asm/gas.js).
+    const sib = /^(?:([.\w$]+)\s*\+\s*)?(?:(e[a-z]{2})\s*\+\s*)?(e[a-z]{2})\s*\*\s*([1248])(?:\s*([+-])\s*(\d+|0x[0-9a-f]+))?$/i.exec(inner);
+    if (sib) {
+      // The leading name is the base register when it is one and no other base follows.
+      const regFirst = sib[1] && REGS32.includes(sib[1].toLowerCase()) && !sib[2];
+      const symBase = sib[1] && !regFirst ? sib[1] : undefined;
+      if (sib[1] && !regFirst && REGS32.includes(sib[1].toLowerCase())) throw new AsmError(`memory operand not in the subset: [${inner}]`);
+      return { k: 'mem', ...(symBase ? { symBase } : {}), base: (regFirst ? sib[1] : sib[2])?.toLowerCase() ?? null, index: sib[3].toLowerCase(),
+               scale: Number(sib[4]), disp: sib[5] ? (sib[5] === '-' ? -1 : 1) * Number(sib[6]) : 0, size: sizeHint ?? null };
+    }
     if (REGS32.includes(inner.toLowerCase())) {
       return { k: 'mem', base: inner.toLowerCase(), disp: 0, size: sizeHint ?? null };
     }

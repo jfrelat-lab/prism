@@ -1,0 +1,442 @@
+{
+  "name": "et",
+  "title": "WOLFENSTEIN: ENEMY TERRITORY 2.60b (Linux/GLX, GPL source, native cgame/qagame/ui modules)",
+  "dir": "corpus/Enemy-Territory-master",
+  "fetch": "git clone --depth 1 https://github.com/id-Software/Enemy-Territory.git corpus/Enemy-Territory-master",
+  "_units": "SConscript.core's Linux client (local_dedicated 0) minus what it builds from assembly or C++: unix/matha.spp and unix/snd_mixa.spp (gas), unix/snapvector.asm (see asmTranslate), splines/ (C++, see inline), and curl-7.12.2, replaced by the tree's own qcommon/dl_main_stubs.c -- the file SConscript.core links when there is no client download library.",
+  "units": {
+    "list": [
+      "src/server/sv_bot.c",
+      "src/server/sv_ccmds.c",
+      "src/server/sv_client.c",
+      "src/server/sv_game.c",
+      "src/server/sv_init.c",
+      "src/server/sv_main.c",
+      "src/server/sv_net_chan.c",
+      "src/server/sv_snapshot.c",
+      "src/server/sv_world.c",
+      "src/qcommon/cm_load.c",
+      "src/qcommon/cm_patch.c",
+      "src/qcommon/cm_polylib.c",
+      "src/qcommon/cm_test.c",
+      "src/qcommon/cm_trace.c",
+      "src/qcommon/cmd.c",
+      "src/qcommon/common.c",
+      "src/qcommon/cvar.c",
+      "src/qcommon/files.c",
+      "src/qcommon/huffman.c",
+      "src/qcommon/md4.c",
+      "src/qcommon/msg.c",
+      "src/qcommon/net_chan.c",
+      "src/qcommon/unzip.c",
+      "src/qcommon/vm.c",
+      "src/qcommon/vm_interpreted.c",
+      "src/unix/linux_signals.c",
+      "src/unix/unix_main.c",
+      "src/unix/unix_net.c",
+      "src/unix/unix_shared.c",
+      "src/game/q_shared.c",
+      "src/game/q_math.c",
+      "src/botlib/be_aas_bspq3.c",
+      "src/botlib/be_aas_cluster.c",
+      "src/botlib/be_aas_debug.c",
+      "src/botlib/be_aas_entity.c",
+      "src/botlib/be_aas_file.c",
+      "src/botlib/be_aas_main.c",
+      "src/botlib/be_aas_move.c",
+      "src/botlib/be_aas_optimize.c",
+      "src/botlib/be_aas_reach.c",
+      "src/botlib/be_aas_route.c",
+      "src/botlib/be_aas_routealt.c",
+      "src/botlib/be_aas_routetable.c",
+      "src/botlib/be_aas_sample.c",
+      "src/botlib/be_ai_char.c",
+      "src/botlib/be_ai_chat.c",
+      "src/botlib/be_ai_gen.c",
+      "src/botlib/be_ai_goal.c",
+      "src/botlib/be_ai_move.c",
+      "src/botlib/be_ai_weap.c",
+      "src/botlib/be_ai_weight.c",
+      "src/botlib/be_ea.c",
+      "src/botlib/be_interface.c",
+      "src/botlib/l_crc.c",
+      "src/botlib/l_libvar.c",
+      "src/botlib/l_log.c",
+      "src/botlib/l_memory.c",
+      "src/botlib/l_precomp.c",
+      "src/botlib/l_script.c",
+      "src/botlib/l_struct.c",
+      "src/jpeg-6/jcapimin.c",
+      "src/jpeg-6/jchuff.c",
+      "src/jpeg-6/jcinit.c",
+      "src/jpeg-6/jccoefct.c",
+      "src/jpeg-6/jccolor.c",
+      "src/jpeg-6/jfdctflt.c",
+      "src/jpeg-6/jcdctmgr.c",
+      "src/jpeg-6/jcphuff.c",
+      "src/jpeg-6/jcmainct.c",
+      "src/jpeg-6/jcmarker.c",
+      "src/jpeg-6/jcmaster.c",
+      "src/jpeg-6/jcomapi.c",
+      "src/jpeg-6/jcparam.c",
+      "src/jpeg-6/jcprepct.c",
+      "src/jpeg-6/jcsample.c",
+      "src/jpeg-6/jdapimin.c",
+      "src/jpeg-6/jdapistd.c",
+      "src/jpeg-6/jdatasrc.c",
+      "src/jpeg-6/jdcoefct.c",
+      "src/jpeg-6/jdcolor.c",
+      "src/jpeg-6/jddctmgr.c",
+      "src/jpeg-6/jdhuff.c",
+      "src/jpeg-6/jdinput.c",
+      "src/jpeg-6/jdmainct.c",
+      "src/jpeg-6/jdmarker.c",
+      "src/jpeg-6/jdmaster.c",
+      "src/jpeg-6/jdpostct.c",
+      "src/jpeg-6/jdsample.c",
+      "src/jpeg-6/jdtrans.c",
+      "src/jpeg-6/jerror.c",
+      "src/jpeg-6/jidctflt.c",
+      "src/jpeg-6/jmemmgr.c",
+      "src/jpeg-6/jmemnobs.c",
+      "src/jpeg-6/jutils.c",
+      "src/renderer/tr_animation_mdm.c",
+      "src/renderer/tr_animation_mds.c",
+      "src/renderer/tr_backend.c",
+      "src/renderer/tr_bsp.c",
+      "src/renderer/tr_cmds.c",
+      "src/renderer/tr_cmesh.c",
+      "src/renderer/tr_curve.c",
+      "src/renderer/tr_decals.c",
+      "src/renderer/tr_flares.c",
+      "src/renderer/tr_font.c",
+      "src/renderer/tr_image.c",
+      "src/renderer/tr_init.c",
+      "src/renderer/tr_light.c",
+      "src/renderer/tr_main.c",
+      "src/renderer/tr_marks.c",
+      "src/renderer/tr_mesh.c",
+      "src/renderer/tr_model.c",
+      "src/renderer/tr_noise.c",
+      "src/renderer/tr_scene.c",
+      "src/renderer/tr_shade.c",
+      "src/renderer/tr_shade_calc.c",
+      "src/renderer/tr_shader.c",
+      "src/renderer/tr_shadows.c",
+      "src/renderer/tr_sky.c",
+      "src/renderer/tr_surface.c",
+      "src/renderer/tr_world.c",
+      "src/client/cl_cgame.c",
+      "src/client/cl_cin.c",
+      "src/client/cl_console.c",
+      "src/client/cl_input.c",
+      "src/client/cl_keys.c",
+      "src/client/cl_main.c",
+      "src/client/cl_net_chan.c",
+      "src/client/cl_parse.c",
+      "src/client/cl_scrn.c",
+      "src/client/cl_ui.c",
+      "src/client/snd_adpcm.c",
+      "src/client/snd_dma.c",
+      "src/client/snd_mem.c",
+      "src/client/snd_mix.c",
+      "src/client/snd_wavelet.c",
+      "src/qcommon/dl_main_stubs.c",
+      "src/unix/linux_glimp.c",
+      "src/unix/linux_qgl.c",
+      "src/unix/linux_snd.c",
+      "src/unix/linux_joystick.c"
+    ]
+  },
+  "modules": {
+    "cgame": {
+      "units": [
+        "src/cgame/cg_atmospheric.c",
+        "src/cgame/cg_character.c",
+        "src/cgame/cg_commandmap.c",
+        "src/cgame/cg_consolecmds.c",
+        "src/cgame/cg_debriefing.c",
+        "src/cgame/cg_draw.c",
+        "src/cgame/cg_drawtools.c",
+        "src/cgame/cg_effects.c",
+        "src/cgame/cg_ents.c",
+        "src/cgame/cg_event.c",
+        "src/cgame/cg_fireteamoverlay.c",
+        "src/cgame/cg_fireteams.c",
+        "src/cgame/cg_flamethrower.c",
+        "src/cgame/cg_info.c",
+        "src/cgame/cg_limbopanel.c",
+        "src/cgame/cg_loadpanel.c",
+        "src/cgame/cg_localents.c",
+        "src/cgame/cg_main.c",
+        "src/cgame/cg_marks.c",
+        "src/cgame/cg_missionbriefing.c",
+        "src/cgame/cg_multiview.c",
+        "src/cgame/cg_newDraw.c",
+        "src/cgame/cg_particles.c",
+        "src/cgame/cg_players.c",
+        "src/cgame/cg_playerstate.c",
+        "src/cgame/cg_polybus.c",
+        "src/cgame/cg_popupmessages.c",
+        "src/cgame/cg_predict.c",
+        "src/cgame/cg_scoreboard.c",
+        "src/cgame/cg_servercmds.c",
+        "src/cgame/cg_snapshot.c",
+        "src/cgame/cg_sound.c",
+        "src/cgame/cg_spawn.c",
+        "src/cgame/cg_statsranksmedals.c",
+        "src/cgame/cg_syscalls.c",
+        "src/cgame/cg_trails.c",
+        "src/cgame/cg_view.c",
+        "src/cgame/cg_weapons.c",
+        "src/cgame/cg_window.c",
+        "src/cgame/../game/bg_animation.c",
+        "src/cgame/../game/bg_animgroup.c",
+        "src/cgame/../game/bg_character.c",
+        "src/cgame/../game/bg_classes.c",
+        "src/cgame/../game/bg_misc.c",
+        "src/cgame/../game/bg_pmove.c",
+        "src/cgame/../game/bg_slidemove.c",
+        "src/cgame/../game/bg_sscript.c",
+        "src/cgame/../game/bg_stats.c",
+        "src/cgame/../game/bg_tracemap.c",
+        "src/cgame/../game/q_math.c",
+        "src/cgame/../game/q_shared.c",
+        "src/cgame/../ui/ui_shared.c"
+      ],
+      "soname": "cgame.mp.i386.so",
+      "exportsFrom": "src/cgame/cgame.def",
+      "defines": {
+        "CGAMEDLL": "1"
+      }
+    },
+    "qagame": {
+      "units": [
+        "src/botai/ai_cmd.c",
+        "src/botai/ai_dmgoal_mp.c",
+        "src/botai/ai_dmnet_mp.c",
+        "src/botai/ai_dmq3.c",
+        "src/botai/ai_main.c",
+        "src/botai/ai_script.c",
+        "src/botai/ai_script_actions.c",
+        "src/botai/ai_team.c",
+        "src/game/bg_animation.c",
+        "src/game/bg_animgroup.c",
+        "src/game/bg_campaign.c",
+        "src/game/bg_character.c",
+        "src/game/bg_classes.c",
+        "src/game/bg_misc.c",
+        "src/game/bg_pmove.c",
+        "src/game/bg_slidemove.c",
+        "src/game/bg_sscript.c",
+        "src/game/bg_stats.c",
+        "src/game/bg_tracemap.c",
+        "src/game/g_active.c",
+        "src/game/g_alarm.c",
+        "src/game/g_antilag.c",
+        "src/game/g_bot.c",
+        "src/game/g_buddy_list.c",
+        "src/game/g_character.c",
+        "src/game/g_client.c",
+        "src/game/g_cmds.c",
+        "src/game/g_cmds_ext.c",
+        "src/game/g_combat.c",
+        "src/game/g_config.c",
+        "src/game/g_fireteams.c",
+        "src/game/g_items.c",
+        "src/game/g_main.c",
+        "src/game/g_match.c",
+        "src/game/g_mem.c",
+        "src/game/g_misc.c",
+        "src/game/g_missile.c",
+        "src/game/g_mover.c",
+        "src/game/g_multiview.c",
+        "src/game/g_props.c",
+        "src/game/g_referee.c",
+        "src/game/g_save.c",
+        "src/game/g_script.c",
+        "src/game/g_script_actions.c",
+        "src/game/g_session.c",
+        "src/game/g_spawn.c",
+        "src/game/g_stats.c",
+        "src/game/g_sv_entities.c",
+        "src/game/g_svcmds.c",
+        "src/game/g_syscalls.c",
+        "src/game/g_systemmsg.c",
+        "src/game/g_target.c",
+        "src/game/g_team.c",
+        "src/game/g_teammapdata.c",
+        "src/game/g_trigger.c",
+        "src/game/g_utils.c",
+        "src/game/g_vote.c",
+        "src/game/g_weapon.c",
+        "src/game/q_math.c",
+        "src/game/q_shared.c"
+      ],
+      "soname": "qagame.mp.i386.so",
+      "exportsFrom": "src/game/game.def",
+      "defines": {
+        "GAMEDLL": "1"
+      }
+    },
+    "ui": {
+      "units": [
+        "src/ui/ui_atoms.c",
+        "src/ui/ui_gameinfo.c",
+        "src/ui/ui_loadpanel.c",
+        "src/ui/ui_main.c",
+        "src/ui/ui_players.c",
+        "src/ui/ui_shared.c",
+        "src/ui/ui_syscalls.c",
+        "src/ui/ui_util.c",
+        "src/ui/../game/bg_campaign.c",
+        "src/ui/../game/bg_classes.c",
+        "src/ui/../game/bg_misc.c",
+        "src/ui/../game/q_math.c",
+        "src/ui/../game/q_shared.c"
+      ],
+      "soname": "ui.mp.i386.so",
+      "exportsFrom": "src/ui/ui.def",
+      "defines": {
+        "UIDLL": "1"
+      }
+    }
+  },
+  "defines": {
+    "__linux__": "1",
+    "__i386__": null,
+    "i386": null,
+    "NDEBUG": "1"
+  },
+  "unitDefines": {
+    "src/botlib/be_aas_bspq3.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_cluster.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_debug.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_entity.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_file.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_main.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_move.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_optimize.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_reach.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_route.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_routealt.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_routetable.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_aas_sample.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_char.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_chat.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_gen.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_goal.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_move.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_weap.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ai_weight.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_ea.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/be_interface.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_crc.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_libvar.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_log.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_memory.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_precomp.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_script.c": {
+      "BOTLIB": "1"
+    },
+    "src/botlib/l_struct.c": {
+      "BOTLIB": "1"
+    },
+    "src/unix/unix_main.c": {
+      "__i386__": "1"
+    }
+  },
+  "env": [
+    "stdio",
+    "x11",
+    "dsp",
+    "dl",
+    "gl",
+    "glx"
+  ],
+  "host": "glx",
+  "compile": {
+    "memory": 512,
+    "collect": true,
+    "longDouble": 64
+  },
+  "_inline": "prism-splines.c stands in for splines/*.cpp (C++) in the one state the shipped data reaches: no camera files. The user chose this over waiting for C++ (2026-10-03).",
+  "inline": {
+    "prism-splines.c": "#include \"src/game/q_shared.h\"\n#include \"src/qcommon/qcommon.h\"\n/*\n * splines/splines.cpp's three extern \"C\" entry points, for the one state ET's data can reach.\n * splines/ is C++ (idCameraDef, idVec3, operator overloading), which PRISM does not compile. Its\n * cameras are files under cameras/ and pak0-2.pk3 ship none, so loadCamera's FS_ReadFile always\n * misses and it returns qfalse -- exactly what splines.cpp:62 does then -- and cgame only starts\n * or reads a camera loadCamera accepted (cg_consolecmds.c, cg_ents.c). A camera file that DOES\n * exist stops the game with the reason rather than going on without its camera.\n */\nqboolean loadCamera( int camNum, const char *name ) {\n\tvoid *buf;\n\tif ( camNum < 0 || camNum >= 64 ) {\n\t\treturn qfalse;\n\t}\n\tFS_ReadFile( name, &buf );\n\tif ( !buf ) {\n\t\treturn qfalse;\n\t}\n\tFS_FreeFile( buf );\n\tCom_Error( ERR_FATAL, \"loadCamera(%s): spline cameras are splines/*.cpp, C++, which PRISM does not compile\", name );\n\treturn qfalse;\n}\nvoid startCamera( int camNum, int time ) {\n\tCom_Error( ERR_FATAL, \"startCamera(%d): no camera was ever loaded (splines/*.cpp is C++)\", camNum );\n}\nqboolean getCameraInfo( int camNum, int time, float *origin, float *angles, float *fov ) {\n\tCom_Error( ERR_FATAL, \"getCameraInfo(%d): no camera was ever loaded (splines/*.cpp is C++)\", camNum );\n\treturn qfalse;\n}\n"
+  },
+  "_files": "What the INSTALLATION provides: the three modules' files. unix_main.c's Sys_LoadDll checks access(fs_basepath/<fs_game>/<name>.mp.i386.so, R_OK) before it dlopens that path, and a real install has the files there (the 2.60b installer unpacks them into etmain/). Their content is never read: the modules are linked into the program and dlopen resolves them by name.",
+  "files": {
+    "etmain/cgame.mp.i386.so": "PRISM links this module into the program; dlopen finds it by this name (src/env/dl.js).\n",
+    "etmain/qagame.mp.i386.so": "PRISM links this module into the program; dlopen finds it by this name (src/env/dl.js).\n",
+    "etmain/ui.mp.i386.so": "PRISM links this module into the program; dlopen finds it by this name (src/env/dl.js).\n"
+  },
+  "_unitDefines": "BOTLIB for botlib/ as SConscript.core's botlib_env adds it. unix/unix_main.c gets __i386__ back for Sys_GetDLLName's '.mp.i386.so' (it #errors on an unknown arch), while every other unit has it off so q_shared.h picks id386 0 and the C paths.",
+  "asmTranslate": [
+    "src/unix/snapvector.asm",
+    {
+      "file": "src/unix/snd_mixa.spp",
+      "syntax": "gas",
+      "defines": {
+        "__linux__": "1",
+        "__i386__": "1",
+        "ELF": "1"
+      }
+    }
+  ],
+  "_asmTranslate": "unix/snapvector.asm is Sys_SnapVector in NASM (x87), as Quake III's. unix/snd_mixa.spp is GNU as through cpp, with what SConscript.core's gas_env gives it: ELF, and gcc -m32's __linux__ and __i386__ (its #if id386 needs them; the C units are built without __i386__). It is the only S_WriteLinearBlastStereo16 a Linux build links: snd_mix.c declares it under __linux__, and its C twin is in an #else no Linux configuration reaches. unix/matha.spp is not listed: nothing undefined names its routines.",
+  "_dir": "The repository root, not src/: cgame, game and ui include ../../etmain/ui/menudef.h, which lives outside src/ and must be in the tree the page is served."
+}

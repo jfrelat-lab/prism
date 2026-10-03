@@ -91,12 +91,13 @@ export function installStdio(M, {
    * exact match wins; a basename match is the fallback, so `pacman/pacman.6e` finds a file supplied
    * as `pacman.6e`.
    */
-  function find(name) {
+  function find(name, { guess = true } = {}) {
     const want = norm(name);
     if (store.has(want)) return want;
     // A key that ends with the whole requested path: a store keyed one directory deeper still
     // identifies the file, and the directory is what tells two files of the same name apart.
     for (const k of store.keys()) if (k.endsWith(`/${want}`)) return k;
+    if (!guess) return null;
     const base = want.replace(/^.*\//, '');
     /*
      * The BASENAME fallback, and only when it is UNAMBIGUOUS. `pacman/pacman.6e` finding a file
@@ -748,7 +749,12 @@ export function installStdio(M, {
   }
 
   Object.assign(api, {
-    access: (namePtr) => (find(M.mod.cstr(namePtr)) === null ? -1 : 0),
+    /*
+     * access() answers for THIS path, so it takes no basename guess. A program probing candidates uses
+     * the answer to choose: ET's Sys_LoadDll asks fs_homepath before fs_basepath, and a guess that
+     * found ~/.etwolf/etmain/ui.mp.i386.so in etmain/ made it delete that file as an outdated copy.
+     */
+    access: (namePtr) => (find(M.mod.cstr(namePtr), { guess: false }) === null ? -1 : 0),
     getcwd: (buf, size) => {
       if ((size | 0) < 2) return 0;
       M.u8[buf] = 47; M.u8[buf + 1] = 0;             // "/"
@@ -900,8 +906,10 @@ export function installStdio(M, {
     msync: () => 0,
     chmod: () => 0,
     umask: () => 0,
-    usleep: () => 0,
-    sleep: () => 0,
+    // Neither waits; each counts the time it stands for, which only the time-stamp counter sees
+    // (runtime.js __prism_rdtsc).
+    usleep: (us) => { M.sleptMicros = (M.sleptMicros ?? 0) + (us >>> 0); return 0; },
+    sleep: (s) => { M.sleptMicros = (M.sleptMicros ?? 0) + (s >>> 0) * 1e6; return 0; },
 
     pread: (fd, dst, n, off) => {
       const h = fileOf(fd);

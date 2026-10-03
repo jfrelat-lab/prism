@@ -198,6 +198,8 @@ export const BUILTINS = new Map(Object.entries({
   getpwuid: { ret: P, params: [U] }, getpwnam: { ret: P, params: [P] }, ctime: { ret: P, params: [P] }, XSetWMNormalHints: { ret: V, params: [P, U, P] },
   XAllocClassHint: { ret: P, params: [] },
   XFree: { ret: I, params: [P] },
+  XLoadQueryFont: { ret: P, params: [P, P] },
+  XFreeFont: { ret: I, params: [P, P] },
   ScreenOfDisplay: { ret: P, params: [P, I] },
   WidthOfScreen: { ret: I, params: [P] },
   HeightOfScreen: { ret: I, params: [P] },
@@ -456,6 +458,7 @@ export const BUILTINS = new Map(Object.entries({
   expf: { ret: FLT, params: [FLT] }, logf: { ret: FLT, params: [FLT] },
   log10f: { ret: FLT, params: [FLT] }, powf: { ret: FLT, params: [FLT, FLT] },
   floorf: { ret: FLT, params: [FLT] }, ceilf: { ret: FLT, params: [FLT] },
+  lrintf: { ret: I, params: [FLT] }, lrint: { ret: I, params: [D] },
   fabsf: { ret: FLT, params: [FLT] }, fmodf: { ret: FLT, params: [FLT, FLT] },
   ldexp: { ret: D, params: [D, I] }, ldexpf: { ret: FLT, params: [FLT, I] },
   frexp: { ret: D, params: [D, P] },
@@ -956,7 +959,9 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
     });
     const tokens = pp.run(u.source, u.file);
     const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model, signedChar, enums, longDouble });
-    parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
+    // The module is part of a static's identity: ET builds game/bg_sscript.c into cgame AND qagame,
+    // and one tag per path let cgame's calls reach qagame's copy (and its syscall table).
+    parsed.push({ ...u, unit, scope, tag: u.module ? `${u.module}_${tagOf(u.file)}` : tagOf(u.file) });
   }
 
   /*
@@ -1359,8 +1364,10 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
   // The declared type of every function the main module knows, defined or not: what a binding for
   // a function another object file defines needs, to lay its arguments out as the C pushes them.
   const funcTypes = new Map([...perModule.get(MAIN).funcs].map(([n, f]) => [n, f.type]));
+  // Where each of the main module's globals lives: what an assembly file's `extern` names resolve to.
+  const globalAddrs = Object.fromEntries([...perModule.get(MAIN).globals].map(([n, g]) => [n, g.addr]));
   return { M, F, src, mod, failures, duplicates, undefined: undefined_, undefinedVars,
-           externPlaced, funcTypes, run: makeRunner(M, F, mod, model) };
+           externPlaced, funcTypes, globalAddrs, run: makeRunner(M, F, mod, model) };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */

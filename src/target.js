@@ -22,6 +22,7 @@ import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
 import { installAsm } from './asm/link.js';
+import { asmText } from './asm/gas.js';
 import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from './asm/tasm-link.js';
 
 /**
@@ -333,7 +334,8 @@ export function targetUnits(target, root) {
     for (const f of m.units ?? []) {
       const full = join(dir, f);
       if (!existsSync(full)) throw new Error(`target '${target.name}': module ${name} missing unit ${f}`);
-      units.push({ file: full, source: readFileSync(full, 'latin1'), module: name });
+      // A module's `defines` are its build's own (ET's SConscript.cgame adds CGAMEDLL to every unit).
+      units.push({ file: full, source: readFileSync(full, 'latin1'), module: name, ...(m.defines ? { defines: m.defines } : {}) });
     }
   }
   for (const { name, source } of envVars(target.env)) {
@@ -467,7 +469,16 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   }
   const asmBound = target.asmTranslate?.length
     ? installAsm(program, {
-      sources: target.asmTranslate.map(f => ({ file: f, text: readFileSync(join(dir, f), 'latin1') })),
+      sources: target.asmTranslate.map((e) => {
+        const f = typeof e === 'string' ? e : e.file;
+        // A header the assembly includes and the tree lacks is an error here, not an empty stub: qasm.h
+        // is where `id386` is decided, and without it the whole file preprocesses to nothing.
+        const lost = new Set();
+        const text = asmText(typeof e === 'string' ? e : { ...e, file: join(dir, f) }, readFileSync(join(dir, f), 'latin1'), makeResolver(dir, target, lost, new Set()));
+        if (lost.size) throw new Error(`${f}: missing include(s) ${[...lost].join(', ')}`);
+        return { file: f, text };
+      }),
+      symbols: program.globalAddrs ?? {},
       machine: program.M.machine ?? null,
     })
     : [];

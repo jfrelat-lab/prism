@@ -174,7 +174,9 @@ const server = createServer(async (req, res) => {
            * its tree defines get_block and put_block nowhere but dos/gfx.S, so a browser that cannot
            * reach that file cannot draw anything at all.
            */
-          asmTranslate: (resolved.asmTranslate ?? []).map(f => `${rel(dir)}/${f}`),
+          // A gas entry is an object; its file is relative to the tree like a NASM name's.
+          asmTranslate: (resolved.asmTranslate ?? []).map(f => (typeof f === 'string'
+            ? `${rel(dir)}/${f}` : { ...f, file: `${rel(dir)}/${f.file}`, inTree: f.file })),
           /*
            * Whole Turbo Assembler modules and the object files the project links (Keen Dreams,
            * Catacomb 3-D): the module list as the target names it, every assembler source in the

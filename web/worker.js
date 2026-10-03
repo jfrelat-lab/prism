@@ -18,6 +18,7 @@ import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js'
  */
 import { buildEnv, envHeaders, envBuiltins } from '../src/env/registry.js';
 import { installAsm } from '../src/asm/link.js';
+import { asmText } from '../src/asm/gas.js';
 import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from '../src/asm/tasm-link.js';
 import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
@@ -117,6 +118,12 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         .filter(([, m]) => m.soname).map(([k, m]) => [m.soname, k])),
       outsideRoot: t.units.filter(u => u.source === undefined)
         .map(u => u.file).filter(f => !f.startsWith(`${t.dir}/`)),
+      /*
+       * Module and defines PER UNIT, in the order of `units`: a file can be compiled into several
+       * modules with different defines -- Enemy Territory builds game/bg_misc.c into cgame (CGAMEDLL),
+       * qagame (GAMEDLL) and ui (UIDLL) -- so a table keyed by path keeps only one of them.
+       */
+      unitInfo: t.units.filter(u => u.source === undefined).map(u => ({ module: u.module, defines: u.defines })),
       unitDefines: Object.fromEntries(t.units.filter(u => u.defines)
         .map(u => [(u.file.startsWith(`${t.dir}/`) ? u.file.slice(t.dir.length + 1) : u.file)
           .toLowerCase(), u.defines])),
@@ -233,13 +240,14 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
    * the same reason.
    */
   const asmSources = [];
-  for (const f of program.asmTranslate ?? []) {
+  for (const entry of program.asmTranslate ?? []) {
+    const f = typeof entry === 'string' ? entry : entry.file;
     const r = await fetch(`/${f}`);
     if (!r.ok) throw new Error(`missing assembly ${f}: ${r.status}`);
     const bytes = new Uint8Array(await r.arrayBuffer());
     let text = '';
     for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
-    asmSources.push({ file: f, text });
+    asmSources.push({ file: f, text, entry });
   }
   /*
    * Turbo Assembler sources, read as LATIN-1 for the reason given above, keyed by their file name
@@ -320,8 +328,11 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
        * `#include "./env.h"` from a unit in a subdirectory looked for `libbenly/src/./env.h`, found
        * nothing, and was stubbed empty -- the parse then died on a type that header declares.
        */
-      const key = p.replace(/^\.\//, '').replace(/\/\.\//g, '/')
-        .replace(/[^/]+\/\.\.\//g, '').toLowerCase();
+      let key = p.replace(/^\.\//, '').replace(/\/\.\//g, '/');
+      // Until none is left: one pass turns src/cgame/../../etmain into src/../etmain and stops (ET's
+      // cgame includes ../../etmain/ui/menudef.h).
+      for (let prev = ''; prev !== key;) { prev = key; key = key.replace(/(^|\/)(?!\.\.\/)[^/]+\/\.\.\//, '$1'); }
+      key = key.toLowerCase();
       return tree.has(key) ? { path: key, text: tree.get(key) } : null;
     };
     if (!angled && fromFile) {
@@ -347,14 +358,20 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     return { path: `<missing:${name}>`, text: '' };
   }
 
+  // A gas source is preprocessed against the same tree as the C, then rewritten as NASM (src/asm/gas.js).
+  for (const a of asmSources) {
+    if (typeof a.entry !== 'string') a.text = asmText({ ...a.entry, file: a.entry.inTree }, a.text, resolve);
+  }
+
   // --- 2. compile.
   setState(STATE.COMPILING);
   const units = [];
-  for (const u of program.units) {
+  for (const [i, u] of program.units.entries()) {
     const text = tree.get(u.toLowerCase());
     if (text === undefined) throw new Error(`missing translation unit ${u}`);
-    const over = (program.unitDefines || {})[u.toLowerCase()];
-    const mod = (program.unitModules || {})[u.toLowerCase()];
+    const info = program.unitInfo?.[i];
+    const over = info ? info.defines : (program.unitDefines || {})[u.toLowerCase()];
+    const mod = info ? info.module : (program.unitModules || {})[u.toLowerCase()];
     units.push({ file: u, source: text, ...(over ? { defines: over } : {}), ...(mod ? { module: mod } : {}) });
   }
   for (const [name, source] of Object.entries(program.extraUnits || {})) {
@@ -554,15 +571,19 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     installSvgalib(prog.M, { keyboard: { next: () => keyboard.nextEvent() }, mouse });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     installGL(prog.M, { backend });
-    let out = 0, since = performance.now(), count = 0;
+    let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
     installFxMesa(prog.M, {
       onSwap: (_n, gl) => {
         count++;
         const now = performance.now();
         if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
         const { width: w, height: h } = gl.state;
-        if (!out) {
+        // Again whenever the size changes: ET's vid_restart recreates its window at 1024x768, and a buffer
+        // kept at the first window's size was overrun every frame while the page showed the old one.
+        if (!out || w !== outW || h !== outH) {
+          if (out) prog.M.rt.free(out);
           out = prog.M.rt.malloc(w * h * 4);
+          outW = w; outH = h;
           Atomics.store(ctrl, SLOT.WIDTH, w);
           Atomics.store(ctrl, SLOT.HEIGHT, h);
           Atomics.store(ctrl, SLOT.PIXELS, out);
@@ -598,7 +619,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     installGL(prog.M, { backend });
-    let out = 0, since = performance.now(), count = 0;
+    let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
     installGlx(prog.M, {
       onSwap: (_n, gl) => {
         // The frame rate, said every five seconds: GLX has no other place a person could read it.
@@ -606,8 +627,12 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         const now = performance.now();
         if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
         const { width: w, height: h } = gl.state;
-        if (!out) {
+        // Again whenever the size changes: ET's vid_restart recreates its window at 1024x768, and a buffer
+        // kept at the first window's size was overrun every frame while the page showed the old one.
+        if (!out || w !== outW || h !== outH) {
+          if (out) prog.M.rt.free(out);
           out = prog.M.rt.malloc(w * h * 4);
+          outW = w; outH = h;
           Atomics.store(ctrl, SLOT.WIDTH, w);
           Atomics.store(ctrl, SLOT.HEIGHT, h);
           Atomics.store(ctrl, SLOT.PIXELS, out);
@@ -626,7 +651,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
     });
     // The program's own assembly, as for the DOS host: Quake III's Sys_SnapVector is snapvector.nasm.
     if (asmSources.length) {
-      const bound = installAsm(prog, { sources: asmSources, machine: null });
+      const bound = installAsm(prog, { sources: asmSources, symbols: prog.globalAddrs ?? {}, machine: null });
       log(`assembly translated and bound: ${bound.map((b) => b.name).join(' ')}`);
     }
   } else if (platform === 'quake') {
@@ -1304,7 +1329,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * a routine that does `out` needs the port seam to exist.
      */
     if (asmSources.length) {
-      const bound = installAsm(prog, { sources: asmSources, machine: prog.M.machine ?? null });
+      const bound = installAsm(prog, { sources: asmSources, symbols: prog.globalAddrs ?? {}, machine: prog.M.machine ?? null });
       log(`assembly translated and bound: ${bound.map((b) => b.name).join(" ")}`);
     }
 

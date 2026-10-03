@@ -55,6 +55,15 @@ function tmIsI386(M, what) {
 }
 
 export function makeMachine(mod = new Module()) {
+  // A function's declared type by its table index, rebuilt when the table grows.
+  let typeByIndex = null;
+  const funcType = (i) => {
+    if (!typeByIndex || typeByIndex.length !== mod.funcTable.length) {
+      typeByIndex = new Array(mod.funcTable.length);
+      for (const f of mod.funcs.values()) typeByIndex[f.index] = f.type;
+    }
+    return typeByIndex[i];
+  };
   const M = {
     mod,
     u8: mod.u8,
@@ -130,10 +139,33 @@ export function makeMachine(mod = new Module()) {
     },
 
     /** An indirect call through a function pointer. */
-    icall(p, args) {
+    icall(p, args, packedTail = 0) {
       if (!isFuncPtr(p)) throw new Trap(`call through a non-function pointer 0x${(p >>> 0).toString(16)}`);
       const f = M.funcs[funcIndex(p)];
       if (!f) throw new Trap(`call through an unbound function pointer (index ${funcIndex(p)})`);
+      if (packedTail) {
+        /*
+         * A call through a pointer of VARIADIC type to a function that is NOT variadic. i386 cdecl lays
+         * both out the same on the stack, so C programs rely on it: ET's engine calls each module's
+         * `int vmMain(int command, int arg0, ... int arg11)` through `int (*entryPoint)(int, ...)`.
+         * PRISM passes a variadic tail as one packed buffer, so here it is read back into the
+         * parameters the callee declares, slot by slot as the stack would hold them.
+         */
+        const t = funcType(funcIndex(p));
+        if (t && !t.variadic && t.params) {
+          const fixed = args.slice(0, -1), va = vaReader(M, args[args.length - 1]);
+          for (let i = fixed.length; i < t.params.length; i++) {
+            const pt = t.params[i].type;
+            const fp = pt.k === 'scalar' && /double|float/.test(pt.name);
+            if (fp && pt.name === 'float') fixed.push(Math.fround(va.f64()));   // promoted to double in the tail
+            else if (fp) fixed.push(va.f64());
+            else if (pt.k === 'scalar' && pt.size === 8) fixed.push(va.i64());
+            else if (pt.k !== 'scalar' && pt.k !== 'ptr' && pt.k !== 'enum') throw new Trap('a struct parameter through a variadic pointer type is not implemented');
+            else fixed.push(pt.k === 'ptr' ? va.ptr() : va.int());
+          }
+          return f(...fixed);
+        }
+      }
       return f(...args);
     },
 
@@ -1005,6 +1037,14 @@ function makeLibc(M) {
      * Doom's D_DoomLoop spins until I_GetTime reports a new tic, so a frozen clock is an infinite
      * loop. installRealClock replaces it where real time is wanted.
      */
+    /*
+     * The time-stamp counter, for the rdtsc of GCC inline assembly (emit.js #gccAsmMoves): a nominal
+     * 3 GHz over the guest clock plus every second the program spent in sleep()/usleep(), which return
+     * at once here. ET reads it around sleep(1) to measure the CPU and pick its graphics preset, so a
+     * counter blind to the sleep would measure 0 MHz. Reading it advances nothing.
+     */
+    __prism_rdtsc: () => BigInt(Math.round((M.realClock ? M.realClock.micros() : (M.wallMicros ?? 0)) + (M.sleptMicros ?? 0))) * 3000n,
+
     gettimeofday: (tv, _tz) => {
       checkLeash(M);
       M.wallMicros = (M.wallMicros ?? EPOCH_US) + 28571;
@@ -1230,6 +1270,8 @@ function makeLibc(M) {
     log10f: (x) => Math.fround(Math.log10(x)),
     powf: (x, y) => Math.fround(Math.pow(x, y)),
     floorf: (x) => Math.fround(Math.floor(x)), ceilf: (x) => Math.fround(Math.ceil(x)),
+    // Ties to even; out of range or NaN is the x86 "integer indefinite" 0x80000000, as cvtss2si gives.
+    lrintf: (x) => lrintTiesEven(x), lrint: (x) => lrintTiesEven(x),
     fabsf: (x) => Math.fround(Math.abs(x)),
     fmodf: (x, y) => Math.fround(x % y),
     ldexp: (x, e) => x * Math.pow(2, e | 0),
@@ -1628,6 +1670,11 @@ function fixed(v, p) {
  * NOT the default, and never in the gates: this is where reproducibility is traded for faithfulness,
  * and that trade belongs to an interactive host only.
  */
+function lrintTiesEven(x) {
+  const r = Math.abs(x % 1) === 0.5 ? 2 * Math.round(x / 2) : Math.round(x);
+  return Number.isFinite(r) && r >= -2147483648 && r <= 2147483647 ? r | 0 : -2147483648;
+}
+
 export function installRealClock(M, { now, speed = () => 100, paused = () => false } = {}) {
   const clockNow = now || (() => performance.now());
   let wall = clockNow();          // host time at the last advance
