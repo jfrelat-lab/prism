@@ -28,10 +28,13 @@
 // NOT implemented, and refused rather than approximated: points, polygon modes other than FILL,
 // positional lights, colour-index textures.
 
+import { GL_H } from './headers-gl.js';
+
 const MODELVIEW = 0x1700, PROJECTION = 0x1701;
 const CAP = {
   CULL_FACE: 0x0b44, LIGHTING: 0x0b50, DEPTH_TEST: 0x0b71, NORMALIZE: 0x0ba1, LIGHT0: 0x4000,
   TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60, SCISSOR_TEST: 0x0c11,
+  POLYGON_OFFSET_FILL: 0x8037, CLIP_PLANE0: 0x3000,
 };
 const ARRAY = { 0x8074: 'vertex', 0x8076: 'color', 0x8078: 'tex' };
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
@@ -69,6 +72,23 @@ function normalMatrix(m) {
   const det = a * A + b * B + c * C || 1;
   return [A / det, B / det, C / det, D / det, E / det, F / det, G / det, H / det, I / det];
 }
+function invert4(m) {
+  const a = Array.from(m), r = Array.from(ident());
+  for (let c = 0; c < 4; c++) {
+    let p = c;
+    for (let k = c + 1; k < 4; k++) if (Math.abs(a[c * 4 + k]) > Math.abs(a[c * 4 + p])) p = k;
+    if (a[c * 4 + p] === 0) return r;               // singular: GL leaves the result undefined
+    for (let j = 0; j < 4; j++) { [a[j * 4 + c], a[j * 4 + p]] = [a[j * 4 + p], a[j * 4 + c]]; [r[j * 4 + c], r[j * 4 + p]] = [r[j * 4 + p], r[j * 4 + c]]; }
+    const d = a[c * 4 + c];
+    for (let j = 0; j < 4; j++) { a[j * 4 + c] /= d; r[j * 4 + c] /= d; }
+    for (let k = 0; k < 4; k++) {
+      if (k === c) continue;
+      const f = a[c * 4 + k];
+      for (let j = 0; j < 4; j++) { a[j * 4 + k] -= f * a[j * 4 + c]; r[j * 4 + k] -= f * r[j * 4 + c]; }
+    }
+  }
+  return r;
+}
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 /** The eight comparison functions, shared by the alpha and depth tests (their enums coincide). */
@@ -97,6 +117,9 @@ function baseFormat(internal) {
  * MESA_GL_VERSION_OVERRIDE does on the reference side.
  */
 export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM' } = {}) {
+  // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
+  // exports (src/env/dl.js), as opengl32.dll does for GetProcAddress (src/env/opengl32.c).
+  M.glNames = new Set([...GL_H.matchAll(/\b(gl[A-Z]\w*)\s*\(/g)].map((m) => m[1]));
   let webgl = null;                         // the WebGL2 rasteriser when backend is 'webgl' (makeWebGL)
   const dv = () => M.mod.dv;
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
@@ -122,7 +145,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
     textures: new Map([[0, newTexture()]]), bound: 0, nextTexture: 1, genTextures: new Set(),
     arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false } },
-    scissor: [0, 0, 0, 0], pointSize: 1,
+    scissor: [0, 0, 0, 0], pointSize: 1, lineWidth: 1,
+    colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
     stats: { triangles: 0, culled: 0, clipped: 0, fragments: 0 },
@@ -173,7 +197,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // Which of the two a triangle gets is known only once its window-space winding is (triangle()).
       if (s.twoSide) back = litColour(s.backMaterial, [-en[0], -en[1], -en[2]]);
     } else colour = s.colour.map(clamp01);
-    s.verts.push({ clip, colour, back, tex: [s.tex[0], s.tex[1]], eyeZ: Math.abs(eye[2] / (eye[3] || 1)) });
+    s.verts.push({ clip, colour, back, tex: [s.tex[0], s.tex[1]], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye });
   }
 
   // --- clipping against the near plane (z + w >= 0), every attribute linear in clip space
@@ -183,6 +207,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     back: a.back && a.back.map((v, k) => v + (b.back[k] - v) * t),
     tex: [a.tex[0] + (b.tex[0] - a.tex[0]) * t, a.tex[1] + (b.tex[1] - a.tex[1]) * t],
     eyeZ: a.eyeZ + (b.eyeZ - a.eyeZ) * t,
+    eye: a.eye && a.eye.map((v, k) => v + (b.eye[k] - v) * t),
   });
   function clipNear(poly) {
     const d = (v) => v.clip[2] + v.clip[3];
@@ -195,6 +220,37 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if ((da >= 0) !== (db >= 0)) out.push(lerpV(a, b, da / (da - db)));
     }
     return out;
+  }
+
+  /*
+   * The user clip planes (glClipPlane), in EYE space as GL 1.1 2.11 puts them: a point is kept where
+   * plane . eye >= 0. After the near plane, so both rasterisers get the same clipped polygons.
+   */
+  const userPlanes = () => s.clipPlanes.map((p, i) => (p && s.caps.has(CAP.CLIP_PLANE0 + i) ? p : null)).filter(Boolean);
+  const dotEye = (p, v) => p[0] * v.eye[0] + p[1] * v.eye[1] + p[2] * v.eye[2] + p[3] * v.eye[3];
+  function clipUser(poly) {
+    for (const p of userPlanes()) {
+      if (poly.length < 3) break;
+      if (poly.every((v) => dotEye(p, v) >= 0)) continue;
+      const out = [];
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length], da = dotEye(p, a), db = dotEye(p, b);
+        if (da >= 0) out.push(a);
+        if ((da >= 0) !== (db >= 0)) out.push(lerpV(a, b, da / (da - db)));
+      }
+      poly = out;
+    }
+    return poly;
+  }
+  function clipUserSegment(seg) {
+    for (const p of userPlanes()) {
+      if (seg.length < 2) break;
+      const [a, b] = seg, da = dotEye(p, a), db = dotEye(p, b);
+      if (da < 0 && db < 0) return [];
+      if (da < 0) seg = [lerpV(a, b, da / (da - db)), b];
+      else if (db < 0) seg = [a, lerpV(a, b, da / (da - db))];
+    }
+    return seg;
   }
 
   // --- rasterisation
@@ -302,7 +358,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const sf = BLEND(s.blend[0], out, dst, out[3], dst[3]), df = BLEND(s.blend[1], out, dst, out[3], dst[3]);
       out = [0, 1, 2, 3].map((k) => clamp01(out[k] * sf[k] + dst[k] * df[k]));
     }
-    for (let k = 0; k < 4; k++) s.color[o + k] = Math.round(out[k] * 255);
+    for (let k = 0; k < 4; k++) if (s.colorMask[k]) s.color[o + k] = Math.round(out[k] * 255);
     s.stats.fragments++;
   }
   function rasterTriangle(A, B, C, flatColour) {
@@ -324,6 +380,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const edge = (u, v, px, py) => (v.x - u.x) * (py - u.y) - (v.y - u.y) * (px - u.x);
     const t = s.caps.has(CAP.TEXTURE_2D) ? texture() : null;
     const textured = t && complete(t);
+    let zoff = 0;
+    if (s.caps.has(CAP.POLYGON_OFFSET_FILL) && (s.polygonOffset[0] || s.polygonOffset[1])) {
+      const dzdx = ((B.z - A.z) * (C.y - A.y) - (C.z - A.z) * (B.y - A.y)) / area;
+      const dzdy = ((C.z - A.z) * (B.x - A.x) - (B.z - A.z) * (C.x - A.x)) / area;
+      zoff = s.polygonOffset[0] * Math.max(Math.abs(dzdx), Math.abs(dzdy)) + s.polygonOffset[1] / 16777215;
+    }
     // Perspective-correct attributes at a window point: weights, then attribute/w over 1/w.
     const at = (cx, cy) => {
       const l0 = edge(Q, R, cx, cy) / ar, l1 = edge(R, P, cx, cy) / ar, l2 = edge(P, Q, cx, cy) / ar;
@@ -342,7 +404,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         // Rounded to the depth buffer's own precision BEFORE the test: comparing a double with the
         // float32 an earlier pass stored made LEQUAL fail wherever the rounding went down, and a second
         // pass over the same polygon (Quake's lightmaps) vanished on alternate rows.
-        const z = Math.fround(l0 * P.z + l1 * Q.z + l2 * R.z);
+        const z = Math.fround(zoff ? clamp01(l0 * P.z + l1 * Q.z + l2 * R.z + zoff) : l0 * P.z + l1 * Q.z + l2 * R.z);
         let col = flatColour ?? [0, 1, 2, 3].map((k) => pc((v) => v.colour[k]));
         if (textured) {
           const u = pc((v) => v.tex[0]), v = pc((v) => v.tex[1]);
@@ -361,7 +423,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   function triangle(a, b, c, provoking) {
     s.stats.triangles++;
-    const poly = clipNear([a, b, c]);
+    const poly = clipUser(clipNear([a, b, c]));
     if (poly.length < 3) return;
     const asBack = (v) => ({ ...v, colour: v.back });
     for (let k = 1; k + 1 < poly.length; k++) {
@@ -379,7 +441,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     }
   }
   function line(a, b) {
-    const seg = clipNear([a, b]);
+    const seg = clipUserSegment(clipNear([a, b]));
     if (seg.length < 2) return;
     if (webgl) { webgl.line(seg[0], seg[1], gpuState()); return; }
     const A = toWindow(seg[0]), B = toWindow(seg[1]);
@@ -421,6 +483,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       depth: s.caps.has(CAP.DEPTH_TEST) ? `${s.depthFunc},${s.depthMask}` : '',
       range: `${s.depthRange[0]},${s.depthRange[1]}`,
       scissor: s.caps.has(CAP.SCISSOR_TEST) ? s.scissor.join(',') : '',
+      mask: s.colorMask.join(','),
+      offset: s.caps.has(CAP.POLYGON_OFFSET_FILL) ? s.polygonOffset.join(',') : '',
       fog: s.caps.has(CAP.FOG) ? `${s.fog.mode},${s.fog.density},${s.fog.start},${s.fog.end},${s.fog.colour.join(',')}` : '',
     };
   }
@@ -445,13 +509,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const exec = {
     glClear: (mask) => {
       const sc = s.caps.has(CAP.SCISSOR_TEST) ? s.scissor : null;
-      if (webgl) { webgl.clear(mask, s.clear, s.clearDepth, sc); return; }
+      if (webgl) { webgl.clear(mask, s.clear, s.clearDepth, sc, s.colorMask, s.depthMask); return; }
       const x0 = sc ? Math.max(0, sc[0]) : 0, y0 = sc ? Math.max(0, sc[1]) : 0;
       const x1 = sc ? Math.min(s.width, sc[0] + sc[2]) : s.width, y1 = sc ? Math.min(s.height, sc[1] + sc[3]) : s.height;
       const c = s.clear.map((x) => Math.round(clamp01(x) * 255));
       for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
         const i = y * s.width + x;
-        if (mask & 0x4000) for (let k = 0; k < 4; k++) s.color[i * 4 + k] = c[k];
+        if (mask & 0x4000) for (let k = 0; k < 4; k++) if (s.colorMask[k]) s.color[i * 4 + k] = c[k];
         if ((mask & 0x100) && s.depthMask) s.depth[i] = s.clearDepth;
       }
     },
@@ -583,6 +647,25 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4) };
       t.dirty = true;
     },
+    glColorMask: (r, g, b, a) => { s.colorMask = [!!r, !!g, !!b, !!a]; },
+    glPolygonOffset: (factor, units) => { s.polygonOffset = [factor, units]; },
+    // The plane is given in object space and kept in eye space, by the modelview current NOW (2.11).
+    glClipPlane: (plane, eq) => {
+      const i = plane - CAP.CLIP_PLANE0;
+      if (i < 0 || i > 5) throw new Error(`gl: clip plane 0x${plane.toString(16)}`);
+      const inv = invert4(s.stacks[MODELVIEW].at(-1));
+      s.clipPlanes[i] = [0, 1, 2, 3].map((c) => eq[0] * inv[c * 4] + eq[1] * inv[c * 4 + 1] + eq[2] * inv[c * 4 + 2] + eq[3] * inv[c * 4 + 3]);
+    },
+    glLineWidth: (w) => { s.lineWidth = w; },
+    /*
+     * Stencil, on a framebuffer with NO stencil bits (the visual and pixel format say 0): the test
+     * always passes and nothing is written (GL 1.1 4.1.4), so these change no pixel.
+     */
+    glStencilFunc: () => {}, glStencilOp: () => {}, glStencilMask: () => {}, glClearStencil: () => {},
+    glTexParameterfv: (target, p, v) => {
+      if (p === 0x1004) { texture().border = v; return; }   // GL_TEXTURE_BORDER_COLOR, kept with the texture
+      exec.glTexParameterf(target, p, v[0]);
+    },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
   };
   // Array arguments are read at CALL time, so a display list keeps the values (the spec's copy rule).
@@ -596,6 +679,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glColor4ubv: (a) => [[M.u8[a[0]], M.u8[a[0] + 1], M.u8[a[0] + 2], M.u8[a[0] + 3]]],
     glColor3fv: (a) => [f32(a[0], 3)],
     glLoadMatrixf: (a) => [f32(a[0], 16)],
+    glClipPlane: (a) => [a[0], Array.from({ length: 4 }, (_, k) => dv().getFloat64(a[1] + 8 * k, true))],
+    glTexParameterfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x1004 ? 4 : 1)],
     glTexImage2D: (a) => {
       if (a[7] !== 0x1401) throw new Error(`gl: texel type 0x${a[7].toString(16)} (only GL_UNSIGNED_BYTE)`);
       return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8]) : null];
@@ -641,6 +726,28 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; } } },
     glGetError: () => 0,
+    /*
+     * The integer state Quake III asks for. MAX_TEXTURE_SIZE: this layer has no limit of its own and
+     * answers what Mesa 22's llvmpipe answers, 16384, so the program and its reference size images
+     * alike. Any other name is refused, naming itself.
+     */
+    glGetIntegerv: (p, out) => {
+      const vals = p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : null;
+      if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
+      vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
+    },
+    // glDrawElements: the enabled arrays, element by element, as if each index were glArrayElement.
+    glDrawElements: (mode, count, type, ptr) => {
+      if (s.recording) throw new Error('gl: glDrawElements inside a display list is not implemented');
+      const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
+      if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
+      exec.glBegin(mode);
+      for (let i = 0; i < count; i++) {
+        const at = ptr + i * size;
+        exec.glArrayElement(size === 4 ? dv().getUint32(at, true) : size === 2 ? dv().getUint16(at, true) : M.u8[at]);
+      }
+      exec.glEnd();
+    },
     glIsTexture: (id) => (id && s.textures.has(id) ? 1 : 0),
     // Names no texture uses and none handed out before; they become textures when first bound (GL 1.1, 3.8.8).
     glGenTextures: (n, out) => {
@@ -761,6 +868,8 @@ void main() {
       const [m, d, s0, e0, r, gg, b, a] = st.fog.split(',').map(Number);
       g.uniform1i(U.fogMode, m === 0x2601 ? 1 : m === 0x0800 ? 2 : 3); g.uniform1f(U.fogDensity, d); g.uniform1f(U.fogStart, s0); g.uniform1f(U.fogEnd, e0); g.uniform4f(U.fogColour, r, gg, b, a);
     } else g.uniform1i(U.fogMode, 0);
+    const cm = st.mask.split(',').map((v) => v === 'true'); g.colorMask(cm[0], cm[1], cm[2], cm[3]);
+    if (st.offset) { const [f, u] = st.offset.split(',').map(Number); g.enable(g.POLYGON_OFFSET_FILL); g.polygonOffset(f, u); } else g.disable(g.POLYGON_OFFSET_FILL);
   }
   const flush = () => {
     if (!n) return;
@@ -788,10 +897,11 @@ void main() {
     tri(a, b, c, flat, st) { begin(st, g.TRIANGLES, 3); push(a, flat); push(b, flat); push(c, flat); },
     line(a, b, st) { begin(st, g.LINES, 2); push(a); push(b); },
     viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); },
-    clear(mask, colour, depth, scissor) {
+    clear(mask, colour, depth, scissor, colorMask = [true, true, true, true], depthMask = true) {
       flush();
       if (scissor) { g.enable(g.SCISSOR_TEST); g.scissor(...scissor); } else g.disable(g.SCISSOR_TEST);
-      g.clearColor(colour[0], colour[1], colour[2], colour[3]); g.clearDepth(depth); g.depthMask(true);
+      g.clearColor(colour[0], colour[1], colour[2], colour[3]); g.clearDepth(depth);
+      g.colorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]); g.depthMask(depthMask);
       g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0));
       key = null;
     },
@@ -811,6 +921,9 @@ export function glBuiltins(T) {
     glMatrixMode: f(V, U), glLoadIdentity: f(V), glLoadMatrixf: f(V, P), glPushMatrix: f(V), glPopMatrix: f(V),
     glTranslatef: f(V, F, F, F), glRotatef: f(V, F, F, F, F), glScalef: f(V, F, F, F),
     glFrustum: f(V, D, D, D, D, D, D), glOrtho: f(V, D, D, D, D, D, D), glGetFloatv: f(V, U, P),
+    glColorMask: f(V, U, U, U, U), glPolygonOffset: f(V, F, F), glClipPlane: f(V, U, P), glLineWidth: f(V, F),
+    glStencilFunc: f(V, U, I, U), glStencilOp: f(V, U, U, U), glStencilMask: f(V, U), glClearStencil: f(V, I),
+    glTexParameterfv: f(V, U, U, P), glGetIntegerv: f(V, U, P), glDrawElements: f(V, U, I, U, P),
     glBegin: f(V, U), glEnd: f(V), glVertex3f: f(V, F, F, F), glVertex3fv: f(V, P), glVertex2f: f(V, F, F),
     glNormal3f: f(V, F, F, F), glColor3f: f(V, F, F, F), glColor4f: f(V, F, F, F, F), glColor4fv: f(V, P), glColor3ubv: f(V, P),
     glTexCoord2f: f(V, F, F), glTexCoord2fv: f(V, P),

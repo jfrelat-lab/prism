@@ -218,6 +218,34 @@ export function translate(parsed, name, { symbols = {}, dataBase = 0, paged = fa
       // have to be explained away on every single comparison.
       case 'ret': body.push(`${line} esp=(esp+4)|0;_pc=-1;continue;`); break;
       case 'nop': body.push(line); break;
+      /*
+       * x87, as far as snapvector.nasm goes: the control word, and moving values between memory and
+       * the register stack. The stack holds JavaScript doubles, which is exact here -- a float32 and
+       * an int32 both fit a double, and nothing in this subset computes. What the subset DOES depend
+       * on is the rounding control (RC, bits 10-11): fistp rounds by it, and so does fstp to a
+       * narrower format. Every other x87 instruction stays refused by the default below.
+       */
+      case 'fnstcw': body.push(`${line} ${storeMem({ ...ops[0], size: 2 }, '_cw')}`); break;
+      case 'fldcw': body.push(`${line} _cw=${loadMem({ ...ops[0], size: 2 })};`); break;
+      case 'fld': case 'fild': {
+        const o = ops[0];
+        if (o.k !== 'mem' || !o.size) throw new EmitError(`${it.at}: ${op} wants a sized memory operand`);
+        const get = op === 'fld' ? { 4: 'getFloat32', 8: 'getFloat64' }[o.size] : { 2: 'getInt16', 4: 'getInt32' }[o.size];
+        if (!get) throw new EmitError(`${it.at}: ${op} of ${o.size} bytes is not in the subset`);
+        body.push(`${line} _st.push(D.${get}(${Ar(o)},1));`);
+        break;
+      }
+      case 'fstp': case 'fistp': {
+        const o = ops[0];
+        if (o.k !== 'mem' || !o.size) throw new EmitError(`${it.at}: ${op} wants a sized memory operand`);
+        if (op === 'fistp') {
+          if (o.size !== 4) throw new EmitError(`${it.at}: fistp of ${o.size} bytes is not in the subset`);
+          body.push(`${line} D.setInt32(${A(o)},_fist(_st.pop()),1);`);
+        } else if (o.size === 4) body.push(`${line} D.setFloat32(${A(o)},_f32(_st.pop()),1);`);
+        else if (o.size === 8) body.push(`${line} D.setFloat64(${A(o)},_st.pop(),1);`);
+        else throw new EmitError(`${it.at}: fstp of ${o.size} bytes is not in the subset`);
+        break;
+      }
 
       case 'jmp': jump('1'); break;
       case 'jz': case 'je': jump('_ZF'); break;
@@ -243,6 +271,30 @@ export function translate(parsed, name, { symbols = {}, dataBase = 0, paged = fa
   ${R.map(r => `${r}=regs.${r}|0;`).join(' ')}
   let _a=0,_b=0,_r=0,_c=0;
   let _CF=false,_PF=false,_AF=false,_ZF=false,_SF=false,_OF=false;
+  // The x87: a register stack and the control word, at its power-on value (0x037F: all exceptions
+  // masked, round to nearest even).
+  const _st=[]; let _cw=0x037f;
+  const _rc=()=>(_cw>>10)&3;
+  // fistp: an int32 by the rounding control; NaN, infinities and anything out of range store the
+  // integer indefinite, 0x80000000, as the x87 does with the invalid exception masked.
+  const _fist=(v)=>{
+    if(!Number.isFinite(v)) return -2147483648;
+    const rc=_rc(); let r;
+    if(rc===0){ r=Math.round(v); if(Math.abs(v-Math.trunc(v))===0.5&&(r%2)!==0) r-=1; }
+    else r=rc===1?Math.floor(v):rc===2?Math.ceil(v):Math.trunc(v);
+    return (r<-2147483648||r>2147483647)?-2147483648:r;
+  };
+  // fstp to float32, rounded by the control: fround is nearest-even; the directed modes step it.
+  const _f32=(v)=>{
+    const f=Math.fround(v), rc=_rc();
+    if(rc===0||f===v||!Number.isFinite(v)) return f;
+    const b=new Float32Array(1), u=new Int32Array(b.buffer); b[0]=f;
+    const away=(d)=>{ u[0]+=(f>0)===(d>0)?1:-1; return b[0]; };
+    if(rc===1&&f>v) return f===0?-1.401298464324817e-45:away(-1);
+    if(rc===2&&f<v) return f===0?1.401298464324817e-45:away(1);
+    if(rc===3&&Math.abs(f)>Math.abs(v)) return away(f>0?-1:1);
+    return f;
+  };
   const _fl=(k,a,b,r,w,big)=>{
     const sign=${JSON.stringify(SIGN)}[w], mask=${JSON.stringify(MASK)}[w];
     _ZF=(r&mask)===0; _SF=((r&sign)!==0);

@@ -1696,6 +1696,21 @@ int main(void)
 }
 `);
 
+// A variadic function's named parameters sit just below its variadic ones, as i386 cdecl lays the
+// call out: Quake III's VM_Call hands &callnum to its bytecode interpreter, which reads the arguments
+// after it straight from memory. Undefined in C; the stack layout of every i386 compiler.
+C('variadic-named-args-in-memory', `#include <stdio.h>
+static int sum(const int *p, int n) { int s = 0, i; for (i = 0; i < n; i++) s += p[i]; return s; }
+static int vcall(int callnum, ...) { return callnum * 1000 + sum(&callnum + 1, 3); }
+static int vcall2(int a, int b, ...) { int *p = &b; return a + p[1] * 10 + p[2]; }
+static int vfirst(int callnum, ...) { int *p = &callnum; return p[0]; }
+int main(void)
+{
+    printf("%d %d %d %d\\n", vcall(1, 2, 3, 4), vcall(5, 10, 20, 30), vcall2(1, 2, 4, 5), vfirst(42));
+    return 0;
+}
+`);
+
 C('rand-matches-the-reference', `#include <stdio.h>
 #include <stdlib.h>
 

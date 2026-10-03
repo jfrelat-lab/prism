@@ -159,7 +159,8 @@ function accessor(t) {
   switch (t.name) {
     case 'float': return { get: 'getFloat32', set: 'setFloat32', endian: true };
     case 'double': return { get: 'getFloat64', set: 'setFloat64', endian: true };
-    case 'long double': return unsup('long double');
+    // An 8-byte long double (compile.longDouble 64, or Watcom's) IS a double; the 12-byte x87 one is not representable.
+    case 'long double': return t.size === 8 ? { get: 'getFloat64', set: 'setFloat64', endian: true } : unsup('long double');
     // char's write side is setInt8 whatever its signedness; see above.
     case 'char': return { get: t.signed ? 'getInt8' : 'getUint8', set: 'setInt8', endian: false };
   }
@@ -236,7 +237,7 @@ const WIDE = new Set(['long double']);
  */
 export const is64 = (t) => t && t.k === 'scalar' && (t.name === 'long long' || t.name === 'unsigned long long');
 const mask64 = (js, t) => `BigInt.as${t.signed ? 'Int' : 'Uint'}N(64,${js})`;
-const checkWide = (t) => { if (t && t.k === 'scalar' && WIDE.has(t.name)) unsup(t.name); };
+const checkWide = (t) => { if (t && t.k === 'scalar' && WIDE.has(t.name) && t.size !== 8) unsup(t.name); };
 
 /** Truncate/extend a 32-bit value to a narrower type, as an assignment or cast must. */
 /** A `_seg` pointer with a real meaning: its value is a paragraph, and seg*16 is the address. */
@@ -492,6 +493,20 @@ export class FunctionEmitter {
         continue;
       }
       if (p.type.k === 'array') unsup('an array parameter by value');
+      /*
+       * A VARIADIC function's named parameter whose address is taken lives where i386 cdecl puts
+       * it: in the caller's argument block, just below the variadic ones (#packVarargs reserves the
+       * room). Quake III's VM_Call hands &callnum to its bytecode interpreter, which reads the
+       * arguments that follow callnum straight out of memory -- undefined in C, and exactly the
+       * stack layout of the i386 compilers it was written for.
+       */
+      if (this.variadic && escaped.has(p.name)) {
+        const at = this.#namedArgLayout(d.type).find((x) => x.p === p);
+        const js = `((_va-${at.below})|0)`;
+        this.locals.set(p.name, { kind: 'aggparam', js, type: p.type });
+        this.vaNamed = (this.vaNamed ?? []).concat({ js, type: p.type, from: paramIdent(p.name) });
+        continue;
+      }
       if (escaped.has(p.name)) {
         const off = this.slot(p.type.size, p.type.align);
         this.locals.set(p.name, { kind: 'slot', off, type: p.type });
@@ -545,6 +560,7 @@ export class FunctionEmitter {
     if (this.usesRegs) body.push(REGISTER_DECLS);
     if (this.usesRegs && this.isInterrupt) body.push('if(M.isrRegs)for(const _k of ["ax","bx","cx","dx","si","di","bp","es"])$r[_k]=M.isrRegs[_k]&65535;');
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
+    for (const p of this.vaNamed ?? []) body.push('  ' + storeExpr(p.js, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
     body.push(`  return ${this.asm?.endsInAsm && d.type.ret.k !== 'void' ? this.#axReturn(d.type.ret)
@@ -2718,6 +2734,19 @@ export class FunctionEmitter {
    * will assume when it is handed a type to read. The slot is the model's int: four bytes on i386,
    * one 8086 stack word under a 16-bit model, where a long takes two and a near pointer one.
    */
+  /**
+   * Where each named parameter of a variadic function sits relative to its variadic block, in cdecl's
+   * layout: in order, each in a whole number of int-sized slots (a struct by its size), the last
+   * one ending where the variadic arguments begin. `below` is the distance down from that point.
+   */
+  #namedArgLayout(ft) {
+    const unit = this.ty.INT.size;
+    const sizes = ft.params.map((p) => Math.ceil((p.type.size ?? unit) / unit) * unit);
+    const total = sizes.reduce((a, b) => a + b, 0);
+    let off = 0;
+    return ft.params.map((p, i) => { const below = total - off; off += sizes[i]; return { p, below, total }; });
+  }
+
   #packVarargs(e, ft) {
     const fixed = ft.params.length;
     const tail = e.args.slice(fixed);
@@ -2735,8 +2764,11 @@ export class FunctionEmitter {
       items.push({ node, type: t, off: total });
       total += Math.ceil(size / unit) * unit;
     }
-    if (!total) return '0';
-    const base = this.slot(total, 8);
+    // The named arguments' room in front (see #namedArgLayout), which the callee fills if it takes an
+    // address -- so the block exists even when there is no variadic argument at all.
+    const named = ft.params.length ? this.#namedArgLayout(ft)[0].total : 0;
+    if (!total && !named) return '0';
+    const base = this.slot(named + total, 8) + named;
     const parts = [];
     for (const it of items) {
       const addr = `(_fp+${base + it.off}|0)`;
@@ -2750,7 +2782,7 @@ export class FunctionEmitter {
     // Right to left too when the target's compiler did so (see #callArgs).
     if (this.ctx.argOrder === 'rtl') parts.reverse();
     const t = this.newTmp(); this.#declareTmp(t);
-    return `(${parts.join(',')},${t}=(_fp+${base}|0),${t})`;
+    return `(${parts.map((p) => `${p},`).join('')}${t}=(_fp+${base}|0),${t})`;
   }
 
   /** Copy a struct argument into a caller-owned temporary and pass its address. */

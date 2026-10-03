@@ -48,6 +48,8 @@ export function installGlx(M, { frames = null, onFrame = null, onSwap = null } =
     XF86VidModeGetAllModeLines: refuse('XF86VidModeGetAllModeLines'),
     XF86VidModeSwitchToMode: refuse('XF86VidModeSwitchToMode'),
     XF86VidModeSetViewPort: refuse('XF86VidModeSetViewPort'),
+    XF86VidModeGetGamma: refuse('XF86VidModeGetGamma'),
+    XF86VidModeSetGamma: refuse('XF86VidModeSetGamma'),
     XF86DGADirectVideo: refuse('XF86DGADirectVideo'),
   });
   M.glx = s;
@@ -62,6 +64,6 @@ export function glxBuiltins(T) {
     glXSwapBuffers: f(V, P, U), glXDestroyContext: f(V, P, P),
     XF86VidModeQueryVersion: f(I, P, P, P), XF86DGAQueryVersion: f(I, P, P, P),
     XF86VidModeGetAllModeLines: f(I, P, I, P, P), XF86VidModeSwitchToMode: f(I, P, I, P),
-    XF86VidModeSetViewPort: f(I, P, I, I, I), XF86DGADirectVideo: f(I, P, I, I),
+    XF86VidModeSetViewPort: f(I, P, I, I, I), XF86VidModeGetGamma: f(I, P, I, P), XF86VidModeSetGamma: f(I, P, I, P), XF86DGADirectVideo: f(I, P, I, I),
   };
 }

@@ -1,0 +1,265 @@
+{
+  "name": "quake3",
+  "title": "QUAKE III ARENA 1.32 (Linux/GLX, id386=0, interpreted QVMs)",
+  "dir": "corpus/Quake-III-Arena-master/code",
+  "fetch": "curl -sL -o q3.zip https://github.com/id-Software/Quake-III-Arena/archive/refs/heads/master.zip && unzip -q q3.zip -d corpus",
+  "_units": "code/unix/Makefile's linuxquake3: Q3OBJ plus the linux Q3POBJ, each object mapped to its source by the Makefile's own rule (135 C files). Left out, each for the build's own reason: snd_mixa.s and matha.s (the i386 assembly; with __i386__ undefined q_shared.h sets id386 0 and the C beside them is compiled), vm_x86.o (added only for ARCH i386), and the thirteen ft2/ objects, whose directory the GPL release does not contain and which tr_font.c uses only under BUILD_FREETYPE, which the Makefile never defines. The C++ splines are commented out of the Makefile itself. One file the Makefile does not list and its own sources need: unix/linux_signals.c, which defines InitSig, called from unix_main.c and linux_glimp.c -- the same staleness as Quake II's linux/Makefile.i386.",
+  "units": {
+    "list": [
+      "client/cl_cgame.c",
+      "client/cl_cin.c",
+      "client/cl_console.c",
+      "client/cl_input.c",
+      "client/cl_keys.c",
+      "client/cl_main.c",
+      "client/cl_net_chan.c",
+      "client/cl_parse.c",
+      "client/cl_scrn.c",
+      "client/cl_ui.c",
+      "qcommon/cm_load.c",
+      "qcommon/cm_patch.c",
+      "qcommon/cm_polylib.c",
+      "qcommon/cm_test.c",
+      "qcommon/cm_trace.c",
+      "qcommon/cmd.c",
+      "qcommon/common.c",
+      "qcommon/cvar.c",
+      "qcommon/files.c",
+      "qcommon/md4.c",
+      "qcommon/msg.c",
+      "qcommon/net_chan.c",
+      "qcommon/huffman.c",
+      "client/snd_adpcm.c",
+      "client/snd_dma.c",
+      "client/snd_mem.c",
+      "client/snd_mix.c",
+      "client/snd_wavelet.c",
+      "server/sv_bot.c",
+      "server/sv_ccmds.c",
+      "server/sv_client.c",
+      "server/sv_game.c",
+      "server/sv_init.c",
+      "server/sv_main.c",
+      "server/sv_net_chan.c",
+      "server/sv_snapshot.c",
+      "server/sv_world.c",
+      "game/q_math.c",
+      "game/q_shared.c",
+      "qcommon/unzip.c",
+      "qcommon/vm.c",
+      "qcommon/vm_interpreted.c",
+      "botlib/be_aas_bspq3.c",
+      "botlib/be_aas_cluster.c",
+      "botlib/be_aas_debug.c",
+      "botlib/be_aas_entity.c",
+      "botlib/be_aas_file.c",
+      "botlib/be_aas_main.c",
+      "botlib/be_aas_move.c",
+      "botlib/be_aas_optimize.c",
+      "botlib/be_aas_reach.c",
+      "botlib/be_aas_route.c",
+      "botlib/be_aas_routealt.c",
+      "botlib/be_aas_sample.c",
+      "botlib/be_ai_char.c",
+      "botlib/be_ai_chat.c",
+      "botlib/be_ai_gen.c",
+      "botlib/be_ai_goal.c",
+      "botlib/be_ai_move.c",
+      "botlib/be_ai_weap.c",
+      "botlib/be_ai_weight.c",
+      "botlib/be_ea.c",
+      "botlib/be_interface.c",
+      "botlib/l_crc.c",
+      "botlib/l_libvar.c",
+      "botlib/l_log.c",
+      "botlib/l_memory.c",
+      "botlib/l_precomp.c",
+      "botlib/l_script.c",
+      "botlib/l_struct.c",
+      "jpeg-6/jcapimin.c",
+      "jpeg-6/jchuff.c",
+      "jpeg-6/jcinit.c",
+      "jpeg-6/jccoefct.c",
+      "jpeg-6/jccolor.c",
+      "jpeg-6/jfdctflt.c",
+      "jpeg-6/jcdctmgr.c",
+      "jpeg-6/jcphuff.c",
+      "jpeg-6/jcmainct.c",
+      "jpeg-6/jcmarker.c",
+      "jpeg-6/jcmaster.c",
+      "jpeg-6/jcomapi.c",
+      "jpeg-6/jcparam.c",
+      "jpeg-6/jcprepct.c",
+      "jpeg-6/jcsample.c",
+      "jpeg-6/jdapimin.c",
+      "jpeg-6/jdapistd.c",
+      "jpeg-6/jdatasrc.c",
+      "jpeg-6/jdcoefct.c",
+      "jpeg-6/jdcolor.c",
+      "jpeg-6/jddctmgr.c",
+      "jpeg-6/jdhuff.c",
+      "jpeg-6/jdinput.c",
+      "jpeg-6/jdmainct.c",
+      "jpeg-6/jdmarker.c",
+      "jpeg-6/jdmaster.c",
+      "jpeg-6/jdpostct.c",
+      "jpeg-6/jdsample.c",
+      "jpeg-6/jdtrans.c",
+      "jpeg-6/jerror.c",
+      "jpeg-6/jidctflt.c",
+      "jpeg-6/jmemmgr.c",
+      "jpeg-6/jmemnobs.c",
+      "jpeg-6/jutils.c",
+      "renderer/tr_animation.c",
+      "renderer/tr_backend.c",
+      "renderer/tr_bsp.c",
+      "renderer/tr_cmds.c",
+      "renderer/tr_curve.c",
+      "renderer/tr_flares.c",
+      "renderer/tr_font.c",
+      "renderer/tr_image.c",
+      "renderer/tr_init.c",
+      "renderer/tr_light.c",
+      "renderer/tr_main.c",
+      "renderer/tr_marks.c",
+      "renderer/tr_mesh.c",
+      "renderer/tr_model.c",
+      "renderer/tr_noise.c",
+      "renderer/tr_scene.c",
+      "renderer/tr_shade.c",
+      "renderer/tr_shade_calc.c",
+      "renderer/tr_shader.c",
+      "renderer/tr_shadows.c",
+      "renderer/tr_sky.c",
+      "renderer/tr_surface.c",
+      "renderer/tr_world.c",
+      "unix/unix_main.c",
+      "unix/unix_net.c",
+      "unix/unix_shared.c",
+      "unix/linux_common.c",
+      "unix/linux_qgl.c",
+      "unix/linux_glimp.c",
+      "unix/linux_joystick.c",
+      "unix/linux_snd.c",
+      "unix/linux_signals.c"
+    ]
+  },
+  "_defines": "__linux__ is what gcc on Linux predefines and what q_shared.h selects the platform by (PRISM predefines no OS); every test that would pick assembly reads __linux__ && __i386__, so with __i386__ and i386 undefined, as for Quake, the C paths stay in.",
+  "defines": {
+    "__linux__": "1",
+    "__i386__": null,
+    "i386": null,
+    "NDEBUG": "1"
+  },
+  "env": [
+    "stdio",
+    "x11",
+    "dsp",
+    "dl",
+    "gl",
+    "glx"
+  ],
+  "host": "glx",
+  "_args": "vm_game/vm_cgame/vm_ui 1 = interpret the bytecode: without vm_x86.c there is no VM_Compile, and the default (compiled) would call it. The engine's own setting. net_noudp 1 is the engine's own switch for running without an IP socket: this Linux layer has no POSIX sockets here, NET_OpenIP would end in 'Couldn't allocate IP port', and a local game talks to its own server over the loopback anyway. sv_pure 0: a pure server makes its clients load the QVMs COMPILED (cl_ui.c, cl_cgame.c) whatever vm_ui/vm_cgame say, and there is no compiler without vm_x86.c; the local server is made impure, the engine's own setting.",
+  "args": "+set vm_game 1 +set vm_cgame 1 +set vm_ui 1 +set net_noudp 1 +set sv_pure 0",
+  "compile": {
+    "memory": 512,
+    "collect": true,
+    "longDouble": 64
+  },
+  "_unitDefines": "The Makefile compiles botlib with DO_BOT_CC, which adds -DBOTLIB; everything else with DO_CC. NDEBUG is RELEASE_CFLAGS'. unix_main.c alone gets __i386__ back: it has no assembly, and reads the macro only to name the architecture (the arch cvar, and the qagamei386.so a native game would be, which interpreted QVMs never load); without one it stops at #error Unknown arch.",
+  "unitDefines": {
+    "botlib/be_aas_bspq3.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_cluster.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_debug.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_entity.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_file.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_main.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_move.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_optimize.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_reach.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_route.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_routealt.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_aas_sample.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_char.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_chat.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_gen.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_goal.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_move.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_weap.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ai_weight.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_ea.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/be_interface.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_crc.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_libvar.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_log.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_memory.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_precomp.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_script.c": {
+      "BOTLIB": "1"
+    },
+    "botlib/l_struct.c": {
+      "BOTLIB": "1"
+    },
+    "unix/unix_main.c": {
+      "__i386__": "1"
+    }
+  },
+  "_compile": "longDouble 64 is gcc's -mlong-double-64: botlib's script parser keeps every number in a long double, and PRISM represents the IEEE-double form of it, not the x87 extended one (tools/gate-long-double64.mjs). The reference build is given the same flag.",
+  "asmTranslate": [
+    "unix/snapvector.nasm"
+  ],
+  "_asmTranslate": "Sys_SnapVector is assembly on Linux i386 -- unix_shared.c compiles its C one only for __APPLE__ -- and the game VMs call it every frame through trap_SnapVector. So the program's own snapvector.nasm is translated (x87: the control word, fld/fistp/fild/fstp) and bound like any function; tools/gate-asm-snapvector.mjs holds the translation to Unicorn running the same file, 300 of 300 vectors."
+}

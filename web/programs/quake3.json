@@ -1,0 +1,33 @@
+{
+  "title": "QUAKE III ARENA",
+  "subtitle": "id Software, 1999 · 1.32b, the GPL source — Linux/GLX, OpenGL only, interpreted QVMs",
+  "target": "quake3",
+  "host": "glx",
+  "args": "+set com_introplayed 1 +map q3dm1",
+  "argsHint": "`+map <name>` loads an arena (q3dm1 to q3dm19, q3tourney1..6, q3ctf1..4); without it the game opens on its menu. com_introplayed 1 skips the id logo film. The build's own flags (interpreted VMs, no UDP, an impure local server) come from the target and stay.",
+  "fps": 85,
+  "_fps": "85 is the engine's own cap, com_maxfps's default in qcommon/common.c.",
+  "needsData": {
+    "dir": "quake3",
+    "hint": "baseq3/ of the full game: pak0.pk3 from the CD and pak1-8 from the 1.32 point release"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "~",
+      "console"
+    ]
+  ],
+  "_why": "The first id engine with no software renderer: tr_*.c speaks only OpenGL, here PRISM's, opened by linux_qgl.c with dlopen(\"libGL.so.1\"). The game, cgame and ui modules run as QVM bytecode in the engine's own interpreter, compiled by PRISM like the rest."
+}

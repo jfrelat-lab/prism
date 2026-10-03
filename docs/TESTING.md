@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Sixty-four now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Sixty-six now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -34,6 +34,8 @@ something outside PRISM that could contradict it.
 | `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds in its first 28 s is one the real binary showed, and its scenes come at the real binary's times (slope within 0.08) |
 | `gate-jnb-pixels.mjs` | **the game's own `jumpbump.exe`** (DJGPP) under DOSBox-X, DOS clock set to PRISM's | every one of 300 pages PRISM flips is a page the real binary showed |
 | `gate-mesa-demos.mjs` | **Mesa 22 (llvmpipe)** drawing mesa-demos 8.0.1's morph3d and texobj on the same GLUT harness; texobj twice, its GL_VERSION set on both sides, because "1.1" sends it to texture objects and anything else to textures compiled into display lists | per frame at most 0.1% of pixels beyond 8 levels (0-7 do); six controls red: two-sided lighting, the scene ambient, the second light, glBindTexture at draw time, NEAREST magnification, glTexImage2D in a list |
+| `gate-long-double64.mjs` | **gcc -m32 -mlong-double-64 -msse2 -mfpmath=sse** on one program in the oracle | struct sizes and offsets, arithmetic, conversions, L constants and varargs print the same; red without the option and with gcc's 12-byte long double |
+| `gate-asm-snapvector.mjs` | **Unicorn** running nasm's bytes of Quake III's unmodified unix/snapvector.nasm (golden captured once) | 300 of 300 float32 vectors rounded alike; red with RC forced to truncation and with the routine's control word ignored |
 | `gate-gears.mjs` | **Mesa 22 (llvmpipe)** drawing the same gears.c, in the oracle container, on a surfaceless-EGL GLUT harness | frames 0, 25 and 50: at most 0.1% of pixels differ beyond 8 levels (2-3 of 90,000 do) |
 | WebGL in the page (browser check, no CLI gate) | **Mesa's frames** from `gate-gears`, fetched by the page from `.oracle/gears/` | `?machine=linux&program=gears&glcheck=0,25,50&run=1` posts frames 0, 25 and 50 to `window.PRISM_DIAG.glframes`; 1-4 of 90,000 pixels differ, by at most one level (frame 25 against Mesa's frame 0: 9,028) |
 | `gate-glquake.mjs` | **the same GLQuake source built against Mesa 22** in the oracle, on a GLX-over-EGL harness (tools/oracle/glx-egl.c); the Win32 build (quake:wgl, gl_vidnt.c on src/env/opengl32.c, run with its own -gamma 1 because only it calls Check_Gamma) against the same frame | world frame 40 of the demo: at most 0.2% of pixels off by more than 8 (1 of 307,200 is, for either build) |

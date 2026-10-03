@@ -540,6 +540,7 @@ struct timespec { long tv_sec; long tv_nsec; };
 struct tm *localtime(const long *t);
 struct tm *gmtime(const long *t);
 char *asctime(const struct tm *tm);
+char *ctime(const long *t);
 long mktime(struct tm *tm);
 double difftime(long a, long b);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
@@ -812,6 +813,11 @@ int fdatasync(int fd);
 long sysconf(int name);
 #define _SC_PAGESIZE 30
 #define _SC_PAGE_SIZE 30
+#define _SC_NPROCESSORS_CONF 83
+#define _SC_NPROCESSORS_ONLN 84
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
 #define F_OK 0
 #define X_OK 1
 #define W_OK 2
@@ -1331,6 +1337,33 @@ int XPutImage(Display *d, Drawable dr, GC gc, XImage *img, int sx, int sy, int d
 int XStoreColors(Display *d, Colormap c, XColor *colors, int n);
 int XPending(Display *d);
 int XNextEvent(Display *d, XEvent *ev);
+/* Quake III's linux_glimp.c: peeking (it tells key repeat from a real release by the next event),
+   error handlers, pointer acceleration, size hints, and the thread switch. */
+int XPeekEvent(Display *d, XEvent *ev);
+/* Display accessors Xlib defines as macros over the opaque Display; here, functions behind them. */
+int XConnectionNumber(Display *d);
+unsigned long XBlackPixel(Display *d, int screen);
+unsigned long XWhitePixel(Display *d, int screen);
+#define ConnectionNumber(d) XConnectionNumber(d)
+#define BlackPixel(d, s) XBlackPixel(d, s)
+#define WhitePixel(d, s) XWhitePixel(d, s)
+int XEventsQueued(Display *d, int mode);
+#define QueuedAlready 0
+#define QueuedAfterReading 1
+#define QueuedAfterFlush 2
+typedef struct {
+    int type;
+    Display *display;
+    unsigned long resourceid;    /* an XID */
+    unsigned long serial;
+    unsigned char error_code, request_code, minor_code;
+} XErrorEvent;
+typedef int (*XErrorHandler)(Display *, XErrorEvent *);
+XErrorHandler XSetErrorHandler(XErrorHandler handler);
+int XGetErrorText(Display *d, int code, char *buf, int length);
+int XGetPointerControl(Display *d, int *accel_numerator, int *accel_denominator, int *threshold);
+int XChangePointerControl(Display *d, Bool do_accel, Bool do_threshold, int accel_numerator, int accel_denominator, int threshold);
+Status XInitThreads(void);
 KeySym XKeycodeToKeysym(Display *d, unsigned int keycode, int index);
 KeySym XLookupKeysym(XKeyEvent *ev, int index);
 int XGrabKeyboard(Display *d, Window w, Bool owner, int pmode, int kmode, Time t);
@@ -1382,6 +1415,17 @@ typedef struct {
     int base_width, base_height;
     int win_gravity;
 } XSizeHints;
+/* XSizeHints.flags, X.org's values. */
+#define USPosition (1L << 0)
+#define USSize (1L << 1)
+#define PPosition (1L << 2)
+#define PSize (1L << 3)
+#define PMinSize (1L << 4)
+#define PMaxSize (1L << 5)
+#define PResizeInc (1L << 6)
+#define PAspect (1L << 7)
+#define PBaseSize (1L << 8)
+#define PWinGravity (1L << 9)
 
 typedef struct {
     int x, y;
@@ -1405,6 +1449,7 @@ int XChangeProperty(Display *d, Window w, Atom prop, Atom type, int format, int 
                     const unsigned char *data, int nelements);
 XWMHints *XAllocWMHints(void);
 XSizeHints *XAllocSizeHints(void);
+void XSetWMNormalHints(Display *d, Window w, XSizeHints *hints);
 XClassHint *XAllocClassHint(void);
 void XSetWMProperties(Display *d, Window w, XTextProperty *name, XTextProperty *icon,
                       char **argv, int argc, XSizeHints *normal, XWMHints *wm, XClassHint *cls);
@@ -1580,6 +1625,29 @@ const KEYSYMDEF = `
 #define XK_KP_Add 0xffab
 #define XK_KP_Divide 0xffaf
 #define XK_KP_Equal 0xffbd
+/* Quake III's keypad and shifted digits; values printed from X.org's keysym.h in the oracle. */
+#define XK_KP_0 0xffb0
+#define XK_KP_1 0xffb1
+#define XK_KP_2 0xffb2
+#define XK_KP_3 0xffb3
+#define XK_KP_4 0xffb4
+#define XK_KP_6 0xffb6
+#define XK_KP_7 0xffb7
+#define XK_KP_8 0xffb8
+#define XK_KP_9 0xffb9
+#define XK_KP_Decimal 0xffae
+#define XK_KP_Space 0xff80
+#define XK_ampersand 0x0026
+#define XK_asciicircum 0x005e
+#define XK_asterisk 0x002a
+#define XK_at 0x0040
+#define XK_dollar 0x0024
+#define XK_exclam 0x0021
+#define XK_numbersign 0x0023
+#define XK_parenleft 0x0028
+#define XK_parenright 0x0029
+#define XK_percent 0x0025
+#define XK_twosuperior 0x00b2
 #endif
 `;
 
@@ -1747,6 +1815,8 @@ int raise(int sig);
 #define SIGALRM 14
 #define SIGTERM 15
 #define SIGCHLD 17
+#define SIGTTIN 21
+#define SIGTTOU 22
 // DJGPP's numeric-coprocessor signal, which Quake installs a handler for.
 #define SIGNOFP 20
 
@@ -1822,6 +1892,9 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,
+  'termios.h': "#ifndef _PRISM_TERMIOS_H\n#define _PRISM_TERMIOS_H\n/* glibc's i386 layout (60 bytes). There is no terminal here: isatty() says so, and tcgetattr and\n   tcsetattr fail with ENOTTY, which is what they do on a descriptor that is not one. */\ntypedef unsigned char cc_t;\ntypedef unsigned int speed_t;\ntypedef unsigned int tcflag_t;\n#define NCCS 32\nstruct termios {\n    tcflag_t c_iflag, c_oflag, c_cflag, c_lflag;\n    cc_t c_line;\n    cc_t c_cc[NCCS];\n    speed_t c_ispeed, c_ospeed;\n};\n#define VINTR 0\n#define VQUIT 1\n#define VERASE 2\n#define VKILL 3\n#define VEOF 4\n#define VTIME 5\n#define VMIN 6\n#define ISIG 0000001\n#define ICANON 0000002\n#define ECHO 0000010\n#define INPCK 0000020\n#define ISTRIP 0000040\n#define TCSANOW 0\n#define TCSADRAIN 1\n#define TCSAFLUSH 2\nint tcgetattr(int fd, struct termios *t);\nint tcsetattr(int fd, int when, const struct termios *t);\n#endif\n",
+  'pwd.h': "#ifndef _PRISM_PWD_H\n#define _PRISM_PWD_H\n#include <sys/types.h>\n/* glibc's i386 layout (28 bytes). There is no user database: getpwuid finds nobody. */\nstruct passwd {\n    char *pw_name; char *pw_passwd; uid_t pw_uid; gid_t pw_gid;\n    char *pw_gecos; char *pw_dir; char *pw_shell;\n};\nstruct passwd *getpwuid(uid_t uid);\nstruct passwd *getpwnam(const char *name);\n#endif\n",
+  'linux/joystick.h': "#ifndef _PRISM_LINUX_JOYSTICK_H\n#define _PRISM_LINUX_JOYSTICK_H\n/* The kernel's joystick ABI (8-byte event). No /dev/js* exists here, so a program finds no joystick. */\nstruct js_event { unsigned int time; short value; unsigned char type; unsigned char number; };\n#define JS_EVENT_BUTTON 0x01\n#define JS_EVENT_AXIS 0x02\n#define JS_EVENT_INIT 0x80\n#define JSIOCGVERSION 0x80046a01\n#define JSIOCGAXES 0x80016a11\n#define JSIOCGBUTTONS 0x80016a12\n#define JSIOCGNAME(len) (0x80006a13 | ((len) << 16))\n#endif\n",
   'dirent.h': DIRENT,
   'locale.h': LOCALE_H,
   'inttypes.h': INTTYPES,

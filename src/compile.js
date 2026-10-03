@@ -189,6 +189,13 @@ export const BUILTINS = new Map(Object.entries({
   XUndefineCursor: { ret: I, params: [P, U] },
   XAllocWMHints: { ret: P, params: [] },
   XAllocSizeHints: { ret: P, params: [] },
+  XPeekEvent: { ret: I, params: [P, P] }, XEventsQueued: { ret: I, params: [P, I] },
+  XSetErrorHandler: { ret: P, params: [P] }, XGetErrorText: { ret: I, params: [P, I, P, I] },
+  XGetPointerControl: { ret: I, params: [P, P, P, P] }, XChangePointerControl: { ret: I, params: [P, I, I, I, I, I] },
+  XInitThreads: { ret: I, params: [] }, XConnectionNumber: { ret: I, params: [P] },
+  XBlackPixel: { ret: U, params: [P, I] }, XWhitePixel: { ret: U, params: [P, I] },
+  tcgetattr: { ret: I, params: [I, P] }, tcsetattr: { ret: I, params: [I, I, P] },
+  getpwuid: { ret: P, params: [U] }, getpwnam: { ret: P, params: [P] }, ctime: { ret: P, params: [P] }, XSetWMNormalHints: { ret: V, params: [P, U, P] },
   XAllocClassHint: { ret: P, params: [] },
   XFree: { ret: I, params: [P] },
   ScreenOfDisplay: { ret: P, params: [P, I] },
@@ -760,15 +767,15 @@ function wireRebind(F, mod, emitted, rebind) {
   }
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, ppSizeof = null, extraBuiltins = null } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, ppSizeof = null, extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
     ppSizeof,
-    defines: mergeDefines(mergeDefines(TARGET_DEFINES, modelDefines(model, signedChar)), defines),
+    defines: mergeDefines(mergeDefines(TARGET_DEFINES, { ...modelDefines(model, signedChar), ...longDoubleDefines(longDouble) }), defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
   const tokens = pp.run(source, file);
   // `enums` shapes types, and types are the parser's: the emitter never builds an enum of its own.
-  const { unit, scope } = parse(tokens, { file, pack, c89, model, signedChar, enums });
+  const { unit, scope } = parse(tokens, { file, pack, c89, model, signedChar, enums, longDouble });
 
   const mod = new Module({ ...(memory ? { memory } : {}), shared, model });
   const M = makeMachine(mod);
@@ -916,7 +923,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, ppSizeof = null, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, ppSizeof = null, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -943,12 +950,12 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
      */
     const pp = new Preprocessor({
       ppSizeof,
-      defines: mergeDefines(mergeDefines(mergeDefines(TARGET_DEFINES, modelDefines(model, signedChar)),
+      defines: mergeDefines(mergeDefines(mergeDefines(TARGET_DEFINES, { ...modelDefines(model, signedChar), ...longDoubleDefines(longDouble) }),
         defines), u.defines ?? {}),
       resolve: resolver,
     });
     const tokens = pp.run(u.source, u.file);
-    const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model, signedChar, enums });
+    const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model, signedChar, enums, longDouble });
     parsed.push({ ...u, unit, scope, tag: tagOf(u.file) });
   }
 
@@ -1420,6 +1427,11 @@ function staticInit(mod, addr, type, init, ctx) {
  * __CHAR_UNSIGNED__ when char is unsigned and nothing when it is signed; PRISM's limits.h reads it,
  * so CHAR_MIN and CHAR_MAX follow compile.signedChar instead of being a second copy of the answer.
  */
+/** What gcc's -mlong-double-64 changes in the predefined macros PRISM sets: the size, nothing else. */
+export function longDoubleDefines(longDouble) {
+  return longDouble === 64 ? { __SIZEOF_LONG_DOUBLE__: '8' } : {};
+}
+
 export function charDefines(model = 'i386', signedChar) {
   return T.makeTypes(model, { signedChar }).CHAR.signed ? {} : { __CHAR_UNSIGNED__: '1' };
 }

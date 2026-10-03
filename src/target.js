@@ -35,11 +35,12 @@ import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from './as
  *                                  ASSEMBLER provide in a real build: MAME's OSD_VARS, Heretic's
  *                                  I_IBM_A.ASM exports, Quake's sys_dosa.s.
  * @property {object=} defines    program-wide macros; `null` as a value means UNDEFINE.
- * @property {object=} unitDefines  per-unit overrides, keyed by lower-case basename. Heretic's
+ * @property {object=} unitDefines  per-unit overrides, keyed by the unit's lower-case path as listed
+ *                                  (a basename in a flat tree like Heretic's). Heretic's
  *                                  R_DRAW.C is the whole reason this exists: its C rendering loops
  *                                  live behind `#ifndef __WATCOMC__`, and nothing else in the
  *                                  program may have that macro undefined.
- * @property {object=} compile    { memory, pack, c89, model, signedChar, collect, safepoints, directCalls }.
+ * @property {object=} compile    { memory, pack, c89, model, signedChar, longDouble, collect, safepoints, directCalls }.
  * @property {boolean=} caseInsensitive  resolve #includes case-insensitively. Raven's trees write
  *                                       `DoomDef.h` for `DOOMDEF.H`; DOS never had to care.
  * @property {(string[]|object)=} env  the environment, by the names in src/env/registry.js.
@@ -409,6 +410,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // ...and whether its compiler made plain char signed. Absent means "what the model's oracle
     // measured"; see types.js makeTypes.
     signedChar: c.signedChar,
+    longDouble: c.longDouble,
     // ...and the order its code evaluates a call's arguments in, which C leaves unspecified. 'rtl'
     // is Watcom's (see backend/emit.js #callArgs); absent is left to right.
     argOrder: c.argOrder,
@@ -469,6 +471,11 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
       machine: program.M.machine ?? null,
     })
     : [];
+  // Likewise for the translated NASM: what it supplied is no longer missing.
+  if (asmBound.length) {
+    const got = new Set(asmBound.map((b) => b.name));
+    program.undefined = program.undefined.filter((u) => !got.has(u.name));
+  }
   /*
    * The cross-reference: every assembly export, and whether the program still lacks it. A name that
    * appears here AND in program.undefined is one an assembler would buy; one that appears only here

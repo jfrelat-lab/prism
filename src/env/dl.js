@@ -45,6 +45,18 @@ export function installDl(M, { modules = {}, verbose = false } = {}) {
     dlopen: (pathPtr, _flags) => {
       const path = pathPtr ? M.mod.cstr(pathPtr) : '';
       const name = bySoname.get(base(path));
+      /*
+       * A SYSTEM library: libGL. Quake III's linux_qgl.c dlopens libGL.so.1 and takes every gl and
+       * glX entry point with dlsym, as a driver-selectable program does; the library is the GL and GLX
+       * environments' functions, the same ones a direct call reaches. Windows' opengl32.dll is the
+       * same thing in C (src/env/opengl32.c).
+       */
+      if (!name && /^libgl\.so(\.\d+)*$/.test(base(path))) {
+        const h = open.length;
+        open.push({ system: 'libGL.so', path });
+        lastError = 0;
+        return HANDLE_BASE + h;
+      }
       if (!name) { setError(`no module '${base(path)}' in this program`); return 0; }
       const h = open.length;
       open.push({ module: name, path });
@@ -57,6 +69,23 @@ export function installDl(M, { modules = {}, verbose = false } = {}) {
       const entry = open[(handle | 0) - HANDLE_BASE];
       const name = M.mod.cstr(namePtr);
       if (!entry) { setError('invalid handle'); return 0; }
+      if (entry.system) {
+        // Exported: all of GL 1.1, as a real libGL exports it, and the glX* the environment implements.
+        // A GL 1.1 entry point the environment lacks throws, naming itself, when called -- not a NULL
+        // the program would call through without a word (M.glNames is gl.h's list, from gl.js). An
+        // extension is absent, as from a libGL without it; none is advertised. Bound under a name of
+        // the library's own, so a direct call elsewhere is never rebound by it.
+        const has = typeof M.rt[name] === 'function';
+        if (/^gl/.test(name) && (has || M.glNames?.has(name))) {
+          const link = `${entry.system}$${name}`;
+          const impl = has ? M.rt[name] : () => { throw new Error(`gl: ${name} is not implemented`); };
+          const f = M.mod.funcs.get(link)?.fn ? M.mod.funcs.get(link) : M.mod.bindFunc(link, impl);
+          lastError = 0;
+          return f.addr;
+        }
+        setError(`undefined symbol: ${name}`);
+        return 0;
+      }
       // The linkage name a non-main module's externals were given. src/compile.js builds it the same
       // way; if that ever changes, this is the other half that has to change with it.
       const f = M.mod.funcs.get(`${entry.module}$${name}`);

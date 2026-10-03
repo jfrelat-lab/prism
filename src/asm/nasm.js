@@ -44,7 +44,7 @@ export function regInfo(name) {
 
 export class AsmError extends Error {}
 
-const SIZES = { byte: 1, word: 2, dword: 4 };
+const SIZES = { byte: 1, word: 2, dword: 4, qword: 8 };
 
 /**
  * One operand.
@@ -57,7 +57,7 @@ const SIZES = { byte: 1, word: 2, dword: 4 };
 function parseOperand(text, sizeHint) {
   const t = text.trim();
 
-  const m = /^(byte|word|dword)\s+(.*)$/i.exec(t);
+  const m = /^(byte|word|dword|qword)\s+(.*)$/i.exec(t);
   if (m) return parseOperand(m[2], SIZES[m[1].toLowerCase()]);
 
   if (t.startsWith('[')) {
@@ -118,6 +118,18 @@ export function parse(source) {
 
     // A data slot: `.name  dd  0`. Checked BEFORE the bare-label rule, which would otherwise
     // swallow the name and drop the storage -- silently reserving nothing.
+    /*
+     * The same directives without brackets, as NASM 0.98 onward also writes them: Quake III's
+     * snapvector.nasm says `segment .data` and `global Sys_SnapVector`. Its data sits in a data
+     * segment rather than among the code, which changes nothing here: a slot is a slot.
+     */
+    const bare = /^\s*(segment|section|global|extern)\s+(\S+)\s*$/i.exec(line);
+    if (bare) {
+      const what = bare[1].toLowerCase();
+      if (what === 'global') globals.push(bare[2]);
+      else if (what === 'extern') externs.push(bare[2]);
+      return;
+    }
     const dat = /^\s*([.\w$]+)\s+(dd|dw|db)\s+(.*)$/i.exec(line);
     if (dat) {
       const size = { dd: 4, dw: 2, db: 1 }[dat[2].toLowerCase()];
@@ -181,6 +193,8 @@ const MNEMONICS = new Set([
   'mov', 'add', 'sub', 'cmp', 'and', 'or', 'xor', 'neg', 'inc', 'dec', 'imul', 'mul',
   'shl', 'shr', 'sar', 'push', 'pop', 'pusha', 'popa', 'ret', 'out', 'in', 'nop',
   'jmp', 'je', 'jz', 'jne', 'jnz', 'jl', 'jle', 'jg', 'jge', 'js', 'jns', 'jc', 'jnc',
+  // x87, the part snapvector.nasm uses: control word, and loads and stores between memory and st(0)
+  'fnstcw', 'fldcw', 'fld', 'fild', 'fstp', 'fistp',
 ]);
 function isMnemonic(word) {
   return MNEMONICS.has(word.toLowerCase());

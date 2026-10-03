@@ -43,6 +43,8 @@ export function installStdio(M, {
 } = {}) {
   const u8 = () => M.u8;
   const enc = new TextEncoder();
+  // errno is the program's own global (a tentative definition in errno.h): set it where it lives.
+  const setErrno = (v) => { const e = M.mod.symbols.get('errno'); if (e) M.mod.dv.setInt32(e.addr, v, true); };
 
   // name (lower-cased, forward slashes) -> Uint8Array. The store outlives any open handle, which is
   // what makes "write a file, close it, open it again" work.
@@ -934,7 +936,16 @@ export function installStdio(M, {
     },
     fsync: () => 0,
     fdatasync: () => 0,
-    sysconf: () => 4096,          // the only value asked for here is the page size
+    // Answered by name: the page, one processor, and EINVAL for a name this host has no answer to.
+    sysconf: (name) => (name === 30 ? 4096 : name === 83 || name === 84 ? 1 : (setErrno(22), -1)),
+    // No terminal: isatty() says 0, and these fail the way they do on a descriptor that is not one.
+    tcgetattr: () => (setErrno(25), -1),
+    tcsetattr: () => (setErrno(25), -1),
+    // No user database.
+    getpwuid: () => 0,
+    getpwnam: () => 0,
+    // ctime is asctime of localtime (C 7.23.3.2).
+    ctime: (tp) => M.rt.asctime(api.localtime(tp)),
     /*
      * A small environment. Not every program handles a NULL from getenv: Doom calls
      * `I_Error("Please set $HOME to your home directory")` and stops. HOME is the one variable a

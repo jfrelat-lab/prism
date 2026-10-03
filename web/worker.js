@@ -398,6 +398,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       c89: !!program.compile?.c89,
       model: program.compile?.model ?? 'i386',
       signedChar: program.compile?.signedChar,
+      longDouble: program.compile?.longDouble,
       argOrder: program.compile?.argOrder ?? toolchainCompile(program.env).argOrder,
       enums: program.compile?.enums,
       ppSizeof: program.compile?.ppSizeof ?? null,
@@ -623,6 +624,11 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         pace();
       },
     });
+    // The program's own assembly, as for the DOS host: Quake III's Sys_SnapVector is snapvector.nasm.
+    if (asmSources.length) {
+      const bound = installAsm(prog, { sources: asmSources, machine: null });
+      log(`assembly translated and bound: ${bound.map((b) => b.name).join(' ')}`);
+    }
   } else if (platform === 'quake') {
     installQuake(prog.M, {
       publish: { ctrl },

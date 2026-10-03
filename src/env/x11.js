@@ -50,6 +50,8 @@ const XEV_X = 32, XEV_Y = 36, XEV_STATE = 48, XEV_BUTTON = 52;
 const X_BUTTON_MASK = [0, 1 << 8, 1 << 9, 1 << 10];
 
 export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null } = {}) {
+  let peeked = null, errorHandler = 0;
+  const pointerCtl = [2, 1, 4];
   const dv = () => M.mod.dv;
 
   // XImage, in the layout PRISM's own X11/Xlib.h declares. The two are one thing in two places.
@@ -294,9 +296,47 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * Input. A keycode here is a PC scan code, because that is what the host has and what
      * XKeycodeToKeysym is asked to translate; the mapping to X keysyms lives below.
      */
-    XPending: () => events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0),
+    XPending: () => (peeked ? 1 : 0) + events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0),
+    // Every mode counts the same queue: there is no connection to flush or read from.
+    XEventsQueued: (dpy) => M.rt.XPending(dpy),
+    /*
+     * XPeekEvent: the next event WITHOUT removing it. It is taken the way XNextEvent takes it, and the
+     * 96 bytes kept, so the following XNextEvent hands back exactly what was peeked -- Quake III
+     * peeks after a KeyRelease to see whether a KeyPress of the same key follows (auto-repeat).
+     */
+    XPeekEvent: (dpy, ev) => {
+      if (!peeked) { peeked = new Uint8Array(96); const tmp = M.rt.calloc(1, 96); M.rt.XNextEvent(dpy, tmp); peeked.set(M.u8.subarray(tmp, tmp + 96)); M.rt.free(tmp); }
+      M.u8.set(peeked, ev);
+      return 0;
+    },
+    /*
+     * Errors: this server raises none, so a handler is recorded and never called; the text is what
+     * Xlib prints for a code it has no name for.
+     */
+    XSetErrorHandler: (h) => { const old = errorHandler; errorHandler = h; return old; },
+    XGetErrorText: (_dpy, code, buf, n) => {
+      if (n > 0) { const b = new TextEncoder().encode(`X error ${code | 0}`.slice(0, n - 1)); M.u8.set(b, buf); M.u8[buf + b.length] = 0; }
+      return 0;
+    },
+    // Pointer acceleration: the server's defaults (2/1 above 4 pixels), and a change is kept.
+    XGetPointerControl: (_dpy, num, den, thr) => {
+      if (num) dv().setInt32(num, pointerCtl[0], true); if (den) dv().setInt32(den, pointerCtl[1], true); if (thr) dv().setInt32(thr, pointerCtl[2], true);
+      return 0;
+    },
+    XChangePointerControl: (_dpy, doAccel, doThr, num, den, thr) => { if (doAccel) { pointerCtl[0] = num; pointerCtl[1] = den; } if (doThr) pointerCtl[2] = thr; return 0; },
+    // One thread here, so Xlib's thread support is trivially there.
+    XInitThreads: () => 1,
+    // The connection's descriptor: a number no file here uses. select() on it reports nothing ready,
+    // which is true -- every event this server has is already in the queue XPending counts.
+    XConnectionNumber: () => 1000,
+    // TrueColor, so black is 0 and white every bit of the visual's 24.
+    XBlackPixel: () => 0,
+    XWhitePixel: () => 0xffffff,
+    // A window manager would read these; there is none, and the window's size is set by XCreateWindow.
+    XSetWMNormalHints: () => {},
 
     XNextEvent: (_dpy, ev) => {
+      if (peeked) { M.u8.set(peeked, ev); peeked = null; return 0; }
       M.u8.fill(0, ev, ev + 96);
       /*
        * The POINTER first, and before the keyboard, because a game reads its mouse every frame and

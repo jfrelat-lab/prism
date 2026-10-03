@@ -189,6 +189,46 @@ typedef double GLclampd;
 #define GL_VERSION 0x1F02
 #define GL_EXTENSIONS 0x1F03
 
+/*
+ * The function-pointer types of GL_ARB_multitexture, as Mesa's <GL/gl.h> declares them in its own
+ * multitexture block (Quake III's qgl.h: "some Linux platforms would need those prototypes"). Types
+ * only: the extension is not advertised, so a program that checks the string never calls through them.
+ */
+typedef void (* PFNGLACTIVETEXTUREARBPROC) (GLenum texture);
+typedef void (* PFNGLCLIENTACTIVETEXTUREARBPROC) (GLenum texture);
+typedef void (* PFNGLMULTITEXCOORD1DARBPROC) (GLenum target, GLdouble s);
+typedef void (* PFNGLMULTITEXCOORD1DVARBPROC) (GLenum target, const GLdouble *v);
+typedef void (* PFNGLMULTITEXCOORD1FARBPROC) (GLenum target, GLfloat s);
+typedef void (* PFNGLMULTITEXCOORD1FVARBPROC) (GLenum target, const GLfloat *v);
+typedef void (* PFNGLMULTITEXCOORD1IARBPROC) (GLenum target, GLint s);
+typedef void (* PFNGLMULTITEXCOORD1IVARBPROC) (GLenum target, const GLint *v);
+typedef void (* PFNGLMULTITEXCOORD1SARBPROC) (GLenum target, GLshort s);
+typedef void (* PFNGLMULTITEXCOORD1SVARBPROC) (GLenum target, const GLshort *v);
+typedef void (* PFNGLMULTITEXCOORD2DARBPROC) (GLenum target, GLdouble s, GLdouble t);
+typedef void (* PFNGLMULTITEXCOORD2DVARBPROC) (GLenum target, const GLdouble *v);
+typedef void (* PFNGLMULTITEXCOORD2FARBPROC) (GLenum target, GLfloat s, GLfloat t);
+typedef void (* PFNGLMULTITEXCOORD2FVARBPROC) (GLenum target, const GLfloat *v);
+typedef void (* PFNGLMULTITEXCOORD2IARBPROC) (GLenum target, GLint s, GLint t);
+typedef void (* PFNGLMULTITEXCOORD2IVARBPROC) (GLenum target, const GLint *v);
+typedef void (* PFNGLMULTITEXCOORD2SARBPROC) (GLenum target, GLshort s, GLshort t);
+typedef void (* PFNGLMULTITEXCOORD2SVARBPROC) (GLenum target, const GLshort *v);
+typedef void (* PFNGLMULTITEXCOORD3DARBPROC) (GLenum target, GLdouble s, GLdouble t, GLdouble r);
+typedef void (* PFNGLMULTITEXCOORD3DVARBPROC) (GLenum target, const GLdouble *v);
+typedef void (* PFNGLMULTITEXCOORD3FARBPROC) (GLenum target, GLfloat s, GLfloat t, GLfloat r);
+typedef void (* PFNGLMULTITEXCOORD3FVARBPROC) (GLenum target, const GLfloat *v);
+typedef void (* PFNGLMULTITEXCOORD3IARBPROC) (GLenum target, GLint s, GLint t, GLint r);
+typedef void (* PFNGLMULTITEXCOORD3IVARBPROC) (GLenum target, const GLint *v);
+typedef void (* PFNGLMULTITEXCOORD3SARBPROC) (GLenum target, GLshort s, GLshort t, GLshort r);
+typedef void (* PFNGLMULTITEXCOORD3SVARBPROC) (GLenum target, const GLshort *v);
+typedef void (* PFNGLMULTITEXCOORD4DARBPROC) (GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q);
+typedef void (* PFNGLMULTITEXCOORD4DVARBPROC) (GLenum target, const GLdouble *v);
+typedef void (* PFNGLMULTITEXCOORD4FARBPROC) (GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+typedef void (* PFNGLMULTITEXCOORD4FVARBPROC) (GLenum target, const GLfloat *v);
+typedef void (* PFNGLMULTITEXCOORD4IARBPROC) (GLenum target, GLint s, GLint t, GLint r, GLint q);
+typedef void (* PFNGLMULTITEXCOORD4IVARBPROC) (GLenum target, const GLint *v);
+typedef void (* PFNGLMULTITEXCOORD4SARBPROC) (GLenum target, GLshort s, GLshort t, GLshort r, GLshort q);
+typedef void (* PFNGLMULTITEXCOORD4SVARBPROC) (GLenum target, const GLshort *v);
+
 /* the rest of OpenGL 1.1, every value Mesa's <GL/gl.h> defines before its OpenGL 1.2 section (printed in the oracle) */
 #define GL_BYTE 0x1400
 #define GL_SHORT 0x1402
@@ -1006,6 +1046,7 @@ typedef unsigned long GLXDrawable;   /* an XID; PRISM's Xlib.h spells Window and
 #define GLX_BLUE_SIZE 10
 #define GLX_ALPHA_SIZE 11
 #define GLX_DEPTH_SIZE 12
+#define GLX_STENCIL_SIZE 13
 XVisualInfo *glXChooseVisual(Display *dpy, int screen, int *attribList);
 GLXContext glXCreateContext(Display *dpy, XVisualInfo *vis, GLXContext share, Bool direct);
 Bool glXMakeCurrent(Display *dpy, GLXDrawable drawable, GLXContext ctx);
@@ -1028,6 +1069,10 @@ Bool XF86VidModeQueryVersion(Display *dpy, int *major, int *minor);
 Bool XF86VidModeGetAllModeLines(Display *dpy, int screen, int *count, XF86VidModeModeInfo ***modes);
 Bool XF86VidModeSwitchToMode(Display *dpy, int screen, XF86VidModeModeInfo *mode);
 Bool XF86VidModeSetViewPort(Display *dpy, int screen, int x, int y);
+/* Gamma ramps (Quake III's linux_glimp.c). Only reached once QueryVersion has said the extension is there, which it never says here. */
+typedef struct { float red, green, blue; } XF86VidModeGamma;
+Bool XF86VidModeGetGamma(Display *dpy, int screen, XF86VidModeGamma *gamma);
+Bool XF86VidModeSetGamma(Display *dpy, int screen, XF86VidModeGamma *gamma);
 #endif
 `;
 const XF86DGA_H = `#ifndef _PRISM_XF86DGA_H
@@ -1045,5 +1090,4 @@ export const GLX_HEADERS = {
   'X11/extensions/xf86vmode.h': XF86VMODE_H,
   'X11/extensions/xf86dga.h': XF86DGA_H,
   'X11/cursorfont.h': '#ifndef _PRISM_CURSORFONT_H\n#define _PRISM_CURSORFONT_H\n#endif\n',
-  'termios.h': '#ifndef _PRISM_TERMIOS_H\n#define _PRISM_TERMIOS_H\n#endif\n',
 };

@@ -76,6 +76,14 @@ def load_elf32(data, base, symbols):
 
     text_i = next(i for i, s in enumerate(secs) if secname(s) == '.text')
     text = bytearray(data[secs[text_i]['off']:secs[text_i]['off'] + secs[text_i]['size']])
+    # A .data section, when the object has one (Quake III's snapvector.nasm keeps its two control words
+    # there), goes right after .text in the same mapping, 16-aligned; its symbols get addresses there.
+    data_i = next((i for i, s in enumerate(secs) if secname(s) == '.data'), None)
+    data_at = None
+    if data_i is not None:
+        text += bytes((-len(text)) % 16)
+        data_at = base + len(text)
+        text += data[secs[data_i]['off']:secs[data_i]['off'] + secs[data_i]['size']]
 
     symtab = next(s for s in secs if s['typ'] == 2)
     strtab = secs[symtab['link']]
@@ -96,6 +104,8 @@ def load_elf32(data, base, symbols):
             addr = symbols.get(name, 0)
         elif shndx == text_i:
             addr = base + val
+        elif data_i is not None and shndx == data_i:
+            addr = data_at + val
         else:
             addr = val
         syms.append(addr)

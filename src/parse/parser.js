@@ -78,13 +78,13 @@ const WATCOM_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt',
 export class Parser {
   /** @param tokens pp-token stream (EOF-terminated) @param scope a T.Scope for the file scope */
   constructor(tokens, { scope = new T.Scope(), file = '<input>', pack = null, c89 = false,
-    model = 'i386', signedChar, enums } = {}) {
+    model = 'i386', signedChar, enums, longDouble } = {}) {
     /*
      * The ABI this translation unit is compiled for. i386 unless a target says otherwise, and the
      * only thing that reads it here is the type system: sizes, the integer promotions and the
      * literal types all follow from the table, not from constants baked into this file.
      */
-    this.ty = T.makeTypes(model, { signedChar, enums });
+    this.ty = T.makeTypes(model, { signedChar, enums, longDouble });
     this.ts = tokens.filter(t => t.k !== 'pm');
     this.i = 0;
     this.scope = scope;

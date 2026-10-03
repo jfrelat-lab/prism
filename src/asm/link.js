@@ -64,7 +64,10 @@ export function installAsm(program, { sources, symbols = {}, machine = null }) {
       in: (port, size) => (machine ? machine.read(port, size) : 0xff),
     };
 
-    for (const g of parsed.globals) {
+    // A `global` naming no label exports nothing, as nasm and ld treat it: Quake III's snapvector.nasm
+    // declares Sys_SnapVectorCW and defines Sys_SnapVector_cw.
+    const defined = new Set(parsed.items.filter((it) => it.kind === 'label' && it.global).map((it) => it.name));
+    for (const g of parsed.globals.filter((name) => defined.has(name))) {
       const cName = g.replace(/^_/, '');
       const declared = program.mod.symbols?.has?.(cName) ?? true;
       if (!declared && !(cName in program.F)) { /* nothing calls it; bind anyway, it is harmless */ }

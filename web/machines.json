@@ -54,6 +54,7 @@
         { "program": "quake-svgalib", "file": "quake.svga", "date": "Aug  1  1996" },
         { "program": "quake2", "file": "quake2", "date": "Dec  9  1997" },
         { "program": "quake2", "variant": "gl", "file": "quake2.gl", "date": "Dec  9  1997" },
+        { "program": "quake3", "file": "quake3", "date": "Nov 14  2002" },
         { "program": "lua", "file": "lua", "date": "May  2  2023" },
         { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" },
         { "program": "jumpnbump-sdl2", "file": "jumpnbump.sdl2", "date": "Sep 16  2025" },
