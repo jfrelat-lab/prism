@@ -120,6 +120,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
   // exports (src/env/dl.js), as opengl32.dll does for GetProcAddress (src/env/opengl32.c).
   M.glNames = new Set([...GL_H.matchAll(/\b(gl[A-Z]\w*)\s*\(/g)].map((m) => m[1]));
+  let gpuCache = null;                      // gpuState until a command that is not a vertex runs (see exec)
   let webgl = null;                         // the WebGL2 rasteriser when backend is 'webgl' (makeWebGL)
   const dv = () => M.mod.dv;
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
@@ -161,6 +162,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     s.width = w; s.height = h;
     s.color = new Uint8Array(w * h * 4); s.depth = new Float32Array(w * h).fill(1);
     s.viewport = [0, 0, w, h];
+    gpuCache = null;
     if (backend === 'webgl') { webgl = makeWebGL(w, h); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) t.dirty = true; }
   }
 
@@ -473,9 +475,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   /** What the GPU path needs of the fragment state, as one comparable value. */
   function gpuState() {
+    if (gpuCache) return gpuCache;
     const t = s.caps.has(CAP.TEXTURE_2D) ? texture() : null, textured = !!(t && complete(t));
     if (textured && t.dirty) { webgl.upload(s.bound, t); t.dirty = false; }
-    return {
+    return gpuCache = {
       tex: textured ? s.bound : -1, base: textured ? t.base : '', env: s.envMode,
       min: textured ? t.min : 0, mag: textured ? t.mag : 0, wrapS: textured ? t.wrapS : 0, wrapT: textured ? t.wrapT : 0,
       blend: s.caps.has(CAP.BLEND) ? `${s.blend[0]},${s.blend[1]}` : '',
@@ -628,15 +631,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexCoordPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.tex, { size, type, stride, ptr }); },
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     glArrayElement: (i) => {
-      const read = (a) => {
-        const width = a.type === 0x1401 ? 1 : 4;               // GL_UNSIGNED_BYTE or GL_FLOAT
-        const base = a.ptr + i * (a.stride || a.size * width);
-        return Array.from({ length: a.size }, (_, k) => (a.type === 0x1401 ? M.u8[base + k] / 255 : dv().getFloat32(base + 4 * k, true)));
+      // Component k of element i of array a: called per vertex of every glDrawElements, so no allocation.
+      const d = dv(), u8 = M.u8;
+      const at = (a, k) => {
+        if (a.type === 0x1401) return u8[a.ptr + i * (a.stride || a.size) + k] / 255;   // GL_UNSIGNED_BYTE
+        return d.getFloat32(a.ptr + i * (a.stride || a.size * 4) + 4 * k, true);       // GL_FLOAT
       };
       const { vertex: va, color: ca, tex: ta } = s.arrays;
-      if (ca.on) { const c = read(ca); s.colour = [c[0], c[1], c[2], c.length > 3 ? c[3] : 1]; }
-      if (ta.on) { const t = read(ta); s.tex = [t[0], t[1]]; }
-      if (va.on) { const v = read(va); vertex(v[0], v[1], v.length > 2 ? v[2] : 0); }
+      if (ca.on) s.colour = [at(ca, 0), at(ca, 1), at(ca, 2), ca.size > 3 ? at(ca, 3) : 1];
+      if (ta.on) s.tex = [at(ta, 0), at(ta, 1)];
+      if (va.on) vertex(at(va, 0), at(va, 1), va.size > 2 ? at(va, 2) : 0);
     },
     glTexEnvf: (target, p, v) => { if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`); },
     glTexEnvi: (target, p, v) => exec.glTexEnvf(target, p, v),
@@ -686,6 +690,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8]) : null];
     },
   };
+  // Only these leave the fragment state alone; every other command may change it, display lists included.
+  const VERTEX_ONLY = new Set(['glBegin', 'glEnd', 'glVertex2f', 'glVertex3f', 'glVertex3fv', 'glNormal3f',
+    'glColor3f', 'glColor4f', 'glColor3fv', 'glColor4fv', 'glColor3ubv', 'glColor4ubv', 'glTexCoord2f', 'glTexCoord2fv',
+    'glArrayElement']);
+  for (const name of Object.keys(exec)) {
+    if (VERTEX_ONLY.has(name)) continue;
+    const run = exec[name];
+    exec[name] = (...a) => { gpuCache = null; return run(...a); };
+  }
   const api = {};
   for (const name of Object.keys(exec)) {
     api[name] = (...a) => {
@@ -879,9 +892,10 @@ void main() {
     n = 0;
   };
   const push = (v, colour) => { const o = n * 11; data.set(v.clip, o); data.set(colour ?? v.colour, o + 4); data[o + 8] = v.tex[0]; data[o + 9] = v.tex[1]; data[o + 10] = v.eyeZ; n++; };
+  // gpuState builds every field from primitives in a fixed order, so field-wise equality is identity.
+  const same = (a, b) => { if (!a || !b) return false; for (const f in a) if (a[f] !== b[f]) return false; return true; };
   const begin = (st, m, count) => {
-    const k = JSON.stringify(st);
-    if (k !== key || m !== mode || n + count > MAXV) { flush(); key = k; pending = st; mode = m; }
+    if (!key || !same(st, pending) || m !== mode || n + count > MAXV) { flush(); key = true; pending = st; mode = m; }
   };
   return {
     upload(id, t) {

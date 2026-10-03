@@ -5,7 +5,7 @@ The safety net. Nothing in PRISM validates its own answers: every layer is check
 
 ## The gates, and what each one asks
 
-**Sixty-six now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
+**Sixty-seven now, all green** — run them with `node tools/gates.mjs`, which says PASS, SKIP or FAIL
 of each (see "Three verdicts" at the end of this file: the two that had been red for weeks were one
 missing its data and one sitting on six real defects). `gate-lua` alone takes about eight minutes of
 the run. This is the index of the ones that carry an external authority; the smaller seam gates
@@ -34,6 +34,7 @@ something outside PRISM that could contradict it.
 | `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds in its first 28 s is one the real binary showed, and its scenes come at the real binary's times (slope within 0.08) |
 | `gate-jnb-pixels.mjs` | **the game's own `jumpbump.exe`** (DJGPP) under DOSBox-X, DOS clock set to PRISM's | every one of 300 pages PRISM flips is a page the real binary showed |
 | `gate-mesa-demos.mjs` | **Mesa 22 (llvmpipe)** drawing mesa-demos 8.0.1's morph3d and texobj on the same GLUT harness; texobj twice, its GL_VERSION set on both sides, because "1.1" sends it to texture objects and anything else to textures compiled into display lists | per frame at most 0.1% of pixels beyond 8 levels (0-7 do); six controls red: two-sided lighting, the scene ambient, the second light, glBindTexture at draw time, NEAREST magnification, glTexImage2D in a list |
+| `gate-webgl-stream.mjs` | **its own blessed stream**: the WebGL2 calls gl.js issues for gears, morph3d, texobj (both paths) and, with `PRISM_QUAKE3_DATA`, 300 swaps of Quake III in q3dm1 -- every call, argument and uploaded byte, hashed -- through a recording context, since Node has no WebGL and every pixel gate uses the soft rasteriser | the stream is the blessed one; a dropped state call per program changes it; red when the front end's state cache is never invalidated (3 of 5) and when the batch ignores state (2 of 5) |
 | `gate-long-double64.mjs` | **gcc -m32 -mlong-double-64 -msse2 -mfpmath=sse** on one program in the oracle | struct sizes and offsets, arithmetic, conversions, L constants and varargs print the same; red without the option and with gcc's 12-byte long double |
 | `gate-asm-snapvector.mjs` | **Unicorn** running nasm's bytes of Quake III's unmodified unix/snapvector.nasm (golden captured once) | 300 of 300 float32 vectors rounded alike; red with RC forced to truncation and with the routine's control word ignored |
 | `gate-gears.mjs` | **Mesa 22 (llvmpipe)** drawing the same gears.c, in the oracle container, on a surfaceless-EGL GLUT harness | frames 0, 25 and 50: at most 0.1% of pixels differ beyond 8 levels (2-3 of 90,000 do) |

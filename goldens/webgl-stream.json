@@ -1,0 +1,27 @@
+{
+  "gears": {
+    "calls": 1117,
+    "draws": 51,
+    "sha": "99e98fedc7d95af23b1cece8e817ed31662cd66f87a1a427e067c3e565a57340"
+  },
+  "morph3d": {
+    "calls": 4147,
+    "draws": 195,
+    "sha": "45939170e11dbab543d28a72f4db49704d589a1329e74ee303c5826fdba4f2f2"
+  },
+  "texobj (texture objects)": {
+    "calls": 2198,
+    "draws": 102,
+    "sha": "2ffa0dbb36da9ffdeb803f2a4702671a853f1f126e462c688a603c22c43c3045"
+  },
+  "texobj (display lists)": {
+    "calls": 2597,
+    "draws": 102,
+    "sha": "5aa754fdc2c3aa636dc5d43a7da9e1f75e14efc942fadd4c6ef006c0d54bdbbe"
+  },
+  "quake3 q3dm1": {
+    "calls": 972833,
+    "draws": 44712,
+    "sha": "69623cfa2ab29dd35c1baf804ea3433632b2d63ab206848cf6676c3f03563f72"
+  }
+}

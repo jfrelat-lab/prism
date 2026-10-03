@@ -10,6 +10,7 @@
 //   node tools/gates.mjs --skip=lua              all but those whose name contains a --skip value
 //                                                (gate-lua alone is about eight minutes of the run)
 //   PRISM_QUAKE_DATA=<dir with id1/> node tools/gates.mjs     let gate-pixels run
+//   PRISM_QUAKE3_DATA=<dir with baseq3/> ...                  add Quake III to gate-webgl-stream
 import { readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
