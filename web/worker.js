@@ -204,7 +204,8 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
    * was never declared, and open_screen could not be emitted. Node reads the tree off disk and so
    * never met this filter at all -- which is how the two hosts disagreed about the same program.
    */
-  const SOURCE_EXT = /\.(c|h|q1|q2|inc|def|xpm)$/i;
+  // C++ units too (src/cxx): .cpp and its kin, and the .hpp some trees use.
+  const SOURCE_EXT = /\.(c|h|q1|q2|inc|def|xpm|cpp|cc|cxx|hpp)$/i;
   const wanted = listing.files.filter(f => SOURCE_EXT.test(f));
   const tree = new Map();
   /* Both keys: units are named relative to the root, includes are searched by repo path. */

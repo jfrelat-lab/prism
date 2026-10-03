@@ -212,7 +212,7 @@ int system(const char *cmd);
 char *tmpnam(char *buf);
 /* mkstemp fills the template's trailing XXXXXX and opens it; see src/env/stdio.js for why the
    descriptor it returns is also a usable FILE*. */
-int mkstemp(char *template);
+int mkstemp(char *tmpl);
 long random(void);
 void srandom(unsigned seed);
 /*
@@ -479,9 +479,11 @@ typedef unsigned long long uint_least64_t;
 const STDBOOL = `
 #ifndef _PRISM_STDBOOL_H
 #define _PRISM_STDBOOL_H
+#ifndef __cplusplus
 #define bool _Bool
 #define true 1
 #define false 0
+#endif
 #define __bool_true_false_are_defined 1
 #endif
 `;
@@ -1045,7 +1047,11 @@ typedef struct _XGC *GC;
 struct _XVisual {
     void *ext_data;
     VisualID visualid;
+#if defined(__cplusplus)
+    int c_class;     /* as Xlib.h spells it for C++ */
+#else
     int class;
+#endif
     unsigned long red_mask, green_mask, blue_mask;
     int bits_per_rgb;
     int map_entries;
@@ -1076,7 +1082,11 @@ typedef struct {
     VisualID visualid;
     int screen;
     int depth;
+#if defined(__cplusplus)
+    int c_class;     /* as Xlib.h spells it for C++ */
+#else
     int class;
+#endif
     unsigned long red_mask, green_mask, blue_mask;
     int colormap_size;
     int bits_per_rgb;
@@ -1320,8 +1330,8 @@ int XAutoRepeatOn(Display *d);
 int XAutoRepeatOff(Display *d);
 int XMapWindow(Display *d, Window w);
 VisualID XVisualIDFromVisual(Visual *v);
-Status XMatchVisualInfo(Display *d, int screen, int depth, int class, XVisualInfo *info);
-XVisualInfo *XGetVisualInfo(Display *d, long mask, XVisualInfo *template, int *nitems);
+Status XMatchVisualInfo(Display *d, int screen, int depth, int c_class, XVisualInfo *info);
+XVisualInfo *XGetVisualInfo(Display *d, long mask, XVisualInfo *vinfo_template, int *nitems);
 Visual *XDefaultVisual(Display *d, int screen);
 int XDestroyWindow(Display *d, Window w);
 int XFreeColormap(Display *d, Colormap c);
@@ -1332,7 +1342,7 @@ int XFreeColormap(Display *d, Colormap c);
 #define VisualClassMask    0x10
 
 Window XCreateWindow(Display *d, Window parent, int x, int y, unsigned int w, unsigned int h,
-                     unsigned int border, int depth, unsigned int class, Visual *visual,
+                     unsigned int border, int depth, unsigned int c_class, Visual *visual,
                      unsigned long mask, XSetWindowAttributes *attrs);
 XImage *XCreateImage(Display *d, Visual *v, unsigned int depth, int format, int offset,
                      char *data, unsigned int w, unsigned int h, int pad, int bytes_per_line);

@@ -3,7 +3,7 @@
   "title": "WOLFENSTEIN: ENEMY TERRITORY 2.60b (Linux/GLX, GPL source, native cgame/qagame/ui modules)",
   "dir": "corpus/Enemy-Territory-master",
   "fetch": "git clone --depth 1 https://github.com/id-Software/Enemy-Territory.git corpus/Enemy-Territory-master",
-  "_units": "SConscript.core's Linux client (local_dedicated 0) minus what it builds from assembly or C++: unix/matha.spp and unix/snd_mixa.spp (gas), unix/snapvector.asm (see asmTranslate), splines/ (C++, see inline), and curl-7.12.2, replaced by the tree's own qcommon/dl_main_stubs.c -- the file SConscript.core links when there is no client download library.",
+  "_units": "SConscript.core's Linux client (local_dedicated 0) minus what it builds from assembly: unix/matha.spp and unix/snd_mixa.spp (gas; see asmTranslate), unix/snapvector.asm, and curl-7.12.2, replaced by the tree's own qcommon/dl_main_stubs.c -- the file SConscript.core links when there is no client download library. splines/ is C++, compiled by src/cxx: its seven .cpp files; splines/q_shared.c is in the static library's list too but its symbols are game/q_shared.c's, already linked, so a linker pulls nothing from it.",
   "units": {
     "list": [
       "src/server/sv_bot.c",
@@ -145,7 +145,14 @@
       "src/unix/linux_glimp.c",
       "src/unix/linux_qgl.c",
       "src/unix/linux_snd.c",
-      "src/unix/linux_joystick.c"
+      "src/unix/linux_joystick.c",
+      "src/splines/math_angles.cpp",
+      "src/splines/math_matrix.cpp",
+      "src/splines/math_quaternion.cpp",
+      "src/splines/math_vector.cpp",
+      "src/splines/q_parse.cpp",
+      "src/splines/splines.cpp",
+      "src/splines/util_str.cpp"
     ]
   },
   "modules": {
@@ -413,10 +420,6 @@
     "memory": 512,
     "collect": true,
     "longDouble": 64
-  },
-  "_inline": "prism-splines.c stands in for splines/*.cpp (C++) in the one state the shipped data reaches: no camera files. The user chose this over waiting for C++ (2026-10-03).",
-  "inline": {
-    "prism-splines.c": "#include \"src/game/q_shared.h\"\n#include \"src/qcommon/qcommon.h\"\n/*\n * splines/splines.cpp's three extern \"C\" entry points, for the one state ET's data can reach.\n * splines/ is C++ (idCameraDef, idVec3, operator overloading), which PRISM does not compile. Its\n * cameras are files under cameras/ and pak0-2.pk3 ship none, so loadCamera's FS_ReadFile always\n * misses and it returns qfalse -- exactly what splines.cpp:62 does then -- and cgame only starts\n * or reads a camera loadCamera accepted (cg_consolecmds.c, cg_ents.c). A camera file that DOES\n * exist stops the game with the reason rather than going on without its camera.\n */\nqboolean loadCamera( int camNum, const char *name ) {\n\tvoid *buf;\n\tif ( camNum < 0 || camNum >= 64 ) {\n\t\treturn qfalse;\n\t}\n\tFS_ReadFile( name, &buf );\n\tif ( !buf ) {\n\t\treturn qfalse;\n\t}\n\tFS_FreeFile( buf );\n\tCom_Error( ERR_FATAL, \"loadCamera(%s): spline cameras are splines/*.cpp, C++, which PRISM does not compile\", name );\n\treturn qfalse;\n}\nvoid startCamera( int camNum, int time ) {\n\tCom_Error( ERR_FATAL, \"startCamera(%d): no camera was ever loaded (splines/*.cpp is C++)\", camNum );\n}\nqboolean getCameraInfo( int camNum, int time, float *origin, float *angles, float *fov ) {\n\tCom_Error( ERR_FATAL, \"getCameraInfo(%d): no camera was ever loaded (splines/*.cpp is C++)\", camNum );\n\treturn qfalse;\n}\n"
   },
   "_files": "What the INSTALLATION provides: the three modules' files. unix_main.c's Sys_LoadDll checks access(fs_basepath/<fs_game>/<name>.mp.i386.so, R_OK) before it dlopens that path, and a real install has the files there (the 2.60b installer unpacks them into etmain/). Their content is never read: the modules are linked into the program and dlopen resolves them by name.",
   "files": {

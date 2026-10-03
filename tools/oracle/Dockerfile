@@ -12,6 +12,9 @@ FROM i386/debian:bookworm-slim
 # rejects in that whole release. Open Watcom, already below, takes the case labels and then refuses
 # `unsigned char *line[0]` in osdepend.h in every mode including -za, so it cannot stand in either.
 # tcc accepts both, links, and runs. Without it MAME 0.4 has no native oracle at all.
+# `g++` is the oracle for PRISM's C++ (2026-10-03, first for ET's splines/): every C++ case is held to
+# the same program built by g++ -m32 here. Added to the existing image with apt-get + docker commit
+# rather than a rebuild, which would also fetch a newer Open Watcom snapshot than the gates were run on.
 # libsdl1.2-dev and libsdl-mixer1.2-dev are here for their HEADERS and nothing else: no SDL is ever
 # linked or run in this image. src/env/headers-sdl12.js declares SDL 1.2 itself, because a guest is
 # compiled against PRISM's declarations rather than a copy of SDL's -- which makes every offset
@@ -19,7 +22,7 @@ FROM i386/debian:bookworm-slim
 # twice, here against the genuine headers and in PRISM against ours, and diffs the two. Without
 # these packages that gate has nothing to be right about.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      gcc tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
+      gcc g++ tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
       libsdl1.2-dev libsdl-mixer1.2-dev \
  && rm -rf /var/lib/apt/lists/*
 

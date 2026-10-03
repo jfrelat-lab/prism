@@ -3,6 +3,7 @@
 // This is the whole pipeline in one file so the seams are visible. Everything it does is tier-0.
 
 import { Preprocessor } from './cpp/cpp.js';
+import { isCxxFile, cxxToC, CXX_DEFINES } from './cxx/index.js';
 import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
@@ -770,13 +771,24 @@ function wireRebind(F, mod, emitted, rebind) {
   }
 }
 
+/**
+ * The tokens the C parser reads for one unit. A C++ unit (by its file name, as gcc decides) is
+ * preprocessed with __cplusplus defined, lowered to C by src/cxx, and that C is tokenised.
+ */
+function unitTokens(pp, source, file) {
+  if (!isCxxFile(file)) return pp.run(source, file);
+  for (const [k, v] of Object.entries(CXX_DEFINES)) pp.defineText(k, v);
+  const c = cxxToC(pp.run(source, file), { file });
+  return new Preprocessor({}).run(c, file);
+}
+
 export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, ppSizeof = null, extraBuiltins = null } = {}) {
   const pp = new Preprocessor({
     ppSizeof,
     defines: mergeDefines(mergeDefines(TARGET_DEFINES, { ...modelDefines(model, signedChar), ...longDoubleDefines(longDouble) }), defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
-  const tokens = pp.run(source, file);
+  const tokens = unitTokens(pp, source, file);
   // `enums` shapes types, and types are the parser's: the emitter never builds an enum of its own.
   const { unit, scope } = parse(tokens, { file, pack, c89, model, signedChar, enums, longDouble });
 
@@ -957,7 +969,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
         defines), u.defines ?? {}),
       resolve: resolver,
     });
-    const tokens = pp.run(u.source, u.file);
+    const tokens = unitTokens(pp, u.source, u.file);
     const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model, signedChar, enums, longDouble });
     // The module is part of a static's identity: ET builds game/bg_sscript.c into cgame AND qagame,
     // and one tag per path let cgame's calls reach qagame's copy (and its syscall table).
@@ -1397,6 +1409,8 @@ function makeRunner(M, F, mod, model = 'i386') {
     M.stdout.length = 0;
     const main = F.main;
     if (!main) throw new CompileError('no main()');
+    // C++ units: the dynamic initialisation of their globals, unit by unit, before main (src/cxx).
+    for (const name of Object.keys(F)) if (/(^|\$)__prism_cxx_init_/.test(name)) F[name]();
     // argv lives in the image, because main may keep the pointers -- each one the model's data pointer.
     const ptrs = argv.map(a => mod.intern([...new TextEncoder().encode(a)]));
     const w = M.abi.ptr;

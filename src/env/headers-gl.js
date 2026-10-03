@@ -1068,7 +1068,11 @@ typedef struct {
     unsigned short vdisplay, vsyncstart, vsyncend, vtotal;
     unsigned int flags;
     int privsize;
+#if defined(__cplusplus)
+    int *c_private;  /* as xf86vmode.h spells it for C++ */
+#else
     int *private;
+#endif
 } XF86VidModeModeInfo;
 Bool XF86VidModeQueryVersion(Display *dpy, int *major, int *minor);
 Bool XF86VidModeGetAllModeLines(Display *dpy, int screen, int *count, XF86VidModeModeInfo ***modes);
