@@ -244,6 +244,8 @@ SDL_Surface *SDL_ConvertSurface(SDL_Surface *src, const SDL_PixelFormat *fmt, Ui
 SDL_bool SDL_SetClipRect(SDL_Surface *surface, const SDL_Rect *rect);
 int SDL_SetSurfaceAlphaMod(SDL_Surface *surface, Uint8 alpha);
 int SDL_SetSurfaceBlendMode(SDL_Surface *surface, SDL_BlendMode blendMode);
+int SDL_GetSurfaceBlendMode(SDL_Surface *surface, SDL_BlendMode *blendMode);
+int SDL_GetColorKey(SDL_Surface *surface, Uint32 *key);
 int SDL_SetSurfacePalette(SDL_Surface *surface, SDL_Palette *palette);
 int SDL_UpperBlitScaled(SDL_Surface *src, const SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect);
 #define SDL_BlitScaled SDL_UpperBlitScaled

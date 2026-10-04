@@ -2,13 +2,15 @@
 //
 // SDL_image is its own library, and what the program sees of it is the KIND of surface it gets back
 // for a given file, because the program then treats paletted and RGBA images differently (SDLPoP
-// keys the first and blends the second). The rules below are IMG_png.c's, the libpng loader:
+// keys the first and blends the second). The rules below are IMG_png.c's, the libpng loader, and
+// tools/gate-sdl2-image.mjs holds each of them to SDL_image 2.6.3 itself:
 //
 //   a palette image stays 8-bit indexed whatever its bit depth, one byte a pixel, its palette
 //   holding the file's colours -- and if its tRNS chunk marks exactly ONE entry fully transparent
 //   and every other one opaque, that entry becomes the surface's colour key;
 //   a palette image with any other transparency is expanded to RGBA;
-//   greyscale becomes 8-bit indexed with a grey ramp, grey with alpha becomes RGBA;
+//   greyscale becomes 8-bit indexed with a grey ramp, grey with alpha becomes RGBA -- and grey with
+//   a tRNS level becomes a two-byte surface SDL names RGB565 (see below);
 //   RGB is a 24-bit surface and RGBA a 32-bit one, bytes in the file's order (R first);
 //   16-bit samples keep their high byte.
 import { decodePng, isPng } from './png.js';
@@ -42,7 +44,21 @@ export function pngToSurface(bytes) {
     const max = depth === 16 ? 255 : (1 << depth) - 1, pixels = new Uint8Array(width * height), palette = new Uint8Array(768);
     for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) pixels[y * width + x] = Math.round((sample(y, x) * 255) / max);
     for (let i = 0; i < 256; i++) palette[3 * i] = palette[3 * i + 1] = palette[3 * i + 2] = i;
-    if (png.trns && png.trns.length >= 2) colorKey = depth === 16 ? png.trns[0] : Math.round((png.trns[1] * 255) / max);
+    if (png.trns && png.trns.length >= 2) {
+      /*
+       * Grey WITH a transparent level, as the library really returns it (measured, not designed):
+       * libpng expands the level into an alpha byte beside each sample, SDL_image asks for a surface
+       * of two bytes a pixel with no masks, and SDL calls that RGB565. So the "16-bit colour" is a
+       * grey byte and an alpha byte, and the colour key is 0.
+       */
+      const level = (png.trns[0] << 8) | png.trns[1], wide = new Uint8Array(width * height * 2);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const raw = depth === 16 ? (rows[y * rowBytes + 2 * x] << 8) | rows[y * rowBytes + 2 * x + 1] : sample(y, x);
+        wide[2 * (y * width + x)] = pixels[y * width + x];
+        wide[2 * (y * width + x) + 1] = raw === level ? 0 : 255;
+      }
+      return { format: PIXELFORMAT.RGB565, width, height, bytes: 2, pixels: wide, palette: null, colorKey: 0 };
+    }
     return { format: PIXELFORMAT.INDEX8, width, height, bytes: 1, pixels, palette, colorKey };
   }
   const alpha = colorType === 6 || colorType === 4 || expand;

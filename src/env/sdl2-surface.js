@@ -384,6 +384,18 @@ export function surfaceApi(M, state, { setErr, intern, cstr }) {
       rec.colorKey = flag ? key >>> 0 : null;
       return 0;
     },
+    SDL_GetColorKey: (p, keyOut) => {
+      const rec = side.get(p);
+      if (!rec || rec.colorKey === null) return setErr('Surface doesn\'t have a colorkey');
+      if (keyOut) dv().setUint32(keyOut, rec.colorKey, true);
+      return 0;
+    },
+    SDL_GetSurfaceBlendMode: (p, modeOut) => {
+      const rec = side.get(p);
+      if (!rec) return setErr('SDL_GetSurfaceBlendMode: passed a NULL surface');
+      if (modeOut) dv().setInt32(modeOut, rec.blend, true);
+      return 0;
+    },
     SDL_SetSurfaceBlendMode: (p, mode) => {
       const rec = side.get(p);
       if (!rec) return setErr('SDL_SetSurfaceBlendMode: passed a NULL surface');
@@ -444,7 +456,7 @@ export function surfaceBuiltins(T) {
     SDL_CreateRGBSurface: f(P, U, I, I, I, U, U, U, U), SDL_FreeSurface: f(V, P),
     SDL_FillRect: f(I, P, P, U), SDL_UpperBlit: f(I, P, P, P, P), SDL_UpperBlitScaled: f(I, P, P, P, P),
     SDL_SetClipRect: f(I, P, P), SDL_LockSurface: f(I, P), SDL_UnlockSurface: f(V, P),
-    SDL_SetColorKey: f(I, P, I, U), SDL_SetSurfaceBlendMode: f(I, P, I), SDL_SetSurfaceAlphaMod: f(I, P, B),
+    SDL_SetColorKey: f(I, P, I, U), SDL_GetColorKey: f(I, P, P), SDL_GetSurfaceBlendMode: f(I, P, P), SDL_SetSurfaceBlendMode: f(I, P, I), SDL_SetSurfaceAlphaMod: f(I, P, B),
     SDL_SetSurfacePalette: f(I, P, P), SDL_SetPaletteColors: f(I, P, P, I, I),
     SDL_AllocFormat: f(P, U), SDL_FreeFormat: f(V, P),
     SDL_MapRGB: f(U, P, B, B, B), SDL_MapRGBA: f(U, P, B, B, B, B),

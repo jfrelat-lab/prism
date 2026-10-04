@@ -12,9 +12,8 @@
 //   is the forward filter and zlib's deflate; the pixels it started from are the answer.
 //
 // Then what SDL_image makes of a decoded file (src/env/sdl2-image.js): which kind of surface, and
-// when a tRNS chunk becomes a colour key. Those rules are read from IMG_png.c and are NOT held to
-// SDL_image itself here -- the oracle container has no libsdl2-image-dev -- so this part checks that
-// the rules are applied, not that they are the right rules.
+// when a tRNS chunk becomes a colour key. Here that is checked without a container; the rules
+// themselves are held to the real SDL_image by tools/gate-sdl2-image.mjs.
 //
 // With PRISM_SDLPOP_DATA=<dir> the 929 PNG files of SDLPoP are inflated against zlib as well.
 //
@@ -25,6 +24,7 @@ import { join } from 'node:path';
 import { inflateZlib, decodePng, PNG_RULES } from '../src/env/png.js';
 import { pngToSurface } from '../src/env/sdl2-image.js';
 import { PIXELFORMAT } from '../src/env/sdl2-surface.js';
+import { encode, CHANNELS } from './png-encode.mjs';
 
 let bad = 0;
 const report = (ok, what, detail = '') => { if (!ok) bad++; console.log(`${ok ? '  ok ' : ' BAD '} ${what.padEnd(64)} ${detail}`); };
@@ -61,40 +61,6 @@ report(wrong === 0, 'inflate returns what zlib deflated', `${streams - wrong} of
 }
 
 // ---- PNG, encoded here
-const crcTable = Uint32Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
-const crc = (bytes) => { let c = 0xffffffff; for (const b of bytes) c = crcTable[(c ^ b) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
-const chunk = (id, body) => {
-  const out = new Uint8Array(12 + body.length), dv = new DataView(out.buffer);
-  dv.setUint32(0, body.length);
-  out.set(new TextEncoder().encode(id), 4); out.set(body, 8);
-  dv.setUint32(8 + body.length, crc(out.subarray(4, 8 + body.length)));
-  return out;
-};
-const paeth = (a, b, c) => { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); return pa <= pb && pa <= pc ? a : pb <= pc ? b : c; };
-const CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
-function encode({ width, height, depth, colorType, rows, palette = null, trns = null, filterOf = (y) => y % 5 }) {
-  const channels = CHANNELS[colorType], rowBytes = (width * channels * depth + 7) >> 3, bpp = Math.max(1, (channels * depth) >> 3);
-  const raw = new Uint8Array((rowBytes + 1) * height);
-  for (let y = 0; y < height; y++) {
-    const f = filterOf(y);
-    raw[y * (rowBytes + 1)] = f;
-    for (let x = 0; x < rowBytes; x++) {
-      const v = rows[y * rowBytes + x], a = x >= bpp ? rows[y * rowBytes + x - bpp] : 0, b = y ? rows[(y - 1) * rowBytes + x] : 0, c = x >= bpp && y ? rows[(y - 1) * rowBytes + x - bpp] : 0;
-      raw[y * (rowBytes + 1) + 1 + x] = (v - (f === 1 ? a : f === 2 ? b : f === 3 ? (a + b) >> 1 : f === 4 ? paeth(a, b, c) : 0)) & 255;
-    }
-  }
-  const z = new Uint8Array(zlib.deflateSync(raw)), cut = z.length >> 1;
-  const ihdr = new Uint8Array(13), dv = new DataView(ihdr.buffer);
-  dv.setUint32(0, width); dv.setUint32(4, height); ihdr[8] = depth; ihdr[9] = colorType;
-  const parts = [Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr)];
-  if (palette) parts.push(chunk('PLTE', palette));
-  if (trns) parts.push(chunk('tRNS', trns));
-  parts.push(chunk('tEXt', new TextEncoder().encode('Comment\0made by gate-png')), chunk('IDAT', z.subarray(0, cut)), chunk('IDAT', z.subarray(cut)), chunk('IEND', new Uint8Array(0)));
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.length; }
-  return out;
-}
 const KINDS = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [2, 8], [2, 16], [3, 1], [3, 2], [3, 4], [3, 8], [4, 8], [4, 16], [6, 8], [6, 16]];
 function image(colorType, depth, width = 37, height = 23) {
   const rowBytes = (width * CHANNELS[colorType] * depth + 7) >> 3, rows = new Uint8Array(rowBytes * height);

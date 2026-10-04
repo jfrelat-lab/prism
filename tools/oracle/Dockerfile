@@ -21,9 +21,15 @@ FROM i386/debian:bookworm-slim
 # PRISM's responsibility, and the kind that fails silently. tools/gate-sdl12abi.mjs builds one probe
 # twice, here against the genuine headers and in PRISM against ours, and diffs the two. Without
 # these packages that gate has nothing to be right about.
+# SDL 2 and SDL_image ARE linked and run here (2026-10-04), with SDL's dummy video and audio drivers:
+# src/env/sdl2-surface.js and sdl2-image.js are held to the libraries themselves (gate-sdl2-surface,
+# gate-sdl2-image), and SDLPoP built against them is the pixel reference for SDLPoP on PRISM
+# (gate-sdlpop-pixels, with tools/oracle/sdl2-capture.c preloaded). So is SDL_mixer 1.2, for
+# gate-sdl-mixer. libsdl2-image-dev was added to the existing image with apt-get + docker commit.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc g++ tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
       libsdl1.2-dev libsdl-mixer1.2-dev \
+      libsdl2-dev libsdl2-image-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Debian's csmith package ships the GENERATOR but none of the runtime headers its output
