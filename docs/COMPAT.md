@@ -10,8 +10,8 @@ it. The long form of each (how it got there, what it found) follows below and in
 
 | Program | Language, platform layer | Runs in the page | Held to | Sound | Open |
 |---|---|---|---|---|---|
-| **MAME 0.6** | C89, DJGPP + Allegro | DOS: `MAME <game>` | a native gcc build, frame hash by frame hash: 21 of 21 games with ROMs here (goldens/mame06.json) | yes (`gate-sound`) | 20 games have no ROM set here |
-| MAME 0.1 to 0.5 | same | no longer on the shelf (one MAME, the newest verified) | the same harness, per release (goldens/mame05.json) | yes | |
+| **MAME 0.7** | C89, DJGPP + Allegro | DOS: `MAME <game>` | a native gcc build, frame hash by frame hash: 21 of 21 games with ROMs here (goldens/mame07.json) | yes (`gate-sound`, on 0.5) | 27 games have no ROM set here, the release's new ones among them; 0.34 next (P8.5c) |
+| MAME 0.1 to 0.6 | same | no longer on the shelf (one MAME, the newest verified) | the same harness, per release (goldens/mame05.json, mame06.json) | yes | |
 | **Quake** | C, five platform layers (DOS, X11, svgalib, SunOS, Win32) | DOS, Linux, SUN, Windows | ITSELF across four platform layers, pixel for pixel (`gate-pixels`: x11 == dos == win == svgalib) -- agreement, not an outside reference | yes on X11 (/dev/dsp) | an outside picture reference |
 | **GLQuake** | C, GLX and WGL on PRISM's GL | Linux `glquake.glx`, Windows | the same source on Mesa, 1 pixel of 307,200 (`gate-glquake`) | not checked | mouse through DGA not replayed by hand |
 | **Quake II** | C, X11 / Win32 / Solaris server; `ref_soft` and `ref_gl` | Linux, Windows, SUN (`q2ded`) | `ref_gl` against Mesa, 3 pixels of 307,200 (`gate-quake2-gl`); `ref_soft`: long form below | not checked | |
