@@ -30,10 +30,10 @@ const F_FORMAT = 0, F_PALETTE = 4, F_BITS = 8, F_BYTES = 9, F_RMASK = 12, F_GMAS
 const A_FREQ = 0, A_FORMAT = 4, A_CHANNELS = 6, A_SILENCE = 7, A_SAMPLES = 8, A_PADDING = 10,
       A_SIZE_ = 12, A_CALLBACK = 16, A_USERDATA = 20, A_SIZE = 24;
 
-const bytesPerPixel = (format) => (format === 0x16161804 ? 4 : format === 0x15151002 ? 2 : 1);
-
 import { format } from '../runtime/runtime.js';
 import { freeRunningClock } from './clock.js';
+import { surfaceApi, surfaceBuiltins } from './sdl2-surface.js';
+import { imageApi, imageBuiltins } from './sdl2-image.js';
 
 export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboard = null,
                                 clock = freeRunningClock() } = {}) {
@@ -62,26 +62,63 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
   const intern = (s) => M.mod.intern([...enc.encode(s), 0]);
   const setErr = (s) => { state.error = intern(s); return -1; };
 
-  /** A PixelFormat in guest memory, because the program reads BytesPerPixel out of it. */
-  function makeFormat(format) {
-    const p = M.rt.malloc(F_SIZE);
-    M.u8.fill(0, p, p + F_SIZE);
-    const bpp = bytesPerPixel(format);
-    dv().setUint32(p + F_FORMAT, format >>> 0, true);
-    M.u8[p + F_BITS] = bpp * 8;
-    M.u8[p + F_BYTES] = bpp;
-    if (bpp === 4) {
-      dv().setUint32(p + F_RMASK, 0x00ff0000, true);
-      dv().setUint32(p + F_GMASK, 0x0000ff00, true);
-      dv().setUint32(p + F_BMASK, 0x000000ff, true);
-    } else if (bpp === 2) {
-      dv().setUint32(p + F_RMASK, 0xf800, true);
-      dv().setUint32(p + F_GMASK, 0x07e0, true);
-      dv().setUint32(p + F_BMASK, 0x001f, true);
+  /* Surfaces, formats, palettes and blits: src/env/sdl2-surface.js. */
+  const surfaces = surfaceApi(M, state, { setErr, intern, cstr });
+  const bytesPerPixel = (format) => surfaces.LAYOUT[format >>> 0]?.[1] ?? 0;
+
+  /*
+   * SDL_RWops: a stream over a block of the program's own memory, or over a file. A handle here is
+   * a number the program only hands back; what it names is kept on this side.
+   */
+  const streams = new Map();
+  const streamBytes = (st) => (st.data ? st.data : M.u8.subarray(st.mem, st.mem + st.size));
+  const closeStream = (rw) => {
+    const st = streams.get(rw);
+    if (!st) return -1;
+    if (st.write && st.name && M.files) M.files.store.set(M.files.norm(st.name), st.data.slice(0, st.size));
+    streams.delete(rw);
+    return 0;
+  };
+
+  /* The keyboard as SDL_GetKeyboardState shows it, and the modifiers a key event reports. */
+  const KEYS = 512;
+  let keyState = 0, modState = 0;
+  const keyArray = () => { if (!keyState) { keyState = M.rt.malloc(KEYS); M.u8.fill(0, keyState, keyState + KEYS); } return keyState; };
+
+  /* Timers. SDL runs them on a thread; here the due ones run where the program yields to SDL. */
+  const timers = new Map();
+  let nextTimer = 1;
+  const pumpTimers = () => {
+    if (!timers.size) return;
+    const now = state.clock.now();
+    for (const [id, t] of timers) {
+      if (now < t.due) continue;
+      const next = M.icall(t.callback, [t.interval, t.param]) >>> 0;
+      if (!next) timers.delete(id); else { t.interval = next; t.due = now + next; }
     }
-    state.formats.set(p, { format, bpp });
-    return p;
-  }
+  };
+
+  /*
+   * THE AUDIO THREAD, WITHOUT A THREAD: the buffers due by the clock are asked of the program's
+   * callback where it yields to SDL. A program may WAIT on what its callback does -- SDLPoP holds a
+   * scene until the callback reports its sound finished -- so this runs whether or not anybody
+   * listens; a listener (state.onAudio) is handed the newest buffers only.
+   */
+  const pumpAudioDue = () => {
+    const a = state.audio;
+    if (!a || a.paused || !a.callback || !a.spec.freq || !a.spec.samples) return;
+    const due = Math.floor(((state.clock.now() - a.t0) * a.spec.freq) / (1000 * a.spec.samples)) + 1;
+    while (a.done < due) {
+      if (!a.buffer) a.buffer = M.rt.malloc(a.size);
+      M.u8.fill(a.silence, a.buffer, a.buffer + a.size);
+      a.done++;
+      M.icall(a.callback, [a.userdata, a.buffer, a.size]);
+      if (state.onAudio && due - a.done < 2) state.onAudio(a.buffer, a.spec.samples, a.spec);
+      if (!state.audio || state.audio.paused) break;       // the callback may stop the device itself
+    }
+  };
+  const pump = () => { pumpTimers(); pumpAudioDue(); };
+  state.pump = pump;
 
   const api = {
     // ---------------------------------------------------------------- core
@@ -95,7 +132,20 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
      * A clock that actually moves, because OpenTyrian paces itself with it: 29 calls, more than any
      * other SDL function in the program.
      */
-    SDL_GetTicks: () => state.clock.now(),
+    SDL_GetTicks: () => { pump(); return state.clock.now(); },
+    // A millisecond counter is the resolution this clock has; the frequency says so.
+    SDL_GetPerformanceCounter: () => { pump(); return BigInt(state.clock.now()); },
+    SDL_GetPerformanceFrequency: () => 1000n,
+    SDL_GetVersion: (ver) => { M.u8[ver] = 2; M.u8[ver + 1] = 0; M.u8[ver + 2] = 22; },   // headers-sdl2.js's own
+    SDL_free: (p) => M.rt.free(p),
+    SDL_memset: (p, c, n) => M.rt.memset(p, c, n),
+    SDL_strlen: (p) => M.rt.strlen(p),
+    SDL_AddTimer: (interval, callback, param) => {
+      const id = nextTimer++;
+      timers.set(id, { interval: interval >>> 0, callback, param, due: state.clock.now() + (interval >>> 0) });
+      return id;
+    },
+    SDL_RemoveTimer: (id) => (timers.delete(id | 0) ? 1 : 0),
     /*
      * Delay writes to the SAME clock GetTicks reads, and the host decides what waiting costs.
      *
@@ -104,7 +154,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
      * for it. A limiter written as "sleep a little, ask again" is then a spin, and OpenTyrian's ran
      * 487 million times over 200 frames -- 96% of the wall clock, against 1.1 s of actual game work.
      */
-    SDL_Delay: (ms) => { state.clock.delay(ms | 0); return 0; },
+    SDL_Delay: (ms) => { state.clock.delay(ms | 0); pump(); return 0; },
     SDL_ShowSimpleMessageBox: (_flags, title, msg) => {
       M.write(`[SDL messagebox] ${cstr(title)}: ${cstr(msg)}\n`);
       return 0;
@@ -124,8 +174,6 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     SDL_LogError: (_c, fmt, va) => { M.write('[SDL error] ' + format(M, fmt, va ?? []) + '\n'); },
     SDL_LogMessageV: (_c, _p, fmt, ap) => { M.rt.vprintf(fmt, ap); },
     SDL_LogSetPriority: () => 0,
-    SDL_GetPixelFormatName: (f) => intern(f === 0x16161804 ? 'SDL_PIXELFORMAT_RGB888'
-      : f === 0x15151002 ? 'SDL_PIXELFORMAT_RGB565' : 'SDL_PIXELFORMAT_UNKNOWN'),
 
     // ---------------------------------------------------------------- window and renderer
     SDL_CreateWindow: (_t, _x, _y, w, h) => {
@@ -153,9 +201,57 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return 0;
     },
     SDL_CreateRenderer: () => (state.renderer = handle()),
+    /* One software renderer, which can draw into a texture. */
+    SDL_GetRendererInfo: (_r, info) => {
+      if (!info) return -1;
+      M.u8.fill(0, info, info + 84);
+      dv().setUint32(info, intern('software'), true);
+      dv().setUint32(info + 4, 0x1 | 0x8, true);            // SDL_RENDERER_SOFTWARE | TARGETTEXTURE
+      dv().setUint32(info + 8, 1, true);
+      dv().setUint32(info + 12, 0x16161804, true);          // SDL_PIXELFORMAT_RGB888
+      return 0;
+    },
+    SDL_GetRendererOutputSize: (_r, wp, hp) => {
+      if (wp) dv().setInt32(wp, state.winW | 0, true);
+      if (hp) dv().setInt32(hp, state.winH | 0, true);
+      return 0;
+    },
+    SDL_GL_GetDrawableSize: (_w, wp, hp) => {
+      if (wp) dv().setInt32(wp, state.winW | 0, true);
+      if (hp) dv().setInt32(hp, state.winH | 0, true);
+    },
+    SDL_GetWindowFlags: () => 0,
+    SDL_RenderGetLogicalSize: (_r, wp, hp) => {
+      if (wp) dv().setInt32(wp, state.logicalW | 0, true);
+      if (hp) dv().setInt32(hp, state.logicalH | 0, true);
+    },
+    SDL_RenderGetScale: (_r, xp, yp) => {
+      if (xp) dv().setFloat32(xp, 1, true);
+      if (yp) dv().setFloat32(yp, 1, true);
+    },
+    SDL_RenderGetViewport: (_r, rect) => {
+      if (!rect) return;
+      dv().setInt32(rect, 0, true); dv().setInt32(rect + 4, 0, true);
+      dv().setInt32(rect + 8, state.logicalW || state.winW | 0, true);
+      dv().setInt32(rect + 12, state.logicalH || state.winH | 0, true);
+    },
+    SDL_RenderSetIntegerScale: () => 0,
+    /*
+     * A texture as the render target: what SDL_RenderCopy then draws lands in that texture instead
+     * of on the display. SDLPoP uses it to double its picture before the final stretch.
+     */
+    SDL_SetRenderTarget: (_r, t) => {
+      if (t && !state.textures.has(t)) return setErr('Invalid texture');
+      state.target = t ? state.textures.get(t) : null;
+      return 0;
+    },
     SDL_DestroyRenderer: () => { state.renderer = 0; },
     SDL_SetRenderDrawColor: () => 0,
-    SDL_RenderClear: () => 0,
+    SDL_RenderClear: () => {
+      const t = state.target;
+      if (t) M.u8.fill(0, t.pixels, t.pixels + t.pitch * t.h);
+      return 0;
+    },
     SDL_ShowCursor: () => 0,
     SDL_SetRelativeMouseMode: () => 0,
 
@@ -194,9 +290,24 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return 0;
     },
     SDL_UnlockTexture: () => 0,
-    SDL_RenderCopy: (_r, t) => { state.current = state.textures.get(t) ?? null; return 0; },
+    SDL_RenderCopy: (_r, t) => {
+      const tx = state.textures.get(t) ?? null, to = state.target;
+      if (!to) { state.current = tx; return 0; }
+      if (!tx) return setErr('Invalid texture');
+      if (tx.bpp !== to.bpp) return setErr('SDL_RenderCopy between textures of different formats is not supported');
+      // The whole texture onto the whole target, nearest pixel.
+      for (let y = 0; y < to.h; y++) {
+        const from = tx.pixels + Math.floor((y * tx.h) / to.h) * tx.pitch, row = to.pixels + y * to.pitch;
+        for (let x = 0; x < to.w; x++) {
+          const a = from + Math.floor((x * tx.w) / to.w) * tx.bpp;
+          for (let k = 0; k < tx.bpp; k++) M.u8[row + x * tx.bpp + k] = M.u8[a + k];
+        }
+      }
+      return 0;
+    },
     /** Publish. Everything above this line only prepared bytes; this is where a frame exists. */
     SDL_RenderPresent: () => {
+      pump();
       const tx = state.current;
       if (!tx) return;
       state.frame = {
@@ -205,81 +316,6 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       };
       state.frames++;
       if (onPresent) onPresent(state.frame, state.frames);
-    },
-
-    // ---------------------------------------------------------------- surfaces
-    SDL_CreateRGBSurface: (_flags, w, h, depth) => {
-      const bpp = Math.max(1, (depth | 0) >> 3);
-      const pitch = ((w | 0) * bpp + 3) & ~3;      // SDL pads a surface row to four bytes
-      const pixels = M.rt.malloc(pitch * (h | 0));
-      M.u8.fill(0, pixels, pixels + pitch * (h | 0));
-      const p = M.rt.malloc(S_SIZE);
-      M.u8.fill(0, p, p + S_SIZE);
-      const fmt = makeFormat(depth === 8 ? 0x11100100 : depth === 16 ? 0x15151002 : 0x16161804);
-      M.u8[fmt + F_BYTES] = bpp;
-      M.u8[fmt + F_BITS] = bpp * 8;
-      dv().setUint32(p + S_FORMAT, fmt, true);
-      dv().setInt32(p + S_W, w | 0, true);
-      dv().setInt32(p + S_H, h | 0, true);
-      dv().setInt32(p + S_PITCH, pitch, true);
-      dv().setUint32(p + S_PIXELS, pixels, true);
-      dv().setInt32(p + S_CLIP + 8, w | 0, true);
-      dv().setInt32(p + S_CLIP + 12, h | 0, true);
-      state.surfaces.set(p, { w: w | 0, h: h | 0, pitch, pixels, bpp });
-      return p;
-    },
-    SDL_FreeSurface: (p) => {
-      const s = state.surfaces.get(p);
-      if (!s) return;
-      M.rt.free(s.pixels);
-      M.rt.free(dv().getUint32(p + S_FORMAT, true));
-      M.rt.free(p);
-      state.surfaces.delete(p);
-    },
-    SDL_FillRect: (dst, rect, color) => {
-      const s = state.surfaces.get(dst);
-      if (!s) return setErr('invalid surface');
-      const x0 = rect ? dv().getInt32(rect, true) : 0;
-      const y0 = rect ? dv().getInt32(rect + 4, true) : 0;
-      const w = rect ? dv().getInt32(rect + 8, true) : s.w;
-      const h = rect ? dv().getInt32(rect + 12, true) : s.h;
-      for (let y = y0; y < Math.min(y0 + h, s.h); y++) {
-        const row = s.pixels + y * s.pitch;
-        for (let x = x0; x < Math.min(x0 + w, s.w); x++) {
-          if (s.bpp === 1) M.u8[row + x] = color & 0xff;
-          else if (s.bpp === 2) dv().setUint16(row + x * 2, color & 0xffff, true);
-          else dv().setUint32(row + x * 4, color >>> 0, true);
-        }
-      }
-      return 0;
-    },
-    /** A straight copy, clipped. Same depth on both sides is all the corpus asks for. */
-    SDL_UpperBlit: (src, srcrect, dst, dstrect) => {
-      const a = state.surfaces.get(src), b = state.surfaces.get(dst);
-      if (!a || !b) return setErr('invalid surface');
-      const sx = srcrect ? dv().getInt32(srcrect, true) : 0;
-      const sy = srcrect ? dv().getInt32(srcrect + 4, true) : 0;
-      let w = srcrect ? dv().getInt32(srcrect + 8, true) : a.w;
-      let h = srcrect ? dv().getInt32(srcrect + 12, true) : a.h;
-      const dx = dstrect ? dv().getInt32(dstrect, true) : 0;
-      const dy = dstrect ? dv().getInt32(dstrect + 4, true) : 0;
-      w = Math.min(w, a.w - sx, b.w - dx);
-      h = Math.min(h, a.h - sy, b.h - dy);
-      if (a.bpp !== b.bpp) return setErr('blit between different depths');
-      for (let y = 0; y < h; y++) {
-        const from = a.pixels + (sy + y) * a.pitch + sx * a.bpp;
-        const to = b.pixels + (dy + y) * b.pitch + dx * b.bpp;
-        M.u8.copyWithin(to, from, from + w * a.bpp);
-      }
-      return 0;
-    },
-    SDL_AllocFormat: (format) => makeFormat(format >>> 0),
-    SDL_FreeFormat: (p) => { state.formats.delete(p); M.rt.free(p); },
-    SDL_MapRGB: (fmtPtr, r, g, b) => {
-      const f = state.formats.get(fmtPtr);
-      const bpp = f ? f.bpp : (M.u8[fmtPtr + F_BYTES] || 4);
-      if (bpp === 2) return (((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3)) >>> 0;
-      return (((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)) >>> 0;
     },
 
     /*
@@ -299,7 +335,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       if (rendOut) d.setUint32(rendOut, state.renderer, true);
       return 0;
     },
-    SDL_RenderSetLogicalSize: () => 0,
+    SDL_RenderSetLogicalSize: (_r, w, h) => { state.logicalW = w | 0; state.logicalH = h | 0; return 0; },
     SDL_SetWindowTitle: () => 0,
     SDL_SetWindowIcon: () => 0,
 
@@ -318,53 +354,6 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return 0;
     },
 
-    /*
-     * An 8-bit surface converted to a 32-bit one THROUGH ITS PALETTE, which is all this call means
-     * here: the port draws in 8 bits and asks for RGB888 to hand to a texture. Any other conversion
-     * returns NULL rather than being approximated -- a surface that comes back with plausible wrong
-     * pixels is worse than one that comes back missing, because only the second is noticed.
-     */
-    SDL_ConvertSurfaceFormat: (src, _fmt, _flags) => {
-      const s = state.surfaces.get(src);
-      if (!s || s.bpp !== 1) return NULLPTR;
-      const out = api.SDL_CreateRGBSurface(0, s.w, s.h, 32, 0, 0, 0, 0);
-      const o = state.surfaces.get(out);
-      const pal = state.palette ?? null;
-      for (let y = 0; y < s.h; y++) {
-        for (let x = 0; x < s.w; x++) {
-          const i = M.u8[s.pixels + y * s.pitch + x];
-          const r = pal ? pal[i * 3] : i, g = pal ? pal[i * 3 + 1] : i, b = pal ? pal[i * 3 + 2] : i;
-          const at = o.pixels + y * o.pitch + x * 4;
-          M.u8[at] = b; M.u8[at + 1] = g; M.u8[at + 2] = r; M.u8[at + 3] = 0xff;
-        }
-      }
-      return out;
-    },
-
-    /* The palette, kept on the shim so a later conversion and the host both see the same colours. */
-    SDL_SetPaletteColors: (_palPtr, colors, first, n) => {
-      if (!state.palette) state.palette = new Uint8Array(768);
-      for (let i = 0; i < (n | 0); i++) {
-        const idx = (first | 0) + i;
-        if (idx < 0 || idx > 255) continue;
-        const at = colors + i * 4;
-        state.palette[idx * 3] = M.u8[at];
-        state.palette[idx * 3 + 1] = M.u8[at + 1];
-        state.palette[idx * 3 + 2] = M.u8[at + 2];
-      }
-      if (state.onPalette) state.onPalette(state.palette);
-      return 0;
-    },
-
-    SDL_LockSurface: () => 0,          // software surfaces are always addressable
-    SDL_UnlockSurface: () => 0,
-    SDL_SetColorKey: () => 0,
-    SDL_MapRGBA: (fmtPtr, r, g, b, a) => {
-      const f = state.formats.get(fmtPtr);
-      const bpp = f ? f.bpp : (M.u8[fmtPtr + F_BYTES] || 4);
-      if (bpp === 2) return (((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3)) >>> 0;
-      return (((a & 0xff) << 24) | ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff)) >>> 0;
-    },
     SDL_GetMouseState: (xp, yp) => {
       const d = M.mod.dv;
       if (xp) d.setInt32(xp, 0, true);
@@ -377,6 +366,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
 
     // ---------------------------------------------------------------- events
     SDL_PollEvent: (evt) => {
+      pump();
       const e = state.events.shift();
       if (!e) return 0;
       if (evt) { M.u8.fill(0, evt, evt + 56); M.u8.set(e, evt); }
@@ -386,6 +376,11 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       if (evt) state.events.push(M.u8.slice(evt, evt + 56));
       return 1;
     },
+    SDL_GetKeyboardState: (numkeys) => {
+      if (numkeys) dv().setInt32(numkeys, KEYS, true);
+      return keyArray();
+    },
+    SDL_SetTextInputRect: () => 0,
     SDL_StartTextInput: () => 0,
     SDL_StopTextInput: () => 0,
     SDL_GetScancodeName: (sc) => intern(scancodeName(sc | 0)),
@@ -404,6 +399,60 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     SDL_JoystickGetHat: () => 0,
     SDL_JoystickUpdate: () => 0,
     SDL_JoystickEventState: () => 0,
+    SDL_JoystickRumble: () => -1,
+    // Game controllers and force feedback: none, said the way SDL says it.
+    SDL_IsGameController: () => 0,
+    SDL_GameControllerOpen: () => NULLPTR,
+    SDL_GameControllerClose: () => 0,
+    SDL_GameControllerFromInstanceID: () => NULLPTR,
+    SDL_GameControllerRumble: () => -1,
+    SDL_GameControllerAddMapping: () => 0,
+    SDL_GameControllerAddMappingsFromRW: (rw, freerw) => { if (rw && freerw) closeStream(rw); return rw ? 0 : -1; },
+    SDL_HapticOpen: () => NULLPTR,
+    SDL_HapticRumbleInit: () => -1,
+    SDL_HapticRumblePlay: () => -1,
+
+    // ---------------------------------------------------------------- streams
+    SDL_RWFromConstMem: (mem, size) => { const rw = handle(); streams.set(rw, { mem, size: size | 0, pos: 0 }); return rw; },
+    SDL_RWFromMem: (mem, size) => { const rw = handle(); streams.set(rw, { mem, size: size | 0, pos: 0, writable: true }); return rw; },
+    SDL_RWFromFile: (file, mode) => {
+      const name = cstr(file), m = cstr(mode);
+      if (/[wa+]/.test(m)) {
+        const rw = handle();
+        streams.set(rw, { data: new Uint8Array(256), size: 0, pos: 0, write: true, writable: true, name });
+        return rw;
+      }
+      const key = M.files ? M.files.find(name, { guess: false }) : null;
+      if (key === null) { setErr(`Couldn't open ${name}`); return NULLPTR; }
+      const data = M.files.store.get(key), rw = handle();
+      streams.set(rw, { data, size: data.length, pos: 0 });
+      return rw;
+    },
+    SDL_RWread: (rw, ptr, size, maxnum) => {
+      const st = streams.get(rw);
+      if (!st || !(size >>> 0)) return 0;
+      const n = Math.min(maxnum >>> 0, Math.floor((st.size - st.pos) / (size >>> 0)));
+      if (n <= 0) return 0;
+      M.u8.set(streamBytes(st).subarray(st.pos, st.pos + n * size), ptr);
+      st.pos += n * size;
+      return n;
+    },
+    SDL_RWwrite: (rw, ptr, size, num) => {
+      const st = streams.get(rw), bytes = (size >>> 0) * (num >>> 0);
+      if (!st || !st.writable || !bytes) return 0;
+      if (st.data) {
+        if (st.pos + bytes > st.data.length) { const bigger = new Uint8Array(Math.max(st.data.length * 2, st.pos + bytes)); bigger.set(st.data); st.data = bigger; }
+        st.data.set(M.u8.subarray(ptr, ptr + bytes), st.pos);
+        st.size = Math.max(st.size, st.pos + bytes);
+      } else {
+        if (st.pos + bytes > st.size) return 0;
+        M.u8.copyWithin(st.mem + st.pos, ptr, ptr + bytes);
+      }
+      st.pos += bytes;
+      return num >>> 0;
+    },
+    SDL_RWtell: (rw) => BigInt(streams.get(rw)?.pos ?? -1),
+    SDL_RWclose: (rw) => closeStream(rw),
 
     // ---------------------------------------------------------------- audio
     /*
@@ -412,6 +461,19 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
      * have. `obtained` echoes `desired`, which is what a device that can do exactly what was asked
      * reports -- and saying so is why the program's own resampling never runs.
      */
+    SDL_OpenAudio: (desired, obtained) => {
+      if (!api.SDL_OpenAudioDevice(0, 0, desired, obtained)) return -1;
+      // With no `obtained`, SDL writes what it computed back into `desired`: the program reads
+      // the silence value and the buffer size from there.
+      if (!obtained) {
+        dv().setUint32(desired + A_SIZE_, state.audio.size, true);
+        M.u8[desired + A_SILENCE] = state.audio.silence;
+      }
+      return 0;
+    },
+    SDL_CloseAudio: () => { state.audio = null; if (state.onAudioOpen) state.onAudioOpen(null); },
+    SDL_PauseAudio: (pause) => api.SDL_PauseAudioDevice(0, pause),
+    SDL_GetAudioStatus: () => (!state.audio ? 0 : state.audio.paused ? 2 : 1),
     SDL_OpenAudioDevice: (_dev, _capture, desired, obtained) => {
       if (!desired) return 0;
       const spec = {
@@ -423,15 +485,24 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       const callback = dv().getUint32(desired + A_CALLBACK, true);
       const userdata = dv().getUint32(desired + A_USERDATA, true);
       const size = spec.samples * spec.channels * (spec.format & 0xff) / 8;
+      const silence = (spec.format & 0xff) === 8 && !(spec.format & 0x8000) ? 0x80 : 0;
       if (obtained) {
         M.u8.copyWithin(obtained, desired, desired + A_SIZE);
         dv().setUint32(obtained + A_SIZE_, size, true);
+        M.u8[obtained + A_SILENCE] = silence;
       }
-      state.audio = { callback, userdata, spec, size, paused: true, buffer: 0 };
+      state.audio = { callback, userdata, spec, size, silence, paused: true, buffer: 0, t0: 0, done: 0 };
+      if (state.onAudioOpen) state.onAudioOpen(spec);
       return handle();
     },
-    SDL_CloseAudioDevice: () => { state.audio = null; },
-    SDL_PauseAudioDevice: (_d, pause) => { if (state.audio) state.audio.paused = !!(pause | 0); },
+    SDL_CloseAudioDevice: () => { state.audio = null; if (state.onAudioOpen) state.onAudioOpen(null); },
+    SDL_PauseAudioDevice: (_d, pause) => {
+      const a = state.audio;
+      if (!a) return;
+      // Leaving a pause starts the count of buffers again from now: none is owed for the silence.
+      if (a.paused && !(pause | 0)) { a.t0 = state.clock.now(); a.done = 0; }
+      a.paused = !!(pause | 0);
+    },
     SDL_LockAudioDevice: () => 0,
     SDL_UnlockAudioDevice: () => 0,
     /*
@@ -471,6 +542,12 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     },
   };
 
+  Object.assign(api, surfaces.api, imageApi(M, state, {
+    surfaces, setErr, cstr, closeStream,
+    readStream: (rw) => { const st = streams.get(rw); return st ? streamBytes(st).subarray(st.pos, st.size) : null; },
+    readFile: (name) => { const key = M.files ? M.files.find(name, { guess: false }) : null; return key === null ? null : M.files.store.get(key); },
+  }));
+
   /** Ask the program to fill one audio buffer, the way a device thread would. */
   function pumpAudio() {
     const a = state.audio;
@@ -481,18 +558,53 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     return M.u8.slice(a.buffer, a.buffer + a.size);
   }
 
-  /** Queue a key event the way a window system would deliver one. */
+  /** Queue a key event the way a window system would deliver one. `scancode` is SDL's own. */
   function pushKey(scancode, down) {
+    scancode >>>= 0;
+    const bit = MOD_BIT[scancode] ?? 0;
+    modState = down ? modState | bit : modState & ~bit;
+    if (scancode < KEYS) M.u8[keyArray() + scancode] = down ? 1 : 0;
     const e = new Uint8Array(56);
     const d = new DataView(e.buffer);
     d.setUint32(0, down ? 0x300 : 0x301, true);      // SDL_KEYDOWN / SDL_KEYUP
+    d.setUint32(4, state.clock.now() >>> 0, true);   // timestamp
     d.setUint8(12, down ? 1 : 0);                    // state
-    d.setUint32(16, scancode >>> 0, true);           // keysym.scancode
+    d.setUint32(16, scancode, true);                 // keysym.scancode
+    d.setInt32(20, keycodeOf(scancode), true);       // keysym.sym
+    d.setUint16(24, modState, true);                 // keysym.mod
     state.events.push(e);
+  }
+  /** The same, from a PC set-1 scan code and its 0xE0 prefix, which is what a host's keyboard has. */
+  function pushScan(scan, extended, down) {
+    const code = (extended ? SET1_EXTENDED : SET1)[scan];
+    if (code) pushKey(code, down);
   }
 
   Object.assign(M.rt, api);
-  return { state, pumpAudio, pushKey };
+  return { state, pumpAudio, pushKey, pushScan };
+}
+
+/* PC scan code set 1 -> SDL scancode (the USB usage), for a US keyboard. */
+const SET1 = {
+  1: 41, 2: 30, 3: 31, 4: 32, 5: 33, 6: 34, 7: 35, 8: 36, 9: 37, 10: 38, 11: 39, 12: 45, 13: 46, 14: 42, 15: 43,
+  16: 20, 17: 26, 18: 8, 19: 21, 20: 23, 21: 28, 22: 24, 23: 12, 24: 18, 25: 19, 26: 47, 27: 48, 28: 40, 29: 224,
+  30: 4, 31: 22, 32: 7, 33: 9, 34: 10, 35: 11, 36: 13, 37: 14, 38: 15, 39: 51, 40: 52, 41: 53, 42: 225, 43: 49,
+  44: 29, 45: 27, 46: 6, 47: 25, 48: 5, 49: 17, 50: 16, 51: 54, 52: 55, 53: 56, 54: 229, 55: 85, 56: 226, 57: 44, 58: 57,
+  59: 58, 60: 59, 61: 60, 62: 61, 63: 62, 64: 63, 65: 64, 66: 65, 67: 66, 68: 67, 69: 83, 70: 71,
+  71: 95, 72: 96, 73: 97, 74: 86, 75: 92, 76: 93, 77: 94, 78: 87, 79: 89, 80: 90, 81: 91, 82: 98, 83: 99, 87: 68, 88: 69,
+};
+const SET1_EXTENDED = {
+  28: 88, 29: 228, 53: 84, 56: 230, 71: 74, 72: 82, 73: 75, 75: 80, 77: 79, 79: 77, 80: 81, 81: 78, 82: 73, 83: 76,
+};
+/* KMOD_* by the scancode of the key that holds it down. */
+const MOD_BIT = { 225: 0x0001, 229: 0x0002, 224: 0x0040, 228: 0x0080, 226: 0x0100, 230: 0x0200 };
+/* SDL_Keycode: a printable key is its unshifted character, the rest the scancode with bit 30 set. */
+const PRINTABLE = { 40: 13, 41: 27, 42: 8, 43: 9, 44: 32, 45: 45, 46: 61, 47: 91, 48: 93, 49: 92, 51: 59, 52: 39, 53: 96, 54: 44, 55: 46, 56: 47, 76: 127 };
+function keycodeOf(sc) {
+  if (sc >= 4 && sc <= 29) return 97 + sc - 4;
+  if (sc >= 30 && sc <= 38) return 49 + sc - 30;
+  if (sc === 39) return 48;
+  return PRINTABLE[sc] ?? (sc | (1 << 30));
 }
 
 /* The names SDL gives scancodes, for the few the program round-trips through its config file. */
@@ -531,7 +643,6 @@ export function sdl2Builtins(T) {
     SDL_strlcpy: f(U, P, P, U), SDL_vsnprintf: f(I, P, U, P, P),
     SDL_Log: varargs(V, P), SDL_LogDebug: varargs(V, I, P), SDL_LogWarn: varargs(V, I, P),
     SDL_LogError: varargs(V, I, P), SDL_LogMessageV: f(V, I, I, P, P), SDL_LogSetPriority: f(V, I, I),
-    SDL_GetPixelFormatName: f(P, U),
     SDL_CreateWindow: f(P, P, I, I, I, I, U), SDL_DestroyWindow: f(V, P), SDL_ShowWindow: f(V, P),
     SDL_SetWindowSize: f(V, P, I, I), SDL_SetWindowPosition: f(V, P, I, I),
     SDL_SetWindowFullscreen: f(I, P, U), SDL_GetWindowSize: f(V, P, P, P),
@@ -547,17 +658,9 @@ export function sdl2Builtins(T) {
     SDL_CreateWindowAndRenderer: f(I, I, I, U, P, P),
     SDL_RenderSetLogicalSize: f(I, P, I, I),
     SDL_UpdateTexture: f(I, P, P, P, I),
-    SDL_ConvertSurfaceFormat: f(P, P, U, U),
-    SDL_SetPaletteColors: f(I, P, P, I, I),
     SDL_SetWindowTitle: f(V, P, P), SDL_SetWindowIcon: f(V, P, P),
-    SDL_LockSurface: f(I, P), SDL_UnlockSurface: f(V, P),
-    SDL_SetColorKey: f(I, P, I, U),
-    SDL_MapRGBA: f(U, P, T.UCHAR, T.UCHAR, T.UCHAR, T.UCHAR),
     SDL_GetMouseState: f(U, P, P),
     SDL_LockAudio: f(V), SDL_UnlockAudio: f(V),
-    SDL_CreateRGBSurface: f(P, U, I, I, I, U, U, U, U), SDL_FreeSurface: f(V, P),
-    SDL_FillRect: f(I, P, P, U), SDL_UpperBlit: f(I, P, P, P, P),
-    SDL_AllocFormat: f(P, U), SDL_FreeFormat: f(V, P), SDL_MapRGB: f(U, P, I, I, I),
     SDL_PollEvent: f(I, P), SDL_PushEvent: f(I, P),
     SDL_StartTextInput: f(V), SDL_StopTextInput: f(V),
     SDL_GetScancodeName: f(P, I), SDL_GetScancodeFromName: f(I, P),
@@ -569,5 +672,24 @@ export function sdl2Builtins(T) {
     SDL_OpenAudioDevice: f(U, P, I, P, P, I), SDL_CloseAudioDevice: f(V, U),
     SDL_PauseAudioDevice: f(V, U, I), SDL_LockAudioDevice: f(V, U), SDL_UnlockAudioDevice: f(V, U),
     SDL_BuildAudioCVT: f(I, P, I, I, I, I, I, I), SDL_ConvertAudio: f(I, P),
+    /* What SDLPoP adds; prototypes read from the real SDL 2 headers in the oracle container. */
+    SDL_GetPerformanceCounter: f(T.ULLONG), SDL_GetPerformanceFrequency: f(T.ULLONG),
+    SDL_GetVersion: f(V, P), SDL_free: f(V, P), SDL_memset: f(P, P, I, U), SDL_strlen: f(U, P),
+    SDL_AddTimer: f(I, U, P, P), SDL_RemoveTimer: f(I, I),
+    SDL_GetRendererInfo: f(I, P, P), SDL_GetRendererOutputSize: f(I, P, P, P),
+    SDL_GL_GetDrawableSize: f(V, P, P, P), SDL_GetWindowFlags: f(U, P),
+    SDL_RenderGetLogicalSize: f(V, P, P, P), SDL_RenderGetScale: f(V, P, P, P),
+    SDL_RenderGetViewport: f(V, P, P), SDL_RenderSetIntegerScale: f(I, P, I),
+    SDL_SetRenderTarget: f(I, P, P),
+    SDL_GetKeyboardState: f(P, P), SDL_SetTextInputRect: f(V, P),
+    SDL_JoystickRumble: f(I, P, T.USHORT, T.USHORT, U),
+    SDL_IsGameController: f(I, I), SDL_GameControllerOpen: f(P, I), SDL_GameControllerClose: f(V, P),
+    SDL_GameControllerFromInstanceID: f(P, I), SDL_GameControllerRumble: f(I, P, T.USHORT, T.USHORT, U),
+    SDL_GameControllerAddMapping: f(I, P), SDL_GameControllerAddMappingsFromRW: f(I, P, I),
+    SDL_HapticOpen: f(P, I), SDL_HapticRumbleInit: f(I, P), SDL_HapticRumblePlay: f(I, P, T.FLOAT, U),
+    SDL_RWFromConstMem: f(P, P, I), SDL_RWFromMem: f(P, P, I), SDL_RWFromFile: f(P, P, P),
+    SDL_RWread: f(U, P, P, U, U), SDL_RWwrite: f(U, P, P, U, U), SDL_RWtell: f(T.LLONG, P), SDL_RWclose: f(I, P),
+    SDL_OpenAudio: f(I, P, P), SDL_CloseAudio: f(V), SDL_PauseAudio: f(V, I), SDL_GetAudioStatus: f(I),
+    ...surfaceBuiltins(T), ...imageBuiltins(T),
   };
 }

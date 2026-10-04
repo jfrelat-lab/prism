@@ -252,6 +252,7 @@ const STRING = `
 #define _PRISM_STRING_H
 #include <stddef.h>
 size_t strlen(const char *s);
+size_t strnlen(const char *s, size_t maxlen);
 char *strcpy(char *d, const char *s);
 char *strncpy(char *d, const char *s, size_t n);
 char *strcat(char *d, const char *s);
@@ -346,6 +347,8 @@ double fmod(double x, double y);
  * calls fabsf on every float operation it guards -- nothing hand-written here had ever needed one.
  */
 float sqrtf(float x);
+float log2f(float x);
+double log2(double x);
 float sinf(float x);
 float cosf(float x);
 float tanf(float x);

@@ -412,6 +412,7 @@ export const BUILTINS = new Map(Object.entries({
   mknod: { ret: I, params: [P, U, I] }, mkfifo: { ret: I, params: [P, U] }, endgrent: { ret: V, params: [] },
   recv: { ret: I, params: [I, P, U, I] }, send: { ret: I, params: [I, P, U, I] }, accept: { ret: I, params: [I, P, P] },
   strtoull: { ret: T.ULLONG, params: [P, P, I] },
+  strtoimax: { ret: T.LLONG, params: [P, P, I] }, strtoumax: { ret: T.ULLONG, params: [P, P, I] },
   cosh: { ret: D, params: [D] }, sinh: { ret: D, params: [D] }, tanh: { ret: D, params: [D] }, hypot: { ret: D, params: [D, D] },
   gmtime_r: { ret: P, params: [P, P] }, localtime_r: { ret: P, params: [P, P] }, tzset: { ret: V, params: [] },
   pipe: { ret: I, params: [P] }, fork: { ret: I, params: [] }, dup: { ret: I, params: [I] }, dup2: { ret: I, params: [I, I] },
@@ -435,7 +436,7 @@ export const BUILTINS = new Map(Object.entries({
   random: { ret: T.LONG, params: [] },
   srandom: { ret: V, params: [U] },
   labs: { ret: T.LONG, params: [T.LONG] },
-  strlen: { ret: U, params: [P] },
+  strlen: { ret: U, params: [P] }, strnlen: { ret: U, params: [P, U] },
   strcpy: { ret: P, params: [P, P] },
   strncpy: { ret: P, params: [P, P, U] },
   strcat: { ret: P, params: [P, P] },
@@ -468,6 +469,7 @@ export const BUILTINS = new Map(Object.entries({
    * through the call -- which is exactly the kind of divergence csmith exists to find.
    */
   sqrtf: { ret: FLT, params: [FLT] }, sinf: { ret: FLT, params: [FLT] },
+  log2f: { ret: FLT, params: [FLT] }, log2: { ret: D, params: [D] },
   cosf: { ret: FLT, params: [FLT] }, tanf: { ret: FLT, params: [FLT] },
   atanf: { ret: FLT, params: [FLT] }, atan2f: { ret: FLT, params: [FLT, FLT] },
   roundf: { ret: FLT, params: [FLT] }, truncf: { ret: FLT, params: [FLT] },

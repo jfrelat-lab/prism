@@ -538,7 +538,9 @@ export function installStdio(M, {
 
     for (let i = 0; i < fmt.length; i++) {
       const f = fmt[i];
-      if (/\s/.test(f)) { if (skipSpace() < 0) return assigned || -1; continue; }
+      // White space in the format matches any amount of it, none included, and running into the end
+      // of input while doing so is not a failure: it is the NEXT directive that finds nothing.
+      if (/\s/.test(f)) { skipSpace(); continue; }
       if (f !== '%') {
         const c = getc();
         if (c < 0) return assigned || -1;
@@ -592,7 +594,7 @@ export function installStdio(M, {
       if (conv !== 'c' && conv !== '[') {
         if (skipSpace() < 0) return assigned || -1;
       }
-      let tok = '';
+      let tok = '', ended = false;
       if (conv === 'c') {
         for (let k = 0; k < max; k++) {
           const c = getc();
@@ -609,7 +611,7 @@ export function installStdio(M, {
       } else if (scanset) {
         for (;;) {
           const c = getc();
-          if (c < 0) break;
+          if (c < 0) { ended = true; break; }
           const ch = String.fromCharCode(c);
           if (scanset.set.has(ch) === scanset.negate) { ungetc(c); break; }
           tok += ch;
@@ -618,7 +620,7 @@ export function installStdio(M, {
       } else if (conv === 's') {
         for (;;) {
           const c = getc();
-          if (c < 0) break;
+          if (c < 0) { ended = true; break; }
           if (/\s/.test(String.fromCharCode(c))) { ungetc(c); break; }
           tok += String.fromCharCode(c);
           if (tok.length >= max) break;
@@ -637,7 +639,7 @@ export function installStdio(M, {
           /[-+0-9]/;
         for (;;) {
           const c = getc();
-          if (c < 0) break;
+          if (c < 0) { ended = true; break; }
           const ch = String.fromCharCode(c);
           if (!numeric.test(ch)) { ungetc(c); break; }
           tok += ch;
@@ -646,7 +648,9 @@ export function installStdio(M, {
       } else {
         throw new Error(`scanf: %${conv} is not supported`);
       }
-      if (!tok.length) return assigned;
+      // Nothing matched. If that is because the input ENDED, it is an input failure, which is EOF
+      // when nothing has been assigned yet; a character that did not match is only a mismatch.
+      if (!tok.length) return ended ? assigned || -1 : assigned;
       if (suppress) continue;
 
       const dst = args[ai++] | 0;
@@ -736,12 +740,25 @@ export function installStdio(M, {
   // struct stat, as declared in PRISM's own sys/stat.h: fourteen 4-byte fields. These offsets and
   // that header are one thing in two places; changing either without the other is a silent bug.
   const ST_MODE = 8, ST_SIZE = 28, ST_BLKSIZE = 32, ST_BLOCKS = 36, ST_SIZE_BYTES = 56;
-  const S_IFREG = 0o100000;
+  const S_IFREG = 0o100000, S_IFDIR = 0o040000;
 
-  function fillStat(st, bytes) {
+  /*
+   * A DIRECTORY, in a store that has none: the store is one flat table of files keyed by path, so a
+   * directory exists exactly when some file's path runs through it. SDLPoP asks stat() whether
+   * data/KID is a folder before reading the sprites inside it.
+   */
+  const isDirectory = (name) => {
+    const prefix = norm(name).replace(/\/+$/, '');
+    if (!prefix || prefix === '.') return store.size > 0;
+    for (const k of store.keys()) if (k.startsWith(`${prefix}/`)) return true;
+    return false;
+  };
+
+  function fillStat(st, bytes, directory = false) {
     flatShapeOnly('struct stat');
     M.u8.fill(0, st, st + ST_SIZE_BYTES);
     const dv = M.mod.dv;
+    if (directory) { dv.setUint32(st + ST_MODE, S_IFDIR | 0o755, true); dv.setInt32(st + ST_BLKSIZE, 4096, true); return 0; }
     dv.setUint32(st + ST_MODE, S_IFREG | 0o644, true);
     dv.setInt32(st + ST_SIZE, bytes ? bytes.length : 0, true);
     dv.setInt32(st + ST_BLKSIZE, 4096, true);
@@ -755,14 +772,22 @@ export function installStdio(M, {
      * the answer to choose: ET's Sys_LoadDll asks fs_homepath before fs_basepath, and a guess that
      * found ~/.etwolf/etmain/ui.mp.i386.so in etmain/ made it delete that file as an outdated copy.
      */
-    access: (namePtr) => (find(M.mod.cstr(namePtr), { guess: false }) === null ? -1 : 0),
+    access: (namePtr) => {
+      const name = M.mod.cstr(namePtr);
+      return find(name, { guess: false }) === null && !isDirectory(name) ? -1 : 0;
+    },
     getcwd: (buf, size) => {
       if ((size | 0) < 2) return 0;
       M.u8[buf] = 47; M.u8[buf + 1] = 0;             // "/"
       return buf;
     },
     stat: (namePtr, st) => {
-      const k = find(M.mod.cstr(namePtr));
+      const name = M.mod.cstr(namePtr);
+      // This path as a file, then as a directory, and only then the basename guess.
+      const exact = find(name, { guess: false });
+      if (exact !== null) return fillStat(st, store.get(exact));
+      if (isDirectory(name)) return fillStat(st, null, true);
+      const k = find(name);
       return k === null ? -1 : fillStat(st, store.get(k));
     },
     lstat: (namePtr, st) => api.stat(namePtr, st),

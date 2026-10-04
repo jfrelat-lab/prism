@@ -1,0 +1,31 @@
+{
+  "title": "PRINCE OF PERSIA",
+  "subtitle": "Jordan Mechner, 1989 — SDLPoP 1.23, the DOS game disassembled and rewritten in C by David Nagy",
+  "target": "sdlpop",
+  "host": "sdl2",
+  "fps": 60,
+  "needsData": {
+    "dir": "sdlpop",
+    "hint": "data/ and SDLPoP.ini from the SDLPoP 1.23 source archive (github.com/NagyD/SDLPoP), side by side in this root"
+  },
+  "controls": [
+    [
+      "arrows",
+      "run, climb, crouch"
+    ],
+    [
+      "Shift",
+      "step carefully, grab a ledge, strike"
+    ],
+    [
+      "Enter",
+      "start, from the title"
+    ],
+    [
+      "Esc",
+      "pause, menu"
+    ]
+  ],
+  "_why": "The first program here that draws THROUGH SDL rather than beside it: paletted sprites keyed onto a 24-bit screen, 32-bit images blended by their alpha, surfaces converted between formats. src/env/sdl2-surface.js was written for it, with SDL_image's PNG loading (sdl2-image.js, png.js) and SDL 2's legacy audio device. Its music is the original AdLib data, played by an OPL3 emulator that is part of the program and compiled with it.",
+  "_fps": "The page's cap. The game runs at its own twelve ticks a second and presents more often than that."
+}

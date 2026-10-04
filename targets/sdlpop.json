@@ -1,0 +1,15 @@
+{
+  "name": "sdlpop",
+  "title": "SDLPoP 1.23 (Prince of Persia, C, SDL2)",
+  "dir": "corpus/SDLPoP-1.23/src",
+  "fetch": "curl -L https://github.com/NagyD/SDLPoP/archive/refs/tags/v1.23.tar.gz | tar -xz -C corpus; move its data/ and SDLPoP.ini to the data directory",
+  "_doc": "The 1989 game's DOS executable, disassembled and rewritten in C by David Nagy: seg000.c to seg009.c are the original's code segments. Its sprites are PNG files read through SDL_image, its music is the original's AdLib data played by an OPL3 emulator compiled with the rest (opl3.c), and it mixes its own sound in an SDL audio callback.",
+  "_units": "src/Makefile's OBJ.",
+  "units": {
+    "list": ["main.c", "data.c", "seg000.c", "seg001.c", "seg002.c", "seg003.c", "seg004.c", "seg005.c", "seg006.c", "seg007.c", "seg008.c", "seg009.c", "seqtbl.c", "replay.c", "options.c", "lighting.c", "screenshot.c", "menu.c", "midi.c", "opl3.c", "stb_vorbis.c"]
+  },
+  "include": [],
+  "compile": { "memory": 128, "collect": true },
+  "env": ["stdio", "sdl2"],
+  "host": "sdl2"
+}

@@ -431,7 +431,16 @@ export class FunctionEmitter {
      * Quake needs this for nine functions, six of them in the span renderer, where a label sits
      * inside a `do` loop the gotos jump around.
      */
-    if (needsFlattening(d.body)) {
+    /*
+     * ...and so does a `setjmp` below the top level. The state machine resumes a longjmp at a
+     * numbered point between TOP-LEVEL statements, so a call nested in a branch used to be lifted
+     * out in front of the statement that held it -- registered whether or not the branch ran, and
+     * resumed at a point from which the branch's own condition was evaluated again. SDLPoP's
+     * start_game is `if (first_start) { first_start = 0; setjmp(buf); } else { ...; longjmp(buf, -1); }`:
+     * the longjmp came back to the `if`, found first_start clear, and took the longjmp again, for
+     * ever. Flattened, the call is a top-level statement and the resume point is just after it.
+     */
+    if (needsFlattening(d.body) || nestedSetjmp(d.body, this.ctx.builtins)) {
       let sw = 0;
       const newTemp = (disc) => {
         // The discriminant is evaluated ONCE, into a real local, because the dispatch chain that
@@ -3169,6 +3178,25 @@ function unifyCond(ty, a, b) {
 }
 
 /** The first `setjmp` call in this statement, if any. */
+/**
+ * Is there a setjmp call that a top-level statement does not evaluate first and unconditionally --
+ * one inside a branch, a loop, a switch body or a nested block?
+ */
+function nestedSetjmp(body, builtins) {
+  const has = (node) => findSetjmpCall(node, builtins) !== null;
+  const top = (st) => {
+    if (!st || typeof st !== 'object') return false;
+    switch (st.n) {
+      case 'label': return top(st.body);
+      case 'if': return has(st.then) || has(st.els);
+      case 'while': case 'do': case 'for': case 'block': return has(st);
+      case 'switch': return has(st.body);
+      default: return false;
+    }
+  };
+  return body.items.some(top);
+}
+
 function findSetjmpCall(node, builtins) {
   if (!node || typeof node !== 'object') return null;
   if (Array.isArray(node)) {

@@ -594,6 +594,8 @@ function makeLibc(M) {
       if (r.mag > lim) { M.rt.__setErrno?.(34); return r.neg ? -(1n << 63n) : lim; }
       return r.neg ? -r.mag : r.mag;
     },
+    strtoimax: (p, endp, base) => M.rt.strtoll(p, endp, base),
+    strtoumax: (p, endp, base) => M.rt.strtoull(p, endp, base),
     strtoull: (p, endp, base) => {
       const r = M.rt.__strtoBig(p, endp, base | 0);
       if (r.mag > (1n << 64n) - 1n) { M.rt.__setErrno?.(34); return (1n << 64n) - 1n; }
@@ -694,6 +696,7 @@ function makeLibc(M) {
 
     // --- string
     strlen: (p) => strlenAt(p) | 0,
+    strnlen: (p, max) => { max >>>= 0; let n = 0; while (n < max && M.u8[p + n]) n++; return n; },
     strcpy: (d, s) => { let i = 0; for (; u8()[s + i]; i++) u8()[d + i] = u8()[s + i]; u8()[d + i] = 0; return d; },
     strncpy: (d, s, n) => {
       let i = 0;
@@ -1296,6 +1299,7 @@ function makeLibc(M) {
      * gcc's in the last bits -- the exact class of bug the csmith differential is for.
      */
     sqrtf: (x) => Math.fround(Math.sqrt(x)), sinf: (x) => Math.fround(Math.sin(x)),
+    log2f: (x) => Math.fround(Math.log2(x)), log2: (x) => Math.log2(x),
     cosf: (x) => Math.fround(Math.cos(x)), tanf: (x) => Math.fround(Math.tan(x)),
     roundf: (x) => Math.fround(Math.sign(x) * Math.round(Math.abs(x))),
     truncf: (x) => Math.fround(Math.trunc(x)),

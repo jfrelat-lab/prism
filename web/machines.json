@@ -60,6 +60,7 @@
         { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" },
         { "program": "jumpnbump-sdl2", "file": "jumpnbump.sdl2", "date": "Sep 16  2025" },
         { "program": "opentyrian", "file": "opentyrian", "date": "Aug 15  2026" },
+        { "program": "sdlpop", "file": "prince", "date": "Jan  9  2022" },
         { "program": "gears", "file": "gears", "date": "Sep 30  2026" },
         { "program": "tuxracer", "file": "tuxracer", "date": "Jan  2  2001" },
         { "program": "morph3d", "file": "morph3d", "date": "Jul 13  2010" },

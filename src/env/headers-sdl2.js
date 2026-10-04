@@ -31,6 +31,10 @@ typedef signed int     Sint32;
 typedef unsigned long long Uint64;
 typedef signed long long   Sint64;
 typedef enum { SDL_FALSE = 0, SDL_TRUE = 1 } SDL_bool;
+#define SDL_COMPILE_TIME_ASSERT(name, x) typedef int SDL_compile_time_assert_ ## name[(x) * 2 - 1]
+void SDL_free(void *mem);
+void *SDL_memset(void *dst, int c, size_t len);
+size_t SDL_strlen(const char *str);
 size_t SDL_strlcpy(char *dst, const char *src, size_t maxlen);
 int SDL_vsnprintf(char *text, size_t maxlen, const char *fmt, va_list ap);
 #endif
@@ -47,6 +51,8 @@ const SDL_ENDIAN = `
 #define SDL_SwapLE16(x) (x)
 #define SDL_SwapLE32(x) (x)
 #define SDL_SwapBE16(x) ((Uint16)((((Uint16)(x)) << 8) | (((Uint16)(x)) >> 8)))
+#define SDL_SwapBE32(x) ((Uint32)((((Uint32)(x)) << 24) | ((((Uint32)(x)) << 8) & 0x00FF0000) | \\
+                                  ((((Uint32)(x)) >> 8) & 0x0000FF00) | (((Uint32)(x)) >> 24)))
 #endif
 `;
 
@@ -85,8 +91,12 @@ typedef enum {
     SDL_SCANCODE_KP_1 = 89, SDL_SCANCODE_KP_2, SDL_SCANCODE_KP_3, SDL_SCANCODE_KP_4,
     SDL_SCANCODE_KP_5, SDL_SCANCODE_KP_6, SDL_SCANCODE_KP_7, SDL_SCANCODE_KP_8,
     SDL_SCANCODE_KP_9, SDL_SCANCODE_KP_0, SDL_SCANCODE_KP_PERIOD,
+    SDL_SCANCODE_APPLICATION = 101,
+    SDL_SCANCODE_MUTE = 127, SDL_SCANCODE_VOLUMEUP, SDL_SCANCODE_VOLUMEDOWN,
+    SDL_SCANCODE_CLEAR = 156,
     SDL_SCANCODE_LCTRL = 224, SDL_SCANCODE_LSHIFT, SDL_SCANCODE_LALT, SDL_SCANCODE_LGUI,
     SDL_SCANCODE_RCTRL, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RALT, SDL_SCANCODE_RGUI,
+    SDL_SCANCODE_AUDIOMUTE = 262,
     SDL_NUM_SCANCODES = 512
 } SDL_Scancode;
 #endif
@@ -169,8 +179,18 @@ typedef struct SDL_PixelFormat {
     int refcount;
     struct SDL_PixelFormat *next;
 } SDL_PixelFormat;
-#define SDL_PIXELFORMAT_RGB565 0x15151002
-#define SDL_PIXELFORMAT_RGB888 0x16161804
+#define SDL_PIXELFORMAT_INDEX8   0x13000801
+#define SDL_PIXELFORMAT_RGB565   0x15151002
+#define SDL_PIXELFORMAT_RGB888   0x16161804
+#define SDL_PIXELFORMAT_ARGB8888 0x16362004
+#define SDL_PIXELFORMAT_ABGR8888 0x16762004
+#define SDL_PIXELFORMAT_RGB24    0x17101803
+/* A format's type is the nibble at bit 24, and 1, 2 and 3 are the indexed ones; the nibble above
+   it is 1 for every format that is not a FourCC. */
+#define SDL_ISPIXELFORMAT_INDEXED(format) \\
+    (((((format) >> 28) & 0x0F) == 1) && ((((format) >> 24) & 0x0F) >= 1) && ((((format) >> 24) & 0x0F) <= 3))
+#define SDL_ALPHA_OPAQUE 255
+#define SDL_ALPHA_TRANSPARENT 0
 SDL_PixelFormat *SDL_AllocFormat(Uint32 pixel_format);
 void SDL_FreeFormat(SDL_PixelFormat *format);
 Uint32 SDL_MapRGB(const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b);
@@ -208,6 +228,25 @@ typedef struct SDL_Surface {
     int refcount;
 } SDL_Surface;
 #define SDL_MUSTLOCK(S) (((S)->flags & 0x00000002) != 0)
+typedef enum {
+    SDL_BLENDMODE_NONE = 0x00000000, SDL_BLENDMODE_BLEND = 0x00000001,
+    SDL_BLENDMODE_ADD = 0x00000002, SDL_BLENDMODE_MOD = 0x00000004
+} SDL_BlendMode;
+/* A stream of bytes as SDL reads one. Opaque here: it is made by SDL and handed back to SDL. */
+typedef struct SDL_RWops SDL_RWops;
+SDL_RWops *SDL_RWFromConstMem(const void *mem, int size);
+SDL_RWops *SDL_RWFromMem(void *mem, int size);
+int SDL_RWclose(SDL_RWops *context);
+size_t SDL_RWread(SDL_RWops *context, void *ptr, size_t size, size_t maxnum);
+size_t SDL_RWwrite(SDL_RWops *context, const void *ptr, size_t size, size_t num);
+Sint64 SDL_RWtell(SDL_RWops *context);
+SDL_Surface *SDL_ConvertSurface(SDL_Surface *src, const SDL_PixelFormat *fmt, Uint32 flags);
+SDL_bool SDL_SetClipRect(SDL_Surface *surface, const SDL_Rect *rect);
+int SDL_SetSurfaceAlphaMod(SDL_Surface *surface, Uint8 alpha);
+int SDL_SetSurfaceBlendMode(SDL_Surface *surface, SDL_BlendMode blendMode);
+int SDL_SetSurfacePalette(SDL_Surface *surface, SDL_Palette *palette);
+int SDL_UpperBlitScaled(SDL_Surface *src, const SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect);
+#define SDL_BlitScaled SDL_UpperBlitScaled
 SDL_Surface *SDL_CreateRGBSurface(Uint32 flags, int width, int height, int depth,
                                   Uint32 Rmask, Uint32 Gmask, Uint32 Bmask, Uint32 Amask);
 void SDL_FreeSurface(SDL_Surface *surface);
@@ -223,6 +262,7 @@ const SDL_EVENTS = `
 #include <SDL_stdinc.h>
 #include <SDL_scancode.h>
 #include <SDL_keycode.h>
+#include <SDL_rect.h>
 typedef Sint32 SDL_Keycode;
 typedef Uint16 SDL_Keymod;
 typedef struct SDL_Keysym {
@@ -242,7 +282,20 @@ typedef struct SDL_Keysym {
 #define SDL_MOUSEMOTION       0x400
 #define SDL_MOUSEBUTTONDOWN   0x401
 #define SDL_MOUSEBUTTONUP     0x402
+#define SDL_MOUSEWHEEL        0x403
 #define SDL_JOYAXISMOTION     0x600
+#define SDL_JOYBUTTONDOWN     0x603
+#define SDL_JOYBUTTONUP       0x604
+#define SDL_CONTROLLERAXISMOTION    0x650
+#define SDL_CONTROLLERBUTTONDOWN    0x651
+#define SDL_CONTROLLERBUTTONUP      0x652
+#define SDL_CONTROLLERDEVICEADDED   0x653
+#define SDL_CONTROLLERDEVICEREMOVED 0x654
+#define SDL_USEREVENT         0x8000
+#define SDL_WINDOWEVENT_EXPOSED       3
+#define SDL_WINDOWEVENT_MOVED         4
+#define SDL_WINDOWEVENT_SIZE_CHANGED  6
+#define SDL_WINDOWEVENT_RESTORED      9
 #define SDL_WINDOWEVENT_RESIZED       5
 #define SDL_WINDOWEVENT_FOCUS_GAINED 12
 #define SDL_WINDOWEVENT_FOCUS_LOST   13
@@ -253,6 +306,7 @@ typedef struct SDL_Keysym {
 #define SDL_BUTTON_LEFT   1
 #define SDL_BUTTON_MIDDLE 2
 #define SDL_BUTTON_RIGHT  3
+#define SDL_BUTTON_X1     4
 #define SDL_BUTTON_LMASK  SDL_BUTTON(SDL_BUTTON_LEFT)
 #define SDL_BUTTON_MMASK  SDL_BUTTON(SDL_BUTTON_MIDDLE)
 #define SDL_BUTTON_RMASK  SDL_BUTTON(SDL_BUTTON_RIGHT)
@@ -265,15 +319,37 @@ typedef struct { Uint32 type, timestamp, windowID, which; Uint32 state;
 typedef struct { Uint32 type, timestamp, windowID, which; Uint8 button, state, clicks, padding1;
                  Sint32 x, y; } SDL_MouseButtonEvent;
 typedef struct { Uint32 type, timestamp, windowID; char text[32]; } SDL_TextInputEvent;
+typedef Sint32 SDL_JoystickID;
+typedef struct { Uint32 type, timestamp, windowID, which; Sint32 x, y; Uint32 direction;
+                 float preciseX, preciseY; Sint32 mouseX, mouseY; } SDL_MouseWheelEvent;
+typedef struct { Uint32 type, timestamp; SDL_JoystickID which; Uint8 axis, padding1, padding2, padding3;
+                 Sint16 value; Uint16 padding4; } SDL_JoyAxisEvent;
+typedef struct { Uint32 type, timestamp; SDL_JoystickID which;
+                 Uint8 button, state, padding1, padding2; } SDL_JoyButtonEvent;
+typedef struct { Uint32 type, timestamp; SDL_JoystickID which; Uint8 axis, padding1, padding2, padding3;
+                 Sint16 value; Uint16 padding4; } SDL_ControllerAxisEvent;
+typedef struct { Uint32 type, timestamp; SDL_JoystickID which;
+                 Uint8 button, state, padding1, padding2; } SDL_ControllerButtonEvent;
+typedef struct { Uint32 type, timestamp; Sint32 which; } SDL_ControllerDeviceEvent;
+typedef struct { Uint32 type, timestamp, windowID; Sint32 code; void *data1, *data2; } SDL_UserEvent;
 typedef union SDL_Event {
     Uint32 type;
     SDL_KeyboardEvent key;
     SDL_WindowEvent window;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
+    SDL_MouseWheelEvent wheel;
     SDL_TextInputEvent text;
+    SDL_JoyAxisEvent jaxis;
+    SDL_JoyButtonEvent jbutton;
+    SDL_ControllerAxisEvent caxis;
+    SDL_ControllerButtonEvent cbutton;
+    SDL_ControllerDeviceEvent cdevice;
+    SDL_UserEvent user;
     Uint8 padding[56];
 } SDL_Event;
+const Uint8 *SDL_GetKeyboardState(int *numkeys);
+void SDL_SetTextInputRect(const SDL_Rect *rect);
 int SDL_PollEvent(SDL_Event *event);
 int SDL_PushEvent(SDL_Event *event);
 void SDL_StartTextInput(void);
@@ -293,6 +369,28 @@ typedef struct SDL_Window SDL_Window;
 typedef struct SDL_Renderer SDL_Renderer;
 typedef struct SDL_Texture SDL_Texture;
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
+#define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
+#define SDL_WINDOW_ALLOW_HIGHDPI 0x00002000
+#define SDL_RENDERER_SOFTWARE 0x00000001
+#define SDL_RENDERER_TARGETTEXTURE 0x00000008
+#define SDL_TEXTUREACCESS_TARGET 2
+typedef struct SDL_RendererInfo {
+    const char *name;
+    Uint32 flags;
+    Uint32 num_texture_formats;
+    Uint32 texture_formats[16];
+    int max_texture_width;
+    int max_texture_height;
+} SDL_RendererInfo;
+int SDL_GetRendererInfo(SDL_Renderer *renderer, SDL_RendererInfo *info);
+int SDL_GetRendererOutputSize(SDL_Renderer *renderer, int *w, int *h);
+void SDL_RenderGetLogicalSize(SDL_Renderer *renderer, int *w, int *h);
+void SDL_RenderGetScale(SDL_Renderer *renderer, float *scaleX, float *scaleY);
+void SDL_RenderGetViewport(SDL_Renderer *renderer, SDL_Rect *rect);
+int SDL_RenderSetIntegerScale(SDL_Renderer *renderer, SDL_bool enable);
+int SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
+Uint32 SDL_GetWindowFlags(SDL_Window *window);
+void SDL_GL_GetDrawableSize(SDL_Window *window, int *w, int *h);
 #define SDL_WINDOW_FULLSCREEN_DESKTOP 0x00001001
 #define SDL_WINDOW_HIDDEN     0x00000008
 #define SDL_WINDOW_RESIZABLE  0x00000020
@@ -368,6 +466,7 @@ typedef Uint32 SDL_AudioDeviceID;
 #define AUDIO_S8     0x8008
 #define AUDIO_S16LSB 0x8010
 #define AUDIO_S16SYS AUDIO_S16LSB
+typedef enum { SDL_AUDIO_STOPPED = 0, SDL_AUDIO_PLAYING, SDL_AUDIO_PAUSED } SDL_AudioStatus;
 #define SDL_AUDIO_ALLOW_FREQUENCY_CHANGE 0x00000001
 #define SDL_AUDIO_ALLOW_FORMAT_CHANGE    0x00000002
 #define SDL_AUDIO_ALLOW_CHANNELS_CHANGE  0x00000004
@@ -407,6 +506,10 @@ void SDL_CloseAudioDevice(SDL_AudioDeviceID dev);
 void SDL_PauseAudioDevice(SDL_AudioDeviceID dev, int pause_on);
 void SDL_LockAudioDevice(SDL_AudioDeviceID dev);
 void SDL_UnlockAudioDevice(SDL_AudioDeviceID dev);
+int SDL_OpenAudio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained);
+void SDL_CloseAudio(void);
+void SDL_PauseAudio(int pause_on);
+SDL_AudioStatus SDL_GetAudioStatus(void);
 int SDL_BuildAudioCVT(SDL_AudioCVT *cvt, SDL_AudioFormat src_format, Uint8 src_channels, int src_rate,
                       SDL_AudioFormat dst_format, Uint8 dst_channels, int dst_rate);
 int SDL_ConvertAudio(SDL_AudioCVT *cvt);
@@ -417,6 +520,7 @@ const SDL_JOYSTICK = `
 #ifndef _PRISM_SDL_JOYSTICK_H
 #define _PRISM_SDL_JOYSTICK_H
 #include <SDL_stdinc.h>
+#include <SDL_surface.h>
 typedef struct _SDL_Joystick SDL_Joystick;
 #define SDL_HAT_CENTERED 0x00
 #define SDL_HAT_UP       0x01
@@ -435,6 +539,36 @@ Uint8 SDL_JoystickGetButton(SDL_Joystick *joystick, int button);
 Uint8 SDL_JoystickGetHat(SDL_Joystick *joystick, int hat);
 void SDL_JoystickUpdate(void);
 int SDL_JoystickEventState(int state);
+int SDL_JoystickRumble(SDL_Joystick *joystick, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble, Uint32 duration_ms);
+
+/* Game controllers and force feedback: there are none, and each of these says so. */
+typedef struct _SDL_GameController SDL_GameController;
+typedef struct _SDL_Haptic SDL_Haptic;
+typedef enum {
+    SDL_CONTROLLER_AXIS_INVALID = -1, SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY,
+    SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY, SDL_CONTROLLER_AXIS_TRIGGERLEFT,
+    SDL_CONTROLLER_AXIS_TRIGGERRIGHT, SDL_CONTROLLER_AXIS_MAX
+} SDL_GameControllerAxis;
+typedef enum {
+    SDL_CONTROLLER_BUTTON_INVALID = -1, SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B,
+    SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_Y, SDL_CONTROLLER_BUTTON_BACK,
+    SDL_CONTROLLER_BUTTON_GUIDE, SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_LEFTSTICK,
+    SDL_CONTROLLER_BUTTON_RIGHTSTICK, SDL_CONTROLLER_BUTTON_LEFTSHOULDER,
+    SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, SDL_CONTROLLER_BUTTON_DPAD_UP,
+    SDL_CONTROLLER_BUTTON_DPAD_DOWN, SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT
+} SDL_GameControllerButton;
+SDL_bool SDL_IsGameController(int joystick_index);
+SDL_GameController *SDL_GameControllerOpen(int joystick_index);
+void SDL_GameControllerClose(SDL_GameController *gamecontroller);
+SDL_GameController *SDL_GameControllerFromInstanceID(Sint32 joyid);
+int SDL_GameControllerRumble(SDL_GameController *gamecontroller, Uint16 low_frequency_rumble, Uint16 high_frequency_rumble, Uint32 duration_ms);
+int SDL_GameControllerAddMapping(const char *mappingString);
+int SDL_GameControllerAddMappingsFromRW(SDL_RWops *rw, int freerw);
+SDL_RWops *SDL_RWFromFile(const char *file, const char *mode);
+#define SDL_GameControllerAddMappingsFromFile(file) SDL_GameControllerAddMappingsFromRW(SDL_RWFromFile(file, "rb"), 1)
+SDL_Haptic *SDL_HapticOpen(int device_index);
+int SDL_HapticRumbleInit(SDL_Haptic *haptic);
+int SDL_HapticRumblePlay(SDL_Haptic *haptic, float strength, Uint32 length);
 #endif
 `;
 
@@ -477,7 +611,13 @@ const SDL_MAIN = `
 #define SDL_INIT_AUDIO    0x00000010u
 #define SDL_INIT_VIDEO    0x00000020u
 #define SDL_INIT_JOYSTICK 0x00000200u
+#define SDL_INIT_HAPTIC   0x00001000u
+#define SDL_INIT_GAMECONTROLLER 0x00002000u
+#define SDL_INIT_NOPARACHUTE 0x00100000u
 #define SDL_MESSAGEBOX_ERROR 0x00000010
+#define SDL_HINT_RENDER_SCALE_QUALITY "SDL_RENDER_SCALE_QUALITY"
+#define SDL_HINT_RENDER_VSYNC "SDL_RENDER_VSYNC"
+#define SDL_HINT_IME_SHOW_UI "SDL_IME_SHOW_UI"
 #define SDL_HINT_MOUSE_RELATIVE_SYSTEM_SCALE "SDL_MOUSE_RELATIVE_SYSTEM_SCALE"
 /* The compiled-against version. OpenTyrian tests it with SDL_VERSION_ATLEAST. */
 #define SDL_MAJOR_VERSION 2
@@ -486,6 +626,15 @@ const SDL_MAIN = `
 #define SDL_VERSIONNUM(X, Y, Z) ((X) * 1000 + (Y) * 100 + (Z))
 #define SDL_COMPILEDVERSION SDL_VERSIONNUM(SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL)
 #define SDL_VERSION_ATLEAST(X, Y, Z) (SDL_COMPILEDVERSION >= SDL_VERSIONNUM(X, Y, Z))
+typedef struct SDL_version { Uint8 major, minor, patch; } SDL_version;
+#define SDL_VERSION(x) { (x)->major = SDL_MAJOR_VERSION; (x)->minor = SDL_MINOR_VERSION; (x)->patch = SDL_PATCHLEVEL; }
+void SDL_GetVersion(SDL_version *ver);
+typedef int SDL_TimerID;
+typedef Uint32 (*SDL_TimerCallback)(Uint32 interval, void *param);
+SDL_TimerID SDL_AddTimer(Uint32 interval, SDL_TimerCallback callback, void *param);
+SDL_bool SDL_RemoveTimer(SDL_TimerID id);
+Uint64 SDL_GetPerformanceCounter(void);
+Uint64 SDL_GetPerformanceFrequency(void);
 int SDL_Init(Uint32 flags);
 int SDL_InitSubSystem(Uint32 flags);
 void SDL_QuitSubSystem(Uint32 flags);
@@ -499,7 +648,24 @@ int SDL_ShowSimpleMessageBox(Uint32 flags, const char *title, const char *messag
 #endif
 `;
 
+/*
+ * SDL_image, which is its own library as SDL_mixer is. What it does with a file is in
+ * src/env/sdl2-image.js; IMG_GetError is SDL's own error string, as in the real header.
+ */
+const SDL_IMAGE = `
+#ifndef _PRISM_SDL_IMAGE_H
+#define _PRISM_SDL_IMAGE_H
+#include <SDL.h>
+SDL_Surface *IMG_Load(const char *file);
+SDL_Surface *IMG_Load_RW(SDL_RWops *src, int freesrc);
+int IMG_SavePNG(SDL_Surface *surface, const char *file);
+#define IMG_GetError SDL_GetError
+#endif
+`;
+
 export const SDL2_HEADERS = {
+  'SDL_image.h': SDL_IMAGE,
+  'SDL2/SDL_image.h': SDL_IMAGE,
   'SDL.h': SDL_MAIN,
   'SDL2/SDL.h': SDL_MAIN,
   'SDL_stdinc.h': SDL_STDINC,

@@ -1749,6 +1749,86 @@ int main(void)
 }
 `);
 
+// SDLPoP's start_game keeps its setjmp INSIDE a branch: `if (first) { first = 0; setjmp(buf); }
+// else { ...; longjmp(buf, -1); }`. A longjmp resumes after the call, inside the branch -- it does
+// not evaluate the `if` again. PRISM lifted the call out in front of the statement, so the second
+// pass through took the longjmp once more, for ever. The same in a loop body and a switch.
+C('setjmp-nested-in-a-branch', `#include <stdio.h>
+#include <setjmp.h>
+static jmp_buf buf, buf2, buf3;
+static int first = 1, depth, laps;
+static void restart(void)
+{
+    if (first) {
+        first = 0;
+        setjmp(buf);
+    } else {
+        printf("unwinding from depth %d\\n", depth);
+        longjmp(buf, -1);
+    }
+    printf("past the branch, lap %d\\n", ++laps);
+    if (laps < 3) { depth++; restart(); }
+}
+static int in_loop(void)
+{
+    int i, hits = 0;
+    for (i = 0; i < 3; i++) {
+        if (i == 1) {
+            if (setjmp(buf2)) { hits += 10; continue; }
+            hits++;
+            longjmp(buf2, 1);
+        }
+        hits += 100;
+    }
+    return hits;
+}
+static int in_switch(int k)
+{
+    volatile int seen = 0;
+    switch (k) {
+    case 1:
+        seen = 1;
+        break;
+    case 2:
+        if (setjmp(buf3) == 0) { seen += 2; longjmp(buf3, 7); }
+        seen += 40;
+        break;
+    }
+    return seen;
+}
+int main(void)
+{
+    restart();
+    printf("%d %d %d\\n", in_loop(), in_switch(1), in_switch(2));
+    return 0;
+}
+`);
+
+// What a scan returns when the input ENDS, measured on glibc: white space in the format is satisfied
+// by none at all, so running out while skipping it is not a failure; a conversion that finds the
+// input already ended is one, and is EOF when nothing was assigned before it. SDLPoP's ini reader
+// ends every line with fscanf(f, " ;%*[^\\n]") and fscanf(f, " \\n"), and took PRISM's -1 from the
+// second as a truncated file.
+C('scanf-at-the-end-of-input', `#include <stdio.h>
+#include <string.h>
+static void probe(const char *text, const char *fmt)
+{
+    char a[64] = "-", b[64] = "-";
+    int n = 0, r = sscanf(text, fmt, a, b);
+    (void)n;
+    printf("%d [%s] [%s]\\n", r, a, b);
+}
+int main(void)
+{
+    static const char *texts[] = { "", "\\n", ";x\\n", ";\\n", ";x", "  \\n\\n", "a = b\\n", "a", " ;", "[s]\\n", " name = value ; note" };
+    static const char *fmts[] = { " ;%*[^\\n]", " \\n", "[%63[^];\\n]]\\n", " %63[^=;\\n] = %63[^;\\n]", "%s %s", " %63[^\\n]" };
+    unsigned i, k;
+    for (i = 0; i < sizeof texts / sizeof *texts; i++)
+        for (k = 0; k < sizeof fmts / sizeof *fmts; k++) probe(texts[i], fmts[k]);
+    return 0;
+}
+`);
+
 // Descriptor 1 IS stdout: write(2) to it is output, not nothing, and lseek on it fails because it
 // cannot seek, not because it does not exist. (Only write(), so that no stdio buffer is involved.)
 C('write-to-the-standard-descriptors', `#include <unistd.h>

@@ -1476,29 +1476,86 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * timed. Wrapping the entry point needs nothing from the shim, which is why this branch differs
      * in shape from the SDL 1.2 one without differing in what it means.
      */
+    /*
+     * The page's keyboard speaks PC scan codes; SDL 2 speaks its own (the USB usage table), so each
+     * event goes through the shim's translation, the 0xE0 prefix with it -- the arrows and the
+     * keypad are different keys to SDL.
+     */
+    const deliverKeys = () => {
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        if (env.sdl2?.pushScan) env.sdl2.pushScan(e.scan, !!e.extended, e.down);
+      }
+    };
     const innerPresent = prog.M.rt.SDL_RenderPresent;
-    let published = 0;
+    let published = 0, wide = 0, wideW = 0, wideH = 0;
     prog.M.rt.SDL_RenderPresent = function (...a) {
       const r = innerPresent.apply(this, a);
-      const tex = [...sdl.textures.values()].pop();
+      // The texture the program last copied to the display; before it has, the newest one.
+      const tex = sdl.current ?? [...sdl.textures.values()].pop();
       if (tex && tex.w && tex.h) {
-        if (published !== tex.pixels) {
-          published = tex.pixels;
+        let pixels = tex.pixels;
+        if (tex.bpp === 3) {
+          /*
+           * A 24-BIT TEXTURE (SDLPoP presents SDL_PIXELFORMAT_RGB24: R, G, B, three bytes a pixel).
+           * The page reads four, B first, so the frame is widened into a buffer of this host's own.
+           */
+          if (!wide || wideW !== tex.w || wideH !== tex.h) {
+            if (wide) prog.M.rt.free(wide);
+            wide = prog.M.rt.malloc(tex.w * tex.h * 4);
+            wideW = tex.w; wideH = tex.h;
+          }
+          const u8 = prog.M.u8, rFirst = tex.format === 0x17101803;
+          for (let y = 0; y < tex.h; y++) {
+            let from = tex.pixels + y * tex.pitch, to = wide + y * tex.w * 4;
+            for (let x = 0; x < tex.w; x++, from += 3, to += 4) {
+              u8[to] = u8[from + (rFirst ? 2 : 0)]; u8[to + 1] = u8[from + 1]; u8[to + 2] = u8[from + (rFirst ? 0 : 2)]; u8[to + 3] = 255;
+            }
+          }
+          pixels = wide;
+        }
+        if (published !== pixels) {
+          published = pixels;
           Atomics.store(ctrl, SLOT.WIDTH, tex.w);
           Atomics.store(ctrl, SLOT.HEIGHT, tex.h);
-          Atomics.store(ctrl, SLOT.PIXELS, tex.pixels);
+          Atomics.store(ctrl, SLOT.PIXELS, pixels);
           Atomics.store(ctrl, SLOT.PIXFMT, 32);      // B,G,R,A in memory, as the page expects
           Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-          log(`SDL 2 display ${tex.w}x${tex.h}, 32-bit texture`);
+          log(`SDL 2 display ${tex.w}x${tex.h}, ${tex.bpp * 8}-bit texture`);
         }
-        // One key event per present, through the shim's own door.
-        for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
-          if (env.sdl2?.pushKey) env.sdl2.pushKey(e.scan, e.down);
-        }
+        deliverKeys();
         reader.endFrame();
         pace();
       }
       return r;
+    };
+    /*
+     * ...and where the program ASKS for its events, not only when it presents: SDLPoP holds its
+     * title while the music plays, polling and presenting nothing, and a key that waited for the
+     * next frame never arrived.
+     */
+    const innerPoll = prog.M.rt.SDL_PollEvent;
+    prog.M.rt.SDL_PollEvent = function (...a) { deliverKeys(); return innerPoll.apply(this, a); };
+
+    /*
+     * SOUND: the buffers the program's SDL audio callback fills go into the ring the page plays, at
+     * the rate and channel count the program opened the device with. A buffer the ring has no room
+     * for is dropped rather than waited for.
+     */
+    let audioWritten = 0;
+    sdl.onAudioOpen = (spec) => {
+      Atomics.store(ctrl, SLOT.AUDIO_CHANNELS, spec ? spec.channels : 1);
+      Atomics.store(ctrl, SLOT.AUDIO_RATE, spec ? spec.freq : 0);
+      if (spec) log(`SDL 2 audio ${spec.freq} Hz, ${spec.format & 0xff}-bit, ${spec.channels === 2 ? 'stereo' : 'mono'}, ${spec.samples} frames a buffer`);
+    };
+    sdl.onAudio = (buf, frames, spec) => {
+      const n = frames * spec.channels, mask = audio.length - 1;
+      const read = Atomics.load(ctrl, SLOT.AUDIO_READ);
+      if (audio.length - (audioWritten - read) * spec.channels < n) return;
+      const at = audioWritten * spec.channels, dv = prog.M.mod.dv, u8 = prog.M.u8;
+      if ((spec.format & 0xff) === 16) for (let i = 0; i < n; i++) audio[(at + i) & mask] = dv.getInt16(buf + 2 * i, true);
+      else for (let i = 0; i < n; i++) audio[(at + i) & mask] = (u8[buf + i] - 128) << 8;
+      audioWritten += frames;
+      Atomics.store(ctrl, SLOT.AUDIO_WRITE, audioWritten);
     };
 
   } else if (platform === 'glut') {
