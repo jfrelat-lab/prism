@@ -46,8 +46,17 @@ const context = new Proxy({}, {
         return String(v);
       });
       rec.h.update(`${p}(${args.join(',')})\n`);
+      // What the reversed-depth-range check below reads: the ranges asked of WebGL, and the shader's
+      // z-flip switch.
+      if (p === 'depthRange') rec.ranges.push([a[0], a[1]]);
+      if (p === 'uniform1i' && a[0] === rec.zFlip) rec.flips.push(a[1]);
       if (p === 'getShaderParameter' || p === 'getProgramParameter') return true;
-      if (/^(create|getUniformLocation)/.test(p)) { const o = {}; rec.ids.set(o, rec.ids.size + 1); return o; }
+      if (/^(create|getUniformLocation)/.test(p)) {
+        const o = {};
+        rec.ids.set(o, rec.ids.size + 1);
+        if (p === 'getUniformLocation' && a[1] === 'zFlip') rec.zFlip = o;
+        return o;
+      }
       return undefined;
     };
   },
@@ -107,9 +116,9 @@ const CASES = [
 if (Q3) CASES.push({ name: 'quake3 q3dm1', run: quake3(300), control: ['glDepthMask dropped', drop('glDepthMask')] });
 
 const stream = (c, control = null) => {
-  rec = { h: createHash('sha256'), calls: 0, draws: 0, ids: new WeakMap() };
+  rec = { h: createHash('sha256'), calls: 0, draws: 0, ids: new WeakMap(), ranges: [], flips: [], zFlip: null };
   c.run(control);
-  return { calls: rec.calls, draws: rec.draws, sha: rec.h.digest('hex') };
+  return { calls: rec.calls, draws: rec.draws, sha: rec.h.digest('hex'), ranges: rec.ranges, flips: rec.flips };
 };
 
 if (CAPTURE) {
@@ -130,6 +139,25 @@ for (const c of CASES) {
   report(got.sha === g.sha, `${c.name}: the blessed stream`, `${got.calls} calls, ${got.draws} draws (blessed: ${g.calls}, ${g.draws})`);
   const [what, control] = c.control, m = stream(c, control);
   report(m.sha !== g.sha, `${c.name}: control: ${what} changes it`, `${m.calls} calls, ${m.draws} draws`);
+}
+/*
+ * A REVERSED DEPTH RANGE never reaches WebGL reversed. GL 1.1 lets near exceed far, and GLQuake's
+ * family draws every other frame that way (gl_ztrick); WebGL answers INVALID_OPERATION and keeps
+ * the previous range, which made Hexen II flicker. gl.js hands WebGL the ordered range and negates
+ * z in the vertex shader instead. tests/gl/ztrick.c draws four such frames: no range may arrive
+ * with near above far, and the shader's switch must go on and off with the frames.
+ */
+{
+  const ztrick = { name: 'ztrick', run: () => {
+    const target = { name: 'ztrick', dir: 'tests/gl', units: { list: ['ztrick.c'] }, env: ['stdio', 'gl', 'glu', 'glut'], compile: { memory: 16 } };
+    const { program } = buildTarget(target, { root: ROOT, envExtra: { gl: { backend: 'webgl' }, glut: { frames: [3], onFrame: () => {} } } });
+    program.M.write = () => {};
+    program.run(['ztrick']);
+  } };
+  const got = stream(ztrick);
+  const reversed = got.ranges.filter(([n, f]) => n > f).length;
+  report(got.ranges.length > 0 && reversed === 0, 'ztrick: no depth range reaches WebGL with near above far', `${got.ranges.length} ranges, ${reversed} reversed`);
+  report(got.flips.includes(1) && got.flips.includes(0), 'ztrick: the shader negates z for the reversed frames only', `switch written ${JSON.stringify(got.flips)}`);
 }
 if (!Q3) console.log('  (quake3 not run: set PRISM_QUAKE3_DATA to a directory with baseq3/)');
 if (bad) { console.log(`\n${bad} check(s) failed.`); process.exit(1); }

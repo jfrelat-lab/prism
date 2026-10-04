@@ -49,13 +49,29 @@ export function installGlx(M, { frames = null, onFrame = null, onSwap = null } =
     },
     glXDestroyContext: () => {},
     XF86VidModeQueryVersion: () => 0,
-    XF86DGAQueryVersion: () => 0,
+    /*
+     * THE DGA MOUSE. XFree86-DGA is how these games read a mouse by default (in_dgamouse 1 in
+     * GLQuake, Quake III and Enemy Territory): the server reports relative motion and the pointer
+     * stops being a position. Refusing it sent them to their fallback, which warps the pointer to
+     * the centre and waits for the motion event a real server sends for the warp -- one this Xlib
+     * does not send -- so Enemy Territory's menu cursor never left the corner. Only the mouse
+     * part is here: DirectVideo with any other flag is refused.
+     */
+    XF86DGAQueryVersion: (_dpy, major, minor) => {
+      if (major) dv().setInt32(major, 1, true);
+      if (minor) dv().setInt32(minor, 0, true);
+      return 1;
+    },
     XF86VidModeGetAllModeLines: refuse('XF86VidModeGetAllModeLines'),
     XF86VidModeSwitchToMode: refuse('XF86VidModeSwitchToMode'),
     XF86VidModeSetViewPort: refuse('XF86VidModeSetViewPort'),
     XF86VidModeGetGamma: refuse('XF86VidModeGetGamma'),
     XF86VidModeSetGamma: refuse('XF86VidModeSetGamma'),
-    XF86DGADirectVideo: refuse('XF86DGADirectVideo'),
+    XF86DGADirectVideo: (_dpy, _screen, flags) => {
+      if (flags & ~0x4) throw new Error(`glx: XF86DGADirectVideo with flags 0x${(flags >>> 0).toString(16)}: only the DGA mouse is implemented`);
+      if (M.x11) M.x11.dgaMouse = (flags & 0x4) !== 0;         // XF86DGADirectMouse
+      return 1;
+    },
   });
   M.glx = s;
   return s;

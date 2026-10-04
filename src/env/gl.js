@@ -946,7 +946,8 @@ function makeWebGL(w, h) {
   g.attachShader(prog, shader(g.VERTEX_SHADER, `#version 300 es
 in vec4 pos; in vec4 col; in vec2 tc; in float ez;
 out vec4 v; out vec2 uv; out float eyeZ;
-void main() { gl_Position = pos; v = col; uv = tc; eyeZ = ez; }`));
+uniform int zFlip;     // 1 while glDepthRange is reversed (near > far); see apply()
+void main() { gl_Position = vec4(pos.xy, zFlip == 1 ? -pos.z : pos.z, pos.w); v = col; uv = tc; eyeZ = ez; }`));
   g.attachShader(prog, shader(g.FRAGMENT_SHADER, `#version 300 es
 precision highp float;
 in vec4 v; in vec2 uv; in float eyeZ; out vec4 o;
@@ -980,7 +981,7 @@ void main() {
   g.linkProgram(prog);
   if (!g.getProgramParameter(prog, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(prog)}`);
   g.useProgram(prog);
-  const U = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour']
+  const U = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
     .map((n) => [n, g.getUniformLocation(prog, n)]));
   g.uniform1i(U.tex, 0);
   g.bindBuffer(g.ARRAY_BUFFER, g.createBuffer());
@@ -997,6 +998,7 @@ void main() {
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
   const FILT = { 0x2600: g.NEAREST, 0x2601: g.LINEAR, 0x2700: g.NEAREST_MIPMAP_NEAREST, 0x2701: g.LINEAR_MIPMAP_NEAREST, 0x2702: g.NEAREST_MIPMAP_LINEAR, 0x2703: g.LINEAR_MIPMAP_LINEAR };
   const WRAP = { 0x2901: g.REPEAT, 0x2900: g.CLAMP_TO_EDGE, 0x812f: g.CLAMP_TO_EDGE };
+  let zFlip = 0;
   function apply(st) {
     if (st.tex >= 0) {
       g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex));
@@ -1007,7 +1009,17 @@ void main() {
     if (st.blend) { const [sf, df] = st.blend.split(',').map(Number); g.enable(g.BLEND); g.blendFunc(sf, df); } else g.disable(g.BLEND);
     if (st.alpha) { const [f, r] = st.alpha.split(','); g.uniform1i(U.alphaFn, f - 0x200); g.uniform1f(U.alphaRef, +r); } else g.uniform1i(U.alphaFn, -1);
     if (st.depth) { const [f, m] = st.depth.split(','); g.enable(g.DEPTH_TEST); g.depthFunc(+f); g.depthMask(m === 'true'); } else g.disable(g.DEPTH_TEST);
-    const [dn, df] = st.range.split(',').map(Number); g.depthRange(dn, df);
+    /*
+     * A REVERSED depth range. GL 1.1 lets near exceed far, and GLQuake's family lives on it: with
+     * gl_ztrick (the default) it never clears the depth buffer, and instead draws even frames into
+     * [0, 0.5] with GL_LEQUAL and odd ones into [1, 0.5] with GL_GEQUAL. WebGL refuses such a range
+     * outright (INVALID_OPERATION), so every other frame kept the previous one's range and failed
+     * its depth test: Hexen II flickered. Window z is linear in clip z, so the reversed range is the
+     * ordinary one with z negated -- which the vertex shader does.
+     */
+    const [dn, df] = st.range.split(',').map(Number), flip = dn > df ? 1 : 0;
+    g.depthRange(flip ? df : dn, flip ? dn : df);
+    if (flip !== zFlip) { zFlip = flip; g.uniform1i(U.zFlip, flip); }
     if (st.scissor) { const [x, y, sw, sh] = st.scissor.split(',').map(Number); g.enable(g.SCISSOR_TEST); g.scissor(x, y, sw, sh); } else g.disable(g.SCISSOR_TEST);
     if (st.fog) {
       const [m, d, s0, e0, r, gg, b, a] = st.fog.split(',').map(Number);

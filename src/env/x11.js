@@ -45,7 +45,7 @@ const XEXPOSE_COUNT = 36;
  * at 52 either `keycode` (a key event) or `button` (a button event). XMotionEvent has a `char is_hint`
  * there instead, which nothing in this corpus reads.
  */
-const XEV_X = 32, XEV_Y = 36, XEV_STATE = 48, XEV_BUTTON = 52;
+const XEV_X = 32, XEV_Y = 36, XEV_X_ROOT = 40, XEV_Y_ROOT = 44, XEV_STATE = 48, XEV_BUTTON = 52;
 /* X numbers its buttons 1 left, 2 MIDDLE, 3 right, and its state mask starts at bit 8. */
 const X_BUTTON_MASK = [0, 1 << 8, 1 << 9, 1 << 10];
 
@@ -68,7 +68,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
                    * XWarpPointer -- which is exactly the loop both games run, and it means their
                    * "subtract the centre" arithmetic works out to the delta they wanted.
                    */
-                  pointer: { x: 0, y: 0 }, buttons: 0 };
+                  pointer: { x: 0, y: 0 }, buttons: 0,
+                  dgaMouse: false };         // XF86DGADirectMouse: motion is reported as deltas
 
   /*
    * An event queue, because a real X server sends events a client waits for. Doom maps its window and
@@ -349,6 +350,17 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       const m = takeMouseEvent();
       if (m) {
         dv().setInt32(ev, m.type, true);
+        /*
+         * Under the DGA mouse (XF86DGADirectMouse, src/env/glx.js) a MotionNotify carries how far
+         * the pointer MOVED, in x and y and in x_root and y_root alike -- GLQuake reads the first
+         * pair, Quake III and Enemy Territory the second -- and there is no position to keep.
+         */
+        if (m.relative) {
+          dv().setInt32(ev + XEV_X, m.dx, true); dv().setInt32(ev + XEV_Y, m.dy, true);
+          dv().setInt32(ev + XEV_X_ROOT, m.dx, true); dv().setInt32(ev + XEV_Y_ROOT, m.dy, true);
+          dv().setInt32(ev + XEV_STATE, m.state, true);
+          return 0;
+        }
         dv().setInt32(ev + XEV_X, state.pointer.x, true);
         dv().setInt32(ev + XEV_Y, state.pointer.y, true);
         dv().setInt32(ev + XEV_STATE, m.state, true);
@@ -442,6 +454,11 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       return { type: (now & bit) ? 4 : 5, button, state: stateMask(state.buttons) };  // Press / Release
     }
     if (!mouseHasMotion()) return null;
+    if (state.dgaMouse) {
+      const m = { type: 6, button: 0, state: stateMask(state.buttons), relative: true, dx: carriedDx, dy: carriedDy };
+      carriedDx = 0; carriedDy = 0;
+      return m;
+    }
     state.pointer.x += carriedDx;
     state.pointer.y += carriedDy;
     carriedDx = 0; carriedDy = 0;
