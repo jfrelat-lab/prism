@@ -160,6 +160,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
        * and the .S file is the artefact -- there is nothing pre-built to keep in step.
        */
       asmTranslate: t.asmTranslate ?? [],
+      tree: t.tree ?? null,
       /*
        * The compiler options Node's build passes (src/target.js) and this side used to drop: the
        * ABI model, C89, the sign of char, the size of enums, a stated sizeof for #if, the device
@@ -206,7 +207,10 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
    */
   // C++ units too (src/cxx): .cpp and its kin, and the .hpp some trees use.
   const SOURCE_EXT = /\.(c|h|q1|q2|inc|def|xpm|cpp|cc|cxx|hpp)$/i;
-  const wanted = listing.files.filter(f => SOURCE_EXT.test(f));
+  // A target whose root holds more than the program (Tux Racer's is corpus/, for its sources and Tcl's)
+  // names the subdirectories that are its own: `tree`. Without it the whole root is fetched.
+  const wanted = listing.files.filter(f => SOURCE_EXT.test(f)
+    && (!program.tree || program.tree.some((p) => f.startsWith(`${p}/`))));
   const tree = new Map();
   /* Both keys: units are named relative to the root, includes are searched by repo path. */
   const put = (relKey, text) => {
@@ -420,6 +424,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       argOrder: program.compile?.argOrder ?? toolchainCompile(program.env).argOrder,
       enums: program.compile?.enums,
       ppSizeof: program.compile?.ppSizeof ?? null,
+      lenientPaste: !!program.compile?.lenientPaste,
       window: program.compile?.window ?? (program.env ?? []).includes('ega'),
       externData,
       // The environments' builtin signatures, as src/target.js passes them -- so a program compiled
@@ -1504,7 +1509,38 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      * for SDL 2. GLUT_ELAPSED_TIME is real time here, so the program animates at its own speed.
      */
     const t0 = performance.now();
-    let out = 0;
+    let out = 0, outW = 0, outH = 0, glutSince = performance.now(), glutCount = 0;
+    /*
+     * INPUT, as GLUT callbacks. The page's keyboard queue carries PC set-1 scan codes: the arrows,
+     * function keys and the navigation block become GLUT_KEY_* (glutSpecialFunc), everything else
+     * its unshifted US character (glutKeyboardFunc), each with its release. The mouse arrives as
+     * relative motion; GLUT wants a position, so it is accumulated and kept inside the window.
+     */
+    const GLUT_SPECIAL = { 0x3b: 1, 0x3c: 2, 0x3d: 3, 0x3e: 4, 0x3f: 5, 0x40: 6, 0x41: 7, 0x42: 8, 0x43: 9, 0x44: 10, 0x57: 11, 0x58: 12,
+      0x4b: 100, 0x48: 101, 0x4d: 102, 0x50: 103, 0x49: 104, 0x51: 105, 0x47: 106, 0x4f: 107, 0x52: 108 };
+    const SCAN_ASCII = `\0\x1b1234567890-=\b\tqwertyuiop[]\r\0asdfghjkl;'\`\0\\zxcvbnm,./\0*\0 `;
+    const pointer = { x: 0, y: 0, buttons: 0 };
+    const glutEvents = () => {
+      const ev = [];
+      for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
+        const special = GLUT_SPECIAL[e.scan];
+        if (special !== undefined) { ev.push({ kind: 'special', key: special, down: e.down }); continue; }
+        const ch = e.scan === 0x53 ? 127 : SCAN_ASCII.charCodeAt(e.scan) || 0;
+        if (ch) ev.push({ kind: 'key', ch, down: e.down });
+      }
+      const { dx, dy } = mouse.take(), b = mouse.state();
+      const w = prog.M.gl?.state.width ?? 640, h = prog.M.gl?.state.height ?? 480;
+      if (dx || dy) {
+        pointer.x = Math.max(0, Math.min(w - 1, pointer.x + dx)); pointer.y = Math.max(0, Math.min(h - 1, pointer.y + dy));
+        ev.push({ kind: 'motion', x: pointer.x, y: pointer.y, held: b !== 0 });
+      }
+      // The page's mask is left, right, middle; GLUT numbers them left, middle, right.
+      for (const [bit, button] of [[1, 0], [4, 1], [2, 2]]) {
+        if ((b & bit) !== (pointer.buttons & bit)) ev.push({ kind: 'button', button, down: (b & bit) !== 0, x: pointer.x, y: pointer.y });
+      }
+      pointer.buttons = b;
+      return ev;
+    };
     // WebGL2 on an OffscreenCanvas when the worker has one; ?gl=soft asks for the software rasteriser.
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     // ?glcheck=0,25,50: the fixed 40 ms schedule gate-gears uses, and those frames posted back.
@@ -1517,10 +1553,17 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         frames: check,
         onFrame: check ? (n, rgba, w, h) => post('diag', { glframe: n, w, h, rgba, backend }) : null,
         stop: () => Atomics.load(ctrl, SLOT.STOP) !== 0,
+        events: glutEvents,
         onSwap: (_n, gl) => {
+          // The frame rate, said every five seconds, as the GLX host says it.
+          glutCount++;
+          const tNow = performance.now();
+          if (tNow - glutSince >= 5000) { log(`${glutCount} frames in ${((tNow - glutSince) / 1000).toFixed(1)} s = ${(glutCount * 1000 / (tNow - glutSince)).toFixed(1)} fps (${gl.backend})`); glutSince = tNow; glutCount = 0; }
           const { width: w, height: h } = gl.state;
-          if (!out) {
+          if (!out || w !== outW || h !== outH) {
+            if (out) prog.M.rt.free(out);
             out = prog.M.rt.malloc(w * h * 4);
+            outW = w; outH = h;
             Atomics.store(ctrl, SLOT.WIDTH, w);
             Atomics.store(ctrl, SLOT.HEIGHT, h);
             Atomics.store(ctrl, SLOT.PIXELS, out);

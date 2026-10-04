@@ -151,6 +151,7 @@ const server = createServer(async (req, res) => {
            * package put it there, and it is neither game data nor a source change.
            */
           files: resolved.files ?? {},
+          tree: resolved.tree ?? null,
           // Which shell branch presents it; a variant may set its own.
           host: resolved.host ?? null,
           args: resolved.args ?? null,

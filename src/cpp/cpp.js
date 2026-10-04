@@ -40,6 +40,12 @@ export class Preprocessor {
     this.trigraphs = opts.trigraphs ?? false;
     // sizeof(T) in #if, answered from the build's own statement of the size (see expr.js).
     this.ppSizeof = opts.ppSizeof ?? null;
+    /*
+     * `a ## b` that does not form one token. An error since gcc 3; gcc 2.95 and its contemporaries
+     * emitted the two tokens unjoined, and programs of 2001 lean on it -- Tux Racer writes
+     * `Params. ## nam ## .loaded`. A target built by such a compiler says so (compile.lenientPaste).
+     */
+    this.lenientPaste = !!opts.lenientPaste;
     this.diagnostics = [];
     this.counter = 0;
     this.includeDepth = 0;
@@ -473,7 +479,9 @@ export class Preprocessor {
         else if (last.k === PMK) for (const x of rhsToks) out.push(x);
         else if (rhsToks[0].k === PMK) { out.push(last); for (const x of rhsToks.slice(1)) out.push(x); }
         else {
-          out.push(clone(paste(last, rhsToks[0], t.loc), { ws: last.ws }));
+          const joined = paste(last, rhsToks[0], t.loc, this.lenientPaste);
+          // gcc 2.x: a paste that makes no token leaves its two operands side by side.
+          if (joined) out.push(clone(joined, { ws: last.ws })); else { out.push(last); out.push(clone(rhsToks[0], { ws: false })); }
           for (const x of rhsToks.slice(1)) out.push(x);
         }
         i++;
@@ -594,11 +602,12 @@ function stringize(ts) {
 }
 
 /** `a ## b` — concatenate the spellings and re-lex; the result must be exactly one pp-token. */
-function paste(a, b, loc) {
+function paste(a, b, loc, lenient = false) {
   const text = (a.raw ?? a.v) + (b.raw ?? b.v);
   const { tokens } = lex(text, { file: a.loc?.file ?? '<paste>', keepNewlines: false });
   const real = tokens.filter(t => t.k !== EOF);
   if (real.length !== 1) {
+    if (lenient) return null;
     throw new CppError(`pasting "${a.v}" and "${b.v}" does not give a valid preprocessing token`, loc ?? a.loc);
   }
   return clone(real[0], { hs: hsIntersect(a.hs, b.hs), loc: a.loc });

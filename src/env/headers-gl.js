@@ -989,6 +989,48 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 export const GLU_H = `#ifndef _PRISM_GLU_H
 #define _PRISM_GLU_H
 #include <GL/gl.h>
+/* GLU 1.2, the part src/env/glu.js implements (the glu environment). Values are SGI's. */
+typedef struct GLUquadric GLUquadric;
+typedef struct GLUquadric GLUquadricObj;
+#define GLU_SMOOTH 100000
+#define GLU_FLAT 100001
+#define GLU_NONE 100002
+#define GLU_POINT 100010
+#define GLU_LINE 100011
+#define GLU_FILL 100012
+#define GLU_SILHOUETTE 100013
+#define GLU_OUTSIDE 100020
+#define GLU_INSIDE 100021
+#define GLU_INVALID_ENUM 100900
+#define GLU_INVALID_VALUE 100901
+#define GLU_OUT_OF_MEMORY 100902
+void gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar);
+const GLubyte *gluErrorString(GLenum error);
+GLUquadric *gluNewQuadric(void);
+void gluDeleteQuadric(GLUquadric *quad);
+void gluQuadricDrawStyle(GLUquadric *quad, GLenum draw);
+void gluQuadricNormals(GLUquadric *quad, GLenum normal);
+void gluQuadricOrientation(GLUquadric *quad, GLenum orientation);
+void gluQuadricTexture(GLUquadric *quad, GLboolean texture);
+void gluSphere(GLUquadric *quad, GLdouble radius, GLint slices, GLint stacks);
+GLint gluScaleImage(GLenum format, GLsizei wIn, GLsizei hIn, GLenum typeIn, const void *dataIn, GLsizei wOut, GLsizei hOut, GLenum typeOut, GLvoid *dataOut);
+GLint gluBuild2DMipmaps(GLenum target, GLint internalFormat, GLsizei width, GLsizei height, GLenum format, GLenum type, const void *data);
+#endif
+`;
+
+/* <GL/glext.h>: what a program finds beyond GL 1.1's own header. The one extension PRISM advertises. */
+export const GLEXT_H = `#ifndef _PRISM_GLEXT_H
+#define _PRISM_GLEXT_H
+#define GL_GLEXT_VERSION 6
+#ifndef GL_EXT_compiled_vertex_array
+#define GL_EXT_compiled_vertex_array 1
+#endif
+#ifndef GL_ARRAY_ELEMENT_LOCK_FIRST_EXT
+#define GL_ARRAY_ELEMENT_LOCK_FIRST_EXT 0x81A8
+#define GL_ARRAY_ELEMENT_LOCK_COUNT_EXT 0x81A9
+#endif
+typedef void (*PFNGLLOCKARRAYSEXTPROC)(GLint first, GLsizei count);
+typedef void (*PFNGLUNLOCKARRAYSEXTPROC)(void);
 #endif
 `;
 
@@ -1009,6 +1051,31 @@ export const GLUT_H = `#ifndef _PRISM_GLUT_H
 #define GLUT_KEY_UP 101
 #define GLUT_KEY_RIGHT 102
 #define GLUT_KEY_DOWN 103
+#define GLUT_KEY_PAGE_UP 104
+#define GLUT_KEY_PAGE_DOWN 105
+#define GLUT_KEY_HOME 106
+#define GLUT_KEY_END 107
+#define GLUT_KEY_INSERT 108
+#define GLUT_KEY_F1 1
+#define GLUT_KEY_F2 2
+#define GLUT_KEY_F3 3
+#define GLUT_KEY_F4 4
+#define GLUT_KEY_F5 5
+#define GLUT_KEY_F6 6
+#define GLUT_KEY_F7 7
+#define GLUT_KEY_F8 8
+#define GLUT_KEY_F9 9
+#define GLUT_KEY_F10 10
+#define GLUT_KEY_F11 11
+#define GLUT_KEY_F12 12
+#define GLUT_STENCIL 32
+#define GLUT_LEFT_BUTTON 0
+#define GLUT_MIDDLE_BUTTON 1
+#define GLUT_RIGHT_BUTTON 2
+#define GLUT_DOWN 0
+#define GLUT_UP 1
+#define GLUT_CURSOR_LEFT_ARROW 1
+#define GLUT_CURSOR_NONE 101
 void glutInit(int *argc, char **argv);
 void glutInitDisplayMode(unsigned int mode);
 void glutInitWindowSize(int w, int h);
@@ -1021,6 +1088,16 @@ void glutIdleFunc(void (*f)(void));
 void glutVisibilityFunc(void (*f)(int));
 void glutKeyboardFunc(void (*f)(unsigned char, int, int));
 void glutSpecialFunc(void (*f)(int, int, int));
+void glutKeyboardUpFunc(void (*f)(unsigned char, int, int));
+void glutSpecialUpFunc(void (*f)(int, int, int));
+void glutMouseFunc(void (*f)(int, int, int, int));
+void glutMotionFunc(void (*f)(int, int));
+void glutPassiveMotionFunc(void (*f)(int, int));
+void glutIgnoreKeyRepeat(int ignore);
+void glutSetCursor(int cursor);
+void glutWarpPointer(int x, int y);
+int glutEnterGameMode(void);
+void glutLeaveGameMode(void);
 void glutPostRedisplay(void);
 int glutGet(int what);
 void glutSwapBuffers(void);
@@ -1028,7 +1105,7 @@ void glutMainLoop(void);
 #endif
 `;
 
-export const GL_HEADERS = { 'GL/gl.h': GL_H, 'GL/glu.h': GLU_H, 'GL/glut.h': GLUT_H };
+export const GL_HEADERS = { 'GL/gl.h': GL_H, 'GL/glu.h': GLU_H, 'GL/glut.h': GLUT_H, 'GL/glext.h': GLEXT_H };
 
 /*
  * GLX, for an X client that draws with GL. GLX_ values are GLX 1.x's and are held to Mesa's

@@ -49,6 +49,7 @@ import { installVgaFont } from './vgafont.js';
 import { installWsock } from './wsock.js';
 import { installGL, glBuiltins } from './gl.js';
 import { installGlut, glutBuiltins } from './glut.js';
+import { installGlu, gluBuiltins } from './glu.js';
 import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
 import { installGlx, glxBuiltins } from './glx.js';
 import { installFxMesa, fxmesaBuiltins, FXMESA_H } from './fxmesa.js';
@@ -135,6 +136,11 @@ export const ENV = {
    * translation unit for every program would change the JavaScript every existing target emits.
    */
   getopt: { install: () => ({}), vars: GETOPT_VARS },
+  // POSIX's time zone variables, for a program that reads them (Tcl's clock). There is no zone: GMT.
+  // The environment as an array, for a program that walks it (Tcl copies it into $env). It is empty:
+  // getenv answers from the host's own table (stdio.js), and nothing here is inherited from a parent.
+  environ: { install: () => ({}), vars: 'static char *__prism_environ[1];\nchar **environ = __prism_environ;\n' },
+  tz: { install: () => ({}), vars: 'long timezone = 0;\nchar *tzname[2] = { "GMT", "GMT" };\n' },
 
   // The POSIX side, for the one target that is not a DOS program.
   x11: { install: (M, _c, o) => installX11(M, o) },
@@ -208,6 +214,8 @@ export const ENV = {
    */
   gl: { install: (M, _c, o) => installGL(M, o), headers: GL_HEADERS, builtins: glBuiltins(T) },
   glut: { needs: ['gl'], install: (M, _c, o) => installGlut(M, o), builtins: glutBuiltins(T) },
+  // GLU over that GL (src/env/glu.js): the projection helper, quadric spheres, mipmap building.
+  glu: { needs: ['gl'], install: (M) => installGlu(M), builtins: gluBuiltins(T) },
   // GLX on the X11 shim, for GLQuake's gl_vidlinuxglx.c. See src/env/glx.js.
   // Mesa's 3Dfx context API, for Quake II's own Linux GL build (linux/gl_fxmesa.c). See src/env/fxmesa.js.
   fxmesa: { needs: ['gl'], install: (M, _c, o) => installFxMesa(M, o), headers: { 'GL/fxmesa.h': FXMESA_H }, builtins: fxmesaBuiltins(T) },

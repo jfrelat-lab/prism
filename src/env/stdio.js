@@ -686,9 +686,10 @@ export function installStdio(M, {
   api.getwd = (buf) => api.getcwd(buf, 4096);
 
   api.close = (fd) => api.fclose(fd);
-  // Descriptors 1 and 2 are stdout and stderr -- under a 16-bit model, where the program's handle
-  // numbers are DOS's; i386 keeps its own numbering untouched.
-  const stdFd = (fd) => (small && (fd | 0) === 1 ? STDOUT : small && (fd | 0) === 2 ? STDERR : fd);
+  // Descriptors 1 and 2 are stdout and stderr, under every model. On i386 they used to pass through
+  // as the numbers 1 and 2, which name no stream, and fwrite dropped the bytes without a word: Tcl
+  // writes its standard channels with write(2), and `puts` printed nothing.
+  const stdFd = (fd) => ((fd | 0) === 1 ? STDOUT : (fd | 0) === 2 ? STDERR : fd);
   api.write = (fd, src, n) => { api.fwrite(src, 1, n, stdFd(fd)); return n | 0; };
   // fd 0 is stdin. It is a distinct number from the FILE* stdin above, and a program that mixes the
   // two -- soundsrv.c reads fd 0 while printing through stderr -- must find both working.
@@ -935,10 +936,13 @@ export function installStdio(M, {
      */
     lseek: (fd, off, whence) => {
       const h = fileOf(fd);
-      if (!h) return -1;
+      // Why it failed is part of the answer: the three standard streams exist and cannot seek (ESPIPE),
+      // anything else unknown is not a descriptor (EBADF). Tcl tells them apart to decide whether
+      // stdout is there at all -- with errno left stale it concluded there was none, and `puts` was mute.
+      if (!h) { setErrno(fd >= 0 && fd <= 2 ? 29 : 9); return -1; }
       const base = whence === SEEK_CUR ? h.pos : whence === SEEK_END ? h.bytes.length : 0;
       const p = base + (off | 0);
-      if (p < 0) return -1;
+      if (p < 0) { setErrno(22); return -1; }
       h.pos = p; h.eof = false;
       return p;
     },
@@ -1004,6 +1008,41 @@ export function installStdio(M, {
       return M.__tm;
     },
     gmtime: (tp) => api.localtime(tp),
+    // The caller's struct tm instead of the shared one (nine ints).
+    localtime_r: (tp, res) => { const t = api.localtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + 36); return res; },
+    gmtime_r: (tp, res) => api.localtime_r(tp, res),
+    tzset: () => {},
+    // The path made absolute and tidy, when it names something that exists (there are no links to follow).
+    realpath: (pathPtr, out) => {
+      const hit = find(M.mod.cstr(pathPtr), { guess: false });
+      if (hit === null) { setErrno(2); return 0; }
+      const text = `/${hit}`;
+      const at = out || M.rt.malloc(text.length + 1);
+      for (let k = 0; k <= text.length; k++) M.u8[at + k] = k < text.length ? text.charCodeAt(k) : 0;
+      return at;
+    },
+    mknod: () => (setErrno(38), -1), mkfifo: () => (setErrno(38), -1), endgrent: () => {},
+    recv: () => (setErrno(88), -1), send: () => (setErrno(88), -1), accept: () => (setErrno(88), -1),
+    /*
+     * What a page has no kernel for. Each fails the way the call fails where the facility is absent,
+     * so that a program which checks its result -- Tcl's pipe and exec code, its socket options --
+     * takes its own error path: ENOSYS for processes and links, ECHILD for a wait with no children.
+     */
+    pipe: () => (setErrno(38), -1), fork: () => (setErrno(38), -1), execvp: () => (setErrno(38), -1),
+    dup: () => (setErrno(38), -1), dup2: () => (setErrno(38), -1),
+    symlink: () => (setErrno(38), -1), link: () => (setErrno(38), -1), chown: () => 0,
+    wait: () => (setErrno(10), -1), waitpid: () => (setErrno(10), -1),
+    utime: (path) => (find(M.mod.cstr(path)) === null ? (setErrno(2), -1) : 0),
+    uname: (u) => {
+      ['PRISM', 'prism', '1.0', '1', 'i386', ''].forEach((s, i) => { for (let k = 0; k <= s.length; k++) M.u8[u + i * 65 + k] = k < s.length ? s.charCodeAt(k) : 0; });
+      return 0;
+    },
+    getgrnam: () => 0, getgrgid: () => 0, getpwent: () => 0, setpwent: () => {}, endpwent: () => {},
+    getsockopt: () => (setErrno(88), -1), getpeername: () => (setErrno(88), -1), getsockname: () => (setErrno(88), -1),
+    listen: () => (setErrno(88), -1), connect: () => (setErrno(88), -1),
+    gethostbyaddr: () => 0, getservbyname: () => 0,
+    cfgetispeed: () => 0, cfgetospeed: () => 0, cfsetispeed: () => 0, cfsetospeed: () => 0,
+    tcflush: () => (setErrno(25), -1), tcdrain: () => (setErrno(25), -1),
 
     /*
      * User and group ids. There is one user here and it owns everything, so 0 is not a stand-in for
@@ -1097,6 +1136,7 @@ export function installStdio(M, {
       M.u8[d.buf + bytes.length] = 0;
       return d.buf;
     },
+    rewinddir: (handle) => { const d = dirs[(handle | 0) - DIR_BASE]; if (d) d.i = 0; },
     closedir: (handle) => {
       const d = dirs[(handle | 0) - DIR_BASE];
       if (d) { if (d.buf) M.rt.free(d.buf); dirs[(handle | 0) - DIR_BASE] = null; }

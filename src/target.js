@@ -420,6 +420,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     enums: c.enums,
     // ...and, for a compiler that could answer sizeof inside #if, the sizes it would have given.
     ppSizeof: c.ppSizeof ?? null,
+    // ...and whether it let an invalid token paste through, as gcc 2.x did (src/cpp/cpp.js).
+    lenientPaste: !!c.lenientPaste,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*

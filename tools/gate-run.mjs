@@ -1726,6 +1726,46 @@ int main(void)
 }
 `);
 
+// Tcl 8.4 is K&R throughout: `Tcl_Obj *CONST objv[];` after the parameter list. An array parameter
+// is a pointer there too -- sizeof says so, and so does writing through it.
+C('kr-array-parameter-decays', `#include <stdio.h>
+static int total(n, v, names)
+    int n;
+    int v[];
+    char *const names[];
+{
+    int i, s = 0;
+    for (i = 0; i < n; i++) s += v[i];
+    v[0] = 99;
+    return s * 100 + (int)(sizeof(v) == sizeof(int *)) * 10 + (names[1][0] == 98);
+}
+int main(void)
+{
+    int a[3] = { 1, 2, 3 };
+    char *const names[2] = { "a", "b" };
+    int t = total(3, a, names);
+    printf("%d %d\\n", t, a[0]);
+    return 0;
+}
+`);
+
+// Descriptor 1 IS stdout: write(2) to it is output, not nothing, and lseek on it fails because it
+// cannot seek, not because it does not exist. (Only write(), so that no stdio buffer is involved.)
+C('write-to-the-standard-descriptors', `#include <unistd.h>
+#include <errno.h>
+#include <stdio.h>
+int main(void)
+{
+    char buf[32];
+    int n, r;
+    write(1, "one\\n", 4);
+    r = (int)lseek(1, 0, SEEK_CUR);
+    n = sprintf(buf, "%d %d\\n", r, r == -1 && errno == EBADF);
+    write(1, buf, n);
+    return 0;
+}
+`);
+
 C('rand-matches-the-reference', `#include <stdio.h>
 #include <stdlib.h>
 

@@ -408,6 +408,21 @@ export const BUILTINS = new Map(Object.entries({
   atexit: { ret: I, params: [P] },
   sbrk: { ret: P, params: [I] },
   strtol: { ret: T.LONG, params: [P, P, I] },
+  strtoll: { ret: T.LLONG, params: [P, P, I] }, modf: { ret: D, params: [D, P] }, finite: { ret: I, params: [D] }, isnan: { ret: I, params: [D] }, isinf: { ret: I, params: [D] }, realpath: { ret: P, params: [P, P] }, rewinddir: { ret: V, params: [P] },
+  mknod: { ret: I, params: [P, U, I] }, mkfifo: { ret: I, params: [P, U] }, endgrent: { ret: V, params: [] },
+  recv: { ret: I, params: [I, P, U, I] }, send: { ret: I, params: [I, P, U, I] }, accept: { ret: I, params: [I, P, P] },
+  strtoull: { ret: T.ULLONG, params: [P, P, I] },
+  cosh: { ret: D, params: [D] }, sinh: { ret: D, params: [D] }, tanh: { ret: D, params: [D] }, hypot: { ret: D, params: [D, D] },
+  gmtime_r: { ret: P, params: [P, P] }, localtime_r: { ret: P, params: [P, P] }, tzset: { ret: V, params: [] },
+  pipe: { ret: I, params: [P] }, fork: { ret: I, params: [] }, dup: { ret: I, params: [I] }, dup2: { ret: I, params: [I, I] },
+  symlink: { ret: I, params: [P, P] }, link: { ret: I, params: [P, P] }, chown: { ret: I, params: [P, I, I] }, execvp: { ret: I, params: [P, P] },
+  wait: { ret: I, params: [P] }, waitpid: { ret: I, params: [I, P, I] }, utime: { ret: I, params: [P, P] }, uname: { ret: I, params: [P] },
+  getgrnam: { ret: P, params: [P] }, getgrgid: { ret: P, params: [U] }, getpwent: { ret: P, params: [] }, setpwent: { ret: V, params: [] }, endpwent: { ret: V, params: [] },
+  getsockopt: { ret: I, params: [I, I, I, P, P] }, getpeername: { ret: I, params: [I, P, P] }, getsockname: { ret: I, params: [I, P, P] },
+  listen: { ret: I, params: [I, I] }, connect: { ret: I, params: [I, P, U] },
+  gethostbyaddr: { ret: P, params: [P, U, I] }, getservbyname: { ret: P, params: [P, P] },
+  cfgetispeed: { ret: U, params: [P] }, cfgetospeed: { ret: U, params: [P] }, cfsetispeed: { ret: I, params: [P, U] }, cfsetospeed: { ret: I, params: [P, U] },
+  tcflush: { ret: I, params: [I, I] }, tcdrain: { ret: I, params: [I] },
   strtod: { ret: D, params: [P, P] }, strtof: { ret: FLT, params: [P, P] },
   localeconv: { ret: P, params: [] }, setlocale: { ret: P, params: [I, P] },
   mktime: { ret: T.LONG, params: [P] }, difftime: { ret: D, params: [T.LONG, T.LONG] },
@@ -938,7 +953,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, ppSizeof = null, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -965,6 +980,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
      */
     const pp = new Preprocessor({
       ppSizeof,
+      lenientPaste,
       defines: mergeDefines(mergeDefines(mergeDefines(TARGET_DEFINES, { ...modelDefines(model, signedChar), ...longDoubleDefines(longDouble) }),
         defines), u.defines ?? {}),
       resolve: resolver,
@@ -1270,6 +1286,21 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
      */
     for (const name of p.funcs.keys()) if (!p.globals.has(name)) ctx.globals.delete(name);
     for (const name of p.globals.keys()) if (!p.funcs.has(name)) ctx.funcs.delete(name);
+    /*
+     * A FUNCTION is typed, in each unit, by THAT unit's declaration of it -- as an extern object
+     * already is (see externDecls above). The function's record is one for the whole program and
+     * carried the type of whichever unit declared it last: Tcl's tclUtf.c sees
+     * `struct tm *TclpGetDate()` through tclInt.h without ever including <time.h>, so its struct tm
+     * is incomplete, and that type reached tclDate.c, which writes `TclpGetDate(...)->tm_isdst` with
+     * the members in plain sight. A view of the record with this unit's type, sharing everything else.
+     */
+    for (const d of p.unit.decls) {
+      if (!(d.n === 'func' || (d.n === 'vardecl' && d.type.k === 'func'))) continue;
+      const f = ctx.funcs.get(d.name);
+      if (!f || f.type === d.type) continue;
+      const base = Object.getPrototypeOf(f) === Object.prototype ? f : Object.getPrototypeOf(f);
+      ctx.funcs.set(d.name, Object.assign(Object.create(base), { type: d.type }));
+    }
     for (const d of p.unit.decls) {
       if (d.n === 'vardecl') {
         if (!d.init) continue;

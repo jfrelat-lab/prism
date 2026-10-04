@@ -603,7 +603,8 @@ class CxxParser {
   }
 
   typeId() {
-    const specs = this.declSpecifiers({ allowNone: false });
+    // A type named where no declaration can be: `A(` here is never A's constructor being declared.
+    const specs = this.declSpecifiers({ allowNone: false, inExpr: true });
     const d = this.declarator({ abstract: true });
     return { specs, derivs: d.derivs };
   }
@@ -772,7 +773,7 @@ class CxxParser {
     let type;
     if (this.isP('(')) { this.next(); type = this.typeId(); this.expectP(')'); }
     else {
-      const specs = this.declSpecifiers({ allowNone: false });
+      const specs = this.declSpecifiers({ allowNone: false, inExpr: true });
       const derivs = [];
       while (this.eatP('*')) derivs.push({ k: 'ptr', cv: this.cvList() });
       type = { specs, derivs };

@@ -586,6 +586,41 @@ function makeLibc(M) {
       return Math.max(-2147483648, Math.min(2147483647, r)) | 0;
     },
     strtoul: (p, endp, base) => M.rt.__strtoNum(p, endp, base | 0, false) >>> 0,
+    // 64 bits need every digit: parsed as integers, not through a double (exact only to 2^53). Out of
+    // range clamps to the limit and sets ERANGE, as C says.
+    strtoll: (p, endp, base) => {
+      const r = M.rt.__strtoBig(p, endp, base | 0);
+      const lim = r.neg ? 1n << 63n : (1n << 63n) - 1n;
+      if (r.mag > lim) { M.rt.__setErrno?.(34); return r.neg ? -(1n << 63n) : lim; }
+      return r.neg ? -r.mag : r.mag;
+    },
+    strtoull: (p, endp, base) => {
+      const r = M.rt.__strtoBig(p, endp, base | 0);
+      if (r.mag > (1n << 64n) - 1n) { M.rt.__setErrno?.(34); return (1n << 64n) - 1n; }
+      return BigInt.asUintN(64, r.neg ? -r.mag : r.mag);
+    },
+    __setErrno: (v) => { const e = M.mod.symbols?.get('errno'); if (e) M.mod.dv.setInt32(e.addr, v, true); },
+    __strtoBig(p, endp, base) {
+      const s = M.cstr(p);
+      let i = 0;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      let neg = false;
+      if (s[i] === '+' || s[i] === '-') { neg = s[i] === '-'; i++; }
+      if ((base === 0 || base === 16) && s[i] === '0' && /[xX]/.test(s[i + 1] ?? '') && /[0-9a-fA-F]/.test(s[i + 2] ?? '')) { i += 2; base = 16; }
+      else if (base === 0) base = s[i] === '0' ? 8 : 10;
+      const start = i;
+      let mag = 0n;
+      for (; i < s.length; i++) {
+        const c = s[i].toLowerCase(), d = c >= '0' && c <= '9' ? c.charCodeAt(0) - 48 : c >= 'a' && c <= 'z' ? c.charCodeAt(0) - 87 : 99;
+        if (d >= base) break;
+        mag = mag * BigInt(base) + BigInt(d);
+      }
+      if (endp) M.mod.dv.setInt32(endp, i === start ? p : p + i, true);
+      return { neg, mag };
+    },
+ finite: (x) => +Number.isFinite(x), isnan: (x) => +Number.isNaN(x), isinf: (x) => (x === Infinity ? 1 : x === -Infinity ? -1 : 0),
+    cosh: Math.cosh, modf: (x, ip) => { const i = Number.isFinite(x) ? Math.trunc(x) : x; M.mod.dv.setFloat64(ip, i, true); return Number.isFinite(x) ? x - i : (Number.isNaN(x) ? x : 0 * x); },
+    sinh: Math.sinh, tanh: Math.tanh, hypot: (x, y) => Math.hypot(x, y),
     __strtoNum(p, endp, base, signed) {
       const s = M.cstr(p);
       let i = 0;

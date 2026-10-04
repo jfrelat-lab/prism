@@ -16,11 +16,22 @@
  *   clip          a floor that passes through the near plane, and a quad partly behind the eye
  *   depth         glDepthRange(0, 0.3) and GL_LEQUAL, as Quake draws its view model
  *
+ * And what Tux Racer added (its terrain is textured by position, its ice by reflection):
+ *
+ *   texgen-object a floor with no texture coordinates, textured by GL_OBJECT_LINEAR planes
+ *   texgen-sphere a dome with normals under GL_SPHERE_MAP, the environment map of the ice
+ *   arrays-normal the same dome lit, drawn by glDrawElements from vertex and normal arrays
+ *   colour-material  the dome lit under GL_COLOR_MATERIAL, its colour and ALPHA per vertex, blended
+ *                 over a quad -- how the terrain's snow, ice and rock layers fade into each other
+ *   matrix-rect   glMultMatrixd, glRectf and glRecti, and a 2x2 RGB texture whose rows are padded
+ *                 to GL_UNPACK_ALIGNMENT (4, then 1)
+ *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <GL/glut.h>
 
 static const char *scene = "tex-nearest";
@@ -49,6 +60,23 @@ static void floorQuad(float z0, float z1, float repeat) {
   glTexCoord2f(repeat, repeat); glVertex3f(4, -1, z1);
   glTexCoord2f(0, repeat); glVertex3f(-4, -1, z1);
   glEnd();
+}
+/* A 17x17 dome over [-2,2]x[-2,2]: z = 0.5 - (x*x + y*y) / 16, with its unit normals. */
+static GLfloat domeV[17 * 17][3], domeN[17 * 17][3];
+static GLuint domeI[16 * 16 * 6];
+static void dome(void) {
+  int n = 0;
+  for (int j = 0; j <= 16; j++) for (int i = 0; i <= 16; i++) {
+    float x = -2 + i * 0.25f, y = -2 + j * 0.25f, nx = x / 8, ny = y / 8;
+    float l = (float)sqrt(nx * nx + ny * ny + 1);
+    GLfloat *v = domeV[j * 17 + i], *nn = domeN[j * 17 + i];
+    v[0] = x; v[1] = y; v[2] = 0.5f - (x * x + y * y) / 16;
+    nn[0] = nx / l; nn[1] = ny / l; nn[2] = 1 / l;
+  }
+  for (int j = 0; j < 16; j++) for (int i = 0; i < 16; i++) {
+    GLuint a = j * 17 + i, b = a + 1, c = a + 17, d = c + 1;
+    domeI[n++] = a; domeI[n++] = b; domeI[n++] = d; domeI[n++] = a; domeI[n++] = d; domeI[n++] = c;
+  }
 }
 static void display(void) {
   glClearColor(0.1, 0.1, 0.2, 1);
@@ -123,6 +151,103 @@ static void display(void) {
     glDepthRange(0, 0.3); glDepthFunc(GL_LEQUAL);
     glColor3f(0.9, 0.9, 0.2); glBegin(GL_TRIANGLES); glVertex3f(-1, -1, -8); glVertex3f(1.5, -1, -8); glVertex3f(0, 1.5, -8); glEnd();
     glDepthRange(0, 1); glDepthFunc(GL_LESS);
+  } else if (!strcmp(scene, "texgen-object")) {
+    GLfloat sp[4] = { 0.5f, 0, 0, 0.25f }, tp[4] = { 0, 0, 0.125f, 0 };
+    glBindTexture(GL_TEXTURE_2D, 1); upload(0);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glEnable(GL_TEXTURE_2D);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR); glTexGenfv(GL_S, GL_OBJECT_PLANE, sp);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR); glTexGenfv(GL_T, GL_OBJECT_PLANE, tp);
+    glEnable(GL_TEXTURE_GEN_S); glEnable(GL_TEXTURE_GEN_T);
+    glBegin(GL_QUADS); glVertex3f(-4, -1, -1.5f); glVertex3f(4, -1, -1.5f); glVertex3f(4, -1, -40); glVertex3f(-4, -1, -40); glEnd();
+    glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T);
+  } else if (!strcmp(scene, "texgen-sphere") || !strcmp(scene, "arrays-normal")) {
+    dome();
+    glPushMatrix();
+    glTranslatef(0, 0, -4.5f); glRotatef(-35, 1, 0, 0); glRotatef(20, 0, 0, 1);
+    if (!strcmp(scene, "texgen-sphere")) {
+      glBindTexture(GL_TEXTURE_2D, 1); upload(0);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+      glEnable(GL_TEXTURE_2D);
+      glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP); glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+      glEnable(GL_TEXTURE_GEN_S); glEnable(GL_TEXTURE_GEN_T);
+      for (int j = 0; j < 16; j++) {
+        glBegin(GL_QUAD_STRIP);
+        for (int i = 0; i <= 16; i++) {
+          glNormal3fv(domeN[j * 17 + i]); glVertex3fv(domeV[j * 17 + i]);
+          glNormal3fv(domeN[(j + 1) * 17 + i]); glVertex3fv(domeV[(j + 1) * 17 + i]);
+        }
+        glEnd();
+      }
+      glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T);
+    } else {
+      GLfloat diffuse[4] = { 0.3f, 0.6f, 0.9f, 1 }, dir[4] = { 0.4f, 0.3f, 1, 0 };
+      glDisable(GL_TEXTURE_2D);
+      glEnable(GL_LIGHTING); glEnable(GL_LIGHT0);
+      glLightfv(GL_LIGHT0, GL_POSITION, dir);
+      glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE, diffuse);
+      glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_NORMAL_ARRAY);
+      glVertexPointer(3, GL_FLOAT, 0, domeV); glNormalPointer(GL_FLOAT, 0, domeN);
+      glDrawElements(GL_TRIANGLES, 16 * 16 * 6, GL_UNSIGNED_INT, domeI);
+      glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_NORMAL_ARRAY);
+      glDisable(GL_LIGHTING);
+    }
+    glPopMatrix();
+  } else if (!strcmp(scene, "colour-material")) {
+    GLfloat dir[4] = { 0.4f, 0.3f, 1, 0 };
+    dome();
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(0.9f, 0.5f, 0.1f, 1);
+    glBegin(GL_QUADS); glVertex3f(-3, -2, -7); glVertex3f(3, -2, -7); glVertex3f(3, 2, -7); glVertex3f(-3, 2, -7); glEnd();
+    glPushMatrix();
+    glTranslatef(0, 0, -4.5f); glRotatef(-35, 1, 0, 0); glRotatef(20, 0, 0, 1);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0);
+    glLightfv(GL_LIGHT0, GL_POSITION, dir);
+    glEnable(GL_COLOR_MATERIAL);
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (int j = 0; j < 16; j++) {
+      glBegin(GL_QUAD_STRIP);
+      for (int i = 0; i <= 16; i++) {
+        for (int k = 0; k < 2; k++) {
+          int jj = j + k;
+          glColor4f(i / 16.0f, 1 - jj / 16.0f, 0.8f, (i + jj) / 32.0f);
+          glNormal3fv(domeN[jj * 17 + i]); glVertex3fv(domeV[jj * 17 + i]);
+        }
+      }
+      glEnd();
+    }
+    glDisable(GL_BLEND); glDisable(GL_COLOR_MATERIAL); glDisable(GL_LIGHTING);
+    glPopMatrix();
+  } else if (!strcmp(scene, "matrix-rect")) {
+    static const GLdouble m[16] = { 0.8, 0.3, 0, 0, -0.3, 0.8, 0, 0, 0, 0, 1, 0, -1.2, 0.3, -5, 1 };
+    /* 2x2 RGB: a row is 6 bytes, padded to 8 under the default alignment of 4. */
+    static const unsigned char padded[16] = { 255,0,0, 0,255,0, 99,99,  0,0,255, 255,255,0, 99,99 };
+    static const unsigned char tight[12] = { 255,0,255, 0,255,255,  255,255,255, 60,60,60 };
+    GLfloat sp[4] = { 0.5f, 0, 0, 0.5f }, tp[4] = { 0, 0.5f, 0, 0.5f };
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR); glTexGenfv(GL_S, GL_OBJECT_PLANE, sp);
+    glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR); glTexGenfv(GL_T, GL_OBJECT_PLANE, tp);
+    glEnable(GL_TEXTURE_GEN_S); glEnable(GL_TEXTURE_GEN_T); glEnable(GL_TEXTURE_2D);
+    glPushMatrix();
+    glMultMatrixd(m);
+    glBindTexture(GL_TEXTURE_2D, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, padded);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glRectf(-1, -1, 1, 1);
+    glPopMatrix();
+    glPushMatrix();
+    glTranslatef(1.6f, -0.4f, -5);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glBindTexture(GL_TEXTURE_2D, 2);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, tight);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glRecti(-1, -1, 1, 1);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPopMatrix();
+    glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T);
   }
   glutSwapBuffers();
 }

@@ -238,6 +238,12 @@ long labs(long v);
 #endif
 long strtol(const char *s, char **end, int base);
 unsigned long strtoul(const char *s, char **end, int base);
+/* 64-bit conversions, where there is a 64-bit integer: a real-mode compiler has no long long. */
+#ifndef __PRISM_REALMODE__
+long long strtoll(const char *s, char **end, int base);
+char *realpath(const char *path, char *resolved);
+unsigned long long strtoull(const char *s, char **end, int base);
+#endif
 `;
 
 const STRING = `
@@ -308,6 +314,10 @@ double sqrt(double x);
 double sin(double x);
 double cos(double x);
 double tan(double x);
+double cosh(double x);
+double sinh(double x);
+double tanh(double x);
+double hypot(double x, double y);
 double atan(double x);
 double asin(double x);
 double round(double x);
@@ -322,6 +332,11 @@ double log(double x);
 double log10(double x);
 double pow(double x, double y);
 double floor(double x);
+double modf(double x, double *ip);
+/* The classification functions, as glibc's <math.h> declares them (BSD's finite, and isnan/isinf). */
+int finite(double x);
+int isnan(double x);
+int isinf(double x);
 double ceil(double x);
 double fabs(double x);
 double fmod(double x, double y);
@@ -545,6 +560,14 @@ struct tm {
 struct timespec { long tv_sec; long tv_nsec; };
 struct tm *localtime(const long *t);
 struct tm *gmtime(const long *t);
+/* The re-entrant forms fill the caller's struct tm. There is no time zone: tzset has nothing to read. */
+struct tm *gmtime_r(const long *t, struct tm *result);
+struct tm *localtime_r(const long *t, struct tm *result);
+void tzset(void);
+/* POSIX's time zone variables. Declared here; DEFINED by the tz environment, which a target that
+   uses them names -- every other program keeps the right to its own timezone. */
+extern long timezone;
+extern char *tzname[2];
 char *asctime(const struct tm *tm);
 char *ctime(const long *t);
 long mktime(struct tm *tm);
@@ -717,6 +740,7 @@ typedef struct __prism_DIR DIR;
 DIR *opendir(const char *path);
 struct dirent *readdir(DIR *d);
 int closedir(DIR *d);
+void rewinddir(DIR *d);
 #endif
 `;
 
@@ -806,6 +830,16 @@ int fchmod(int fd, mode_t mode);
 int fchown(int fd, uid_t owner, gid_t group);
 int rmdir(const char *path);
 int geteuid(void);
+/* Processes, descriptors and links. There is one process and no kernel: fork and pipe fail with
+   ENOSYS, as on a system without them, and a program that checks -- every one must -- goes on. */
+int pipe(int fd[2]);
+int fork(void);
+int dup(int fd);
+int dup2(int from, int to);
+int symlink(const char *target, const char *path);
+int link(const char *from, const char *to);
+int chown(const char *path, int owner, int group);
+int execvp(const char *file, char *const argv[]);
 int getuid(void);
 int getgid(void);
 int getpid(void);
@@ -980,6 +1014,32 @@ struct stat {
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
 #define S_ISCHR(m)  (((m) & S_IFMT) == S_IFCHR)
 #define S_IFLNK  0120000
+#ifndef S_IFBLK
+#define S_IFBLK  0060000
+#define S_IFIFO  0010000
+#define S_IFSOCK 0140000
+#endif
+#ifndef S_ISBLK
+#define S_ISBLK(m)  (((m) & S_IFMT) == S_IFBLK)
+#define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
+#define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
+#endif
+#ifndef S_ISLNK
+#define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
+#endif
+#ifndef S_IWOTH
+#define S_IRGRP 0040
+#define S_IWGRP 0020
+#define S_IXGRP 0010
+#define S_IRWXG 0070
+#define S_IROTH 0004
+#define S_IWOTH 0002
+#define S_IXOTH 0001
+#define S_IRWXO 0007
+#define S_ISUID 04000
+#define S_ISGID 02000
+#define S_ISVTX 01000
+#endif
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 #define S_IRUSR 0400
 #define S_IWUSR 0200
@@ -989,6 +1049,8 @@ int stat(const char *path, struct stat *st);
 int fstat(int fd, struct stat *st);
 int lstat(const char *path, struct stat *st);
 int mkdir(const char *path, mode_t mode);
+int mknod(const char *path, mode_t mode, int dev);
+int mkfifo(const char *path, mode_t mode);
 int chmod(const char *path, mode_t mode);
 mode_t umask(mode_t mask);
 #endif
@@ -1020,6 +1082,22 @@ const SYS_IOCTL = `
 #ifndef _PRISM_SYS_IOCTL_H
 #define _PRISM_SYS_IOCTL_H
 int ioctl(int fd, unsigned long request, ...);
+/* Linux's request numbers for a terminal line (asm-generic/ioctls.h), for programs that name them. */
+#ifndef TIOCMGET
+#define TIOCOUTQ 0x5411
+#define TIOCMGET 0x5415
+#define TIOCMSET 0x5418
+#define FIONREAD 0x541B
+#define FIONBIO 0x5421
+#define TIOCSBRK 0x5427
+#define TIOCCBRK 0x5428
+#define TIOCM_DTR 0x002
+#define TIOCM_RTS 0x004
+#define TIOCM_CTS 0x020
+#define TIOCM_CD 0x040
+#define TIOCM_RNG 0x080
+#define TIOCM_DSR 0x100
+#endif
 #endif
 `;
 
@@ -1729,13 +1807,44 @@ int socket(int domain, int type, int protocol);
 int bind(int fd, const struct sockaddr *addr, unsigned int len);
 int sendto(int fd, const void *buf, size_t n, int flags, const struct sockaddr *to, unsigned int tolen);
 int recvfrom(int fd, void *buf, size_t n, int flags, struct sockaddr *from, unsigned int *fromlen);
+int recv(int fd, void *buf, size_t n, int flags);
+int send(int fd, const void *buf, size_t n, int flags);
+#ifndef _PRISM_ACCEPT
+#define _PRISM_ACCEPT
+int accept(int fd, struct sockaddr *addr, unsigned int *len);
+#endif
 int setsockopt(int fd, int level, int name, const void *val, unsigned int len);
+int getsockopt(int fd, int level, int name, void *val, unsigned int *len);
+int getpeername(int fd, struct sockaddr *addr, unsigned int *len);
+int getsockname(int fd, struct sockaddr *addr, unsigned int *len);
+#ifndef _PRISM_SOCKET_MORE
+#define _PRISM_SOCKET_MORE
+typedef unsigned int socklen_t;
+int listen(int fd, int backlog);
+int connect(int fd, const struct sockaddr *addr, unsigned int len);
+#endif
 #define AF_INET 2
+#ifndef AF_UNSPEC
+#define AF_UNSPEC 0
+#define AF_UNIX 1
+#endif
 #define PF_INET 2
 #define FIONBIO 0x5421
 #define MSG_DONTWAIT 0x40
 #define SOCK_DGRAM 2
+#ifndef SOCK_STREAM
+#define SOCK_STREAM 1
+#endif
 #define SOL_SOCKET 1
+#ifndef SO_ERROR
+#define SO_ERROR 4
+#ifndef SO_REUSEADDR
+#define SO_REUSEADDR 2
+#endif
+#define SO_SNDBUF 7
+#define SO_RCVBUF 8
+#define SO_KEEPALIVE 9
+#endif
 #define IPPROTO_UDP 17
 #define IPPROTO_IP 0
 #define SO_BROADCAST 6
@@ -1759,6 +1868,9 @@ char *inet_ntoa(struct in_addr in);
   'netdb.h': `
 struct hostent { char *h_name; char **h_aliases; int h_addrtype; int h_length; char **h_addr_list; };
 struct hostent *gethostbyname(const char *name);
+struct hostent *gethostbyaddr(const void *addr, unsigned int len, int type);
+struct servent { char *s_name; char **s_aliases; int s_port; char *s_proto; };
+struct servent *getservbyname(const char *name, const char *proto);
 `,
   /*
    * OSS, the sound interface a Linux program of this era writes to. The numbers were all 0 while it
@@ -1922,10 +2034,16 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'errno.h': ERRNO,
   'fcntl.h': FCNTL,
   'unistd.h': UNISTD,
-  'termios.h': "#ifndef _PRISM_TERMIOS_H\n#define _PRISM_TERMIOS_H\n/* glibc's i386 layout (60 bytes). There is no terminal here: isatty() says so, and tcgetattr and\n   tcsetattr fail with ENOTTY, which is what they do on a descriptor that is not one. */\ntypedef unsigned char cc_t;\ntypedef unsigned int speed_t;\ntypedef unsigned int tcflag_t;\n#define NCCS 32\nstruct termios {\n    tcflag_t c_iflag, c_oflag, c_cflag, c_lflag;\n    cc_t c_line;\n    cc_t c_cc[NCCS];\n    speed_t c_ispeed, c_ospeed;\n};\n#define VINTR 0\n#define VQUIT 1\n#define VERASE 2\n#define VKILL 3\n#define VEOF 4\n#define VTIME 5\n#define VMIN 6\n#define ISIG 0000001\n#define ICANON 0000002\n#define ECHO 0000010\n#define INPCK 0000020\n#define ISTRIP 0000040\n#define TCSANOW 0\n#define TCSADRAIN 1\n#define TCSAFLUSH 2\nint tcgetattr(int fd, struct termios *t);\nint tcsetattr(int fd, int when, const struct termios *t);\n#endif\n",
-  'pwd.h': "#ifndef _PRISM_PWD_H\n#define _PRISM_PWD_H\n#include <sys/types.h>\n/* glibc's i386 layout (28 bytes). There is no user database: getpwuid finds nobody. */\nstruct passwd {\n    char *pw_name; char *pw_passwd; uid_t pw_uid; gid_t pw_gid;\n    char *pw_gecos; char *pw_dir; char *pw_shell;\n};\nstruct passwd *getpwuid(uid_t uid);\nstruct passwd *getpwnam(const char *name);\n#endif\n",
+  'termios.h': "#ifndef _PRISM_TERMIOS_H\n#define _PRISM_TERMIOS_H\n/* glibc's i386 layout (60 bytes). There is no terminal here: isatty() says so, and tcgetattr and\n   tcsetattr fail with ENOTTY, which is what they do on a descriptor that is not one. */\ntypedef unsigned char cc_t;\ntypedef unsigned int speed_t;\ntypedef unsigned int tcflag_t;\n#define NCCS 32\nstruct termios {\n    tcflag_t c_iflag, c_oflag, c_cflag, c_lflag;\n    cc_t c_line;\n    cc_t c_cc[NCCS];\n    speed_t c_ispeed, c_ospeed;\n};\n#define VINTR 0\n#define VQUIT 1\n#define VERASE 2\n#define VKILL 3\n#define VEOF 4\n#define VTIME 5\n#define VMIN 6\n#define ISIG 0000001\n#define ICANON 0000002\n#define ECHO 0000010\n#define INPCK 0000020\n#define ISTRIP 0000040\n#define TCSANOW 0\n#define TCSADRAIN 1\n#define TCSAFLUSH 2\n#define B0 0000000\n#define B50 0000001\n#define B75 0000002\n#define B110 0000003\n#define B134 0000004\n#define B150 0000005\n#define B200 0000006\n#define B300 0000007\n#define B600 0000010\n#define B1200 0000011\n#define B1800 0000012\n#define B2400 0000013\n#define B4800 0000014\n#define B9600 0000015\n#define B19200 0000016\n#define B38400 0000017\n#define B57600 0010001\n#define B115200 0010002\n#define B230400 0010003\n#define B460800 0010004\n#define CSIZE 0000060\n#define CS5 0000000\n#define CS6 0000020\n#define CS7 0000040\n#define CS8 0000060\n#define CSTOPB 0000100\n#define CREAD 0000200\n#define PARENB 0000400\n#define PARODD 0001000\n#define HUPCL 0002000\n#define CLOCAL 0004000\n#define CRTSCTS 020000000000\n#define IGNBRK 0000001\n#define BRKINT 0000002\n#define IGNPAR 0000004\n#define PARMRK 0000010\n#define INLCR 0000100\n#define IGNCR 0000200\n#define ICRNL 0000400\n#define IXON 0002000\n#define IXANY 0004000\n#define IXOFF 0010000\n#define OPOST 0000001\n#define ONLCR 0000004\n#define ECHOE 0000020\n#define ECHOK 0000040\n#define ECHONL 0000100\n#define NOFLSH 0000200\n#define TOSTOP 0000400\n#define IEXTEN 0100000\n#define VSTART 8\n#define VSTOP 9\n#define VSUSP 10\n#define VEOL 11\n#define TCIFLUSH 0\n#define TCOFLUSH 1\n#define TCIOFLUSH 2\nspeed_t cfgetispeed(const struct termios *t);\nspeed_t cfgetospeed(const struct termios *t);\nint cfsetispeed(struct termios *t, speed_t s);\nint cfsetospeed(struct termios *t, speed_t s);\nint tcflush(int fd, int queue);\nint tcdrain(int fd);\nint tcgetattr(int fd, struct termios *t);\nint tcsetattr(int fd, int when, const struct termios *t);\n#endif\n",
+  'pwd.h': "#ifndef _PRISM_PWD_H\n#define _PRISM_PWD_H\n#include <sys/types.h>\n/* glibc's i386 layout (28 bytes). There is no user database: getpwuid finds nobody. */\nstruct passwd {\n    char *pw_name; char *pw_passwd; uid_t pw_uid; gid_t pw_gid;\n    char *pw_gecos; char *pw_dir; char *pw_shell;\n};\nstruct passwd *getpwuid(uid_t uid);\nstruct passwd *getpwnam(const char *name);\nstruct passwd *getpwent(void);\nvoid setpwent(void);\nvoid endpwent(void);\n#endif\n",
   'linux/joystick.h': "#ifndef _PRISM_LINUX_JOYSTICK_H\n#define _PRISM_LINUX_JOYSTICK_H\n/* The kernel's joystick ABI (8-byte event). No /dev/js* exists here, so a program finds no joystick. */\nstruct js_event { unsigned int time; short value; unsigned char type; unsigned char number; };\n#define JS_EVENT_BUTTON 0x01\n#define JS_EVENT_AXIS 0x02\n#define JS_EVENT_INIT 0x80\n#define JSIOCGVERSION 0x80046a01\n#define JSIOCGAXES 0x80016a11\n#define JSIOCGBUTTONS 0x80016a12\n#define JSIOCGNAME(len) (0x80006a13 | ((len) << 16))\n#endif\n",
   'dirent.h': DIRENT,
+  'sys/param.h': "#ifndef _PRISM_SYS_PARAM_H\n#define _PRISM_SYS_PARAM_H\n#include <limits.h>\n#ifndef MAXPATHLEN\n#define MAXPATHLEN 4096\n#endif\n#define MAXHOSTNAMELEN 64\n#ifndef MIN\n#define MIN(a,b) (((a)<(b))?(a):(b))\n#define MAX(a,b) (((a)>(b))?(a):(b))\n#endif\n#endif\n",
+  'sys/file.h': "#ifndef _PRISM_SYS_FILE_H\n#define _PRISM_SYS_FILE_H\n#include <fcntl.h>\n#define LOCK_SH 1\n#define LOCK_EX 2\n#define LOCK_NB 4\n#define LOCK_UN 8\n#endif\n",
+  'sys/wait.h': "#ifndef _PRISM_SYS_WAIT_H\n#define _PRISM_SYS_WAIT_H\n/* glibc's encoding of a wait status. There are no child processes: waitpid fails with ECHILD. */\n#define WNOHANG 1\n#define WUNTRACED 2\n#define WEXITSTATUS(s) (((s) & 0xff00) >> 8)\n#define WTERMSIG(s) ((s) & 0x7f)\n#define WSTOPSIG(s) WEXITSTATUS(s)\n#define WIFEXITED(s) (WTERMSIG(s) == 0)\n#define WIFSIGNALED(s) (((signed char)(((s) & 0x7f) + 1) >> 1) > 0)\n#define WIFSTOPPED(s) (((s) & 0xff) == 0x7f)\nint wait(int *status);\nint waitpid(int pid, int *status, int options);\n#endif\n",
+  'utime.h': "#ifndef _PRISM_UTIME_H\n#define _PRISM_UTIME_H\nstruct utimbuf { long actime; long modtime; };\nint utime(const char *path, const struct utimbuf *times);\n#endif\n",
+  'sys/utsname.h': "#ifndef _PRISM_SYS_UTSNAME_H\n#define _PRISM_SYS_UTSNAME_H\n/* glibc's layout: six 65-byte fields. */\nstruct utsname { char sysname[65]; char nodename[65]; char release[65]; char version[65]; char machine[65]; char domainname[65]; };\nint uname(struct utsname *u);\n#endif\n",
+  'grp.h': "#ifndef _PRISM_GRP_H\n#define _PRISM_GRP_H\n/* There is no group database: both lookups find nothing. */\nstruct group { char *gr_name; char *gr_passwd; unsigned int gr_gid; char **gr_mem; };\nstruct group *getgrnam(const char *name);\nstruct group *getgrgid(unsigned int gid);\nvoid endgrent(void);\n#endif\n",
   'locale.h': LOCALE_H,
   'inttypes.h': INTTYPES,
   'wchar.h': WCHAR_H,

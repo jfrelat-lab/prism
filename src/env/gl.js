@@ -36,7 +36,9 @@ const CAP = {
   TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60, SCISSOR_TEST: 0x0c11,
   POLYGON_OFFSET_FILL: 0x8037, CLIP_PLANE0: 0x3000,
 };
-const ARRAY = { 0x8074: 'vertex', 0x8076: 'color', 0x8078: 'tex' };
+// What glEnable acts on (the rest are named in CAP): texture generation, colour material.
+const KNOWN_CAPS = new Set([0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57]);
+const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
 const LIGHT_MODEL = { LOCAL_VIEWER: 0x0b51, TWO_SIDE: 0x0b52, AMBIENT: 0x0b53 };
@@ -147,7 +149,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     envMode: TEX.MODULATE,
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
     textures: new Map([[0, newTexture()]]), bound: 0, nextTexture: 1, genTextures: new Set(),
-    arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false } },
+    arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false }, normal: { on: false } },
+    // glTexGen: per coordinate (s, t) its mode and object plane; the caps TEXTURE_GEN_S/T turn it on.
+    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
+    unpackAlign: 4,
+    colourMaterial: { face: 0x0408, mode: 0x1602 },    // GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE
+    unknownCaps: new Set(),
     scissor: [0, 0, 0, 0], pointSize: 1, lineWidth: 1,
     colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
@@ -193,6 +200,21 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const clip = xform(pr, eye[0], eye[1], eye[2], eye[3]);
     let colour, back = null;
     if (s.caps.has(CAP.LIGHTING)) {
+      /*
+       * GL_COLOR_MATERIAL: the current colour IS the material property it tracks, alpha included (GL 1.1,
+       * 2.13.3). Tux Racer blends its terrain layers -- snow, ice, rock -- by a per-vertex alpha that
+       * reaches the lit colour only this way; ignored, every layer came out opaque.
+       */
+      if (s.caps.has(0x0b57)) {
+        const { face, mode } = s.colourMaterial;
+        for (const m of face === FRONT ? [s.material] : face === BACK ? [s.backMaterial] : [s.material, s.backMaterial]) {
+          if (mode === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = s.colour; m.diffuse = s.colour; }
+          else if (mode === PNAME.AMBIENT) m.ambient = s.colour;
+          else if (mode === PNAME.DIFFUSE) m.diffuse = s.colour;
+          else if (mode === PNAME.SPECULAR) m.specular = s.colour;
+          else if (mode === PNAME.EMISSION) m.emission = s.colour;
+        }
+      }
       const nm = normalMatrix(mv), n = s.normal;
       let en = [nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]];
       if (s.caps.has(CAP.NORMALIZE)) en = norm3(en);
@@ -201,7 +223,23 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // Which of the two a triangle gets is known only once its window-space winding is (triangle()).
       if (s.twoSide) back = litColour(s.backMaterial, [-en[0], -en[1], -en[2]]);
     } else colour = s.colour.map(clamp01);
-    s.verts.push({ clip, colour, back, tex: [s.tex[0], s.tex[1]], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye });
+    // A generated coordinate replaces the current one: the object plane dotted with the vertex as given.
+    let tu = s.tex[0], tv = s.tex[1];
+    const genS = s.caps.has(0x0c60), genT = s.caps.has(0x0c61);
+    if ((genS && s.texGen[0].mode === 0x2402) || (genT && s.texGen[1].mode === 0x2402)) {
+      // GL_SPHERE_MAP (GL 1.1, 2.10.4): the eye-space reflection of the view direction about the normal.
+      const nm = normalMatrix(mv), n = s.normal;
+      const en = norm3([nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]]);
+      const w = eye[3] || 1, u = norm3([eye[0] / w, eye[1] / w, eye[2] / w]);
+      const d = 2 * (en[0] * u[0] + en[1] * u[1] + en[2] * u[2]);
+      const r = [u[0] - d * en[0], u[1] - d * en[1], u[2] - d * en[2]];
+      const m = 2 * Math.sqrt(r[0] * r[0] + r[1] * r[1] + (r[2] + 1) * (r[2] + 1)) || 1;
+      if (genS && s.texGen[0].mode === 0x2402) tu = r[0] / m + 0.5;
+      if (genT && s.texGen[1].mode === 0x2402) tv = r[1] / m + 0.5;
+    }
+    if (genS && s.texGen[0].mode === 0x2401) { const p = s.texGen[0].object; tu = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    if (genT && s.texGen[1].mode === 0x2401) { const p = s.texGen[1].object; tv = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    s.verts.push({ clip, colour, back, tex: [tu, tv], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye });
   }
 
   // --- clipping against the near plane (z + w >= 0), every attribute linear in clip space
@@ -511,8 +549,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const u8 = M.u8, out = new Uint8Array(w * h * 4);
     const n = { [FMT.RGBA]: 4, [FMT.RGB]: 3, [FMT.LUMINANCE]: 1, [FMT.ALPHA]: 1, [FMT.LUMINANCE_ALPHA]: 2, [FMT.INTENSITY]: 1 }[format];
     if (!n) throw new Error(`gl: pixel format 0x${format.toString(16)} (colour index needs an extension PRISM does not advertise)`);
+    const row = Math.ceil(w * n / s.unpackAlign) * s.unpackAlign;
     for (let i = 0; i < w * h; i++) {
-      const p = ptr + i * n, o = i * 4;
+      const p = ptr + Math.floor(i / w) * row + (i % w) * n, o = i * 4;
       if (format === FMT.RGBA) { out[o] = u8[p]; out[o + 1] = u8[p + 1]; out[o + 2] = u8[p + 2]; out[o + 3] = u8[p + 3]; }
       else if (format === FMT.RGB) { out[o] = u8[p]; out[o + 1] = u8[p + 1]; out[o + 2] = u8[p + 2]; out[o + 3] = 255; }
       else if (format === FMT.LUMINANCE || format === FMT.INTENSITY) { out[o] = out[o + 1] = out[o + 2] = u8[p]; out[o + 3] = format === FMT.INTENSITY ? u8[p] : 255; }
@@ -537,7 +576,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       }
     },
     glClearColor: (r, g, b, a) => { s.clear = [r, g, b, a].map(clamp01); },
-    glEnable: (cap) => { s.caps.add(cap); },
+    glEnable: (cap) => {
+      // A capability this GL does not implement is said once, by number: enabling it changes nothing
+      // here, and a picture that is wrong for that reason should be traceable to it.
+      if (!KNOWN_CAPS.has(cap) && !(cap >= 0x4000 && cap < 0x4008) && !(cap >= 0x3000 && cap < 0x3006) && !s.unknownCaps.has(cap)) {
+        s.unknownCaps.add(cap);
+        console.warn(`gl: glEnable(0x${cap.toString(16)}) has no effect in this implementation`);
+      }
+      s.caps.add(cap);
+    },
+    glColorMaterial: (face, mode) => { s.colourMaterial = { face, mode }; },
     glDisable: (cap) => { s.caps.delete(cap); },
     glShadeModel: (m) => { s.shade = m; },
     glCullFace: (m) => { s.cullFace = m; },
@@ -552,6 +600,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glMatrixMode: (m) => { s.mode = m; },
     glLoadIdentity: () => setTop(ident()),
     glLoadMatrixf: (m) => setTop(Float64Array.from(m)),
+    glMultMatrixf: (m) => setTop(mul(top(), Float64Array.from(m))),
+    glMultMatrixd: (m) => setTop(mul(top(), Float64Array.from(m))),
+    glLoadMatrixd: (m) => setTop(Float64Array.from(m)),
     glPushMatrix: () => { s.stacks[s.mode].push(Float64Array.from(top())); },
     glPopMatrix: () => { if (s.stacks[s.mode].length > 1) s.stacks[s.mode].pop(); },
     glTranslatef: (x, y, z) => { const t = ident(); t[12] = x; t[13] = y; t[14] = z; setTop(mul(top(), t)); },
@@ -588,6 +639,32 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glColor3ubv: (v) => { s.colour = [v[0] / 255, v[1] / 255, v[2] / 255, 1]; },
     glTexCoord2f: (u, v) => { s.tex = [u, v]; },
     glTexCoord2fv: (v) => { s.tex = [v[0], v[1]]; },
+    glTexCoord2d: (u, v) => { s.tex = [u, v]; },
+    glTexCoord2dv: (v) => { s.tex = [v[0], v[1]]; },
+    glColor3dv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
+    glColor4dv: (v) => { s.colour = [v[0], v[1], v[2], v[3]]; },
+    glVertex2dv: (v) => vertex(v[0], v[1], 0),
+    glVertex3dv: (v) => vertex(v[0], v[1], v[2]),
+    glNormal3fv: (v) => { s.normal = [v[0], v[1], v[2]]; },
+    // glRect: one polygon in the z = 0 plane, counter-clockwise from (x1, y1).
+    glRectf: (x1, y1, x2, y2) => { exec.glBegin(0x0009); vertex(x1, y1, 0); vertex(x2, y1, 0); vertex(x2, y2, 0); vertex(x1, y2, 0); exec.glEnd(); },
+    glRecti: (x1, y1, x2, y2) => exec.glRectf(x1, y1, x2, y2),
+    glLightf: (li, pname, v) => exec.glLightfv(li, pname, [v]),
+    glMaterialf: (face, pname, v) => exec.glMaterialfv(face, pname, [v]),
+    glPixelStorei: (p, v) => { if (p === 0x0cf5) s.unpackAlign = v; else if (p !== 0x0d05) throw new Error(`gl: glPixelStorei 0x${p.toString(16)}`); },
+    // Texture coordinate generation: GL_OBJECT_LINEAR, the mode a terrain textured by position uses.
+    glTexGeni: (coord, pname, v) => {
+      const g = s.texGen[coord - 0x2000];
+      if (!g || pname !== 0x2500) throw new Error(`gl: glTexGeni 0x${coord.toString(16)} 0x${pname.toString(16)}`);
+      if (v !== 0x2401 && v !== 0x2402) throw new Error(`gl: texture generation mode 0x${v.toString(16)} (GL_EYE_LINEAR is not implemented)`);
+      g.mode = v;
+    },
+    glTexGenfv: (coord, pname, v) => {
+      const g = s.texGen[coord - 0x2000];
+      if (!g) throw new Error(`gl: glTexGenfv coordinate 0x${coord.toString(16)}`);
+      if (pname === 0x2501) g.object = v; else if (pname === 0x2500) exec.glTexGeni(coord, pname, v[0]);
+      else throw new Error(`gl: glTexGenfv 0x${pname.toString(16)} (eye planes are not implemented)`);
+    },
     glLightfv: (li, pname, v) => {
       const L = s.lights[li - CAP.LIGHT0];
       if (!L) throw new Error(`gl: light 0x${li.toString(16)}`);
@@ -598,6 +675,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       } else if (pname === PNAME.AMBIENT) L.ambient = v;
       else if (pname === PNAME.DIFFUSE) L.diffuse = v;
       else if (pname === PNAME.SPECULAR) L.specular = v;
+      // A spotlight's cone and a light's attenuation. A program may set them to their defaults -- Tux
+      // Racer sets every parameter of every light -- and only a cone narrower than 180 degrees or a
+      // falling-off positional light would change the picture; those are refused, not approximated.
+      else if (pname === 0x1204) L.spotDirection = v;
+      else if (pname === 0x1205) L.spotExponent = v[0];
+      else if (pname === 0x1206) { if (v[0] !== 180) throw new Error('gl: spotlights (GL_SPOT_CUTOFF other than 180) are not implemented'); }
+      else if (pname === 0x1207 || pname === 0x1208 || pname === 0x1209) (L.attenuation ??= [1, 0, 0])[pname - 0x1207] = v[0];
       else throw new Error(`gl: glLightfv pname 0x${pname.toString(16)}`);
     },
     glMaterialfv: (face, pname, v) => {
@@ -643,6 +727,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ptr }); },
     glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ptr }); },
     glTexCoordPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.tex, { size, type, stride, ptr }); },
+    glNormalPointer: (type, stride, ptr) => { Object.assign(s.arrays.normal, { size: 3, type, stride, ptr }); },
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     glArrayElement: (i) => {
       // Component k of element i of array a: called per vertex of every glDrawElements, so no allocation.
@@ -651,7 +736,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         if (a.type === 0x1401) return u8[a.ptr + i * (a.stride || a.size) + k] / 255;   // GL_UNSIGNED_BYTE
         return d.getFloat32(a.ptr + i * (a.stride || a.size * 4) + 4 * k, true);       // GL_FLOAT
       };
-      const { vertex: va, color: ca, tex: ta } = s.arrays;
+      const { vertex: va, color: ca, tex: ta, normal: na } = s.arrays;
+      if (na.on) s.normal = [at(na, 0), at(na, 1), at(na, 2)];
       if (ca.on) s.colour = [at(ca, 0), at(ca, 1), at(ca, 2), ca.size > 3 ? at(ca, 3) : 1];
       if (ta.on) s.tex = [at(ta, 0), at(ta, 1)];
       if (va.on) vertex(at(va, 0), at(va, 1), va.size > 2 ? at(va, 2) : 0);
@@ -700,6 +786,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glColor4ubv: (a) => [[M.u8[a[0]], M.u8[a[0] + 1], M.u8[a[0] + 2], M.u8[a[0] + 3]]],
     glColor3fv: (a) => [f32(a[0], 3)],
     glLoadMatrixf: (a) => [f32(a[0], 16)],
+    glMultMatrixf: (a) => [f32(a[0], 16)],
+    glMultMatrixd: (a) => [Array.from({ length: 16 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))],
+    glLoadMatrixd: (a) => [Array.from({ length: 16 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))],
+    glTexCoord2dv: (a) => [Array.from({ length: 2 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))], glColor3dv: (a) => [Array.from({ length: 3 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))], glColor4dv: (a) => [Array.from({ length: 4 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))],
+    glVertex2dv: (a) => [Array.from({ length: 2 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))], glVertex3dv: (a) => [Array.from({ length: 3 }, (_, k) => dv().getFloat64(a[0] + 8 * k, true))], glNormal3fv: (a) => [f32(a[0], 3)],
+    glTexGenfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x2500 ? 1 : 4)],
     glClipPlane: (a) => [a[0], Array.from({ length: 4 }, (_, k) => dv().getFloat64(a[1] + 8 * k, true))],
     glTexParameterfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x1004 ? 4 : 1)],
     glTexImage2D: (a) => {
@@ -710,7 +802,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // Only these leave the fragment state alone; every other command may change it, display lists included.
   const VERTEX_ONLY = new Set(['glBegin', 'glEnd', 'glVertex2f', 'glVertex3f', 'glVertex3fv', 'glNormal3f',
     'glColor3f', 'glColor4f', 'glColor3fv', 'glColor4fv', 'glColor3ubv', 'glColor4ubv', 'glTexCoord2f', 'glTexCoord2fv',
-    'glArrayElement', 'glLockArraysEXT', 'glUnlockArraysEXT']);
+    'glArrayElement', 'glLockArraysEXT', 'glUnlockArraysEXT', 'glTexCoord2d', 'glTexCoord2dv', 'glColor3dv', 'glColor4dv',
+    'glVertex2dv', 'glVertex3dv', 'glNormal3fv']);
   for (const name of Object.keys(exec)) {
     if (VERTEX_ONLY.has(name)) continue;
     const run = exec[name];
@@ -756,6 +849,17 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; } } },
     glGetError: () => 0,
+    glGetBooleanv: (p, out) => {
+      const v = p === 0x0c32 ? 1 : p === 0x0b72 ? +s.depthMask : s.caps.has(p) ? 1 : null;   // DOUBLEBUFFER, DEPTH_WRITEMASK, a capability
+      if (v === null) throw new Error(`gl: glGetBooleanv 0x${p.toString(16)}`);
+      M.u8[out] = v;
+    },
+    glGetTexLevelParameteriv: (target, level, p, out) => {
+      const L = texture()?.levels[level];
+      const v = p === 0x1000 ? (L?.w ?? 0) : p === 0x1001 ? (L?.h ?? 0) : null;
+      if (v === null) throw new Error(`gl: glGetTexLevelParameteriv 0x${p.toString(16)}`);
+      dv().setInt32(out, v, true);
+    },
     /*
      * The integer state Quake III asks for. MAX_TEXTURE_SIZE: this layer has no limit of its own and
      * answers what Mesa 22's llvmpipe answers, 16384, so the program and its reference size images
@@ -969,6 +1073,11 @@ export function glBuiltins(T) {
     glBegin: f(V, U), glEnd: f(V), glVertex3f: f(V, F, F, F), glVertex3fv: f(V, P), glVertex2f: f(V, F, F),
     glNormal3f: f(V, F, F, F), glColor3f: f(V, F, F, F), glColor4f: f(V, F, F, F, F), glColor4fv: f(V, P), glColor3ubv: f(V, P),
     glTexCoord2f: f(V, F, F), glTexCoord2fv: f(V, P),
+    glMultMatrixf: f(V, P), glMultMatrixd: f(V, P), glLoadMatrixd: f(V, P), glTexCoord2d: f(V, D, D), glTexCoord2dv: f(V, P),
+    glColor3dv: f(V, P), glColor4dv: f(V, P), glVertex2dv: f(V, P), glVertex3dv: f(V, P), glNormal3fv: f(V, P),
+    glRectf: f(V, F, F, F, F), glRecti: f(V, I, I, I, I), glLightf: f(V, U, U, F), glMaterialf: f(V, U, U, F),
+    glColorMaterial: f(V, U, U), glPixelStorei: f(V, U, I), glTexGeni: f(V, U, U, I), glTexGenfv: f(V, U, U, P), glNormalPointer: f(V, U, I, P),
+    glGetBooleanv: f(V, U, P), glGetTexLevelParameteriv: f(V, U, I, U, P),
     glLightfv: f(V, U, U, P), glMaterialfv: f(V, U, U, P),
     glLightModelfv: f(V, U, P), glLightModelf: f(V, U, F), glLightModeli: f(V, U, I), glIsTexture: f(U, U),
     glFogf: f(V, U, F), glFogi: f(V, U, I), glFogfv: f(V, U, P),

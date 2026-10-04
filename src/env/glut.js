@@ -14,12 +14,12 @@
 
 const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1;
 
-export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, stop = () => false, onSwap = null, now = null } = {}) {
+export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, stop = () => false, onSwap = null, now = null, events = null } = {}) {
   const gl = M.gl;
   if (!gl) throw new Error('glut: needs the gl environment');
   const want = frames ? new Set(frames) : null;
   const last = frames ? Math.max(...frames) : Infinity;
-  const s = { w: 300, h: 300, swaps: 0, redisplay: false, cb: {} };
+  const s = { w: 300, h: 300, swaps: 0, redisplay: false, cb: {}, pointer: [0, 0] };
   const call = (p, args = []) => { if (p) M.icall(p, args); };
   Object.assign(M.rt, {
     glutInit: () => {}, glutInitDisplayMode: () => {},
@@ -33,6 +33,17 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
     glutVisibilityFunc: (p) => { s.cb.visibility = p; },
     glutKeyboardFunc: (p) => { s.cb.keyboard = p; },
     glutSpecialFunc: (p) => { s.cb.special = p; },
+    glutKeyboardUpFunc: (p) => { s.cb.keyboardUp = p; },
+    glutSpecialUpFunc: (p) => { s.cb.specialUp = p; },
+    glutMouseFunc: (p) => { s.cb.mouse = p; },
+    glutMotionFunc: (p) => { s.cb.motion = p; },
+    glutPassiveMotionFunc: (p) => { s.cb.passive = p; },
+    // The host delivers one press per press: there is no auto-repeat to ignore, no cursor, no mode switch.
+    glutIgnoreKeyRepeat: () => {}, glutSetCursor: () => {},
+    glutWarpPointer: (x, y) => { s.pointer = [x, y]; },
+    // Game mode takes the whole display, whatever window size was asked for: here a 640x480 one.
+    glutEnterGameMode: () => { s.w = 640; s.h = 480; gl.resize(s.w, s.h); return 1; },
+    glutLeaveGameMode: () => {},
     glutPostRedisplay: () => { s.redisplay = true; },
     glutGet: (what) => (what === GLUT_ELAPSED_TIME ? (now ? Math.floor(now()) : s.swaps * stepMs) : what === GLUT_WINDOW_WIDTH ? s.w : what === GLUT_WINDOW_HEIGHT ? s.h : 0),
     glutSwapBuffers: () => {
@@ -46,6 +57,16 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
         call(s.cb.visibility, [GLUT_VISIBLE]);
         call(s.cb.display);
         while (!stop()) {
+          // Input the host has gathered since the last turn: `events()` yields
+          //   { kind: 'key', ch, down }  { kind: 'special', key, down }
+          //   { kind: 'button', button, down, x, y }  { kind: 'motion', x, y, held }
+          for (const ev of events ? events() : []) {
+            const [x, y] = ev.x === undefined ? s.pointer : (s.pointer = [ev.x, ev.y]);
+            if (ev.kind === 'key') call(ev.down ? s.cb.keyboard : s.cb.keyboardUp, [ev.ch, x, y]);
+            else if (ev.kind === 'special') call(ev.down ? s.cb.special : s.cb.specialUp, [ev.key, x, y]);
+            else if (ev.kind === 'button') call(s.cb.mouse, [ev.button, ev.down ? 0 : 1, x, y]);
+            else if (ev.kind === 'motion') call(ev.held ? s.cb.motion : s.cb.passive, [x, y]);
+          }
           call(s.cb.idle);
           if (s.redisplay) { s.redisplay = false; call(s.cb.display); }
         }
@@ -64,6 +85,9 @@ export function glutBuiltins(T) {
     glutInitWindowPosition: f(V, I, I), glutCreateWindow: f(I, P), glutDestroyWindow: f(V, I),
     glutDisplayFunc: f(V, P), glutReshapeFunc: f(V, P), glutIdleFunc: f(V, P), glutVisibilityFunc: f(V, P),
     glutKeyboardFunc: f(V, P), glutSpecialFunc: f(V, P), glutPostRedisplay: f(V), glutGet: f(I, I),
+    glutKeyboardUpFunc: f(V, P), glutSpecialUpFunc: f(V, P), glutMouseFunc: f(V, P), glutMotionFunc: f(V, P),
+    glutPassiveMotionFunc: f(V, P), glutIgnoreKeyRepeat: f(V, I), glutSetCursor: f(V, I), glutWarpPointer: f(V, I, I),
+    glutEnterGameMode: f(I), glutLeaveGameMode: f(V),
     glutSwapBuffers: f(V), glutMainLoop: f(V),
   };
 }

@@ -415,7 +415,8 @@ export class Parser {
         const s = this.#declSpecifiers();
         for (;;) {
           const p = this.#declarator(s.type);
-          byName.set(p.name, p.type);
+          // Decayed as a prototype's parameter is: Tcl 8.4 is K&R throughout, `Tcl_Obj *CONST objv[];`.
+          byName.set(p.name, this.ty.decay(p.type));
           if (this.eatP(',')) continue;
           this.expectP(';');
           break;
