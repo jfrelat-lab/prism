@@ -143,6 +143,58 @@ int main(void)
     return 0;
 }
 `,
+  'shapes.cpp': `/*
+ * C++, lowered to C and then compiled like the rest: PRISM's front end is the old cfront idea.
+ *
+ * What is here is what C has no word for -- a constructor that runs, a virtual call that finds its
+ * function through the object, an overloaded operator, a destructor at the end of a scope. The
+ * subset is C++98 without exceptions, namespaces or function templates, and a use of one of those
+ * is refused by name.
+ */
+#include <stdio.h>
+
+class Shape {
+public:
+    virtual ~Shape() { printf("  (a shape goes)\\n"); }
+    virtual float area() const = 0;
+    virtual const char *name() const = 0;
+};
+
+class Rect : public Shape {
+    float w, h;
+public:
+    Rect(float w_, float h_) : w(w_), h(h_) {}
+    float area() const { return w * h; }
+    const char *name() const { return "rectangle"; }
+};
+
+class Circle : public Shape {
+    float r;
+public:
+    Circle(float r_) : r(r_) {}
+    float area() const { return 3.14159265f * r * r; }
+    const char *name() const { return "circle"; }
+};
+
+struct Total {
+    float sum;
+    Total() : sum(0) {}
+    Total &operator+=(const Shape &s) { sum += s.area(); return *this; }
+};
+
+int main()
+{
+    Shape *shapes[3] = { new Rect(3, 4), new Circle(1), new Rect(2, 2.5f) };
+    Total total;
+    for (int i = 0; i < 3; i++) {
+        printf("%-10s %6.2f\\n", shapes[i]->name(), shapes[i]->area());
+        total += *shapes[i];
+    }
+    printf("total      %6.2f\\n", total.sum);
+    for (int i = 0; i < 3; i++) delete shapes[i];
+    return 0;
+}
+`,
 };
 
 // ---------------------------------------------------------------- the files
@@ -189,7 +241,7 @@ function renderTabs() {
   add.className = 'tab add';
   add.textContent = '+ file';
   add.onclick = () => {
-    const name = prompt('file name (.c is compiled, .h is only included)', 'util.c');
+    const name = prompt('file name (.c and .cpp are compiled, anything else is only included)', 'util.c');
     if (!name) return;
     if (files.some(f => f.name === name)) return;
     stash();
@@ -293,7 +345,7 @@ $('run').onclick = () => {
     $('status').textContent = 'failed';
     $('run').disabled = false; $('stopBtn').disabled = true;
   };
-  worker.postMessage({ type: 'start', files, control, argv: tokenise($('argv').value) });
+  worker.postMessage({ type: 'start', files, control, argv: tokenise($('argv').value), language: $('language').value });
 
   $('run').disabled = true; $('stopBtn').disabled = false;
   $('stdin').focus();

@@ -422,6 +422,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     ppSizeof: c.ppSizeof ?? null,
     // ...and whether it let an invalid token paste through, as gcc 2.x did (src/cpp/cpp.js).
     lenientPaste: !!c.lenientPaste,
+    cxx: c.cxx,
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*

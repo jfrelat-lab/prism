@@ -417,6 +417,7 @@
   ],
   "host": "glx",
   "compile": {
+    "cxx": { "std": "gnu++98" },
     "memory": 512,
     "collect": true,
     "longDouble": 64

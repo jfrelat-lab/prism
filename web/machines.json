@@ -28,7 +28,7 @@
       "listing": "dir",
       "volume": "PRISM",
       "programs": [
-        { "program": "mame-0.5", "file": "MAME", "ext": "EXE", "date": "1997-02-20" },
+        { "program": "mame-0.6", "file": "MAME", "ext": "EXE", "date": "1997-03-01" },
         { "program": "quake", "variant": "dos", "file": "QUAKE", "ext": "EXE", "date": "1996-08-01" },
         { "program": "heretic", "file": "HERETIC", "ext": "EXE", "date": "1994-12-23" },
         { "program": "hexen", "file": "HEXEN", "ext": "EXE", "date": "1995-09-30" },

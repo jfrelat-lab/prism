@@ -425,6 +425,7 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       enums: program.compile?.enums,
       ppSizeof: program.compile?.ppSizeof ?? null,
       lenientPaste: !!program.compile?.lenientPaste,
+      cxx: program.compile?.cxx,
       window: program.compile?.window ?? (program.env ?? []).includes('ega'),
       externData,
       // The environments' builtin signatures, as src/target.js passes them -- so a program compiled

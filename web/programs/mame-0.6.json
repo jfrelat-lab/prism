@@ -1,14 +1,14 @@
 {
-  "title": "MAME 0.5",
-  "subtitle": "Nicola Salmoria, June 1997 · thirty-four games, still C89 — the newest MAME PRISM builds",
-  "target": "mame05",
+  "title": "MAME 0.6",
+  "subtitle": "Nicola Salmoria, 1997 · forty-one games, still C89 — the newest MAME PRISM builds",
+  "target": "mame06",
   "platform": "allegro",
   "args": "pacman -nojoy",
-  "argsHint": "a game name plus msdos.c's own switches (-nosound -nojoy -vesa -noscanlines). 0.5 adds Donkey Kong Jr, the Galaxian family and its clones, Pisces, War of the Bugs, Moon Cresta and The End to what 0.4 already drove — thirty-four names in all, and each wants its own ROM set in a directory named after it.",
+  "argsHint": "a game name plus msdos.c's own switches (-nosound -nojoy -vesa -noscanlines). 0.6 adds Scramble, Uniwars, Frogger and its bootleg, Amidar, Turtles and Rally X to what 0.5 drove — forty-one names in all, and each wants its own ROM set in a directory named after it.",
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the program paces itself from drv->frames_per_second through the real clock.",
   "needsData": {
-    "hint": "each game's own ROMs, in a directory named after it (pacman/, wow/, galaxian/, dkongjr/, ...). MAME 0.5 uses its OWN 1997 filenames, which are not a later MAME's: it says which file it wanted when one is missing.",
+    "hint": "each game's own ROMs, in a directory named after it (pacman/, wow/, galaxian/, amidar/, ...). MAME 0.6 uses its OWN 1997 filenames, which are not a later MAME's: it says which file it wanted when one is missing, and each game's folder in the release carries a readme naming them.",
     "dir": "roms"
   },
   "controls": [

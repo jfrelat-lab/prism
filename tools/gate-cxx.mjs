@@ -370,6 +370,34 @@ for (const [n, c] of active.entries()) {
   fails.push({ c, why: `stdout differs (exit prism=${got.code} g++=${g.rc})\n    prism: ${JSON.stringify(ours)}\n    g++  : ${JSON.stringify(theirs)}` });
 }
 console.log(`${pass}/${active.length} C++ programs behave identically to a native i386 g++ build`);
+
+/*
+ * THE OPTION (compile.cxx, src/cxx/index.js): which units are C++, and in which dialect. No oracle
+ * is needed for these -- each says what the option must make of one small program, and gcc's own
+ * `-x c++` is the behaviour copied. A check that could not fail would be worth nothing, so each
+ * pair is a build that must work beside the same build that must not.
+ */
+if (!FILTER) {
+  const CLASS = '#include <stdio.h>\nclass A { int v; public: A(int x) : v(x) {} int twice() const { return v * 2; } };\nint main() { A a(21); printf("%d\\n", a.twice()); return 0; }\n';
+  const PLAIN = '#include <stdio.h>\nint main(void) { int class = 42; printf("%d\\n", class); return 0; }\n';
+  const out = (src, file, cxx) => { try { return compile(src, { file, cxx }).run().stdout.trim(); } catch (e) { return `refused: ${e.message.split('\n')[0]}`; } };
+  const option = [
+    ['a .c unit named C++ by the option runs as C++', out(CLASS, 'unit.c', { language: { '*': 'c++' } }) === '42'],
+    ['...and is refused as C without it', out(CLASS, 'unit.c').startsWith('refused')],
+    ['a .cpp unit named C by the option is read as C (`class` is an identifier)', out(PLAIN, 'unit.cpp', { language: { '*.cpp': 'c' } }) === '42'],
+    ['...and is refused as C++ without it', out(PLAIN, 'unit.cpp').startsWith('refused')],
+    ['cxx: false makes every unit C', out(PLAIN, 'unit.cpp', false) === '42'],
+    ['an exact unit path wins over a pattern', out(CLASS, 'src/unit.c', { language: { 'unit.c': 'c++', '*.c': 'c', '*': 'c' } }) === '42'],
+    ['std gnu++98 is accepted', out(CLASS, 'unit.cpp', { std: 'gnu++98' }) === '42'],
+    ['std c++17 is refused by name', /^refused: .*c\+\+17.*C\+\+98/.test(out(CLASS, 'unit.cpp', { std: 'c++17' }))],
+    ['a language that is neither c nor c++ is refused', /^refused: .*'c' or 'c\+\+'/.test(out(CLASS, 'unit.cpp', { language: { '*': 'objc' } }))],
+    ['a key the option does not have is refused', /^refused: .*no 'standard'/.test(out(CLASS, 'unit.cpp', { standard: 'c++98' }))],
+  ];
+  for (const [what, ok] of option) {
+    if (ok) { pass++; if (VERBOSE) console.log(`  ok   option: ${what}`); } else fails.push({ c: { name: `option: ${what}` }, why: 'the option did not do that' });
+  }
+  console.log(`${option.filter(([, ok]) => ok).length}/${option.length} checks of the compile.cxx option`);
+}
 if (fails.length) {
   console.log(`\n${fails.length} failing:\n`);
   for (const f of fails) console.log(`--- ${f.c.name}\n    ${f.why}\n`);

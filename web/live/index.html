@@ -117,6 +117,13 @@
   <label>example
     <select id="examples"></select>
   </label>
+  <label title="how each compiled file is read: by its name (.c is C; .cpp, .cc and .cxx are C++), or all of them as one language">language
+    <select id="language">
+      <option value="">by file name</option>
+      <option value="c">C</option>
+      <option value="c++">C++ (98)</option>
+    </select>
+  </label>
   <button id="reset" title="throw away these files and start from the example">Reset</button>
   <span class="sep"></span>
   <a class="back" href="../">&larr; Machines</a>

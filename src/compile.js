@@ -3,7 +3,7 @@
 // This is the whole pipeline in one file so the seams are visible. Everything it does is tier-0.
 
 import { Preprocessor } from './cpp/cpp.js';
-import { isCxxFile, cxxToC, CXX_DEFINES } from './cxx/index.js';
+import { cxxToC, CXX_DEFINES, unitLanguage, checkCxxOption } from './cxx/index.js';
 import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module } from './link/module.js';
@@ -789,23 +789,25 @@ function wireRebind(F, mod, emitted, rebind) {
 }
 
 /**
- * The tokens the C parser reads for one unit. A C++ unit (by its file name, as gcc decides) is
- * preprocessed with __cplusplus defined, lowered to C by src/cxx, and that C is tokenised.
+ * The tokens the C parser reads for one unit. A C++ unit (by its file name as gcc decides, or as
+ * the `cxx` option says -- see src/cxx/index.js) is preprocessed with __cplusplus defined, lowered
+ * to C by src/cxx, and that C is tokenised.
  */
-function unitTokens(pp, source, file) {
-  if (!isCxxFile(file)) return pp.run(source, file);
+function unitTokens(pp, source, file, cxx) {
+  if (unitLanguage(file, cxx) !== 'c++') return pp.run(source, file);
   for (const [k, v] of Object.entries(CXX_DEFINES)) pp.defineText(k, v);
   const c = cxxToC(pp.run(source, file), { file });
   return new Preprocessor({}).run(c, file);
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, ppSizeof = null, extraBuiltins = null } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, ppSizeof = null, extraBuiltins = null, cxx } = {}) {
+  checkCxxOption(cxx);
   const pp = new Preprocessor({
     ppSizeof,
     defines: mergeDefines(mergeDefines(TARGET_DEFINES, { ...modelDefines(model, signedChar), ...longDoubleDefines(longDouble) }), defines),
     resolve: resolve ?? builtinHeaderResolver(),
   });
-  const tokens = unitTokens(pp, source, file);
+  const tokens = unitTokens(pp, source, file, cxx);
   // `enums` shapes types, and types are the parser's: the emitter never builds an enum of its own.
   const { unit, scope } = parse(tokens, { file, pack, c89, model, signedChar, enums, longDouble });
 
@@ -955,7 +957,8 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [] } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx } = {}) {
+  checkCxxOption(cxx);
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -987,7 +990,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
         defines), u.defines ?? {}),
       resolve: resolver,
     });
-    const tokens = unitTokens(pp, u.source, u.file);
+    const tokens = unitTokens(pp, u.source, u.file, cxx);
     const { unit, scope } = parse(tokens, { file: u.file, pack, c89, model, signedChar, enums, longDouble });
     // The module is part of a static's identity: ET builds game/bg_sscript.c into cgame AND qagame,
     // and one tag per path let cgame's calls reach qagame's copy (and its syscall table).

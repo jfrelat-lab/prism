@@ -220,6 +220,7 @@
   "host": "sdl",
   "_compile": "lenientPaste: the game was built by gcc 2.95, which let `Params. ## nam` (game_config.c) through as two tokens; gcc 3 and later refuse it.",
   "compile": {
+    "cxx": { "std": "gnu++98" },
     "memory": 256,
     "collect": true,
     "lenientPaste": true

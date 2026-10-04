@@ -1,0 +1,143 @@
+{
+  "_doc": [
+    "One fingerprint per ROM set: a sha256 prefix over the frame log MAME itself prints, which is a",
+    "display hash per frame and therefore the whole observable behaviour of the run.",
+    "",
+    "EVERY ENTRY HERE WAS VERIFIED against a native build of the same sources at the moment it was",
+    "written (tools/mamediff.mjs), and a game that disagreed is absent rather than recorded. That is",
+    "what separates a golden from a snapshot of whatever the program happened to do.",
+    "",
+    "Replay with: node tools/mame-golden.mjs --check --roms=<dir>  -- which needs no compiler, no",
+    "container and no ROM fetching. Regenerate after a deliberate change with --write."
+  ],
+  "release": "06",
+  "frames": 120,
+  "games": {
+    "pacman": {
+      "fingerprint": "c6c24c554bb1f41c",
+      "lines": 146,
+      "display": "224x288",
+      "pens": 16
+    },
+    "puckman": {
+      "fingerprint": "aedaa8fafd84fcfb",
+      "lines": 146,
+      "display": "224x288",
+      "pens": 16
+    },
+    "piranha": {
+      "fingerprint": "9a63b169aafb0102",
+      "lines": 146,
+      "display": "224x288",
+      "pens": 16
+    },
+    "mspacman": {
+      "fingerprint": "4f06ef7f262fd3b1",
+      "lines": 146,
+      "display": "224x288",
+      "pens": 16
+    },
+    "crush": {
+      "fingerprint": "d3add6636670979c",
+      "lines": 146,
+      "display": "224x288",
+      "pens": 16
+    },
+    "pengo": {
+      "fingerprint": "c03abbcc15c59716",
+      "lines": 162,
+      "display": "224x288",
+      "pens": 32
+    },
+    "ladybug": {
+      "fingerprint": "5d222405a02de0eb",
+      "lines": 162,
+      "display": "256x256",
+      "pens": 32
+    },
+    "mrdo": {
+      "fingerprint": "0628643c014e4945",
+      "lines": 386,
+      "display": "256x256",
+      "pens": 256
+    },
+    "cclimber": {
+      "fingerprint": "620227311955dcd0",
+      "lines": 226,
+      "display": "256x256",
+      "pens": 96
+    },
+    "ccboot": {
+      "fingerprint": "c8863814f4f61430",
+      "lines": 226,
+      "display": "256x256",
+      "pens": 96
+    },
+    "ckong": {
+      "fingerprint": "e32ce3899e309054",
+      "lines": 171,
+      "display": "256x256",
+      "pens": 41
+    },
+    "dkong": {
+      "fingerprint": "f0cc68e45c1029f1",
+      "lines": 142,
+      "display": "256x256",
+      "pens": 12
+    },
+    "dkongjr": {
+      "fingerprint": "60e14049beb8b88b",
+      "lines": 142,
+      "display": "256x256",
+      "pens": 12
+    },
+    "bagman": {
+      "fingerprint": "1a92031e8f325f8c",
+      "lines": 171,
+      "display": "256x256",
+      "pens": 41
+    },
+    "wow": {
+      "fingerprint": "6f785550cf5a3846",
+      "lines": 135,
+      "display": "320x204",
+      "pens": 5
+    },
+    "galapx": {
+      "fingerprint": "cfd29aee8cda7bf6",
+      "lines": 226,
+      "display": "256x256",
+      "pens": 96
+    },
+    "pisces": {
+      "fingerprint": "ac643ba1ae727c0c",
+      "lines": 226,
+      "display": "256x256",
+      "pens": 96
+    },
+    "warofbug": {
+      "fingerprint": "4d4826f45ed4a17b",
+      "lines": 226,
+      "display": "256x256",
+      "pens": 96
+    },
+    "theend": {
+      "fingerprint": "248dc6a7d8b37b8b",
+      "lines": 226,
+      "display": "256x256",
+      "pens": 96
+    },
+    "amidar": {
+      "fingerprint": "178e74324e26fbb5",
+      "lines": 138,
+      "display": "256x256",
+      "pens": 8
+    },
+    "turtles": {
+      "fingerprint": "5365d6c83d8d7d66",
+      "lines": 138,
+      "display": "256x256",
+      "pens": 8
+    }
+  }
+}

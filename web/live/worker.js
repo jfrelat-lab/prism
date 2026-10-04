@@ -29,7 +29,7 @@ self.onmessage = async (e) => {
   }
 };
 
-async function run({ files, argv, control, stdinText }) {
+async function run({ files, argv, control, stdinText, language }) {
   const views = controlViews(control);
   const { ctrl } = views;
   const keyboard = makeKeyboard(views);
@@ -40,9 +40,10 @@ async function run({ files, argv, control, stdinText }) {
    * compiling it as a unit would define its contents twice. The distinction is the file name, which
    * is exactly how a makefile makes it.
    */
-  const units = files.filter(f => /\.c$/i.test(f.name))
+  const UNIT = /\.(c|cpp|cc|cxx)$/i;
+  const units = files.filter(f => UNIT.test(f.name))
     .map(f => ({ file: f.name, source: f.source }));
-  if (!units.length) throw new Error('nothing to compile: no .c file');
+  if (!units.length) throw new Error('nothing to compile: no .c or .cpp file');
   /*
    * TWO DEFINITIONS OF main IS NOT A BIGGER PROGRAM. A real linker refuses it; PRISM's placement
    * pass simply lets the last one win, which means one of the two files you can see silently does
@@ -56,7 +57,7 @@ async function run({ files, argv, control, stdinText }) {
 
   // The headers the person wrote, for #include "…". The standard ones come from PRISM's own set,
   // which compileProgram installs when no resolver is given.
-  const includes = Object.fromEntries(files.filter(f => !/\.c$/i.test(f.name))
+  const includes = Object.fromEntries(files.filter(f => !UNIT.test(f.name))
     .map(f => [f.name, f.source]));
 
   const t0 = performance.now();
@@ -64,6 +65,8 @@ async function run({ files, argv, control, stdinText }) {
     includes,
     memory: 64 * 1024 * 1024,
     collect: true,               // report every gap in one build rather than dying on the first
+    // The language choice of the page: by file name (absent), or every unit as C or as C++.
+    cxx: language === 'c' || language === 'c++' ? { language: { '*': language } } : undefined,
   });
   const ms = performance.now() - t0;
 

@@ -1,5 +1,45 @@
 # PRISM — Compatibility
 
+## The catalogue, one line a program (2026-10-04)
+
+The short form. "Not checked" in the sound column means exactly that: nobody measured it for this
+table. **Runs in the page** names the shelf and the command; **held to** names what
+OUTSIDE PRISM could contradict it -- a gate, with its reference -- and says so plainly when nothing
+does. A program can run, look right and be held to nothing; that is a state, and the table shows
+it. The long form of each (how it got there, what it found) follows below and in ROADMAP.md.
+
+| Program | Language, platform layer | Runs in the page | Held to | Sound | Open |
+|---|---|---|---|---|---|
+| **MAME 0.6** | C89, DJGPP + Allegro | DOS: `MAME <game>` | a native gcc build, frame hash by frame hash: 21 of 21 games with ROMs here (goldens/mame06.json) | yes (`gate-sound`) | 20 games have no ROM set here |
+| MAME 0.1 to 0.5 | same | no longer on the shelf (one MAME, the newest verified) | the same harness, per release (goldens/mame05.json) | yes | |
+| **Quake** | C, five platform layers (DOS, X11, svgalib, SunOS, Win32) | DOS, Linux, SUN, Windows | ITSELF across four platform layers, pixel for pixel (`gate-pixels`: x11 == dos == win == svgalib) -- agreement, not an outside reference | yes on X11 (/dev/dsp) | an outside picture reference |
+| **GLQuake** | C, GLX and WGL on PRISM's GL | Linux `glquake.glx`, Windows | the same source on Mesa, 1 pixel of 307,200 (`gate-glquake`) | not checked | mouse through DGA not replayed by hand |
+| **Quake II** | C, X11 / Win32 / Solaris server; `ref_soft` and `ref_gl` | Linux, Windows, SUN (`q2ded`) | `ref_gl` against Mesa, 3 pixels of 307,200 (`gate-quake2-gl`); `ref_soft`: long form below | not checked | |
+| **Quake III Arena** 1.32b | C, GLX | Linux `quake3` | the WebGL command stream only (`gate-webgl-stream`); NO picture reference | not checked | picture reference (P15.1), Win32 build (P15.6) |
+| **Enemy Territory** | C + C++ (splines), GLX, three native modules | Linux `et` | its splines against g++ (`gate-cxx-splines`, `gate-cxx-camera`); NO picture reference | a /dev/dsp device is given to it; not checked | picture reference (P15.1); about 27 fps in a map |
+| **Hexen II** | C, Win32 + WGL | Windows `glh2.exe` | nothing | — | no reference at all: its code is Win32-only (P15.7) |
+| **Doom** | C, X11 + a sound server process | Linux `doom` | long form below | yes (its sound server runs as a second program) | its shareware demos are refused by the 1.10 source |
+| **Heretic**, **Hexen** | C, Watcom DOS | DOS | long form below | — | 35 Hz pacing (P6.4) |
+| **OpenDUNE** | C, Watcom DOS | DOS `DUNE2` | the real DUNE2.EXE under DOSBox-X (`gate-dune-pixels`) | — | intro pacing (P7.11) |
+| **Jump 'n Bump** | C + NASM, planar DOS; also SDL 1.2 and SDL 2 ports | DOS, Linux (two entries) | the real jumpbump.exe under DOSBox-X, 300 of 300 pages (`gate-jnb-pixels`) | DOS: — ; SDL ports: silent | |
+| **Keen Dreams** | 16-bit Borland C++ 2.0 + TASM | DOS `KDREAMS` | the shipped KDREAMS.EXE under DOSBox-X (`gate-keen-pixels`) | — | PC speaker, OPL2 |
+| Catacomb 3-D | 16-bit Borland + TASM | builds, does not run | its TASM modules against Turbo Assembler (`gate-tasm-front`) | — | run-time generated code (P11.4) |
+| **OpenTyrian** | C, SDL 2 | Linux `opentyrian` | nothing (same frame before and after the SDL 2 rewrite, by hand) | yes, since 2026-10-04 | a reference |
+| **SDLPoP** (Prince of Persia) | C, SDL 2 + SDL_image | Linux `prince` | itself built against the real SDL 2: 130 of 130 pictures, in order (`gate-sdlpop-pixels`) | yes (its own OPL emulator) | the reference covers the first seconds of level 1 |
+| **Tux Racer** 0.61 | C + C++, SDL 1.2 + SDL_mixer + OpenGL, Tcl 8.4 | Linux `tuxracer` | its Tcl against gcc's (`gate-tcl`), its mixer against SDL_mixer (`gate-sdl-mixer`); NO picture reference | effects yes, music no | picture reference (P15.1), music |
+| gears, morph3d, texobj | C, GLUT | Linux | Mesa, pixel for pixel (`gate-gears`, `gate-mesa-demos`) | — | the other demos (P15.3) |
+| **Lua 5.4** | C, console | Linux `lua` | Lua's own test suite (`gate-lua`) | — | |
+| **PuTTYtel** | C, Win32 + Winsock | Windows | PuTTY's own test suite; long form below | — | |
+| SQLite 3.53 | C, one 269,650-line unit | headless only | agrees with gcc; long form below | — | |
+
+What the compiler itself is held to (preprocessor, layouts, the 16-bit models, C++, the assemblers)
+is TESTING.md's table, not this one.
+
+---
+
+## The long form
+
+
 What actually runs. The point of this file is that "what runs" is never inferred from "what is
 written": a row here means a gate observed it, not that the code looks capable of it.
 
