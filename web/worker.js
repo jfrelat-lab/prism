@@ -75,7 +75,7 @@ self.onmessage = async (e) => {
   }
 };
 
-async function start({ program, control, data, argv, pipeSab = null, screen = null, options = {} }) {
+async function start({ program, control, data, lazyData = [], argv, pipeSab = null, screen = null, options = {} }) {
   /*
    * A descriptor may carry the BUILD or merely name a target that does.
    *
@@ -490,6 +490,24 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
   const biggest = Object.entries(files).sort((a, b) => b[1].length - a[1].length)[0];
   log(`${Object.keys(files).length} data files visible to the program` +
     (biggest ? ` (largest: ${biggest[0]}, ${biggest[1].length.toLocaleString('en')} bytes)` : ''));
+  /*
+   * Files that are only LISTED (a descriptor's needsData.lazy): each is fetched when the program
+   * first opens or stats it, and not before -- see src/env/stdio.js. The fetch is synchronous
+   * because the program's fopen is, which a worker is allowed and a page is not.
+   */
+  for (const name of lazyData) {
+    if (name in files) continue;
+    files[name] = () => {
+      const x = new XMLHttpRequest();
+      x.open('GET', `/__data/${name.split('/').map(encodeURIComponent).join('/')}`, false);
+      x.responseType = 'arraybuffer';
+      try { x.send(); } catch { return null; }
+      if (x.status !== 200) return null;
+      log(`fetched ${name} (${x.response.byteLength.toLocaleString('en')} bytes)`);
+      return new Uint8Array(x.response);
+    };
+  }
+  if (lazyData.length) log(`${lazyData.length} more files listed, each fetched when the program opens it`);
   log(`argv: ${(argv || []).join(' ')}`);
 
   /*
@@ -1906,7 +1924,10 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         const f = Atomics.load(ctrl, SLOT.FRAME);
         // No frame since the last safepoint means the program is waiting, not working -- the same
         // judgement spin damping makes about a service, made about a loop.
-        if (f === lastFrame) { if (++idle > 2) park(); } else { idle = 0; lastFrame = f; }
+        // A waiting program presents no frame, so the park is its frame boundary for the key
+        // latches too: MAME 0.34 waits at its copyright screen for a key to be pressed AND released
+        // in a loop that draws nothing, and a latch that only a frame retires never lets go.
+        if (f === lastFrame) { if (++idle > 2) { reader.endFrame(); park(); } } else { idle = 0; lastFrame = f; }
       };
     }
   }

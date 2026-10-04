@@ -88,9 +88,10 @@ const program = compileProgram([
   { file: 'sound-probe.c', source: PROBE },
 ], { defines: { LSB_FIRST: '1' }, resolve: resolver, memory: 64 * 1024 * 1024 });
 
-// "0\n" answers the audio-device prompt msdos.c prints; that is the program asking a question.
+// "1\n" answers the audio-device prompt msdos.c prints; that is the program asking a question.
+// Device 0 is SEAL's silent "None" driver, so the output is device 1.
 let at = 0;
-const stdin = '0\n';
+const stdin = '1\n';
 installStdio(program.M, { files: {}, readChar: () => (at < stdin.length ? stdin.charCodeAt(at++) : -1) });
 installPorts(program.M);
 const allegro = installAllegro(program.M);

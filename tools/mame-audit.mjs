@@ -38,7 +38,7 @@ for (const f of readdirSync(join(SRC, dir)).filter((f) => /\.c$/i.test(f))) {
   const text = readFileSync(join(SRC, dir, f), 'latin1').replace(/\/\*[\s\S]*?\*\//g, ' ');
   for (const m of text.matchAll(/ROM_START\(\s*(\w+)\s*\)([\s\S]*?)ROM_END/g)) {
     const roms = [];
-    for (const r of m[2].matchAll(/ROM_LOAD\w*\(\s*"([^"]+)"\s*,[^,]+,\s*([^,]+),\s*(0x[0-9a-fA-F]+|\d+)\s*\)/g)) {
+    for (const r of m[2].matchAll(/ROM_LOAD\w*\s*\(\s*"([^"]+)"\s*,[^,]+,\s*([^,]+),\s*(0x[0-9a-fA-F]+|\d+)\s*\)/g)) {
       roms.push({ name: r[1], length: Number(r[2].trim()) || 0, crc: Number(r[3]) >>> 0 });
     }
     drivers.set(m[1], roms);

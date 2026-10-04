@@ -1667,27 +1667,114 @@ export class FunctionEmitter {
    * two locals, both passed as "m" inputs and written anyway, as gcc lets them be. Any other template
    * is refused as before. Returns false, emitting nothing, when the template is outside the subset.
    */
+  /*
+   * Widened for MAME 0.34's two uses, still over EAX and EDX only:
+   *
+   *  - src/msdos/profiler.c: `pushl`/`popl` around rdtsc, and `movl %eax, _curr_cycles` -- a store
+   *    to a C global by its ASSEMBLER name (DJGPP is COFF: a leading underscore), in a template
+   *    with no operands, hence the single `%`.
+   *  - src/msdos/osinline.h's vec_mult: `movl %1,%0 ; imull %2 ; movl %%edx,%%eax` with output
+   *    "=&a" -- the high half of a signed 32x32 multiply. An operand whose constraint names a
+   *    register class of one (a, d) IS that register; any other operand is read as a value, and a
+   *    store to one needs "m".
+   *
+   * The registers are JavaScript temporaries, so a push/pop pair of the same register around the
+   * code is the identity and emits nothing; an unbalanced one is refused.
+   */
   #gccAsmMoves(text, operands) {
     const bare = (c) => String(c ?? '').replace(/^L?"|"$/g, '');
-    const plan = [];
-    for (const l of text.split(/[;\n]/).map((x) => x.trim()).filter(Boolean)) {
+    const pinned = (n) => {
+      const c = operands[n] ? bare(operands[n].constraint).replace(/[=+&%]/g, '') : null;
+      return c === 'a' ? 'eax' : c === 'd' ? 'edx' : null;
+    };
+    // An operand as written: {reg}, {n} (a C operand), or {sym} (a global by assembler name).
+    const operand = (s) => {
+      let m = /^%%?(eax|edx)$/.exec(s);
+      if (m) return { reg: m[1] };
+      m = /^%(\d+)$/.exec(s);
+      if (m && operands[+m[1]]) return pinned(+m[1]) ? { reg: pinned(+m[1]) } : { n: +m[1] };
+      m = /^_([A-Za-z_]\w*)$/.exec(s);
+      if (m && !operands.length && this.#knowsGlobal(m[1])) return { sym: m[1] };
+      return null;
+    };
+    const plan = [], stack = [];
+    // The template is the string token as written: its line breaks are still a backslash and an n.
+    for (const l of text.replace(/\\[nt]/g, '\n').split(/[;\n]/).map((x) => x.trim()).filter(Boolean)) {
       if (l === 'rdtsc') { plan.push({ op: 'rdtsc' }); continue; }
-      const m = /^movl\s+%%(eax|edx)\s*,\s*%(\d+)$/.exec(l);
-      if (!m || !operands[+m[2]] || !/m/.test(bare(operands[+m[2]].constraint))) return false;
-      plan.push({ op: 'store', reg: m[1], n: +m[2] });
+      let m = /^(pushl|popl)\s+%%?(eax|edx)$/.exec(l);
+      if (m) {
+        if (m[1] === 'pushl') stack.push({ reg: m[2], at: plan.length });
+        else {
+          const top = stack.pop();
+          if (!top || top.reg !== m[2]) return false;
+          plan.push({ op: 'restore', reg: m[2], from: top });
+        }
+        continue;
+      }
+      m = /^imull\s+(\S+)$/.exec(l);
+      if (m) {
+        const by = operand(m[1]);
+        if (!by || by.sym) return false;
+        plan.push({ op: 'imul', by });
+        continue;
+      }
+      m = /^movl\s+(\S+?)\s*,\s*(\S+)$/.exec(l);
+      const src = m && operand(m[1]), dst = m && operand(m[2]);
+      if (!src || !dst) return false;
+      if (dst.n !== undefined && !/m/.test(bare(operands[dst.n].constraint))) return false;
+      if (!src.reg && !dst.reg) return false;                 // memory to memory is not an instruction
+      plan.push({ op: 'mov', src, dst });
     }
-    if (!plan.length) return false;
+    if (!plan.length || stack.length) return false;
     const reg = { eax: this.newTmp(), edx: this.newTmp() };
     this.#declareTmp(reg.eax); this.#declareTmp(reg.edx);
     this.out.push(`${reg.eax}=0;${reg.edx}=0;`);
-    for (const p of plan) {
+    // What a register held when it was pushed, for the pop that brings it back.
+    for (const p of plan) if (p.op === 'restore') { p.from.t = this.newTmp(); this.#declareTmp(p.from.t); }
+    const saves = plan.filter((p) => p.op === 'restore').map((p) => p.from);
+    // Operands read as values are evaluated once, up front, as gcc loads them before the template.
+    const value = new Map();
+    const read = (o) => {
+      if (o.reg) return reg[o.reg];
+      if (o.sym) return this.#rval({ n: 'ident', name: o.sym }).js;
+      if (!value.has(o.n)) {
+        const v = this.#rval(operands[o.n].expr);
+        const t = this.newTmp();
+        this.#declareTmp(t);
+        this.out.push(`${t}=${coerce(this.ty, v.js, v.type, this.ty.INT)};`);
+        value.set(o.n, t);
+      }
+      return value.get(o.n);
+    };
+    for (const p of plan) for (const o of [p.src, p.by]) if (o && o.n !== undefined) read(o);
+    plan.forEach((p, i) => {
+      for (const s of saves) if (s.at === i) this.out.push(`${s.t}=${reg[s.reg]};`);
       if (p.op === 'rdtsc') {
         this.out.push(`{const _t=M.rt.__prism_rdtsc();${reg.eax}=Number(_t&0xffffffffn)>>>0;${reg.edx}=Number(_t>>32n&0xffffffffn)>>>0;}`);
+      } else if (p.op === 'restore') {
+        this.out.push(`${reg[p.reg]}=${p.from.t};`);
+      } else if (p.op === 'imul') {
+        this.out.push(`{const _p=BigInt(${reg.eax}|0)*BigInt(${read(p.by)}|0);${reg.eax}=Number(BigInt.asUintN(32,_p));${reg.edx}=Number(BigInt.asUintN(32,_p>>32n));}`);
+      } else if (p.dst.reg) {
+        this.out.push(`${reg[p.dst.reg]}=${read(p.src)}>>>0;`);
       } else {
-        this.#storeAt(this.#lvalPlace(operands[p.n].expr), reg[p.reg], this.ty.UINT);
+        const e = p.dst.sym ? { n: 'ident', name: p.dst.sym } : operands[p.dst.n].expr;
+        this.#storeAt(this.#lvalPlace(e), reg[p.src.reg], this.ty.UINT);
       }
-    }
+    });
+    // An OUTPUT pinned to a register receives what the register holds when the template ends.
+    operands.forEach((op, n) => {
+      if (/^[=+]/.test(bare(op.constraint)) && pinned(n)) {
+        this.#storeAt(this.#lvalPlace(op.expr), reg[pinned(n)], this.ty.UINT);
+      }
+    });
     return true;
+  }
+
+  /** Whether `name` is an object the function can see: a local pinned as a global, or a global. */
+  #knowsGlobal(name) {
+    const l = this.locals.get(name);
+    return (l && l.kind === 'global') || this.ctx.globals.has(name);
   }
 
   #lvalPlace(e) {

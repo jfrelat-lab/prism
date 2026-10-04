@@ -83,6 +83,58 @@ export function installAllegro(M, {
     initialise_joystick: () => 1,
     poll_joystick: () => 0,
 
+    /*
+     * ---- Allegro 3.0, as MAME 0.34's src/msdos uses it.
+     *
+     * No joystick and no mouse, each said the way the library says it: install_joystick fails,
+     * install_mouse answers -1 ("no mouse driver"), and the tables stay empty. No configuration
+     * file either: every get_config_* returns the default it was handed -- and the STRING one
+     * returns that very pointer, which is what config.c tests for (`== "#"`) to learn that an
+     * entry is absent.
+     */
+    install_joystick: () => -1,
+    remove_joystick: () => 0,
+    load_joystick_data: () => -1,
+    save_joystick_data: () => -1,
+    calibrate_joystick: () => -1,
+    calibrate_joystick_name: () => 0,
+    install_mouse: () => -1,
+    remove_mouse: () => 0,
+    get_mouse_mickeys: (xp, yp) => { if (xp) dv().setInt32(xp, 0, true); if (yp) dv().setInt32(yp, 0, true); },
+    set_leds: () => 0,
+    set_config_file: () => 0,
+    get_config_string: (_s, _n, def) => def,
+    get_config_int: (_s, _n, def) => def,
+    get_config_float: (_s, _n, def) => def,
+    set_config_string: () => 0,
+    set_config_int: () => 0,
+    set_config_float: () => 0,
+    /* Colours of a 15- or 16-bit mode: 5-6-5, the layout a VESA 16-bit mode has. */
+    set_color_depth: (depth) => { state.colorDepth = depth | 0; },
+    makecol: (r, g, b) => {
+      if (state.colorDepth === 15) return ((r & 0xf8) << 7) | ((g & 0xf8) << 2) | ((b & 0xff) >> 3);
+      return ((r & 0xf8) << 8) | ((g & 0xfc) << 3) | ((b & 0xff) >> 3);
+    },
+    getr: (c) => (state.colorDepth === 15 ? ((c >> 10) & 31) << 3 : ((c >> 11) & 31) << 3),
+    getg: (c) => (state.colorDepth === 15 ? ((c >> 5) & 31) << 3 : ((c >> 5) & 63) << 2),
+    getb: (c) => (c & 31) << 3,
+    create_sub_bitmap: (_parent, _x, _y, w, h) => api.create_bitmap(w, h),
+    _my_ds: () => 0x1f,
+    _movedatal: (_ss, so, _ds, dof, n) => copyTo(so, (n | 0) * 4, dof),
+    // conio's getch: one character, unechoed. Read from the program's standard input.
+    getch: () => (M.rt.getchar ? M.rt.getchar() : -1),
+
+    /*
+     * SEAL's later calls. A voice is PRIMED with a wave and STARTED separately -- APlayVoice is
+     * the two together -- and AUpdateAudioEx says how many output frames are due, which headless
+     * is taken at its word.
+     */
+    APrimeVoice: (h, lpWave) => { const v = voice(h); if (!v) return 1; setWave(v, lpWave); v.pos = 0; v.playing = false; return 0; },
+    AStartVoice: (h) => { const v = voice(h); if (!v) return 1; v.playing = v.length > 0; return 0; },
+    AGetVoiceStatus: (h, lp) => { const v = voice(h); if (lp) dv().setInt32(lp, v && v.playing ? 0 : 1, true); return 0; },
+    AUpdateAudioEx: (n) => { mix(n >>> 0); return 0; },
+    ASetAudioMixerValue: (_ch, value) => { audio.master = Math.min(value >>> 0, 256); return 0; },
+
     /**
      * A graphics mode. The dimensions asked for are recorded but NOT published: msdos.c opens a
      * 320x200 mode and then reprograms the CRTC to 224x288 through TwkUser.c, so the mode is a poor
@@ -226,9 +278,14 @@ export function installAllegro(M, {
      * passes MAME's 0..255 as `volume/4`).
      */
     AInitialize: () => 0,
-    AGetAudioNumDevs: () => 1,
-    AGetAudioDevCaps: (_id, caps) => {
-      const name = 'PRISM shared-memory ring';
+    /*
+     * SEAL's device table starts with its "None" driver: device 0 (AUDIO_DEVICE_NONE) opens and
+     * plays nothing, and the cards follow. MAME 0.34 relies on the numbering -- its sound.c reads
+     * soundcard 0 as "silence" without asking SEAL -- so the one real output here is device 1.
+     */
+    AGetAudioNumDevs: () => 2,
+    AGetAudioDevCaps: (id, caps) => {
+      const name = (id | 0) === 0 ? 'None' : 'PRISM shared-memory ring';
       for (let i = 0; i < name.length; i++) M.u8[caps + 2 + i] = name.charCodeAt(i);
       M.u8[caps + 2 + name.length] = 0;
       return 0;
@@ -237,7 +294,8 @@ export function installAllegro(M, {
     /** The program chooses the rate; the page is told what it chose, the same way as the geometry. */
     AOpenAudio: (info) => {
       audio.rate = dv().getInt32(info + 4, true) || 44100;   // AUDIOINFO.nSampleRate
-      audio.open = true;
+      audio.open = dv().getUint16(info, true) !== 0;       // nDeviceId 0 is the silent driver
+      if (!audio.open) return 0;
       audio.clockUs = null;
       if (publish) {
         Atomics.store(publish.ctrl, SLOT.AUDIO_CHANNELS, 1);   // SEAL voices mix to one channel
@@ -266,11 +324,7 @@ export function installAllegro(M, {
     APlayVoice: (h, lpWave) => {
       const v = voice(h);
       if (!v) return 1;
-      v.data = dv().getInt32(lpWave + 24, true);           // AUDIOWAVE.lpData
-      v.length = dv().getInt32(lpWave + 8, true) >>> 0;    // dwLength
-      v.loop = (dv().getUint16(lpWave, true) & 0x0100) !== 0;
-      v.loopStart = dv().getInt32(lpWave + 12, true) >>> 0;
-      v.loopEnd = dv().getInt32(lpWave + 16, true) >>> 0 || v.length;
+      setWave(v, lpWave);
       v.pos = 0;
       v.playing = v.length > 0;
       state.samples.push({ voice: h | 0, len: v.length });
@@ -382,6 +436,17 @@ export function installAllegro(M, {
     return audio.voices.length;
   };
   const voice = (h) => audio.voices.find(v => v.handle === (h | 0)) ?? null;
+  /* A voice's wave: where its data is, how long, whether it loops, and its sample width. Lengths
+     and positions are in BYTES, as SEAL counts them, for 16-bit data too. */
+  const setWave = (v, lpWave) => {
+    const format = dv().getUint16(lpWave, true);
+    v.data = dv().getInt32(lpWave + 24, true);           // AUDIOWAVE.lpData
+    v.length = dv().getInt32(lpWave + 8, true) >>> 0;    // dwLength
+    v.loop = (format & 0x0100) !== 0;
+    v.wide = (format & 0x0002) !== 0;                    // AUDIO_FORMAT_16BITS
+    v.loopStart = dv().getInt32(lpWave + 12, true) >>> 0;
+    v.loopEnd = dv().getInt32(lpWave + 16, true) >>> 0 || v.length;
+  };
 
   /*
    * How many output samples have become DUE since the last mix.
@@ -413,9 +478,10 @@ export function installAllegro(M, {
     return Math.floor(audio.rate / 60);
   }
 
-  function mix() {
+  function mix(asked = 0) {
     if (!audio.open) return;
-    let n = due();
+    // Headless, an update that names its frame count (AUpdateAudioEx) is taken at its word.
+    let n = asked && !M.realClock ? asked : due();
     if (!n) return;
     // Never overrun the reader. The page publishes what it has consumed; without a page there is no
     // reader and the ring is a sliding window that nobody is behind.
@@ -430,9 +496,14 @@ export function installAllegro(M, {
       let acc = 0;
       for (const v of audio.voices) {
         if (!v.playing || !v.data || !v.length) continue;
-        const s = M.u8[v.data + (v.pos | 0)] - 128;       // 8-bit unsigned, centred on 128
-        acc += s * v.vol;
-        v.pos += v.freq / audio.rate;
+        if (v.wide) {
+          // 16-bit signed; the position is in bytes, so a sample is two of them.
+          acc += (dv().getInt16(v.data + ((v.pos | 0) & ~1), true) >> 8) * v.vol;
+          v.pos += (2 * v.freq) / audio.rate;
+        } else {
+          acc += (M.u8[v.data + (v.pos | 0)] - 128) * v.vol;   // 8-bit unsigned, centred on 128
+          v.pos += v.freq / audio.rate;
+        }
         if (v.pos >= (v.loop ? v.loopEnd : v.length)) {
           if (v.loop) v.pos = v.loopStart + (v.pos - v.loopEnd);
           else { v.pos = 0; v.playing = false; }
@@ -459,6 +530,9 @@ export function installAllegro(M, {
   function copyTo(src, bytes, off) {
     const dst = off >>> 0;
     M.u8.copyWithin(dst, src, src + bytes);
+    // A program that keeps a screen bitmap of its own is presented from it (see presentBitmap):
+    // what it writes to the card is then only the rectangles that changed.
+    if (g.scrbitmap) return 0;
     if (dst === 0xa0000) { present(true); return 0; }
     if (vesaFb && dst >= vesaFb && dst < vesaFb + VESA_W * VESA_H) {
       /*
@@ -491,6 +565,48 @@ export function installAllegro(M, {
     }
     state.pixels = direct ? 0xa0000 : vesaFb;
     if (!direct) { state.width = VESA_W; state.height = VESA_H; }
+    frameDone();
+  }
+
+  /*
+   * MAME 0.34's display, which is no longer "the whole bitmap, every frame, at 0xa0000".
+   *
+   * Its video.c keeps the game's picture in a bitmap of its own (`scrbitmap`) and copies to the card
+   * only the 16x16 blocks that changed, through one of twenty `update_screen_*` routines chosen by
+   * mode -- tweaked VGA, VESA 8- or 16-bit, doubled or not, with or without scanlines. So the card's
+   * memory is never written as a whole, a frame in which nothing moved writes nothing at all, and
+   * where the picture sits in it depends on CRTC registers this shim does not model.
+   *
+   * What does not depend on the mode is the bitmap and the rectangle of it the program decided to
+   * show: `skiplines`, `skipcolumns`, `gfx_display_lines`, `gfx_display_columns`, its own variables,
+   * which the PgUp/PgDn panning moves. So a frame is presented where the program copies it to the
+   * screen -- every update_screen_* routine is followed by this -- and it is that rectangle of that
+   * bitmap, undoubled: the picture the game drew rather than the scan-out of one card.
+   *
+   * 8-bit only. A 16-bit bitmap (the games MAME 0.34 gives more than 256 colours) is not presented.
+   */
+  let shown = 0, shownSize = 0;
+  function presentBitmap() {
+    const d = dv();
+    const b = d.getInt32(g.scrbitmap, true);
+    if (!b) return;
+    const depth = d.getInt32(b + 8, true);
+    const lines = d.getInt32(b + 16, true);
+    const fullW = d.getInt32(b, true), fullH = d.getInt32(b + 4, true);
+    const sy = Math.max(d.getInt32(g.skiplines, true), 0), sx = Math.max(d.getInt32(g.skipcolumns, true), 0);
+    const w = Math.min(d.getInt32(g.displayColumns, true), fullW - sx);
+    const h = Math.min(d.getInt32(g.displayLines, true), fullH - sy);
+    if (depth !== 8 || w <= 0 || h <= 0 || !lines) return;
+    if (w * h > shownSize) { shownSize = w * h; shown = M.rt.malloc(shownSize); }
+    for (let y = 0; y < h; y++) {
+      const row = d.getInt32(lines + 4 * (sy + y), true) + sx;
+      M.u8.copyWithin(shown + y * w, row, row + w);
+    }
+    state.width = w; state.height = h; state.pixels = shown;
+    frameDone();
+  }
+
+  function frameDone() {
     state.frames++;
     if (publish) {
       Atomics.store(publish.ctrl, SLOT.WIDTH, state.width);
@@ -540,6 +656,25 @@ export function installAllegro(M, {
     g.key = sym('key');
     g.screen = sym('screen');
     g.bitmap = sym('bitmap');
+    /*
+     * MAME 0.34's own display variables (see presentBitmap). Three of them are file statics of
+     * src/msdos/video.c, which the linker names by their unit: "<unit>$<name>".
+     */
+    const inVideo = (n) => {
+      for (const [k, v] of program.mod.symbols) if (k === n || /video\$/.test(k) && k.endsWith('$' + n)) return v.addr;
+      return 0;
+    };
+    // ...and so are the blit routines, which video.c declares static before defining them.
+    const blits = Object.keys(program.F).filter((n) => /(^|video\$)update_screen_(?!dummy$)/.test(n));
+    const video = { scrbitmap: inVideo('scrbitmap'), skiplines: inVideo('skiplines'), skipcolumns: inVideo('skipcolumns'),
+      displayLines: inVideo('gfx_display_lines'), displayColumns: inVideo('gfx_display_columns') };
+    if (blits.length && Object.values(video).every(Boolean)) {
+      Object.assign(g, video);
+      for (const name of blits) {
+        const blit = program.F[name];
+        program.F[name] = function (...a) { const r = blit.apply(this, a); presentBitmap(); return r; };
+      }
+    }
     // `screen` is a BITMAP* the program only ever passes back to us; give it a distinguishable value
     // so bmp_write_line can tell the display apart from an ordinary bitmap.
     if (g.screen) {
@@ -566,9 +701,14 @@ export const ALLEGRO_VARS = `
 #include <allegro.h>
 BITMAP *screen;
 char key[128];
+char allegro_error[80];
 int joy_x, joy_y;
 int joy_left, joy_right, joy_up, joy_down;
 int joy_b1, joy_b2, joy_b3, joy_b4;
+JOYSTICK_INFO joy[4];
+int num_joysticks;
+int joy_type;
+volatile int mouse_x, mouse_y, mouse_b;
 `;
 
 /**
@@ -591,6 +731,17 @@ export function allegroBuiltins(T) {
     bmp_write_line: f(T.ULONG, P, I),
     save_pcx: f(I, P, P, P),
     readkey: f(I), keypressed: f(I), clear_keybuf: f(V),
+    install_joystick: f(I, I), remove_joystick: f(V), load_joystick_data: f(I, P), save_joystick_data: f(I, P),
+    calibrate_joystick: f(I, I), calibrate_joystick_name: f(P, I),
+    install_mouse: f(I), remove_mouse: f(V), get_mouse_mickeys: f(V, P, P), set_leds: f(V, I),
+    set_config_file: f(V, P), get_config_string: f(P, P, P, P), get_config_int: f(I, P, P, I),
+    get_config_float: f(T.FLOAT, P, P, T.FLOAT),
+    set_config_string: f(V, P, P, P), set_config_int: f(V, P, P, I), set_config_float: f(V, P, P, T.FLOAT),
+    set_color_depth: f(V, I), makecol: f(I, I, I, I), getr: f(I, I), getg: f(I, I), getb: f(I, I),
+    create_sub_bitmap: f(P, P, I, I, I, I),
+    _my_ds: f(T.USHORT), _movedatal: f(V, U, U, U, U, U), getch: f(I),
+    APrimeVoice: f(U, U, P), AStartVoice: f(U, U), AGetVoiceStatus: f(U, U, P), AUpdateAudioEx: f(U, U),
+    ASetAudioMixerValue: f(U, U, U),
 
     // SEAL
     AInitialize: f(U), AGetAudioNumDevs: f(U), AGetAudioDevCaps: f(U, U, P),

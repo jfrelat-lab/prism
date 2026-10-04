@@ -724,6 +724,21 @@ async function loadData(root, say) {
   return out;
 }
 
+/**
+ * A data root that is only LISTED (`needsData.lazy`), optionally the part of it `under` a prefix.
+ * MAME 0.34's ROM collection is thousands of zips of which a run opens one or two, so the names go
+ * to the worker and each file is fetched when the program opens it.
+ */
+let lazyNames = [];
+async function listData(root, under = '') {
+  const r = await fetch(`/__data/?root=${encodeURIComponent(root)}`);
+  if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
+  const { files } = await r.json();
+  const names = files.filter((f) => f.startsWith(under));
+  if (!names.length) throw new Error(`the data directory '${root}/${under}' is empty`);
+  return names;
+}
+
 // ---------------------------------------------------------------- keyboard
 //
 // Two distinct questions, answered separately, exactly as MIRAGE does it: which keys are HELD (a byte
@@ -1060,10 +1075,12 @@ async function startRun(typedAs = null) {
    * truthful answer for Lua.
    */
   dataFiles = {};
+  lazyNames = [];
   if (program.needsData?.dir) {
     const busy = worker;                              // nothing may have started in the meantime
     try {
-      dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); });
+      if (program.needsData.lazy) lazyNames = await listData(program.needsData.dir, program.needsData.under ?? '');
+      else dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); });
     } catch (e) {
       termNote(e.message, A_ERR);
       termPromptIfTerminal();
@@ -1071,8 +1088,8 @@ async function startRun(typedAs = null) {
       return;
     }
     if (busy !== worker) return;                      // stopped or restarted while we were fetching
-    const n = Object.keys(dataFiles).length;
-    termNote(`${n} file${n === 1 ? '' : 's'} ready`);
+    const n = Object.keys(dataFiles).length || lazyNames.length;
+    termNote(lazyNames.length ? `${n} files listed` : `${n} file${n === 1 ? '' : 's'} ready`);
     log(`${n} data files from ${program.needsData.dir}/`);
   }
   // Only "you loaded nothing at all". WHICH files are needed depends on the arguments — MAME asks
@@ -1142,7 +1159,7 @@ async function startRun(typedAs = null) {
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
   worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
-                       control, data: dataFiles, argv, pipeSab, options: pageOptions,
+                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: pageOptions,
                        /* The machine's own screen, so the program's output continues under the
                           command line instead of starting on a blank page. */
                        screen: machine.kind === 'desktop' ? null

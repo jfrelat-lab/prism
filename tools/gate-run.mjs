@@ -1829,6 +1829,36 @@ int main(void)
 }
 `);
 
+// GCC inline assembly over EAX and EDX: MAME 0.34's vec_mult (src/msdos/osinline.h), the high half
+// of a signed 32x32 multiply, with an output pinned to EAX by its constraint and a one-operand
+// imull. The oracle runs these very instructions on a real x86.
+C('gcc-asm-imull-high-half', `#include <stdio.h>
+static int vec_mult(int x, int y)
+{
+    int result;
+    __asm__ (
+            "movl  %1    , %0    ; "
+            "imull %2            ; "
+            "movl  %%edx , %%eax ; "
+            :  "=&a" (result)
+            :  "mr" (x),
+               "mr" (y)
+            :  "%edx", "%cc"
+        );
+    return result;
+}
+int main(void)
+{
+    static const int v[] = { 0, 1, -1, 12, 65536, -65536, 0x40000000, -0x40000000, 0x7fffffff, (-0x7fffffff - 1), 123456789 };
+    unsigned i, k;
+    for (i = 0; i < sizeof v / sizeof *v; i++) {
+        for (k = 0; k < sizeof v / sizeof *v; k++) printf("%d ", vec_mult(v[i], v[k]));
+        printf("\\n");
+    }
+    return 0;
+}
+`);
+
 // Descriptor 1 IS stdout: write(2) to it is output, not nothing, and lseek on it fails because it
 // cannot seek, not because it does not exist. (Only write(), so that no stdio buffer is involved.)
 C('write-to-the-standard-descriptors', `#include <unistd.h>

@@ -48,9 +48,22 @@ export function installStdio(M, {
 
   // name (lower-cased, forward slashes) -> Uint8Array. The store outlives any open handle, which is
   // what makes "write a file, close it, open it again" work.
-  const store = new Map();
+  /*
+   * A file may be handed over as a FUNCTION that returns its bytes: a file known to exist whose
+   * contents are fetched the first time something reads or stats it. MAME 0.34 is why -- a ROM
+   * collection is thousands of zips and a run opens one or two of them, named by the program at
+   * run time (a clone opens its parent's), so neither loading them all nor guessing which is right.
+   * A function that returns null leaves an empty file.
+   */
+  const store = new (class extends Map {
+    get(k) {
+      let v = super.get(k);
+      if (typeof v === 'function') { v = v() ?? new Uint8Array(0); super.set(k, v); }
+      return v;
+    }
+  })();
   for (const [name, bytes] of Object.entries(files)) {
-    store.set(norm(name), bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    store.set(norm(name), bytes instanceof Uint8Array || typeof bytes === 'function' ? bytes : new Uint8Array(bytes));
   }
 
   /*

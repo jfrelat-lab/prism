@@ -120,7 +120,8 @@ const ALLEGRO = `
 #define GFX_VGA        1
 #define GFX_MODEX      2
 #define GFX_VESA1      3
-#define GFX_VESA2B     5
+#define GFX_VESA2B     4
+#define GFX_VESA2L     5
 
 typedef struct BITMAP {
    int w, h;
@@ -141,6 +142,7 @@ typedef RGB PALETTE[256];
 
 extern BITMAP *screen;
 extern char key[128];
+extern char allegro_error[80];
 extern int joy_x, joy_y;
 extern int joy_left, joy_right, joy_up, joy_down;
 extern int joy_b1, joy_b2, joy_b3, joy_b4;
@@ -163,6 +165,70 @@ int  initialise_joystick(void);
 int  poll_joystick(void);
 unsigned long bmp_write_line(BITMAP *bmp, int line);
 void vsync(void);
+
+/*
+ * ---- What MAME 0.34's src/msdos asks of Allegro 3.0 beyond the above: colour depths, the linear
+ * VESA driver, configuration files, the new joystick tables, the mouse, the keyboard LEDs.
+ *
+ * The driver lists are link-time tables in the real library (which drivers get linked in); here
+ * every driver is one shim, so a list declares nothing.
+ */
+#define DECLARE_GFX_DRIVER_LIST(list)   extern int _prism_allegro_gfx_driver_list;
+#define DECLARE_COLOR_DEPTH_LIST(list)  extern int _prism_allegro_color_depth_list;
+#define DECLARE_DIGI_DRIVER_LIST(list)  extern int _prism_allegro_digi_driver_list;
+#define DECLARE_MIDI_DRIVER_LIST(list)  extern int _prism_allegro_midi_driver_list;
+
+void set_color_depth(int depth);
+int  makecol(int r, int g, int b);
+int  getr(int c);
+int  getg(int c);
+int  getb(int c);
+BITMAP *create_sub_bitmap(BITMAP *parent, int x, int y, int width, int height);
+
+#define KEY_LCONTROL 29
+#define KEY_PRTSCR   84
+#define KEY_F12      88
+#define KEY_RCONTROL 120
+#define KEY_ALTGR    121
+#define KB_SCROLOCK_FLAG 0x0100
+#define KB_NUMLOCK_FLAG  0x0200
+#define KB_CAPSLOCK_FLAG 0x0400
+void set_leds(int leds);
+
+void set_config_file(const char *filename);
+const char *get_config_string(const char *section, const char *name, const char *def);
+int   get_config_int(const char *section, const char *name, int def);
+float get_config_float(const char *section, const char *name, float def);
+void  set_config_string(const char *section, const char *name, const char *val);
+void  set_config_int(const char *section, const char *name, int val);
+void  set_config_float(const char *section, const char *name, float val);
+
+#define JOY_TYPE_NONE      0
+#define JOYFLAG_CALIBRATE  8
+typedef struct JOYSTICK_AXIS_INFO { int pos; int d1, d2; char *name; } JOYSTICK_AXIS_INFO;
+typedef struct JOYSTICK_STICK_INFO { int flags; int num_axis; JOYSTICK_AXIS_INFO axis[3]; char *name; } JOYSTICK_STICK_INFO;
+typedef struct JOYSTICK_BUTTON_INFO { int b; char *name; } JOYSTICK_BUTTON_INFO;
+typedef struct JOYSTICK_INFO {
+   int flags;
+   int num_sticks;
+   int num_buttons;
+   JOYSTICK_STICK_INFO stick[4];
+   JOYSTICK_BUTTON_INFO button[16];
+} JOYSTICK_INFO;
+extern JOYSTICK_INFO joy[4];
+extern int num_joysticks;
+extern int joy_type;
+int  install_joystick(int type);
+void remove_joystick(void);
+int  load_joystick_data(const char *filename);
+int  save_joystick_data(const char *filename);
+int  calibrate_joystick(int n);
+char *calibrate_joystick_name(int n);
+
+extern volatile int mouse_x, mouse_y, mouse_b;
+int  install_mouse(void);
+void remove_mouse(void);
+void get_mouse_mickeys(int *mickeyx, int *mickeyy);
 #endif
 `;
 
@@ -241,6 +307,19 @@ unsigned int AGetVoicePosition(HAC hVoice, unsigned long *lpdwPosition);
 unsigned int ACreateAudioData(LPAUDIOWAVE lpWave);
 unsigned int ADestroyAudioData(LPAUDIOWAVE lpWave);
 unsigned int AWriteAudioData(LPAUDIOWAVE lpWave, unsigned long dwOffset, unsigned int nCount);
+
+/* SEAL 1.0x's later calls, which MAME 0.34's sound.c uses: a voice primed with a wave and started
+   separately, a status query, an update that says how many frames are due, the mixer's volume. */
+typedef int BOOL;
+typedef BOOL *LPBOOL;
+typedef long LONG;
+typedef LONG *LPLONG;
+#define AUDIO_MIXER_MASTER_VOLUME 0x0001
+unsigned int APrimeVoice(HAC hVoice, LPAUDIOWAVE lpWave);
+unsigned int AStartVoice(HAC hVoice);
+unsigned int AGetVoiceStatus(HAC hVoice, LPBOOL lpnStatus);
+unsigned int AUpdateAudioEx(unsigned int nFrames);
+unsigned int ASetAudioMixerValue(unsigned int nChannel, unsigned int nValue);
 #endif
 `;
 

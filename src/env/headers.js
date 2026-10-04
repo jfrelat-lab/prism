@@ -2064,6 +2064,8 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'stdio.h': STDIO,
   'stdlib.h': STDLIB,
   'string.h': STRING,
+  // BSD's name for part of the same library; DJGPP and glibc both carry it.
+  'strings.h': '#include <string.h>\n',
   'math.h': MATH,
   'limits.h': LIMITS,
   'assert.h': ASSERT,
