@@ -1,6 +1,6 @@
 {
   "name": "tuxracer",
-  "title": "TUX RACER 0.61 (Sunspire Studios, 2001: GLUT, Tcl 8.4, its terrain in C++)",
+  "title": "TUX RACER 0.61 (Sunspire Studios, 2001: SDL 1.2 and SDL_mixer, Tcl 8.4, its terrain in C++)",
   "dir": "corpus",
   "fetch": "Tux Racer 0.61 and Tcl 8.4.20 from SourceForge, unpacked as corpus/tuxracer-0.61 and corpus/tcl8.4.20",
   "_units": "src/Makefile.am's tuxracer_SOURCES (its three .cpp files -- the quadtree terrain -- compiled by src/cxx), and the Tcl library it links: unix/Makefile.in's GENERIC_OBJS, UNIX_OBJS and NOTIFY_OBJS, with generic/tclLoadNone.c as configure --disable-load selects.",
@@ -166,7 +166,7 @@
     "tcl8.4.20/generic",
     "tcl8.4.20/unix"
   ],
-  "_defines": "Two configures' answers in one table. Tcl's are what its unix/configure finds (run in the oracle container for the list), less what PRISM's libc is not: no 64-bit file API, no tm_zone/tm_gmtoff, no fts, no langinfo. Tux Racer's choose GLUT: without SDL there is no sound and no joystick, which its own #ifdefs allow.",
+  "_defines": "Two configures' answers in one table. Tcl's are what its unix/configure finds (run in the oracle container for the list), less what PRISM's libc is not: no 64-bit file API, no tm_zone/tm_gmtoff, no fts, no langinfo. Tux Racer's choose SDL and SDL_mixer, the build that has sound; HAVE_SDL_JOYSTICKOPEN is left out, as configure leaves it out on a machine with no joystick support.",
   "defines": {
     "HAVE_LIMITS_H": "1",
     "HAVE_UNISTD_H": "1",
@@ -200,7 +200,8 @@
     "VERSION": "\"0.61\"",
     "PACKAGE": "\"tuxracer\"",
     "TCL_HEADER": "<tcl.h>",
-    "HAVE_GLUT": "1",
+    "HAVE_SDL": "1",
+    "HAVE_SDL_MIXER": "1",
     "HAVE_GETTIMEOFDAY": "1",
     "HAVE_STRDUP": "1",
     "HAVE_ISNAN": "1",
@@ -214,9 +215,9 @@
     "environ",
     "gl",
     "glu",
-    "glut"
+    "sdl12"
   ],
-  "host": "glut",
+  "host": "sdl",
   "_compile": "lenientPaste: the game was built by gcc 2.95, which let `Params. ## nam` (game_config.c) through as two tokens; gcc 3 and later refuse it.",
   "compile": {
     "memory": 256,

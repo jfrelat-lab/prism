@@ -1593,8 +1593,11 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
      *
      * Devices come from the target's own env list, so this branch names none of them.
      */
+    // An SDL_OPENGL program draws through gl.js: WebGL2 when the worker has it, as for GLUT.
+    const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     const env = buildEnv(prog.M, program.env ?? [], {
       stdio: { files, readChar: () => keyboard.read() },
+      gl: { backend },
       sdl12: {
         onPalette: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
         /*
@@ -1607,6 +1610,9 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
       },
     });
     void env;
+    // A program may take a library function's ADDRESS -- Tux Racer calls SDL_GL_GetProcAddress
+    // through a pointer -- and those slots can only be bound once the environments exist.
+    bindLateBuiltins(prog);
     const sdl = prog.M.sdl;
     if (!sdl) {
       throw new Error("host 'sdl' needs the sdl12 environment — it is what supplies the surface " +
@@ -1623,6 +1629,76 @@ async function start({ program, control, data, argv, pipeSab = null, screen = nu
         const e = keyboard.nextEvent();
         return e ? { scan: e.scan, extended: !!e.extended, down: e.down, ascii: 0 } : null;
       },
+    };
+
+    /*
+     * THE MOUSE, as a position. The page reports relative motion; SDL reports where the pointer
+     * is, so the motion is accumulated and kept inside the display. The page's button mask is left,
+     * right, middle; SDL numbers them left, middle, right.
+     */
+    const pointer = { x: 0, y: 0 };
+    sdl.state.mouse = {
+      poll: () => {
+        const { dx, dy } = mouse.take(), b = mouse.state();
+        const w = sdl.state.width || 640, h = sdl.state.height || 480;
+        pointer.x = Math.max(0, Math.min(w - 1, pointer.x + dx));
+        pointer.y = Math.max(0, Math.min(h - 1, pointer.y + dy));
+        return { x: pointer.x, y: pointer.y, buttons: (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1) };
+      },
+      warp: (x, y) => { pointer.x = x; pointer.y = y; },
+    };
+
+    /*
+     * SOUND. SDL_mixer's buffers go into the ring the page plays, at the rate and channel count the
+     * program opened the device with; an 8-bit device is widened here, because the ring is 16-bit.
+     * A buffer the ring has no room for is dropped: the page is the clock, and a mixer that waited
+     * for it would stall the game for its sound.
+     */
+    let audioWritten = 0;
+    sdl.state.onAudioOpen = (s) => {
+      Atomics.store(ctrl, SLOT.AUDIO_CHANNELS, s.outChannels);
+      Atomics.store(ctrl, SLOT.AUDIO_RATE, s.audioOpen ? s.freq : 0);
+      if (s.audioOpen) log(`SDL_mixer device ${s.freq} Hz, ${s.format & 0xff}-bit, ${s.outChannels === 2 ? 'stereo' : 'mono'}, ${s.chunkFrames} frames a buffer`);
+    };
+    sdl.state.onAudio = (buf, frames, s) => {
+      const n = frames * s.outChannels, mask = audio.length - 1;
+      const read = Atomics.load(ctrl, SLOT.AUDIO_READ);
+      if (audio.length - (audioWritten - read) * s.outChannels < n) return;
+      const at = audioWritten * s.outChannels, dv = prog.M.mod.dv, u8 = prog.M.u8;
+      if ((s.format & 0xff) === 16) for (let i = 0; i < n; i++) audio[(at + i) & mask] = dv.getInt16(buf + 2 * i, true);
+      else for (let i = 0; i < n; i++) audio[(at + i) & mask] = (u8[buf + i] - 128) << 8;
+      audioWritten += frames;
+      Atomics.store(ctrl, SLOT.AUDIO_WRITE, audioWritten);
+    };
+
+    /*
+     * AN OPENGL DISPLAY: the frame gl.js drew, copied at every SDL_GL_SwapBuffers into a buffer in
+     * guest memory, top row first and B,G,R,A -- what the GLUT host publishes, by the same route.
+     */
+    let out = 0, outW = 0, outH = 0, glSince = performance.now(), glCount = 0;
+    sdl.state.onSwap = (gl) => {
+      glCount++;
+      const tNow = performance.now();
+      if (tNow - glSince >= 5000) { log(`${glCount} frames in ${((tNow - glSince) / 1000).toFixed(1)} s = ${(glCount * 1000 / (tNow - glSince)).toFixed(1)} fps (${gl.backend})`); glSince = tNow; glCount = 0; }
+      const { width: w, height: h } = gl.state;
+      if (!out || w !== outW || h !== outH) {
+        if (out) prog.M.rt.free(out);
+        out = prog.M.rt.malloc(w * h * 4);
+        outW = w; outH = h;
+        Atomics.store(ctrl, SLOT.WIDTH, w);
+        Atomics.store(ctrl, SLOT.HEIGHT, h);
+        Atomics.store(ctrl, SLOT.PIXELS, out);
+        Atomics.store(ctrl, SLOT.PIXFMT, 32);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        log(`SDL 1.2 OpenGL display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
+      }
+      const px = gl.readPixels(), u8 = prog.M.u8;
+      for (let i = 0; i < w * h; i++) {
+        u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
+        u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
+      }
+      reader.endFrame();
+      pace();
     };
 
     let published = 0;

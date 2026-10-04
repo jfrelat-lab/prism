@@ -1,14 +1,14 @@
 {
   "title": "TUX RACER",
-  "subtitle": "Sunspire Studios, 2001 · 0.61, the last GPL release — GLUT, Tcl 8.4 for its courses, its terrain in C++",
+  "subtitle": "Sunspire Studios, 2001 · 0.61, the last GPL release — SDL 1.2 and SDL_mixer, Tcl 8.4 for its courses, its terrain in C++",
   "target": "tuxracer",
-  "host": "glut",
+  "host": "sdl",
   "fps": 60,
   "needsData": {
     "dir": "tuxracer",
     "hint": "tuxracer-data-0.61/ from the game's data archive (courses, textures, fonts, tux.tcl)"
   },
   "controls": [["arrows", "steer, paddle, brake"], ["Enter", "choose"], ["Esc", "back"], ["mouse", "menus"]],
-  "_why": "The first game here whose C++ is part of the game: the course is a quadtree (quadtree.cpp, 1,580 lines of classes) compiled by src/cxx beside 70 C files, and its courses are Tcl scripts run by the real Tcl 8.4 library, built from source like the rest. GLU and the input half of GLUT were written for it.",
-  "_fps": "The page's own cap: GLUT has none, and the game draws as fast as it is allowed."
+  "_why": "The first game here whose C++ is part of the game: the course is a quadtree (quadtree.cpp, 1,580 lines of classes) compiled by src/cxx beside 70 C files, and its courses are Tcl scripts run by the real Tcl 8.4 library, built from source like the rest. GLU and the input half of GLUT were written for it; it now runs as its SDL build, the one with sound: its effects are mixed by src/env/sdlmixer.js, held to the real SDL_mixer 1.2. Its music is Impulse Tracker modules, which nothing here plays yet.",
+  "_fps": "The page's own cap: the game draws as fast as it is allowed."
 }

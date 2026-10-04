@@ -10,6 +10,9 @@
 // WHAT IS DECLARED IS WHAT corpus/jumpnbump-sdl12 ASKS FOR, and the list came from its own source
 // rather than from a memory of SDL: 34 functions, 11 types, 17 constants, 19 key symbols. Adding
 // the rest of SDL 1.2 before a program needs it is how a shim grows a surface nobody checks.
+// corpus/tuxracer-0.61 then asked for more -- SDL_OPENGL and the SDL_GL calls, the rest of the
+// keyboard, mouse motion, the resize event, the audio formats, SDL_RWFromFile -- and each of those
+// is in the gate's probe too.
 //
 // EVERY LAYOUT AND EVERY VALUE HERE WAS MEASURED against the real headers, with gcc -m32 in the
 // oracle container (libsdl1.2-dev), because the program reads surface->pixels and surface->pitch
@@ -102,7 +105,17 @@ const SDL_MAIN_12 = `
 #define SDL_INIT_AUDIO    0x00000010
 #define SDL_INIT_VIDEO    0x00000020
 #define SDL_INIT_JOYSTICK 0x00000200
+#define SDL_INIT_NOPARACHUTE 0x00100000
 #define SDL_INIT_EVERYTHING 0x0000FFFF
+
+/* A file as SDL reads one. Opaque here: the only use is to hand one to a loader. */
+typedef struct SDL_RWops SDL_RWops;
+SDL_RWops *SDL_RWFromFile(const char *file, const char *mode);
+
+#define AUDIO_U8     0x0008
+#define AUDIO_S16LSB 0x8010
+#define AUDIO_S16    AUDIO_S16LSB
+#define AUDIO_S16SYS AUDIO_S16LSB
 
 int SDL_Init(Uint32 flags);
 int SDL_InitSubSystem(Uint32 flags);
@@ -160,6 +173,8 @@ typedef struct SDL_Surface {
 
 #define SDL_SWSURFACE   0x00000000
 #define SDL_HWSURFACE   0x00000001
+#define SDL_OPENGL      0x00000002
+#define SDL_RESIZABLE   0x00000010
 #define SDL_DOUBLEBUF   0x40000000
 #define SDL_FULLSCREEN  0x80000000
 #define SDL_SRCCOLORKEY 0x00001000
@@ -182,6 +197,16 @@ void SDL_WM_SetCaption(const char *title, const char *icon);
 void SDL_WM_SetIcon(SDL_Surface *icon, Uint8 *mask);
 int SDL_WM_ToggleFullScreen(SDL_Surface *surface);
 
+/* An OpenGL display: SDL_SetVideoMode with SDL_OPENGL makes the context, and this pair is all a
+   program then asks of SDL about it. */
+typedef enum {
+    SDL_GL_RED_SIZE, SDL_GL_GREEN_SIZE, SDL_GL_BLUE_SIZE, SDL_GL_ALPHA_SIZE, SDL_GL_BUFFER_SIZE,
+    SDL_GL_DOUBLEBUFFER, SDL_GL_DEPTH_SIZE, SDL_GL_STENCIL_SIZE
+} SDL_GLattr;
+int SDL_GL_SetAttribute(SDL_GLattr attr, int value);
+void SDL_GL_SwapBuffers(void);
+void *SDL_GL_GetProcAddress(const char *proc);
+
 /*
  * SDLKey is an ENUM, four bytes wide, and SDL2 renamed it SDL_Keycode -- which is what made a
  * program compiled against 1.2 fail to parse when it was handed SDL2's header. The values below are
@@ -189,12 +214,22 @@ int SDL_WM_ToggleFullScreen(SDL_Surface *surface);
  * and the rest are not, which is exactly the part that cannot be guessed.
  */
 typedef enum {
+    SDLK_UNKNOWN = 0,
     SDLK_ESCAPE = 27,
     SDLK_1 = 49, SDLK_2 = 50, SDLK_3 = 51, SDLK_4 = 52,
     SDLK_a = 97, SDLK_d = 100, SDLK_i = 105, SDLK_j = 106, SDLK_l = 108, SDLK_w = 119,
-    SDLK_KP4 = 260, SDLK_KP6 = 262, SDLK_KP8 = 264,
-    SDLK_UP = 273, SDLK_RIGHT = 275, SDLK_LEFT = 276,
-    SDLK_F10 = 291, SDLK_F12 = 293,
+    SDLK_KP0 = 256, SDLK_KP1 = 257, SDLK_KP2 = 258, SDLK_KP3 = 259, SDLK_KP4 = 260,
+    SDLK_KP5 = 261, SDLK_KP6 = 262, SDLK_KP7 = 263, SDLK_KP8 = 264, SDLK_KP9 = 265,
+    SDLK_KP_PERIOD = 266, SDLK_KP_DIVIDE = 267, SDLK_KP_MULTIPLY = 268, SDLK_KP_MINUS = 269,
+    SDLK_KP_PLUS = 270, SDLK_KP_ENTER = 271, SDLK_KP_EQUALS = 272,
+    SDLK_UP = 273, SDLK_DOWN = 274, SDLK_RIGHT = 275, SDLK_LEFT = 276,
+    SDLK_INSERT = 277, SDLK_HOME = 278, SDLK_END = 279, SDLK_PAGEUP = 280, SDLK_PAGEDOWN = 281,
+    SDLK_F1 = 282, SDLK_F2 = 283, SDLK_F3 = 284, SDLK_F4 = 285, SDLK_F5 = 286, SDLK_F6 = 287,
+    SDLK_F7 = 288, SDLK_F8 = 289, SDLK_F9 = 290, SDLK_F10 = 291, SDLK_F11 = 292, SDLK_F12 = 293,
+    SDLK_F13 = 294, SDLK_F14 = 295, SDLK_F15 = 296,
+    SDLK_NUMLOCK = 300, SDLK_CAPSLOCK = 301, SDLK_SCROLLOCK = 302,
+    SDLK_RSHIFT = 303, SDLK_LSHIFT = 304, SDLK_RCTRL = 305, SDLK_LCTRL = 306,
+    SDLK_RALT = 307, SDLK_LALT = 308, SDLK_RMETA = 309, SDLK_LMETA = 310,
     SDLK_LAST = 323
 } SDLKey;
 
@@ -217,6 +252,10 @@ typedef struct SDL_keysym {
 #define SDL_MOUSEBUTTONDOWN  5
 #define SDL_MOUSEBUTTONUP    6
 #define SDL_QUIT            12
+#define SDL_VIDEORESIZE     16
+
+#define SDL_DEFAULT_REPEAT_DELAY    500
+#define SDL_DEFAULT_REPEAT_INTERVAL 30
 
 /* Every event begins with a Uint8 type -- a Uint32 in SDL2, which is the other silent difference. */
 typedef struct SDL_KeyboardEvent {
@@ -246,12 +285,19 @@ typedef struct SDL_QuitEvent {
     Uint8 type;
 } SDL_QuitEvent;
 
+typedef struct SDL_ResizeEvent {
+    Uint8 type;
+    int w;
+    int h;
+} SDL_ResizeEvent;
+
 /* 20 bytes, which the keyboard member is what decides. */
 typedef union SDL_Event {
     Uint8 type;
     SDL_KeyboardEvent key;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
+    SDL_ResizeEvent resize;
     SDL_QuitEvent quit;
 } SDL_Event;
 
@@ -267,6 +313,7 @@ Uint8 *SDL_GetKeyState(int *numkeys);
 #define SDL_BUTTON_RIGHT  3
 
 Uint8 SDL_GetMouseState(int *x, int *y);
+void SDL_WarpMouse(Uint16 x, Uint16 y);
 
 struct _SDL_Joystick;
 typedef struct _SDL_Joystick SDL_Joystick;

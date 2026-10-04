@@ -28,6 +28,13 @@
 // pulled by pumpAudio(), the same answer safepoints give for the timer. What this build does NOT
 // need is thread emulation: SDL_CreateThread and the semaphores live inside #ifdef USE_KAILLERA in
 // sdl/interrpt.c, the netplay lobby, which this target does not select.
+//
+// SINCE THEN, FOR corpus/tuxracer-0.61: an OPENGL display -- SDL_SetVideoMode with SDL_OPENGL makes
+// gl.js's framebuffer the display and SDL_GL_SwapBuffers publishes it -- the whole keyboard rather
+// than one game's keys, the mouse as events, and SDL_RWFromFile for Mix_LoadWAV. And SDL_mixer now
+// mixes for itself (src/env/sdlmixer.js), so the calls where a program yields to SDL -- a delay, a
+// tick query, an event poll, a flip or a swap -- are also where the buffers due by the clock get
+// mixed: state.pump(), the audio thread's work done at the safepoints.
 
 /* SDL_Surface, SDL 1.2's. pitch is 16-BIT here -- SDL2 widened it, and the padding hides the
    difference from offsetof, which is why the gate measures member widths too. */
@@ -44,29 +51,40 @@ const P_NCOLORS = 0, P_COLORS = 4, P_SIZE = 8, COLOR_SIZE = 4;
 /* SDL_Event, SDL 1.2's. `type` is a Uint8 here and a Uint32 in SDL2 -- the difference that makes
    one version's PollEvent unusable by the other's program. */
 const E_TYPE = 0, E_KEY_STATE = 2, E_KEY_SYM = 8, E_KEY_UNICODE = 16,
-      E_BTN_BUTTON = 2, E_BTN_STATE = 3, E_BTN_X = 4, E_BTN_Y = 6, E_SIZE = 20;
+      E_BTN_BUTTON = 2, E_BTN_STATE = 3, E_BTN_X = 4, E_BTN_Y = 6,
+      E_MOTION_STATE = 2, E_MOTION_X = 4, E_MOTION_Y = 6, E_MOTION_XREL = 8, E_MOTION_YREL = 10, E_SIZE = 20;
 
-const SDL_KEYDOWN = 2, SDL_KEYUP = 3;
+const SDL_KEYDOWN = 2, SDL_KEYUP = 3, SDL_MOUSEMOTION = 4, SDL_MOUSEBUTTONDOWN = 5, SDL_MOUSEBUTTONUP = 6;
 const SDL_PRESSED = 1, SDL_RELEASED = 0;
+const SDL_OPENGL = 0x00000002;
 
 /*
- * Scan code set 1 -> SDLKey, for the keys this corpus names, and only those. `ext` is the 0xE0
- * prefix: the arrows and the keypad share a code and SDL 1.2 gives them different symbols, so the
- * prefix is the whole difference between SDLK_UP and SDLK_KP8.
+ * Scan code set 1 -> SDLKey, for a US keyboard. `extended` is the 0xE0 prefix: the arrows and the
+ * keypad share a code and SDL 1.2 gives them different symbols, so the prefix is the whole
+ * difference between SDLK_UP and SDLK_KP8. A printable key's symbol is its unshifted character.
  */
+const SCAN_CHARS = `\0\x1b1234567890-=\b\tqwertyuiop[]\r\0asdfghjkl;'\`\0\\zxcvbnm,./\0\0\0 `;
 const SDLK = {
   plain: {
-    1: 27,                                            // Escape
-    2: 49, 3: 50, 4: 51, 5: 52,                       // 1 2 3 4
-    17: 119, 30: 97, 32: 100,                         // w a d
-    23: 105, 36: 106, 38: 108,                        // i j l
-    68: 291, 88: 293,                                 // F10 F12
-    72: 264, 75: 260, 77: 262,                        // keypad 8 4 6
+    29: 306, 42: 304, 54: 303, 56: 308,               // left Ctrl, left Shift, right Shift, left Alt
+    55: 268, 58: 301, 69: 300, 70: 302,               // keypad *, Caps Lock, Num Lock, Scroll Lock
+    59: 282, 60: 283, 61: 284, 62: 285, 63: 286, 64: 287, 65: 288, 66: 289, 67: 290, 68: 291,   // F1..F10
+    87: 292, 88: 293,                                 // F11 F12
+    71: 263, 72: 264, 73: 265, 74: 269,               // keypad 7 8 9 -
+    75: 260, 76: 261, 77: 262, 78: 270,               // keypad 4 5 6 +
+    79: 257, 80: 258, 81: 259, 82: 256, 83: 266,      // keypad 1 2 3 0 .
   },
   extended: {
-    72: 273, 75: 276, 77: 275,                        // arrow up, left, right
+    28: 271, 29: 305, 53: 267, 56: 307,               // keypad Enter, right Ctrl, keypad /, right Alt
+    71: 278, 72: 273, 73: 280, 75: 276, 77: 275,      // Home, up, Page Up, left, right
+    79: 279, 80: 274, 81: 281, 82: 277, 83: 127,      // End, down, Page Down, Insert, Delete
+    91: 310, 92: 309,                                 // left and right Meta
   },
 };
+for (let scan = 1; scan < SCAN_CHARS.length; scan++) {
+  const ch = SCAN_CHARS.charCodeAt(scan);
+  if (ch) SDLK.plain[scan] = ch;
+}
 
 import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
 
@@ -91,12 +109,50 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     pixels: 0,              // its pixel buffer
     palette: new Uint8Array(768),   // 0..255 per channel, as a host would want it
     error: 0,
+    opengl: false,          // the display is an OpenGL context: gl.js draws, SDL only swaps
+    onSwap: null,           // host hook: called at SDL_GL_SwapBuffers with the GL layer
+    mouse: null,            // host hook: { poll() -> { x, y, buttons } }, buttons as SDL's mask
     clock,                   // one clock for GetTicks and Delay both, see env/clock.js
     ...MIXER_STATE,          // the mixer's bookkeeping, shared with the SDL 2 environment
   };
 
   const intern = (s) => M.mod.intern([...enc.encode(s), 0]);
-  state.error = intern('');
+  const noError = intern('');
+  state.error = noError;
+  /* SDL_GetError's text, which SDL_mixer sets too: Mix_GetError is the same string there. */
+  state.setError = (text) => {
+    if (state.error !== noError) M.rt.free(state.error);
+    const bytes = enc.encode(text);
+    state.error = M.rt.malloc(bytes.length + 1);
+    M.u8.set(bytes, state.error); M.u8[state.error + bytes.length] = 0;
+  };
+
+  /* Files opened by SDL_RWFromFile: the handle is a guest block, so it is non-NULL and its own. */
+  const rwFiles = new Map();
+  const readRW = (rw) => {
+    const bytes = rwFiles.get(rw) ?? null;
+    if (rwFiles.delete(rw)) M.rt.free(rw);
+    return bytes;
+  };
+
+  /* Mouse events are made here, from the difference between two polls of the host's pointer. */
+  const pointer = { x: 0, y: 0, buttons: 0 };
+  const queue = [];
+  const gatherMouse = () => {
+    if (!state.mouse) return;
+    const p = state.mouse.poll();
+    if (p.x !== pointer.x || p.y !== pointer.y) {
+      queue.push({ type: SDL_MOUSEMOTION, x: p.x, y: p.y, xrel: p.x - pointer.x, yrel: p.y - pointer.y, held: p.buttons });
+      pointer.x = p.x; pointer.y = p.y;
+    }
+    for (let button = 1; button <= 3; button++) {
+      const bit = 1 << (button - 1);
+      if ((p.buttons & bit) !== (pointer.buttons & bit)) {
+        queue.push({ type: p.buttons & bit ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP, button, x: p.x, y: p.y });
+      }
+    }
+    pointer.buttons = p.buttons;
+  };
 
   /** A surface plus its format, laid out where the header says. Returns the surface's address. */
   const makeSurface = (w, h, depth) => {
@@ -167,24 +223,52 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_Quit: () => 0,
     SDL_GetError: () => state.error,
     // A limiter built on sleeping SPINS when the sleep does nothing, so the host answers instead.
-    SDL_Delay: (ms) => { state.clock.delay(ms | 0); return 0; },
-    SDL_GetTicks: () => state.clock.now(),
+    SDL_Delay: (ms) => { state.clock.delay(ms | 0); state.pump(); return 0; },
+    SDL_GetTicks: () => { state.pump(); return state.clock.now(); },
+    SDL_RWFromFile: (name, _mode) => {
+      const path = M.mod.cstr(name);
+      const key = M.files ? M.files.find(path, { guess: false }) : null;
+      if (key === null) { state.setError(`Couldn't open ${path}`); return 0; }
+      const rw = M.rt.malloc(4);
+      rwFiles.set(rw, M.files.store.get(key));
+      return rw;
+    },
 
     // ---- video -----------------------------------------------------------------------------
-    SDL_SetVideoMode: (w, h, depth, _flags) => {
+    SDL_SetVideoMode: (w, h, depth, flags) => {
       state.width = w | 0;
       state.height = h | 0;
+      if (flags & SDL_OPENGL) {
+        /*
+         * An OpenGL display. The surface SDL hands back is one the program never draws into -- it
+         * keeps the pointer and tests it against NULL -- so it has the geometry and no pixels.
+         */
+        if (!M.gl) { state.setError('No OpenGL here: the gl environment is not in the target\'s env list'); return 0; }
+        M.gl.resize(state.width, state.height);
+        state.opengl = true;
+        state.surface = makeSurface(1, 1, 32);
+        dv().setUint32(state.surface + S_FLAGS, flags >>> 0, true);
+        dv().setInt32(state.surface + S_W, state.width, true);
+        dv().setInt32(state.surface + S_H, state.height, true);
+        state.pixels = 0;
+        return state.surface;
+      }
+      state.opengl = false;
       state.surface = makeSurface(w | 0, h | 0, depth | 0 || 8);
       state.pixels = surfacePixels(state.surface);
       return state.surface;
     },
+    SDL_GL_SetAttribute: () => 0,
+    // No extension entry points: NULL is what SDL answers for a name the driver does not export.
+    SDL_GL_GetProcAddress: () => 0,
+    SDL_GL_SwapBuffers: () => { state.pump(); if (state.onSwap) state.onSwap(M.gl); },
     SDL_GetVideoSurface: () => state.surface,
     SDL_CreateRGBSurface: (_flags, w, h, depth) => makeSurface(w | 0, h | 0, depth | 0 || 32),
     SDL_FreeSurface: () => 0,    // the guest heap is not reclaimed here; nothing leaks per frame
     SDL_LockSurface: () => 0,    // software surfaces are always addressable
     SDL_UnlockSurface: () => 0,
-    SDL_Flip: (s) => { if (state.onPresent) state.onPresent(s || state.surface); return 0; },
-    SDL_UpdateRect: (s) => { if (state.onPresent) state.onPresent(s || state.surface); },
+    SDL_Flip: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); return 0; },
+    SDL_UpdateRect: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); },
     SDL_SetColorKey: () => 0,
     SDL_WM_SetCaption: () => 0,
     SDL_WM_SetIcon: () => 0,
@@ -235,10 +319,11 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_EnableUNICODE: () => 0,
     SDL_EnableKeyRepeat: () => 0,
     SDL_GetMouseState: (xp, yp) => {
-      if (xp) dv().setInt32(xp, 0, true);
-      if (yp) dv().setInt32(yp, 0, true);
-      return 0;            // no buttons down
+      if (xp) dv().setInt32(xp, pointer.x, true);
+      if (yp) dv().setInt32(yp, pointer.y, true);
+      return pointer.buttons;
     },
+    SDL_WarpMouse: (x, y) => { if (state.mouse?.warp) state.mouse.warp(x & 0xffff, y & 0xffff); },
 
     /*
      * One host key event becomes one SDL 1.2 event. `extended` is what tells SDLK_UP from SDLK_KP8,
@@ -246,13 +331,31 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
      * losing that flag would silently merge two players' controls.
      */
     SDL_PollEvent: (ev) => {
+      state.pump();
+      gatherMouse();
+      const d = dv();
+      if (queue.length) {
+        if (!ev) return 1;
+        const m = queue.shift();
+        M.u8.fill(0, ev, ev + E_SIZE);
+        d.setUint8(ev + E_TYPE, m.type);
+        if (m.type === SDL_MOUSEMOTION) {
+          d.setUint8(ev + E_MOTION_STATE, m.held);
+          d.setUint16(ev + E_MOTION_X, m.x, true); d.setUint16(ev + E_MOTION_Y, m.y, true);
+          d.setInt16(ev + E_MOTION_XREL, m.xrel, true); d.setInt16(ev + E_MOTION_YREL, m.yrel, true);
+        } else {
+          d.setUint8(ev + E_BTN_BUTTON, m.button);
+          d.setUint8(ev + E_BTN_STATE, m.type === SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED);
+          d.setUint16(ev + E_BTN_X, m.x, true); d.setUint16(ev + E_BTN_Y, m.y, true);
+        }
+        return 1;
+      }
       if (!state.keyboard) return 0;
       const e = state.keyboard.next ? state.keyboard.next() : null;
       if (!e) return 0;
       if (!ev) return 1;
       const table = e.extended ? SDLK.extended : SDLK.plain;
       const sym = table[e.scan] ?? SDLK.plain[e.scan] ?? 0;
-      const d = dv();
       M.u8.fill(0, ev, ev + E_SIZE);
       d.setUint8(ev + E_TYPE, e.down ? SDL_KEYDOWN : SDL_KEYUP);
       d.setUint8(ev + E_KEY_STATE, e.down ? SDL_PRESSED : SDL_RELEASED);
@@ -279,7 +382,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_PauseAudio: () => 0,
     SDL_CloseAudio: () => 0,
 
-    ...mixerApi(M, state),
+    ...mixerApi(M, state, { readRW }),
   };
 
   Object.assign(M.rt, api);
@@ -304,6 +407,7 @@ export function sdl12Builtins(T) {
     SDL_GetError: f(P),
     SDL_Delay: f(V, U),
     SDL_GetTicks: f(U),
+    SDL_RWFromFile: f(P, P, P),
 
     SDL_SetVideoMode: f(P, I, I, I, U),
     SDL_GetVideoSurface: f(P),
@@ -311,6 +415,9 @@ export function sdl12Builtins(T) {
     SDL_FreeSurface: f(V, P),
     SDL_LockSurface: f(I, P),
     SDL_UnlockSurface: f(V, P),
+    SDL_GL_SetAttribute: f(I, I, I),
+    SDL_GL_GetProcAddress: f(P, P),
+    SDL_GL_SwapBuffers: f(V),
     SDL_Flip: f(I, P),
     SDL_UpdateRect: f(V, P, I, I, U, U),
     SDL_SetColors: f(I, P, P, I, I),
@@ -327,6 +434,7 @@ export function sdl12Builtins(T) {
     SDL_EnableUNICODE: f(I, I),
     SDL_EnableKeyRepeat: f(I, I, I),
     SDL_GetMouseState: f(B, P, P),
+    SDL_WarpMouse: f(V, T.USHORT, T.USHORT),
 
     SDL_NumJoysticks: f(I),
     SDL_JoystickOpen: f(P, I),
