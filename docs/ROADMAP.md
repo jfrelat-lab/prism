@@ -191,6 +191,37 @@ second ABI — and the question "what else is DOS but flat?" had an answer.
 | P8.11 | ⚪ | Should files be fully buffered by default, as C99 7.19.3p7 says? Today a stream buffers only when `setvbuf` asks, so every target's writes are visible at once; changing the default changes that for all seventeen. A decision, not a fix. | S | — |
 | P8.12 | ✅ | `atexit` handlers run: in reverse order of registration, on `exit()` and on a return from `main`, then every stream is flushed; `_exit` does neither (C99 7.20.4.3). They had been recorded and never run. gate-run: `atexit-reverse-order`, `atexit-from-exit`. | S | — |
 
+## P16 · MAME 0.34, from the least to the most ambitious
+
+Asked for by the owner on 2026-10-06, once the release ran and was held to a native build (P8.5d).
+Two lists. The first is what the DOS layer or the shims under it do not do yet, ranked by how much
+each asks for. The second is the build itself: today the page compiles all 695 units -- 959 games,
+16.4 MB of emitted JavaScript, 7.7 s -- to play one.
+
+**What is missing, by ambition.**
+
+| # | | Task | Effort | |
+|---|---|---|---|---|
+| P16.1 | ⚪ | **Keyboard LEDs.** `set_leds` answers nothing; MAME drives them from `osd_led_w` (start lamps, coin counters). Carry the three bits to the page. | S | — |
+| P16.2 | ⚪ | **High scores, per-game configuration, snapshots: test them, then keep them.** The writes already land in the in-memory file store (HI/, CFG/, PCX/) -- untested. Then make them outlive a reload (the page's storage), which is also what turns off the copyright and credits screens on a second run, as on a real disk. | S | — |
+| P16.3 | ⚪ | **`mame.cfg`.** Allegro's `get_config_*`/`set_config_*` over a real file instead of "every option is its default and nothing is saved". Persists with P16.2. | S | — |
+| P16.4 | ⚪ | **Sound, measured.** MAME's audio reaches SEAL (1942's music: 16-bit, 22,050 Hz) and nothing holds the 16-bit mix -- gate-sound covers the 8-bit voices of 0.5. A gate for it, and `samples/<game>.zip` fetched as the ROMs are (Space Invaders is silent without them). | S–M | — |
+| P16.5 | ⚪ | **Mouse and trackball.** `install_mouse` says there is none. The page's pointer through `get_mouse_mickeys`, which is how MAME reads a trackball: Centipede, Missile Command, Marble Madness. | S–M | — |
+| P16.6 | ⚪ | **Joystick and analogue controls.** The browser's Gamepad API into Allegro 3's `joy[]` table (sticks, axes with d1/d2, buttons), calibration answered as already done. | M | — |
+| P16.7 | ⚪ | **The pixel doublers.** `double_pixels` and `double_pixels16` are GCC inline assembly in video.c (`lodsl`, `bswap`, `xchgw`, `roll`, `stosl`, `loop`, a segment override): widen the subset emit.js has for rdtsc and imull, held to a real x86 as those are. Fidelity more than need -- the page scales the picture already -- but it removes `-nodouble`. | M | — |
+| P16.8 | ⚪ | **The card's scan-out.** No VGA or VESA register is modelled: the frame is the program's own bitmap, so tweaked modes, scanlines and centring do not exist here. Model the CRTC and the VESA window and present what the card would show. Its reference is the real MAME.EXE under DOSBox-X (`DX-CAPTURE`, as for Keen Dreams) -- which would also be the first thing to hold src/msdos/video.c itself. | L | — |
+| P16.9 | ⚪ | **The YM2203 through an OPL card.** `ym2203.opm` is x86 object code with no source: it would have to be translated (MIRAGE's territory) and given an OPL to drive. Little to gain -- with No_FM the core computes the chip itself. | L–XL | — |
+
+**The build, by ambition.** The static bundle is P13.1 and is not started; these are what it means
+for MAME.
+
+| # | | Task | Effort | |
+|---|---|---|---|---|
+| P16.10 | ⚪ | **A light build, per game.** The core, the CPU cores the driver names and the driver's own units (drivers/, machine/, vidhrdw/, sndhrdw/), over a `drivers[]` table that lists one game -- a replaced unit, as the platform layer already is, and what MAME's own later `tiny.mak` does; no source is edited. The unit list per driver comes from the makefile and the driver's externs. **Measure first**, on a Z80 game and a 68000 one: units, emitted JavaScript, compile time. That number decides the rest. | M | — |
+| P16.11 | ⚪ | **A static bundle, per game** (P13.1 applied to P16.10): one JavaScript file with the emitted functions and the memory image, loaded without the compiler or the sources. The comparison the owner asked for -- lighter than an Emscripten MAME? -- is answered here and only by measuring: per game it should be, because of the cut and not of the format (JavaScript is wordier than WASM for the same code, and an Emscripten build of today carries a far larger MAME). Held to goldens/mame034.json: same game, same frames. | M | — |
+| P16.12 | ⚪ | **The whole collection through the reference.** 15 games agree with gcc; 764 complete sets have never run. `mame034diff --write` over all of them is about 20 s a game (four hours), less with P16.10. Every disagreement is either a compiler defect or one of MAME's, and both are worth knowing. | M | — |
+| P16.13 | ⚪ | **A compatibility page.** One row per game: what the audit says of the ROM set (tools/mame-audit.mjs), what the reference says (P16.12), the release's own flags (GAME_NOT_WORKING, wrong colours), a screenshot, and a button that starts it on the DOS machine. Screenshots are pictures of the games: generated locally, never committed. | M–L | — |
+
 ## P9 · One engine, more platforms: X11, Win32, SunOS, and sound
 
 | # | | Task | Effort | |
