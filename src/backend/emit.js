@@ -3663,6 +3663,26 @@ function evalConstNumber(ty, e) {
       // `double d = 1024.0 - 1.0/32768.0;` equal 1024.0 exactly, which is what gcc's float-floor.c
       // catches. The node's own type decides, not the shape of the operands.
       const isFP = T.isFloat(e.type ?? ty.INT) || T.isFloat(e.a.type ?? ty.INT) || T.isFloat(e.b.type ?? ty.INT);
+      /*
+       * A 32-bit UNSIGNED operation is its own arithmetic, and JavaScript's operators are the
+       * signed one: `(UINT32)0xff800000 >> 3` folded with `>>` is 0xfff00000, where C says
+       * 0x1ff00000. MAME 0.34's TMS34010 memory maps are written exactly so -- TOBYTE(bitaddr) is
+       * `((UINT32)(bitaddr) >> 3)` in a static table -- and Smash TV's reset vector was read from
+       * outside its ROM. A shift takes its left operand's type; the others, either operand's.
+       */
+      const u32 = (t) => t?.k === 'scalar' && t.size === 4 && (t.name === 'unsigned int' || t.name === 'unsigned long');
+      if (!isFP && (e.op === '<<' || e.op === '>>' ? u32(e.a.type) : u32(e.a.type) || u32(e.b.type))) {
+        const A = a >>> 0, B = b >>> 0;
+        switch (e.op) {
+          case '+': return (A + B) >>> 0; case '-': return (A - B) >>> 0; case '*': return Math.imul(A, B) >>> 0;
+          case '/': return B ? Math.floor(A / B) : 0; case '%': return B ? A % B : 0;
+          case '<<': return (A << b) >>> 0; case '>>': return A >>> b;
+          case '&': return (A & B) >>> 0; case '|': return (A | B) >>> 0; case '^': return (A ^ B) >>> 0;
+          case '==': return A === B ? 1 : 0; case '!=': return A !== B ? 1 : 0;
+          case '<': return A < B ? 1 : 0; case '>': return A > B ? 1 : 0;
+          case '<=': return A <= B ? 1 : 0; case '>=': return A >= B ? 1 : 0;
+        }
+      }
       switch (e.op) {
         case '+': return a + b; case '-': return a - b; case '*': return a * b;
         case '/': return isFP ? a / b : (a / b) | 0;

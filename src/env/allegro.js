@@ -596,19 +596,43 @@ export function installAllegro(M, {
     const sy = Math.max(d.getInt32(g.skiplines, true), 0), sx = Math.max(d.getInt32(g.skipcolumns, true), 0);
     const w = Math.min(d.getInt32(g.displayColumns, true), fullW - sx);
     const h = Math.min(d.getInt32(g.displayLines, true), fullH - sy);
-    if (depth !== 8 || w <= 0 || h <= 0 || !lines) return;
-    if (w * h > shownSize) { shownSize = w * h; shown = M.rt.malloc(shownSize); }
-    for (let y = 0; y < h; y++) {
-      const row = d.getInt32(lines + 4 * (sy + y), true) + sx;
-      M.u8.copyWithin(shown + y * w, row, row + w);
+    if ((depth !== 8 && depth !== 16) || w <= 0 || h <= 0 || !lines) return;
+    const bytes = depth === 16 ? 4 : 1;
+    if (w * h * bytes > shownSize) { shownSize = w * h * bytes; shown = M.rt.malloc(shownSize); }
+    if (depth === 8) {
+      for (let y = 0; y < h; y++) {
+        const row = d.getInt32(lines + 4 * (sy + y), true) + sx;
+        M.u8.copyWithin(shown + y * w, row, row + w);
+      }
+    } else {
+      /*
+       * A 16-bit bitmap holds what makecol returned -- the mode's own pixel format, 5-6-5 or 5-5-5
+       * by the depth the program set -- and no palette stands between it and the screen. It goes
+       * out as B,G,R,A, a component's high bits repeated into its low ones as a DAC would not but a
+       * full-range display must (31 is white, not 248).
+       */
+      const five = (v) => (v << 3) | (v >> 2), six = (v) => (v << 2) | (v >> 4);
+      const is15 = state.colorDepth === 15;
+      let o = shown;
+      for (let y = 0; y < h; y++) {
+        let p = d.getInt32(lines + 4 * (sy + y), true) + 2 * sx;
+        for (let x = 0; x < w; x++, p += 2, o += 4) {
+          const c = M.u8[p] | (M.u8[p + 1] << 8);
+          M.u8[o] = five(c & 31);
+          M.u8[o + 1] = is15 ? five((c >> 5) & 31) : six((c >> 5) & 63);
+          M.u8[o + 2] = five(is15 ? (c >> 10) & 31 : c >> 11);
+          M.u8[o + 3] = 255;
+        }
+      }
     }
-    state.width = w; state.height = h; state.pixels = shown;
+    state.width = w; state.height = h; state.pixels = shown; state.format = depth === 16 ? 32 : 0;
     frameDone();
   }
 
   function frameDone() {
     state.frames++;
     if (publish) {
+      Atomics.store(publish.ctrl, SLOT.PIXFMT, state.format ?? 0);
       Atomics.store(publish.ctrl, SLOT.WIDTH, state.width);
       Atomics.store(publish.ctrl, SLOT.HEIGHT, state.height);
       Atomics.store(publish.ctrl, SLOT.PIXELS, state.pixels);

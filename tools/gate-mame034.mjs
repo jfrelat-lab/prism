@@ -10,13 +10,20 @@
 //      ROM_LOAD lines finds in src/drivers. Two derivations of one table: the C compiled and run,
 //      and a regular expression over the source.
 //
-// What is NOT held here: that a game plays as the original does. That takes a native build of the
-// same sources to compare frames with (tools/mamediff.mjs does it for 0.1 to 0.7) and its backend
-// does not speak 0.34's osd interface yet. With PRISM_MAME_ROMS=<dir of zips> a SMOKE run is added:
-// two games reach their emulation loop and present a picture that is not blank. It can tell "does
-// not start" from "starts"; it cannot tell right from wrong, and says so.
+// With PRISM_MAME_ROMS=<dir of zips>, two more things:
 //
-//   node tools/gate-mame034.mjs [--selftest]
+//   3. a SMOKE run through the release's own DOS layer: two games reach their emulation loop and
+//      present a picture that is not blank. It can tell "does not start" from "starts"; it cannot
+//      tell right from wrong, and says so;
+//   4. THE REFERENCE, replayed: five games print, frame for frame, what a native i386 gcc build of
+//      the same sources printed (goldens/mame034.json, written by tools/mame034diff.mjs only for
+//      games on which the two builds agreed). That one does tell right from wrong -- for everything
+//      above the platform layer, which there is a headless backend (tools/mamediff/osdnull34.c).
+//
+// What is NOT held: the picture the DOS layer itself presents (src/msdos/video.c through the
+// Allegro shim), and sound.
+//
+//   node tools/gate-mame034.mjs
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -151,9 +158,41 @@ if (roms) {
   }
   const none = child('invaders', 50, '-nodouble', '-romdir', 'nosuchset');
   check((none.frames ?? 0) === 0, 'SMOKE control: with the ROM set withheld no frame is presented');
+
+  /*
+   * THE REFERENCE, replayed: goldens/mame034.json holds, per game, the fingerprint of the frames
+   * PRISM and a native i386 gcc build both printed (tools/mame034diff.mjs --write records a game
+   * only when the two agreed). Five of them here, one per CPU family -- 8080, Z80, 6502 vector,
+   * 68000, TMS34010; the tool's own --check replays them all.
+   */
+  const { readGolden, runPrism, fingerprint } = await import('./mame034diff.mjs');
+  const golden = readGolden();
+  if (!golden) check(false, 'goldens/mame034.json is in the tree');
+  else {
+    const argv = [golden.frames, ...golden.play];
+    let control = null;
+    for (const game of ['invaders', '1942', 'asteroid', 'ffight', 'smashtv']) {
+      const want = golden.games[game];
+      if (!want || !existsSync(join(roms, `${game}.zip`))) { console.log(`     (${game}: not in the golden or no zip here, not replayed)`); continue; }
+      const lines = runPrism(roms, game, argv);
+      const got = fingerprint(lines);
+      check(got && got.fingerprint === want.fingerprint && got.frames === want.frames,
+        `${game}: ${want.frames} played frames, the pictures and palettes a native gcc build printed`,
+        got ? `${got.frames} frames ${got.fingerprint}, golden ${want.fingerprint}` : `no frame: ${lines.filter(Boolean).slice(-2).join(' | ')}`);
+      control ??= { lines, want };
+    }
+    // One frame line's hash altered by one digit, and the run cut short by a frame: both must show.
+    if (control) {
+      const i = control.lines.findIndex((l) => /^frame 700 /.test(l));
+      const flipped = control.lines.map((l, k) => (k === i ? l.replace(/([0-9a-f])( [0-9a-f]{8})$/, (_m, d, rest) => `${d === '0' ? '1' : '0'}${rest}`) : l));
+      check(i >= 0 && fingerprint(flipped).fingerprint !== control.want.fingerprint, 'control: one altered digit in one frame of 1500 changes the fingerprint');
+      const short = fingerprint(control.lines.filter((l) => !/^frame 1499 /.test(l)));
+      check(short.frames === control.want.frames - 1 && short.fingerprint !== control.want.fingerprint, 'control: a run one frame short is seen');
+    }
+  }
 } else {
   console.log('     (no PRISM_MAME_ROMS: the smoke runs are not made)');
 }
 
-console.log(bad ? `\n${bad} check(s) failed` : '\nMAME 0.34 builds whole with its DOS layer, and its ROM tables read back as the sources state them');
+console.log(bad ? `\n${bad} check(s) failed` : '\nMAME 0.34 builds whole with its DOS layer, its ROM tables read back as the sources state them' + (roms ? ', and five games print what a native gcc build printed' : ''));
 process.exit(bad ? 1 : 0);

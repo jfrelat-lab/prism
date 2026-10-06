@@ -1,0 +1,78 @@
+{
+  "_doc": [
+    "MAME 0.34, per game: the fingerprint of the frame lines PRISM and a native i386 gcc build BOTH printed",
+    "(tools/mame034diff.mjs --write). Recorded only for a game whose differential was green when written.",
+    "A frame line is a hash of the screen bitmap and one of the palette, per emulated frame; `play` is the",
+    "schedule both sides were given (coin, start, fire from, fire to, in frames). No ROM data is in here."
+  ],
+  "release": "034",
+  "frames": 1500,
+  "play": [
+    400,
+    520,
+    600,
+    1300
+  ],
+  "games": {
+    "1942": {
+      "fingerprint": "aa5bffe81409783a",
+      "frames": 1500
+    },
+    "smashtv": {
+      "fingerprint": "b22466f5f9d0fdfd",
+      "frames": 1500
+    },
+    "invaders": {
+      "fingerprint": "6ff479b66839449c",
+      "frames": 1500
+    },
+    "commando": {
+      "fingerprint": "1b4d6c4c8b6bc4c9",
+      "frames": 1500
+    },
+    "asteroid": {
+      "fingerprint": "c768381cafd8431e",
+      "frames": 1500
+    },
+    "ccastles": {
+      "fingerprint": "ec4206a794beab48",
+      "frames": 1500
+    },
+    "marble": {
+      "fingerprint": "4a47117a31b50496",
+      "frames": 1500
+    },
+    "ffight": {
+      "fingerprint": "40ec1458c37dc467",
+      "frames": 1500
+    },
+    "boblbobl": {
+      "fingerprint": "d00ac64aa0735785",
+      "frames": 1500
+    },
+    "capbowl": {
+      "fingerprint": "6981957dbfe4efe8",
+      "frames": 1500
+    },
+    "exterm": {
+      "fingerprint": "beb0bb42ea5ad3b2",
+      "frames": 1500
+    },
+    "dkong": {
+      "fingerprint": "2abecacc8c3725d5",
+      "frames": 1500
+    },
+    "berzerk": {
+      "fingerprint": "22f3453a6ce4b343",
+      "frames": 1500
+    },
+    "bzone": {
+      "fingerprint": "44d97e1e7d507786",
+      "frames": 1500
+    },
+    "blktiger": {
+      "fingerprint": "c552cdedf37d1bd8",
+      "frames": 1500
+    }
+  }
+}

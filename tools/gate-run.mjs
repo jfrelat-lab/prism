@@ -1859,6 +1859,37 @@ int main(void)
 }
 `);
 
+// Unsigned arithmetic in a STATIC initialiser, which is folded by the compiler and not by the
+// emitted code: `(UINT32)0xff800000 >> 3` is 0x1ff00000, not the sign-extended 0xfff00000. MAME
+// 0.34's TMS34010 memory maps are tables of exactly that (TOBYTE), and Smash TV read its reset
+// vector from outside its ROM. The same expressions in a local were always right.
+C('unsigned-arithmetic-in-a-static-initialiser', `#include <stdio.h>
+typedef unsigned int UINT32;
+#define TOBYTE(bitaddr) ((UINT32) (bitaddr)>>3)
+struct M { int start, end; };
+static struct M map[] = {
+    { TOBYTE(0xff800000), TOBYTE(0xffffffff) },
+    { (UINT32)0xff800000 >> 3, 0xff800000 >> 3 },
+    { (int)((unsigned)0x80000000 >> 31), (int)0x80000000 >> 31 },
+    { (UINT32)-8 / 3, (UINT32)-8 % 7 },
+    { (UINT32)-1 > 1, -1 > 1 },
+    { (0x80000000u | 1) >> 4, ~0u >> 28 },
+    { (0xc0000000u + 0xc0000000u) >> 1, (0x10000u * 0x10001u) >> 8 },
+    { 1u << 31 >> 31, (int)(1u << 31) >> 31 },
+};
+static int one = TOBYTE(0xff800000);
+static unsigned two = (UINT32)(-8) >> 1;
+static long long three = (UINT32)0xff800000 >> 3;
+int main(void)
+{
+    unsigned i;
+    int local = TOBYTE(0xff800000);
+    for (i = 0; i < sizeof map / sizeof *map; i++) printf("%x %x\\n", map[i].start, map[i].end);
+    printf("%x %x %llx %x\\n", one, two, three, local);
+    return 0;
+}
+`);
+
 // Descriptor 1 IS stdout: write(2) to it is output, not nothing, and lseek on it fails because it
 // cannot seek, not because it does not exist. (Only write(), so that no stdio buffer is involved.)
 C('write-to-the-standard-descriptors', `#include <unistd.h>
