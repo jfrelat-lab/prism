@@ -85,9 +85,16 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
    * older kind and keeps working unchanged.
    */
   if (program.target) {
-    const r = await fetch(`/__target?name=${encodeURIComponent(program.target)}`);
+    // `subject` is the first word of the command line that is not a switch: for a target whose
+    // build depends on what it is asked to run (MAME, one archive of games), the server reads it.
+    const subject = (argv || []).slice(1).find((a) => a && !/^[-\/]/.test(a)) ?? "";
+    const r = await fetch(`/__target?name=${encodeURIComponent(program.target)}&subject=${encodeURIComponent(subject)}`);
     if (!r.ok) throw new Error(`no target '${program.target}': ${(await r.json()).error ?? r.status}`);
     const t = await r.json();
+    if (t.lightOf) {
+      log(`a light build for '${subject}': ${t.lightOf.units} of ${t.lightOf.of} units -- the makefile's ` +
+        `${t.lightOf.archives.join(' + ')} (${t.lightOf.games} games), CPU cores ${t.lightOf.cores.join(' ')}`);
+    }
     program = {
       ...program,
       root: t.dir,

@@ -19,6 +19,8 @@
 //      the same sources printed (goldens/mame034.json, written by tools/mame034diff.mjs only for
 //      games on which the two builds agreed). That one does tell right from wrong -- for everything
 //      above the platform layer, which there is a headless backend (tools/mamediff/osdnull34.c).
+//   5. THE LIGHT BUILD the page is served -- one archive of the makefile, the CPU cores it uses --
+//      prints those same frames for three games, and a cut that is too small does not.
 //
 // What is NOT held: the picture the DOS layer itself presents (src/msdos/video.c through the
 // Allegro shim), and sound.
@@ -188,6 +190,27 @@ if (roms) {
       check(i >= 0 && fingerprint(flipped).fingerprint !== control.want.fingerprint, 'control: one altered digit in one frame of 1500 changes the fingerprint');
       const short = fingerprint(control.lines.filter((l) => !/^frame 1499 /.test(l)));
       check(short.frames === control.want.frames - 1 && short.fingerprint !== control.want.fingerprint, 'control: a run one frame short is seen');
+    }
+
+    /*
+     * THE LIGHT BUILD, which is what the page is served (tools/mame-light.mjs, P16.10): one archive
+     * of the makefile and the CPU cores its drivers use, instead of 695 units. Held to the same
+     * golden as the whole build -- the frames a native gcc build printed -- so what was left out
+     * was not needed. Three games whose builds differ in kind: one archive and one core family;
+     * the 68000; and Exterminator, whose archive only links with another one's routine.
+     */
+    for (const game of ['invaders', 'ffight', 'exterm']) {
+      const want = golden.games[game];
+      if (!want || !existsSync(join(roms, `${game}.zip`))) { console.log(`     (${game}: not in the golden or no zip here, light build not replayed)`); continue; }
+      const got = fingerprint(runPrism(roms, game, argv, { light: true }));
+      check(got && got.fingerprint === want.fingerprint && got.frames === want.frames,
+        `LIGHT ${game}: the same ${want.frames} frames from the build of its archive alone`,
+        got ? `${got.frames} frames ${got.fingerprint}, golden ${want.fingerprint}` : 'printed no frame');
+    }
+    if (golden.games.exterm && existsSync(join(roms, 'exterm.zip'))) {
+      const alone = fingerprint(runPrism(roms, 'exterm', argv, { light: 'alone' }));
+      check(!alone || alone.fingerprint !== golden.games.exterm.fingerprint,
+        'LIGHT control: Exterminator\'s archive WITHOUT the one its links need does not pass');
     }
   }
 } else {

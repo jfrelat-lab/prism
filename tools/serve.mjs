@@ -128,8 +128,20 @@ const server = createServer(async (req, res) => {
       headers(res, TYPES['.json']);
       try {
         const target = loadTarget(join(ROOT, 'targets', `${file}.json`), variant || null);
-        const resolved = variant || !target.default
+        let resolved = variant || !target.default
           ? target : loadTarget(join(ROOT, 'targets', `${file}.json`), target.default);
+        /*
+         * A target whose build depends on WHAT IS ASKED OF IT. MAME links 959 games to play one;
+         * its target names a module that knows which of the makefile's archives hold a given game
+         * (`light`), and the page says which game its command line starts with (`subject`). The
+         * module answers with a smaller target of the same shape, or null -- an unknown name, a
+         * switch such as -listcrc -- and then the whole build is what is served.
+         */
+        const subject = (url.searchParams.get('subject') || '').replace(/[^A-Za-z0-9_]/g, '');
+        if (resolved.light?.module && subject) {
+          const light = (await import(join(ROOT, resolved.light.module)))[resolved.light.export ?? 'lightFor'](subject);
+          if (light) resolved = { ...light, name: resolved.name };
+        }
         const { units, dir, asm } = targetUnits(resolved, ROOT);
         const rel = (f) => f.startsWith(ROOT) ? f.slice(ROOT.length + 1) : f;
         res.end(JSON.stringify({
@@ -154,6 +166,8 @@ const server = createServer(async (req, res) => {
           tree: resolved.tree ?? null,
           // Which shell branch presents it; a variant may set its own.
           host: resolved.host ?? null,
+          // What a light build is made of, for the page to say: archives, cores, units of how many.
+          lightOf: resolved.lightOf ?? null,
           args: resolved.args ?? null,
           // A variant's frame-rate cap, when its renderer is not the one the descriptor was paced for.
           fps: resolved.fps ?? null,

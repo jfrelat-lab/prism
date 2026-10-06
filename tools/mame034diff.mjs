@@ -78,9 +78,27 @@ if (process.argv[2] === '--prism') {
     const z = join(romDir, `${g}.zip`);
     if (existsSync(z)) files[`ROMS/${g}.zip`] = new Uint8Array(readFileSync(z));
   }
-  const t = { ...target, units: { list: UNITS }, env: ['stdio'],
-    inline: { ...(target.inline ?? {}), 'osdnull34.c': readFileSync(BACKEND, 'latin1') } };
-  const { program } = buildTarget(t, { root: ROOT, envExtra: { stdio: { files } } });
+  // A build's units over the headless backend instead of the DOS layer (fileio.c stays).
+  const headless = (base) => ({ ...base, env: ['stdio'],
+    units: { list: [...base.units.list.filter((u) => !/^src\/msdos\//i.test(u)), 'src/msdos/fileio.c'] },
+    inline: { ...(base.inline ?? {}), 'osdnull34.c': readFileSync(BACKEND, 'latin1') } });
+  /*
+   * PRISM_MAME_LIGHT=1: the LIGHT build of the game's archive (tools/mame-light.mjs) in place of
+   * the whole one. Same backend, same frames expected -- which is what says that leaving out 580
+   * units and ten CPU cores left the game alone. It is the RECORDED closure that is built
+   * (targets/mame034-light.json), since that is what the page is served.
+   * PRISM_MAME_LIGHT=alone: the game's archive without the ones its links need -- the control: a
+   * cut that is too small has to show.
+   */
+  let program;
+  if (process.env.PRISM_MAME_LIGHT) {
+    const { lightFor, lightTarget, archiveOf } = await import('./mame-light.mjs');
+    const light = process.env.PRISM_MAME_LIGHT === 'alone' ? lightTarget([archiveOf(argv[0])]) : lightFor(argv[0]);
+    if (!light) { process.stdout.write(`no recorded light build holds '${argv[0]}'\n`, () => process.exit(0)); await new Promise(() => {}); }
+    ({ program } = buildTarget(headless(light), { root: ROOT, envExtra: { stdio: { files } } }));
+  } else {
+    ({ program } = buildTarget(headless(target), { root: ROOT, envExtra: { stdio: { files } } }));
+  }
   {
     const M = program.M, malloc = M.rt.malloc;
     const filled = (n) => { const p = malloc(n); if (p) M.u8.fill(FILL, p, p + (n >>> 0)); return p; };
@@ -131,9 +149,10 @@ export function buildReference(say = console.log) {
 }
 
 /** PRISM's side of one game: the lines it printed. */
-export function runPrism(romDir, game, argv) {
+export function runPrism(romDir, game, argv, { light = false } = {}) {
   const p = spawnSync('node', ['--max-old-space-size=8192', SELF, '--prism', romDir, game, ...argv.map(String)],
-    { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 28, timeout: 1000000 });
+    { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 28, timeout: 1000000,
+      env: { ...process.env, PRISM_MAME_LIGHT: light === 'alone' ? 'alone' : light ? '1' : '' } });
   return `${p.stdout ?? ''}${p.stderr ?? ''}`.split('\n');
 }
 
@@ -183,7 +202,7 @@ export const readGolden = () => (existsSync(GOLDEN) ? JSON.parse(readFileSync(GO
 
 if (process.argv[1] === SELF && process.argv[2] !== '--prism') {
   const romDir = arg('roms'), dump = arg('dump');
-  const WRITE = process.argv.includes('--write'), CHECK = process.argv.includes('--check');
+  const WRITE = process.argv.includes('--write'), CHECK = process.argv.includes('--check'), LIGHT = process.argv.includes('--light');
   const golden = readGolden();
   const frames = +arg('frames', CHECK && golden ? golden.frames : 300);
   const play = (arg('play') ?? (CHECK && golden ? golden.play.join(',') : '0,0,0,0')).split(',').map(Number);
@@ -201,7 +220,7 @@ if (process.argv[1] === SELF && process.argv[2] !== '--prism') {
       const want = golden.games[game];
       if (!want) { console.log(`absent  ${game.padEnd(9)} is not in the golden`); bad++; continue; }
       if (!existsSync(join(romDir, `${game}.zip`))) { console.log(`no ROMs ${game.padEnd(9)} ${game}.zip is not in ${romDir}`); continue; }
-      const got = fingerprint(runPrism(romDir, game, argv));
+      const got = fingerprint(runPrism(romDir, game, argv, { light: LIGHT }));
       const ok = got && got.fingerprint === want.fingerprint && got.frames === want.frames;
       console.log(`${ok ? 'match  ' : 'CHANGED'} ${game.padEnd(9)} ${got ? `${got.frames} frames ${got.fingerprint}` : 'printed no frame'}${ok ? '' : `  (golden: ${want.frames} frames ${want.fingerprint})`}`);
       if (!ok) bad++;

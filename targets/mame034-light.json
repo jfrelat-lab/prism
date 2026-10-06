@@ -1,0 +1,768 @@
+{
+ "_doc": [
+  "MAME 0.34, one light build per archive of its makefile (tools/mame-light.mjs --write): the archives a",
+  "build needs for its links to close, the CPU cores its drivers use, and what it weighs. Written from",
+  "builds, not by hand. `js` is megabytes of emitted JavaScript; the whole build is 19.2."
+ ],
+ "archives": {
+  "pacman": {
+   "archives": [
+    "pacman"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 24,
+   "units": 72,
+   "js": 3.62
+  },
+  "galaxian": {
+   "archives": [
+    "galaxian",
+    "pacman"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 51,
+   "units": 76,
+   "js": 3.72
+  },
+  "scramble": {
+   "archives": [
+    "scramble",
+    "cclimber",
+    "galaxian",
+    "pacman"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 108,
+   "units": 95,
+   "js": 3.92
+  },
+  "cclimber": {
+   "archives": [
+    "cclimber"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 15,
+   "units": 67,
+   "js": 3.58
+  },
+  "phoenix": {
+   "archives": [
+    "phoenix"
+   ],
+   "cores": [
+    "I8085",
+    "Z80"
+   ],
+   "games": 8,
+   "units": 70,
+   "js": 3.8
+  },
+  "namco": {
+   "archives": [
+    "namco"
+   ],
+   "cores": [
+    "Z80",
+    "M6809",
+    "M6808"
+   ],
+   "games": 31,
+   "units": 90,
+   "js": 4.86
+  },
+  "univers": {
+   "archives": [
+    "univers"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 24,
+   "units": 77,
+   "js": 3.61
+  },
+  "nintendo": {
+   "archives": [
+    "nintendo"
+   ],
+   "cores": [
+    "Z80",
+    "I8039",
+    "M6502"
+   ],
+   "games": 15,
+   "units": 77,
+   "js": 4.62
+  },
+  "midw8080": {
+   "archives": [
+    "midw8080",
+    "midwz80"
+   ],
+   "cores": [
+    "I8085",
+    "Z80"
+   ],
+   "games": 48,
+   "units": 74,
+   "js": 3.89
+  },
+  "midwz80": {
+   "archives": [
+    "midwz80",
+    "midw8080"
+   ],
+   "cores": [
+    "Z80",
+    "I8085"
+   ],
+   "games": 48,
+   "units": 74,
+   "js": 3.89
+  },
+  "meadows": {
+   "archives": [
+    "meadows"
+   ],
+   "cores": [
+    "S2650"
+   ],
+   "games": 4,
+   "units": 70,
+   "js": 2.64
+  },
+  "astrocde": {
+   "archives": [
+    "astrocde"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 7,
+   "units": 67,
+   "js": 3.58
+  },
+  "mcr": {
+   "archives": [
+    "mcr"
+   ],
+   "cores": [
+    "Z80",
+    "M6808",
+    "M68000",
+    "M6809"
+   ],
+   "games": 24,
+   "units": 93,
+   "js": 6.87
+  },
+  "irem": {
+   "archives": [
+    "irem"
+   ],
+   "cores": [
+    "Z80",
+    "M6808"
+   ],
+   "games": 16,
+   "units": 75,
+   "js": 4.05
+  },
+  "gottlieb": {
+   "archives": [
+    "gottlieb"
+   ],
+   "cores": [
+    "I86",
+    "M6502"
+   ],
+   "games": 11,
+   "units": 68,
+   "js": 3.78
+  },
+  "oldtaito": {
+   "archives": [
+    "oldtaito"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 2,
+   "units": 64,
+   "js": 3.52
+  },
+  "qixtaito": {
+   "archives": [
+    "qixtaito"
+   ],
+   "cores": [
+    "M6809",
+    "M6808",
+    "M6805"
+   ],
+   "games": 9,
+   "units": 70,
+   "js": 3.68
+  },
+  "taito": {
+   "archives": [
+    "taito"
+   ],
+   "cores": [
+    "Z80",
+    "M6805"
+   ],
+   "games": 14,
+   "units": 67,
+   "js": 3.87
+  },
+  "taito2": {
+   "archives": [
+    "taito2"
+   ],
+   "cores": [
+    "Z80",
+    "M6809",
+    "M68000",
+    "M6805"
+   ],
+   "games": 40,
+   "units": 120,
+   "js": 7.08
+  },
+  "williams": {
+   "archives": [
+    "williams"
+   ],
+   "cores": [
+    "M6809",
+    "M6808"
+   ],
+   "games": 19,
+   "units": 68,
+   "js": 3.44
+  },
+  "capcom": {
+   "archives": [
+    "capcom"
+   ],
+   "cores": [
+    "Z80",
+    "M6809",
+    "M68000"
+   ],
+   "games": 83,
+   "units": 117,
+   "js": 6.72
+  },
+  "capbowl": {
+   "archives": [
+    "capbowl"
+   ],
+   "cores": [
+    "M6809"
+   ],
+   "games": 3,
+   "units": 67,
+   "js": 2.99
+  },
+  "mitchell": {
+   "archives": [
+    "mitchell"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 1,
+   "units": 64,
+   "js": 3.53
+  },
+  "gremlin": {
+   "archives": [
+    "gremlin"
+   ],
+   "cores": [
+    "I8085"
+   ],
+   "games": 4,
+   "units": 65,
+   "js": 2.6
+  },
+  "vicdual": {
+   "archives": [
+    "vicdual"
+   ],
+   "cores": [
+    "Z80",
+    "I8039"
+   ],
+   "games": 15,
+   "units": 67,
+   "js": 3.71
+  },
+  "segav": {
+   "archives": [
+    "segav",
+    "segar"
+   ],
+   "cores": [
+    "Z80",
+    "I8039"
+   ],
+   "games": 12,
+   "units": 73,
+   "js": 3.84
+  },
+  "segar": {
+   "archives": [
+    "segar"
+   ],
+   "cores": [
+    "Z80",
+    "I8039"
+   ],
+   "games": 5,
+   "units": 69,
+   "js": 3.79
+  },
+  "zaxxon": {
+   "archives": [
+    "zaxxon"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 5,
+   "units": 67,
+   "js": 3.55
+  },
+  "system8": {
+   "archives": [
+    "system8"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 40,
+   "units": 64,
+   "js": 3.62
+  },
+  "system16": {
+   "archives": [
+    "system16"
+   ],
+   "cores": [
+    "M68000",
+    "Z80"
+   ],
+   "games": 21,
+   "units": 81,
+   "js": 5.87
+  },
+  "btime": {
+   "archives": [
+    "btime"
+   ],
+   "cores": [
+    "M6502"
+   ],
+   "games": 11,
+   "units": 67,
+   "js": 3.19
+  },
+  "dataeast": {
+   "archives": [
+    "dataeast"
+   ],
+   "cores": [
+    "M6502",
+    "Z80",
+    "M6809"
+   ],
+   "games": 17,
+   "units": 81,
+   "js": 5.02
+  },
+  "dec8": {
+   "archives": [
+    "dec8"
+   ],
+   "cores": [
+    "M6809",
+    "M6502"
+   ],
+   "games": 5,
+   "units": 67,
+   "js": 3.82
+  },
+  "dec0": {
+   "archives": [
+    "dec0"
+   ],
+   "cores": [
+    "M68000",
+    "M6502"
+   ],
+   "games": 16,
+   "units": 87,
+   "js": 5.55
+  },
+  "tehkan": {
+   "archives": [
+    "tehkan"
+   ],
+   "cores": [
+    "Z80",
+    "M68000"
+   ],
+   "games": 20,
+   "units": 98,
+   "js": 5.98
+  },
+  "konami": {
+   "archives": [
+    "konami"
+   ],
+   "cores": [
+    "Z80",
+    "M6809",
+    "I8039",
+    "M68000"
+   ],
+   "games": 43,
+   "units": 126,
+   "js": 6.86
+  },
+  "nemesis": {
+   "archives": [
+    "nemesis"
+   ],
+   "cores": [
+    "M68000",
+    "Z80"
+   ],
+   "games": 7,
+   "units": 81,
+   "js": 5.8
+  },
+  "tmnt": {
+   "archives": [
+    "tmnt"
+   ],
+   "cores": [
+    "M68000",
+    "Z80"
+   ],
+   "games": 5,
+   "units": 81,
+   "js": 5.8
+  },
+  "exidy": {
+   "archives": [
+    "exidy"
+   ],
+   "cores": [
+    "M6502",
+    "Z80"
+   ],
+   "games": 16,
+   "units": 74,
+   "js": 4.36
+  },
+  "atarivg": {
+   "archives": [
+    "atarivg",
+    "other",
+    "konami"
+   ],
+   "cores": [
+    "M6502",
+    "M6809",
+    "M68000",
+    "Z80",
+    "I8039",
+    "I8085"
+   ],
+   "games": 130,
+   "units": 245,
+   "js": 8.7
+  },
+  "centiped": {
+   "archives": [
+    "centiped",
+    "atarivg",
+    "other",
+    "konami"
+   ],
+   "cores": [
+    "M6502",
+    "M6809",
+    "M68000",
+    "Z80",
+    "I8039",
+    "I8085"
+   ],
+   "games": 135,
+   "units": 255,
+   "js": 8.73
+  },
+  "kangaroo": {
+   "archives": [
+    "kangaroo"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 3,
+   "units": 68,
+   "js": 3.58
+  },
+  "missile": {
+   "archives": [
+    "missile"
+   ],
+   "cores": [
+    "M6502",
+    "M68000"
+   ],
+   "games": 3,
+   "units": 83,
+   "js": 5.36
+  },
+  "ataribw": {
+   "archives": [
+    "ataribw"
+   ],
+   "cores": [
+    "M6502"
+   ],
+   "games": 9,
+   "units": 87,
+   "js": 3.26
+  },
+  "atarisy1": {
+   "archives": [
+    "atarisy1"
+   ],
+   "cores": [
+    "M68000",
+    "M6502"
+   ],
+   "games": 7,
+   "units": 83,
+   "js": 5.42
+  },
+  "atarisy2": {
+   "archives": [
+    "atarisy2"
+   ],
+   "cores": [
+    "T11",
+    "M6502"
+   ],
+   "games": 7,
+   "units": 68,
+   "js": 5.61
+  },
+  "atari": {
+   "archives": [
+    "atari"
+   ],
+   "cores": [
+    "M68000",
+    "M6502"
+   ],
+   "games": 18,
+   "units": 99,
+   "js": 5.56
+  },
+  "rockola": {
+   "archives": [
+    "rockola",
+    "other",
+    "konami",
+    "atarivg"
+   ],
+   "cores": [
+    "M6502",
+    "I8085",
+    "Z80",
+    "I8039",
+    "M6809",
+    "M68000"
+   ],
+   "games": 141,
+   "units": 250,
+   "js": 8.75
+  },
+  "technos": {
+   "archives": [
+    "technos"
+   ],
+   "cores": [
+    "M6502",
+    "M6809",
+    "M6808",
+    "Z80",
+    "M68000"
+   ],
+   "games": 13,
+   "units": 97,
+   "js": 7.63
+  },
+  "berzerk": {
+   "archives": [
+    "berzerk"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 4,
+   "units": 66,
+   "js": 3.55
+  },
+  "gameplan": {
+   "archives": [
+    "gameplan"
+   ],
+   "cores": [
+    "M6502"
+   ],
+   "games": 4,
+   "units": 65,
+   "js": 3.14
+  },
+  "stratvox": {
+   "archives": [
+    "stratvox"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 3,
+   "units": 64,
+   "js": 3.53
+  },
+  "zaccaria": {
+   "archives": [
+    "zaccaria"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 4,
+   "units": 64,
+   "js": 3.53
+  },
+  "upl": {
+   "archives": [
+    "upl"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 5,
+   "units": 68,
+   "js": 3.55
+  },
+  "tms": {
+   "archives": [
+    "tms",
+    "gottlieb"
+   ],
+   "cores": [
+    "TMS34010",
+    "M6502",
+    "M6809",
+    "I86"
+   ],
+   "games": 27,
+   "units": 80,
+   "js": 5.29
+  },
+  "cinemar": {
+   "archives": [
+    "cinemar"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 6,
+   "units": 64,
+   "js": 3.52
+  },
+  "thepit": {
+   "archives": [
+    "thepit",
+    "galaxian",
+    "pacman"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 56,
+   "units": 78,
+   "js": 3.75
+  },
+  "valadon": {
+   "archives": [
+    "valadon"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 6,
+   "units": 65,
+   "js": 3.53
+  },
+  "seibu": {
+   "archives": [
+    "seibu"
+   ],
+   "cores": [
+    "Z80"
+   ],
+   "games": 4,
+   "units": 64,
+   "js": 3.54
+  },
+  "nichibut": {
+   "archives": [
+    "nichibut"
+   ],
+   "cores": [
+    "Z80",
+    "M68000"
+   ],
+   "games": 5,
+   "units": 85,
+   "js": 5.79
+  },
+  "other": {
+   "archives": [
+    "other",
+    "konami",
+    "atarivg"
+   ],
+   "cores": [
+    "Z80",
+    "I8039",
+    "M6809",
+    "M6502",
+    "M68000",
+    "I8085"
+   ],
+   "games": 130,
+   "units": 245,
+   "js": 8.7
+  }
+ }
+}

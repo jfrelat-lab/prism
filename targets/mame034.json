@@ -742,5 +742,10 @@
     "stdio",
     "ports",
     "allegro"
-  ]
+  ],
+  "light": {
+    "module": "tools/mame-light.mjs",
+    "export": "lightFor"
+  },
+  "_light": "The page does not compile 959 games to play one: asked for this target with the game its command line names, the server answers with the build of the makefile archive that holds it, less the CPU cores its drivers do not use (tools/mame-light.mjs, closures recorded in targets/mame034-light.json). An unknown name or a switch such as -listcrc gets the whole build. Node tools build the whole target unless they ask otherwise."
 }
