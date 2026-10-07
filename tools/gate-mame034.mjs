@@ -150,6 +150,33 @@ check(coverage(got) >= 0.95,
   check(coverage(pairsFromProgram(lines.slice(0, lines.length >> 1).join('\n'))) < 0.95, 'control: half a listing is seen');
 }
 
+/*
+ * THE GAMES, by name: the program's own `-list` -- its drivers[] table walked by the compiled C --
+ * against the names tools/mame-light.mjs reads out of the driver sources as text, archive by
+ * archive. They have to be the same set, because everything that picks a build for a game (the
+ * page, the compatibility index, the bundles) trusts the text reading. It was wrong once without
+ * anything saying so: neogeo.c declares 101 drivers through a macro, and they were simply absent.
+ * And every one of them must belong to an archive whose light build is recorded.
+ */
+{
+  const { ARCHIVES, gamesOf, lightFor } = await import('./mame-light.mjs');
+  const said = child('-list', 1).stdout ?? '';
+  const total = +(said.match(/Total ROM sets supported:\s*(\d+)/)?.[1] ?? 0);
+  const body = said.slice(said.indexOf('following games:') + 16, said.indexOf('Total ROM sets'));
+  const listed = new Set(body.split(/\s+/).filter(Boolean));
+  const read = new Set([...ARCHIVES.keys()].flatMap(gamesOf));
+  const notRead = difference(listed, read), notListed = difference(read, listed);
+  check(total > 900 && listed.size === total && !notRead.length && !notListed.length,
+    `the ${total} games -list names are the ${read.size} read from the driver sources`,
+    `${notRead.length} listed and not read (${notRead.slice(0, 5).join(' ')}); ${notListed.length} read and not listed (${notListed.slice(0, 5).join(' ')})`);
+  const unbuilt = [...read].filter((g) => !lightFor(g));
+  check(!unbuilt.length, 'each belongs to an archive whose light build is recorded (targets/light/mame034.json)', unbuilt.slice(0, 8).join(' '));
+  // The control is the defect itself: without the macro-declared drivers the two sets differ.
+  const blind = new Set([...read].filter((g) => !gamesOf('neogeo').includes(g)));
+  check(difference(listed, blind).length === gamesOf('neogeo').length && gamesOf('neogeo').length > 50,
+    'control: a reading blind to the macro-declared drivers is seen to miss them');
+}
+
 const roms = process.env.PRISM_MAME_ROMS;
 if (roms) {
   for (const game of ['invaders', '1942']) {

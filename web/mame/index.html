@@ -1,0 +1,187 @@
+<!doctype html>
+<!--
+  PRISM — MAME 0.34, game by game.
+
+  One card per game the release lists, saying four things that come from four places and are kept
+  apart on purpose:
+
+    ROMs       whether the set in the collection is the one this release expects, by CRC
+    MAME       what the release itself says of its driver (not working, wrong colours)
+    run        whether the game's build reached its emulation loop and drew a picture -- "starts"
+    reference  whether its frames were held to a native gcc build of the same sources -- "right"
+
+  A screenshot is from the run. It proves the game draws; only the reference proves it draws what
+  the original program draws, and few games have one yet. The page says which.
+
+  The data is dist/mame-compat/index.json, written by `node tools/mame-compat.mjs --roms=<dir>`.
+  It is not in the repository -- screenshots are pictures of the games -- so a fresh checkout shows
+  the instruction instead of a grid. Serve with `node tools/serve.mjs --games=<dir>`, at /web/mame/.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRISM · MAME 0.34 compatibility</title>
+<style>
+  :root {
+    --bg: #0e1013; --panel: #171a1f; --panel-2: #1f242c; --edge: #262b33;
+    --fg: #d7dae0; --dim: #8b929e; --accent: #6cb6ff;
+    --warn: #e3b341; --err: #f28b82; --ok: #7ee2a8;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-size: 13px; }
+
+  header { position: sticky; top: 0; z-index: 2; background: var(--panel); border-bottom: 1px solid var(--edge); }
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 9px 14px; }
+  .name { font-weight: 700; letter-spacing: .16em; color: var(--accent); }
+  .name small { display: block; font-weight: 400; letter-spacing: 0; color: var(--dim); font-size: 10px; }
+  .sep { flex: 1; }
+  a.back { color: var(--dim); text-decoration: none; border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; }
+  a.back:hover { color: var(--accent); border-color: var(--accent); }
+  select, input, button { font: inherit; color: var(--fg); background: var(--panel-2);
+    border: 1px solid var(--edge); border-radius: 5px; padding: 5px 9px; }
+  input[type=search] { width: 22ch; }
+  :is(select, input, button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  label { color: var(--dim); display: inline-flex; gap: 6px; align-items: center; }
+
+  /* The tally: each figure is also the filter that shows those games. */
+  .tally { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 10px; }
+  .tally button { cursor: pointer; display: flex; gap: 8px; align-items: baseline; padding: 4px 9px; }
+  .tally button b { font-variant-numeric: tabular-nums; }
+  .tally button span { color: var(--dim); }
+  .tally button[aria-pressed=true] { border-color: var(--accent); }
+  .tally button[aria-pressed=true] span { color: var(--fg); }
+
+  main { padding: 14px; }
+  .note { color: var(--dim); max-width: 78ch; line-height: 1.5; margin: 0 0 14px; }
+  .note b { color: var(--fg); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+
+  .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 6px; overflow: hidden;
+          display: flex; flex-direction: column; }
+  /* One square box for every game, upright or sideways: the picture is fitted inside it, so a row
+     of cards is one height whatever the monitors were. */
+  .shot { aspect-ratio: 1; background: #000; display: grid; place-items: center; color: var(--dim); font-size: 11px;
+          text-align: center; padding: 6px; position: relative; overflow: hidden; }
+  .shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+              image-rendering: pixelated; }
+  .body { padding: 8px 9px 9px; display: flex; flex-direction: column; gap: 5px; flex: 1; }
+  .title { font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+  .meta { color: var(--dim); font-size: 11px; overflow-wrap: anywhere; }
+  .badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; padding-top: 3px; }
+  .badge { font-size: 10px; border: 1px solid var(--edge); border-radius: 3px; padding: 1px 5px; color: var(--dim); white-space: nowrap; }
+  .badge.ok { color: var(--ok); border-color: #2f6f4f; }
+  .badge.warn { color: var(--warn); border-color: #6b5620; }
+  .badge.err { color: var(--err); border-color: #7a3a36; }
+  .why { color: var(--dim); font-size: 10px; overflow-wrap: anywhere; }
+  a.play { align-self: flex-start; color: var(--accent); text-decoration: none; border: 1px solid var(--edge);
+           border-radius: 4px; padding: 3px 8px; font-size: 11px; }
+  a.play:hover { border-color: var(--accent); }
+
+  .empty { color: var(--dim); padding: 30px 0; }
+  code { background: var(--panel-2); border: 1px solid var(--edge); border-radius: 4px; padding: 2px 6px; }
+  #more { margin: 14px auto 0; display: block; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <div class="name">PRISM<small>MAME 0.34 · game by game</small></div>
+    <input type="search" id="q" placeholder="name, title, maker…" aria-label="Search games">
+    <label>archive <select id="archive"><option value="">all</option></select></label>
+    <label><input type="checkbox" id="clones" checked> clones</label>
+    <span class="sep"></span>
+    <span id="shown" class="meta"></span>
+    <a class="back" href="../">← machines</a>
+  </div>
+  <div class="tally" id="tally"></div>
+</header>
+<main>
+  <p class="note" id="note"></p>
+  <div class="grid" id="grid"></div>
+  <button id="more" hidden>show more</button>
+</main>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const DATA = '../../dist/mame-compat/';
+
+let data;
+try {
+  const r = await fetch(`${DATA}index.json`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(String(r.status));
+  data = await r.json();
+} catch {
+  $('note').innerHTML = 'No compatibility data here yet. It is generated from your own ROM collection and is not part ' +
+    'of the repository:<br><br><code>node tools/mame-compat.mjs --roms=&lt;directory of zips&gt;</code>';
+  throw new Error('no data');
+}
+
+/*
+ * The filters, in the order a reader asks: is it right, does it start, what is wrong, and why a
+ * game is not there at all. Each game is in exactly one of the first five -- they partition the
+ * list -- and the last two cut across it.
+ */
+const problem = (g) => g.run && g.run.verdict !== 'runs';
+const KINDS = [
+  ['all', 'games', () => true],
+  ['reference', 'held to gcc', (g) => !!g.reference],
+  ['runs', 'start and draw', (g) => !g.reference && g.run?.verdict === 'runs'],
+  ['problem', 'do not', (g) => !g.reference && problem(g)],
+  ['unrun', 'not run yet', (g) => !g.reference && !g.run && g.roms === 'complete'],
+  ['norom', 'ROM set incomplete', (g) => !g.reference && !g.run && g.roms !== 'complete'],
+  ['mame', 'MAME says not working', (g) => g.flags.includes('not_working')],
+];
+let kind = 'all', limit = 240;
+
+// From the same partition the tally shows, so the sentence and the buttons cannot disagree.
+const n = (k) => data.games.filter(KINDS.find(([x]) => x === k)[2]).length;
+$('note').innerHTML = `<b>${n('reference')}</b> games print, frame for frame, what a native gcc build of the same sources prints. ` +
+  `<b>${n('runs')}</b> more reach their emulation loop and draw a picture after ${data.frames} frames, which says they start and ` +
+  `not that they are right; <b>${n('problem')}</b> do not. A screenshot comes from that run, through a headless backend: ` +
+  `no sound, no input. ${data.summary.listed && data.summary.listed !== data.games.length
+    ? `The release lists ${data.summary.listed} drivers; ${data.games.length} of them were read from its sources and are shown.` : ''}`;
+
+for (const a of [...new Set(data.games.map((g) => g.archive).filter(Boolean))].sort()) {
+  $('archive').insertAdjacentHTML('beforeend', `<option value="${esc(a)}">${esc(a)}</option>`);
+}
+
+const VERDICT = { runs: ['ok', 'draws'], blank: ['warn', 'blank picture'], stopped: ['err', 'stopped'], threw: ['err', 'threw'], timeout: ['err', 'timed out'] };
+function card(g) {
+  const badges = [];
+  if (g.reference) badges.push(`<span class="badge ok" title="Its frames match a native i386 gcc build over ${g.reference.frames} played frames">= gcc · ${g.reference.frames} frames</span>`);
+  if (g.run) { const [cls, text] = VERDICT[g.run.verdict]; badges.push(`<span class="badge ${cls}" title="${g.run.frames} of ${g.run.of} frames">${text}</span>`); }
+  if (g.roms !== 'complete') badges.push(`<span class="badge${g.roms === 'partial' ? ' warn' : ''}" title="By CRC, against what MAME 0.34 expects">ROMs ${g.have}/${g.need}</span>`);
+  for (const f of g.flags) badges.push(`<span class="badge warn" title="The release's own flag on this driver">MAME: ${esc(f.replace(/_/g, ' '))}</span>`);
+  const why = g.run && g.run.verdict !== 'runs' ? `<div class="why">${esc(g.run.threw ?? g.run.said ?? '')}</div>` : '';
+  const shot = g.run?.shot
+    ? `<div class="shot has"><img loading="lazy" src="${DATA}${esc(g.run.shot)}" alt="${esc(g.title)} after ${g.run.of} frames" width="${g.run.width}" height="${g.run.height}"></div>`
+    : `<div class="shot">${g.run ? 'no picture' : g.roms === 'complete' ? 'not run yet' : 'no complete ROM set'}</div>`;
+  const play = g.roms === 'complete'
+    ? `<a class="play" href="../?machine=dos&amp;program=mame-0.34&amp;args=${encodeURIComponent(`${g.name} -nodouble -soundcard 1`)}">▶ play</a>` : '';
+  return `<article class="card">${shot}<div class="body">
+    <div class="title">${esc(g.title)}</div>
+    <div class="meta">${esc(g.name)} · ${esc(g.year)} · ${esc(g.maker)}${g.cloneOf ? ` · clone of ${esc(g.cloneOf)}` : ''}</div>
+    <div class="meta">${esc(g.archive ?? '')}${g.cores.length ? ` · ${esc(g.cores.join(' '))}` : ''}</div>
+    ${why}<div class="badges">${badges.join('')}</div>${play}</div></article>`;
+}
+
+function render() {
+  const q = $('q').value.trim().toLowerCase(), a = $('archive').value, clones = $('clones').checked;
+  const scope = data.games.filter((g) => (!a || g.archive === a) && (clones || !g.cloneOf)
+    && (!q || `${g.name} ${g.title} ${g.maker} ${g.year}`.toLowerCase().includes(q)));
+  $('tally').innerHTML = KINDS.map(([k, label, f]) =>
+    `<button data-kind="${k}" aria-pressed="${k === kind}"><b>${scope.filter(f).length}</b><span>${label}</span></button>`).join('');
+  const list = scope.filter(KINDS.find(([k]) => k === kind)[2]);
+  $('grid').innerHTML = list.slice(0, limit).map(card).join('') || '<div class="empty">No game matches.</div>';
+  $('shown').textContent = list.length > limit ? `${limit} of ${list.length} shown` : `${list.length} shown`;
+  $('more').hidden = list.length <= limit;
+}
+$('tally').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { kind = b.dataset.kind; limit = 240; render(); } });
+for (const id of ['q', 'archive', 'clones']) $(id).addEventListener('input', () => { limit = 240; render(); });
+$('more').addEventListener('click', () => { limit += 240; render(); });
+render();
+</script>
+</body>
+</html>

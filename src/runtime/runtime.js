@@ -275,6 +275,18 @@ function makeLibc(M) {
 
   const malloc = (n) => {
     n = (n | 0) >>> 0;
+    /*
+     * A request larger than the program's WHOLE memory fails as C says it does: NULL. No machine
+     * of that size could have granted it, so a program that asks is a program that expects the
+     * refusal -- MAME 0.34's readsamples, for a game with no samples, computes
+     * `sizeof(header) + (0 - 1) * sizeof(sample)`, asks for the four gigabytes that makes, and
+     * takes NULL to mean "no samples". Trapping there stopped Tomahawk 777 where a gcc build ran.
+     *
+     * Running out of room that DOES fit the image still traps, below: that is a build whose
+     * `memory` is set too small, which is PRISM's fault and should be said, not handed to the
+     * program as a condition it never met on the machine it was written for.
+     */
+    if (n > M.mod.size) return 0;
     if (n === 0) n = 1;
     const size = Math.ceil((n + 8) / 16) * 16;
     const pool = freeBySize.get(size);

@@ -182,6 +182,25 @@ void osd_update_display(void)
 		printf("pens %d\n", (int)Machine->drv->total_colors);
 		for (y = 0; y < (int)Machine->drv->total_colors; y++) printf("%04x%s", Machine->pens[y], (y & 31) == 31 ? "\n" : "");
 		printf("\n");
+		/* ...and the rectangle of the bitmap a player is shown: the driver's visible area, turned
+		   and flipped as the bitmap was. src/msdos/video.c's adjust_display, to the letter. */
+		{
+			int xmin = Machine->drv->visible_area.min_x, ymin = Machine->drv->visible_area.min_y;
+			int xmax = Machine->drv->visible_area.max_x, ymax = Machine->drv->visible_area.max_y;
+			int w = Machine->drv->screen_width, h = Machine->drv->screen_height, temp;
+			if (Machine->orientation & ORIENTATION_SWAP_XY)
+			{
+				temp = xmin; xmin = ymin; ymin = temp;
+				temp = xmax; xmax = ymax; ymax = temp;
+				temp = w; w = h; h = temp;
+			}
+			if (!(Machine->drv->video_attributes & VIDEO_TYPE_VECTOR))
+			{
+				if (Machine->orientation & ORIENTATION_FLIP_X) { temp = w - xmin - 1; xmin = w - xmax - 1; xmax = temp; }
+				if (Machine->orientation & ORIENTATION_FLIP_Y) { temp = h - ymin - 1; ymin = h - ymax - 1; ymax = temp; }
+				printf("visible %d %d %d %d\n", xmin, ymin, xmax, ymax);
+			}
+		}
 	}
 	frame++;
 }

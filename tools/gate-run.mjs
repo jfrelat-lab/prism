@@ -1859,6 +1859,24 @@ int main(void)
 }
 `);
 
+// malloc of more than any machine has returns NULL, and a program may count on it: MAME 0.34's
+// readsamples asks for `sizeof(header) + (n - 1) * sizeof(entry)` with n == 0 -- a negative size,
+// four gigabytes once unsigned -- and takes the NULL to mean "no samples". PRISM trapped instead.
+C('malloc-of-an-impossible-size-is-null', `#include <stdio.h>
+#include <stdlib.h>
+struct entry { int a, b, c, d, e; };
+struct table { int total; struct entry *e[1]; };
+static void *get(int n) { return malloc(sizeof(struct table) + (n - 1) * sizeof(struct entry) * 4); }
+int main(void)
+{
+    void *none = get(0), *some = get(3);
+    printf("%d %d\\n", none == 0, some != 0);
+    free(some);
+    printf("%d\\n", malloc((size_t)-1) == 0);
+    return 0;
+}
+`);
+
 // Unsigned arithmetic in a STATIC initialiser, which is folded by the compiler and not by the
 // emitted code: `(UINT32)0xff800000 >> 3` is 0x1ff00000, not the sign-extended 0xfff00000. MAME
 // 0.34's TMS34010 memory maps are tables of exactly that (TOBYTE), and Smash TV read its reset

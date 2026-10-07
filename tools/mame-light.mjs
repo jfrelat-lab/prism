@@ -48,8 +48,17 @@ const driverC = visible(readFileSync(join(CORPUS, 'src', 'driver.c'), 'latin1'))
 const LISTED = [...driverC.slice(driverC.indexOf('drivers[]')).matchAll(/&\s*(\w+)\s*,/g)].map((m) => m[1]);
 const structsIn = (unit) => {
   const text = visible(readFileSync(join(CORPUS, unit), 'latin1'));
-  return [...text.matchAll(/struct\s+GameDriver\s+(\w+)\s*=\s*\{\s*__FILE__\s*,\s*(?:&\s*\w+|0)\s*,\s*"([^"]+)"/g)]
-    .map((m) => ({ struct: m[1], game: m[2] }));
+  return [
+    ...[...text.matchAll(/struct\s+GameDriver\s+(\w+)\s*=\s*\{\s*__FILE__\s*,\s*(?:&\s*\w+|0)\s*,\s*"([^"]+)"/g)]
+      .map((m) => ({ struct: m[1], game: m[2] })),
+    /*
+     * neogeo.c declares its hundred drivers through macros of its own, and reading only the
+     * struct form left the Neo Geo archive with no game in it: NEODRIVER(name, ...) is `name_driver`
+     * for the game `name`; NEODRIVERX(name, "romname", ...) gives the game its own name.
+     */
+    ...[...text.matchAll(/^NEODRIVER(X?)\(\s*(\w+)\s*,\s*(?:"([^"]*)")?/gm)]
+      .map((m) => ({ struct: `${m[2]}_driver`, game: m[1] ? m[3] : m[2] })),
+  ];
 };
 const byArchive = new Map([...ARCHIVES].map(([name, units]) =>
   [name, units.filter((u) => /\/drivers\//i.test(u)).flatMap(structsIn).filter((s) => LISTED.includes(s.struct))]));
@@ -198,12 +207,14 @@ export async function buildLight(game, { envExtra = {}, compile = {}, allCores =
 }
 
 /*
- * THE CLOSURES, written down: targets/mame034-light.json. Closing an archive's links takes a build
+ * THE CLOSURES, written down: targets/light/mame034.json. Closing an archive's links takes a build
  * (two, when it pulls another archive in), and a page that is about to start a game should not make
  * one to find out what to compile. `--write` closes all sixty-two once and records, per archive,
  * the archives and CPU cores its build is made of; `lightFor` then answers from the file.
  */
-export const CLOSURES = join(ROOT, 'targets', 'mame034-light.json');
+// Under targets/light/, not beside the targets: everything that lists targets/*.json takes each
+// file there for one, and this is a record of builds, not something to build.
+export const CLOSURES = join(ROOT, 'targets', 'light', 'mame034.json');
 let closures = null;
 /** The light target for a game, from the recorded closures; null when the game or the file is unknown. */
 export function lightFor(game) {

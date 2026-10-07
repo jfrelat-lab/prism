@@ -36,10 +36,28 @@ const structs = new Map();       // driver struct name -> game name
 const dir = readdirSync(SRC).find((d) => d.toLowerCase() === 'drivers');
 for (const f of readdirSync(join(SRC, dir)).filter((f) => /\.c$/i.test(f))) {
   const text = readFileSync(join(SRC, dir, f), 'latin1').replace(/\/\*[\s\S]*?\*\//g, ' ');
+  /*
+   * ROMs a table gets through a MACRO OF THE FILE. neogeo.c's NEO_BIOS_SOUND_128K(name, sum) loads
+   * the game's own sound ROM and, written out in the macro's body, the system's neo-geo.rom and
+   * ng-sm1.rom; NEO_SFIX_128K adds ng-sfix.rom. Leaving those out called 68 sets complete that the
+   * program then refused, each for a BIOS file. So: every #define whose body names ROMs outright,
+   * and those ROMs added wherever a table uses it.
+   */
+  const inMacro = new Map();
+  for (const d of text.replace(/\\\r?\n/g, " ").matchAll(/^[ \t]*#[ \t]*define[ \t]+(\w+)\([^)]*\)(.*)$/gm)) {
+    const own = [...d[2].matchAll(/ROM_LOAD\w*\s*\(\s*"([^"]+)"\s*,[^,]+,\s*([^,]+),\s*(0x[0-9a-fA-F]+|\d+)\s*\)/g)]
+      .map((r) => ({ name: r[1], length: Number(r[2].trim()) || 0, crc: Number(r[3]) >>> 0 }));
+    if (own.length) inMacro.set(d[1], own);
+  }
   for (const m of text.matchAll(/ROM_START\(\s*(\w+)\s*\)([\s\S]*?)ROM_END/g)) {
     const roms = [];
+    for (const [macro, own] of inMacro) if (new RegExp(`\\b${macro}\\s*\\(`).test(m[2])) roms.push(...own);
     for (const r of m[2].matchAll(/ROM_LOAD\w*\s*\(\s*"([^"]+)"\s*,[^,]+,\s*([^,]+),\s*(0x[0-9a-fA-F]+|\d+)\s*\)/g)) {
       roms.push({ name: r[1], length: Number(r[2].trim()) || 0, crc: Number(r[3]) >>> 0 });
+    }
+    // neogeo.c's own macros take the name and the CRC and supply the rest: NEO_SFIX_128K(name, sum).
+    for (const r of m[2].matchAll(/\bNEO_\w+\s*\(\s*"([^"]+)"\s*,\s*(0x[0-9a-fA-F]+|\d+)\s*\)/g)) {
+      roms.push({ name: r[1], length: 0, crc: Number(r[2]) >>> 0 });
     }
     drivers.set(m[1], roms);
   }
@@ -47,6 +65,14 @@ for (const f of readdirSync(join(SRC, dir)).filter((f) => /\.c$/i.test(f))) {
     const table = [...m[5].matchAll(/\b(\w+_rom)\b/g)].map((x) => x[1]).find((t) => drivers.has(t)) ?? null;
     games.push({ name: m[3], description: m[4], table, parent: m[2] === '0' ? null : m[2].replace(/[&\s]/g, ''), struct: m[1] });
     structs.set(m[1], m[3]);
+  }
+  // ...and its drivers, a hundred of them, are declared through NEODRIVER / NEODRIVERX: `name_driver`
+  // for the game `name` (or the name NEODRIVERX gives), its ROMs in `name_rom`, a clone of the BIOS set.
+  for (const m of text.matchAll(/^NEODRIVER(X?)\(\s*(\w+)\s*,(.*)$/gm)) {
+    const strings = [...m[3].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
+    const [name, description] = m[1] ? strings : [m[2], ...strings];
+    games.push({ name, description, table: drivers.has(`${m[2]}_rom`) ? `${m[2]}_rom` : null, parent: "neogeo_bios", struct: `${m[2]}_driver` });
+    structs.set(`${m[2]}_driver`, name);
   }
 }
 for (const g of games) g.cloneOf = g.parent ? structs.get(g.parent) ?? null : null;

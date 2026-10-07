@@ -746,6 +746,18 @@
    "units": 85,
    "js": 5.79
   },
+  "neogeo": {
+   "archives": [
+    "neogeo"
+   ],
+   "cores": [
+    "M68000",
+    "Z80"
+   ],
+   "games": 101,
+   "units": 83,
+   "js": 6.03
+  },
   "other": {
    "archives": [
     "other",

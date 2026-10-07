@@ -61,6 +61,8 @@ export function parentOf(game) {
   const r = spawnSync('grep', ['-rlE', `"${game}",`, dir], { encoding: 'utf8' });
   for (const f of r.stdout.trim().split('\n').filter(Boolean)) {
     const text = readFileSync(f, 'latin1');
+    // neogeo.c's macro-declared drivers are all clones of its BIOS set, which holds their system ROMs.
+    if (new RegExp(`^NEODRIVER\\(\\s*${game}\\s*,|^NEODRIVERX\\(\\s*\\w+\\s*,\\s*"${game}"`, 'm').test(text)) return 'neogeo';
     const m = new RegExp(`struct\\s+GameDriver\\s+\\w+\\s*=\\s*\\{\\s*__FILE__\\s*,\\s*(&\\s*(\\w+)|0)\\s*,\\s*"${game}"`).exec(text);
     if (!m || !m[2]) continue;
     const p = new RegExp(`struct\\s+GameDriver\\s+${m[2]}\\s*=\\s*\\{\\s*__FILE__\\s*,[^,]*,\\s*"([^"]+)"`).exec(text);
@@ -86,7 +88,7 @@ if (process.argv[2] === '--prism') {
    * PRISM_MAME_LIGHT=1: the LIGHT build of the game's archive (tools/mame-light.mjs) in place of
    * the whole one. Same backend, same frames expected -- which is what says that leaving out 580
    * units and ten CPU cores left the game alone. It is the RECORDED closure that is built
-   * (targets/mame034-light.json), since that is what the page is served.
+   * (targets/light/mame034.json), since that is what the page is served.
    * PRISM_MAME_LIGHT=alone: the game's archive without the ones its links need -- the control: a
    * cut that is too small has to show.
    */
