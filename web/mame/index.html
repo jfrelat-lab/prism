@@ -159,7 +159,7 @@ function card(g) {
     ? `<div class="shot has"><img loading="lazy" src="${DATA}${esc(g.run.shot)}" alt="${esc(g.title)} after ${g.run.of} frames" width="${g.run.width}" height="${g.run.height}"></div>`
     : `<div class="shot">${g.run ? 'no picture' : g.roms === 'complete' ? 'not run yet' : 'no complete ROM set'}</div>`;
   const play = g.roms === 'complete'
-    ? `<a class="play" href="../?machine=dos&amp;program=mame-0.34&amp;args=${encodeURIComponent(`${g.name} -nodouble -soundcard 1`)}">▶ play</a>` : '';
+    ? `<a class="play" href="../?machine=dos&amp;program=mame-0.34&amp;args=${encodeURIComponent(`${g.name} -nodouble -soundcard 1`)}&amp;run=1">▶ play</a>` : '';
   return `<article class="card">${shot}<div class="body">
     <div class="title">${esc(g.title)}</div>
     <div class="meta">${esc(g.name)} · ${esc(g.year)} · ${esc(g.maker)}${g.cloneOf ? ` · clone of ${esc(g.cloneOf)}` : ''}</div>
