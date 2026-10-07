@@ -1450,7 +1450,7 @@ function finish(state) {
 let pageOptions = {};
 function applyQuery() {
   const q = new URLSearchParams(location.search);
-  pageOptions = { gl: q.get('gl'), glcheck: q.get('glcheck') };
+  pageOptions = { gl: q.get('gl'), glcheck: q.get('glcheck'), bundle: q.get('bundle') };
   const want = q.get('program') || q.get('p');
   const wantMachine = q.get('machine') || q.get('m');
   // A variant shares its program name with the base build, so a link names it by its shelf file.
@@ -1475,7 +1475,7 @@ function publishQuery() {
   q.set('program', entry().variant ? entry().file : entry().program);
   if ($('args').value.trim()) q.set('args', $('args').value.trim());
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
-  for (const k of ['gl', 'glcheck']) if (pageOptions[k]) q.set(k, pageOptions[k]);
+  for (const k of ['gl', 'glcheck', 'bundle']) if (pageOptions[k]) q.set(k, pageOptions[k]);
   history.replaceState(null, '', `${location.pathname}?${q}`);
 }
 

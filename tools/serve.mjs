@@ -101,6 +101,26 @@ async function listTree(dir, prefix = '', out = []) {
 }
 
 /** Immediate subdirectories, or nothing if the path is not a directory. */
+/*
+ * A STATIC BUNDLE of a target (tools/bundle.mjs), offered to the page when one is in dist/ and is
+ * not older than the compiler that wrote it: a bundle is emitted code, and code emitted by an older
+ * src/ is a different program. Stale or absent, the page compiles from source as it always has.
+ */
+function freshBundle(name) {
+  try {
+    const at = statSync(join(ROOT, "dist", `${name}.js`)).mtimeMs;
+    statSync(join(ROOT, "dist", `${name}.bin`));
+    let newest = 0;
+    (function walk(d) {
+      for (const f of readdirSync(d)) {
+        const p = join(d, f), s = statSync(p);
+        if (s.isDirectory()) walk(p); else if (s.mtimeMs > newest) newest = s.mtimeMs;
+      }
+    })(join(ROOT, "src"));
+    return at >= newest ? `dist/${name}` : null;
+  } catch { return null; }
+}
+
 function readdirSyncSafe(dir) {
   return readdirSync(dir).filter(e => statSync(join(dir, e)).isDirectory());
 }
@@ -168,6 +188,7 @@ const server = createServer(async (req, res) => {
           host: resolved.host ?? null,
           // What a light build is made of, for the page to say: archives, cores, units of how many.
           lightOf: resolved.lightOf ?? null,
+          bundle: freshBundle(resolved.lightOf ? `${resolved.name}-${resolved.lightOf.archives[0]}` : resolved.name),
           args: resolved.args ?? null,
           // A variant's frame-rate cap, when its renderer is not the one the descriptor was paced for.
           fps: resolved.fps ?? null,

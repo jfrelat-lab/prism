@@ -212,6 +212,18 @@ if (roms) {
       check(!alone || alone.fingerprint !== golden.games.exterm.fingerprint,
         'LIGHT control: Exterminator\'s archive WITHOUT the one its links need does not pass');
     }
+
+    /*
+     * ...and that light build as a STATIC BUNDLE (tools/bundle.mjs, P13.1): written to disk and
+     * read back, so what runs was not compiled in the process that runs it. Final Fight, for the
+     * largest program of the three. The round trip itself, with its controls, is gate-bundle's.
+     */
+    if (golden.games.ffight && existsSync(join(roms, 'ffight.zip'))) {
+      const got = fingerprint(runPrism(roms, 'ffight', argv, { light: 'bundle' }));
+      check(got && got.fingerprint === golden.games.ffight.fingerprint && got.frames === golden.games.ffight.frames,
+        `BUNDLE ffight: the same ${golden.games.ffight.frames} frames from the bundle read back from disk`,
+        got ? `${got.frames} frames ${got.fingerprint}` : 'printed no frame');
+    }
   }
 } else {
   console.log('     (no PRISM_MAME_ROMS: the smoke runs are not made)');

@@ -53,6 +53,8 @@ const structsIn = (unit) => {
 };
 const byArchive = new Map([...ARCHIVES].map(([name, units]) =>
   [name, units.filter((u) => /\/drivers\//i.test(u)).flatMap(structsIn).filter((s) => LISTED.includes(s.struct))]));
+/** The games of an archive, by name, in driver.c's order. */
+export const gamesOf = (archive) => (byArchive.get(archive) ?? []).map((s) => s.game);
 /** The archive that holds a game, by the game's own name ("invaders"). */
 export const archiveOf = (game) => [...byArchive].find(([, s]) => s.some((x) => x.game === game))?.[0] ?? null;
 

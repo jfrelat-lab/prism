@@ -6,7 +6,7 @@ import { Preprocessor } from './cpp/cpp.js';
 import { cxxToC, CXX_DEFINES, unitLanguage, checkCxxOption } from './cxx/index.js';
 import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
-import { Module } from './link/module.js';
+import { Module, FUNC_TAG } from './link/module.js';
 import { makeMachine, finalizeHeap, ExitCalled, Trap, vaReader } from './runtime/runtime.js';
 import { FunctionEmitter, EmitError , jsIdent, flexibleExtra, setPaged, setWindow } from './backend/emit.js';
 import { compileAux, AuxError } from './asm/pragma-aux.js';
@@ -1415,7 +1415,91 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
   // Where each of the main module's globals lives: what an assembly file's `extern` names resolve to.
   const globalAddrs = Object.fromEntries([...perModule.get(MAIN).globals].map(([n, g]) => [n, g.addr]));
   return { M, F, src, mod, failures, duplicates, undefined: undefined_, undefinedVars,
-           externPlaced, funcTypes, globalAddrs, run: makeRunner(M, F, mod, model) };
+           externPlaced, funcTypes, globalAddrs, run: makeRunner(M, F, mod, model),
+           // What a static bundle needs beyond the above to be loaded again (snapshotProgram).
+           link: { emitted, builtinRefs: [...builtinRefs], model, shared, paged: !!paged, window: !!window, safepoints: !!safepoints } };
+}
+
+/*
+ * ---- A STATIC BUNDLE: a compiled program, loadable again without compiling it (P13.1).
+ *
+ * What the compiler leaves behind is three things: the emitted JavaScript (`src`, already a
+ * complete module), the linked memory image (every static object at its final address), and the
+ * tables that tie the two together -- which name is at which address, which function is at which
+ * table index. `snapshotProgram` takes those; `loadSnapshot` rebuilds a program from them, in the
+ * order compileProgramInner itself finishes in. The environments are installed afterwards by the
+ * caller, exactly as after a compile: a bundle is the program, not the machine it runs on.
+ *
+ * It must be taken BEFORE the program runs and before any environment is installed -- the image is
+ * the linker's, not a core dump.
+ */
+
+/** A function type, as far as the runtime reads one (icall's variadic repacking): or null. */
+const typeForRuntime = (t) => (t && t.k === 'func' ? {
+  k: 'func', variadic: !!t.variadic,
+  params: (t.params ?? []).map((p) => ({ type: { k: p.type?.k, name: p.type?.name, size: p.type?.size } })),
+} : null);
+
+/** { meta: a JSON-able object, image: Uint8Array, src: the emitted JavaScript }. */
+export function snapshotProgram(program) {
+  const { mod, src, link } = program;
+  if (!link) throw new CompileError('snapshot: only a whole-program build (compileProgram) can be bundled');
+  if (link.paged) throw new CompileError('snapshot: a paged build carries a memory map this does not record yet');
+  /*
+   * The image, as the 64 KB pages that hold anything. A program's statics are a few megabytes at
+   * the bottom of an address space of hundreds, and what the linker did not write is zero.
+   */
+  const PAGE = 65536, u8 = mod.u8, pages = [];
+  for (let at = 0; at < u8.length; at += PAGE) {
+    const page = u8.subarray(at, Math.min(at + PAGE, u8.length));
+    if (page.some((b) => b !== 0)) pages.push(at / PAGE);
+  }
+  const image = new Uint8Array(pages.length * PAGE);
+  pages.forEach((p, i) => image.set(u8.subarray(p * PAGE, Math.min((p + 1) * PAGE, u8.length)), i * PAGE));
+  const meta = {
+    format: 1,
+    model: link.model, memory: mod.size, safepoints: link.safepoints, window: link.window,
+    brk: mod.brk, farBrk: mod.farBrk, pages,
+    symbols: [...mod.symbols].map(([name, s]) => [name, s.addr, s.size ?? 0, s.kind ?? null]),
+    // In table order: a function's address IS its index, and the emitted code has them as constants.
+    funcs: [...mod.funcs].sort((a, b) => a[1].index - b[1].index).map(([name, f]) => [name, f.index, typeForRuntime(f.type)]),
+    funcTable: mod.funcTable.length,
+    emitted: link.emitted, builtinRefs: link.builtinRefs,
+    safepointNames: mod.safepoints,
+  };
+  return { meta, image, src };
+}
+
+/**
+ * A program from a snapshot. `factory` is the emitted module already evaluated -- a static bundle
+ * ships it as JavaScript the engine parses on import -- or omitted, and then `src` is evaluated here.
+ */
+export function loadSnapshot({ meta, image, src = null, factory = null }, { shared = false } = {}) {
+  if (meta.format !== 1) throw new CompileError(`snapshot: format ${meta.format} is not one this build reads`);
+  const mod = new Module({ memory: meta.memory, shared, model: meta.model });
+  const M = makeMachine(mod);
+  installConsole(M);
+  const PAGE = 65536;
+  meta.pages.forEach((p, i) => mod.u8.set(image.subarray(i * PAGE, Math.min((i + 1) * PAGE, image.length)).subarray(0, mod.size - p * PAGE), p * PAGE));
+  mod.brk = meta.brk;
+  mod.farBrk = meta.farBrk;
+  mod.safepoints = meta.safepointNames ?? [];
+  for (const [name, addr, size, kind] of meta.symbols) mod.symbols.set(name, { addr, size, kind, type: null });
+  // In place: the machine made above already holds this very array as its call table.
+  mod.funcTable.length = 0;
+  for (let i = 0; i < meta.funcTable; i++) mod.funcTable.push(null);
+  for (const [name, index, type] of meta.funcs) mod.funcs.set(name, { name, index, addr: FUNC_TAG | index, fn: null, type });
+  finalizeHeap(M);
+  const F = Object.create(null);
+  const make = factory ?? new Function(src)();
+  const rebind = make(M, F, mod.dv);
+  for (const name of meta.emitted) mod.bindFunc(name, F[name]);
+  wireRebind(F, mod, meta.emitted, rebind);
+  for (const name of meta.builtinRefs) bindBuiltinAddr(mod, M, name);
+  installStdio(M);
+  installPIT(installPorts(M), M);
+  return { M, F, src, mod, failures: [], duplicates: [], undefined: [], undefinedVars: [],
+           safepoints: meta.safepoints, run: makeRunner(M, F, mod, meta.model), bundled: true };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */

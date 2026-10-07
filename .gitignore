@@ -25,3 +25,6 @@ DATA/
 *.lmp
 *.rom
 *.zip
+
+# Static bundles (tools/bundle.mjs): artefacts, emitted from sources that are not in this repository.
+/dist/

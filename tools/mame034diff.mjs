@@ -95,7 +95,21 @@ if (process.argv[2] === '--prism') {
     const { lightFor, lightTarget, archiveOf } = await import('./mame-light.mjs');
     const light = process.env.PRISM_MAME_LIGHT === 'alone' ? lightTarget([archiveOf(argv[0])]) : lightFor(argv[0]);
     if (!light) { process.stdout.write(`no recorded light build holds '${argv[0]}'\n`, () => process.exit(0)); await new Promise(() => {}); }
-    ({ program } = buildTarget(headless(light), { root: ROOT, envExtra: { stdio: { files } } }));
+    if (process.env.PRISM_MAME_LIGHT === 'bundle') {
+      /*
+       * ...and that light build as a STATIC BUNDLE (tools/bundle.mjs): written to disk, then what
+       * runs is the program READ BACK from the two files -- a fresh memory, the emitted JavaScript
+       * imported as a module, no compile and no source. The compiled program it came from is dropped.
+       */
+      const { writeBundle, loadBundle } = await import('./bundle.mjs');
+      const dir = join(SCRATCH, 'bundles');
+      writeBundle(headless(light), dir, `diff-${argv[0]}`);
+      ({ program } = await loadBundle(dir, `diff-${argv[0]}`, { envExtra: { stdio: { files } } }));
+      rmSync(join(dir, `diff-${argv[0]}.js`), { force: true });
+      rmSync(join(dir, `diff-${argv[0]}.bin`), { force: true });
+    } else {
+      ({ program } = buildTarget(headless(light), { root: ROOT, envExtra: { stdio: { files } } }));
+    }
   } else {
     ({ program } = buildTarget(headless(target), { root: ROOT, envExtra: { stdio: { files } } }));
   }
@@ -152,7 +166,7 @@ export function buildReference(say = console.log) {
 export function runPrism(romDir, game, argv, { light = false } = {}) {
   const p = spawnSync('node', ['--max-old-space-size=8192', SELF, '--prism', romDir, game, ...argv.map(String)],
     { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 28, timeout: 1000000,
-      env: { ...process.env, PRISM_MAME_LIGHT: light === 'alone' ? 'alone' : light ? '1' : '' } });
+      env: { ...process.env, PRISM_MAME_LIGHT: typeof light === 'string' ? light : light ? '1' : '' } });
   return `${p.stdout ?? ''}${p.stderr ?? ''}`.split('\n');
 }
 
@@ -202,7 +216,7 @@ export const readGolden = () => (existsSync(GOLDEN) ? JSON.parse(readFileSync(GO
 
 if (process.argv[1] === SELF && process.argv[2] !== '--prism') {
   const romDir = arg('roms'), dump = arg('dump');
-  const WRITE = process.argv.includes('--write'), CHECK = process.argv.includes('--check'), LIGHT = process.argv.includes('--light');
+  const WRITE = process.argv.includes('--write'), CHECK = process.argv.includes('--check'), LIGHT = process.argv.includes('--light'), BUNDLE = process.argv.includes('--bundle');
   const golden = readGolden();
   const frames = +arg('frames', CHECK && golden ? golden.frames : 300);
   const play = (arg('play') ?? (CHECK && golden ? golden.play.join(',') : '0,0,0,0')).split(',').map(Number);
@@ -220,7 +234,7 @@ if (process.argv[1] === SELF && process.argv[2] !== '--prism') {
       const want = golden.games[game];
       if (!want) { console.log(`absent  ${game.padEnd(9)} is not in the golden`); bad++; continue; }
       if (!existsSync(join(romDir, `${game}.zip`))) { console.log(`no ROMs ${game.padEnd(9)} ${game}.zip is not in ${romDir}`); continue; }
-      const got = fingerprint(runPrism(romDir, game, argv, { light: LIGHT }));
+      const got = fingerprint(runPrism(romDir, game, argv, { light: BUNDLE ? 'bundle' : LIGHT }));
       const ok = got && got.fingerprint === want.fingerprint && got.frames === want.frames;
       console.log(`${ok ? 'match  ' : 'CHANGED'} ${game.padEnd(9)} ${got ? `${got.frames} frames ${got.fingerprint}` : 'printed no frame'}${ok ? '' : `  (golden: ${want.frames} frames ${want.fingerprint})`}`);
       if (!ok) bad++;

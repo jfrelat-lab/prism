@@ -17,7 +17,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { toolchainCompile } from './toolchain.js';
 import { join, basename, dirname, resolve as resolvePath } from 'node:path';
-import { compileProgram, bindLateBuiltins } from './compile.js';
+import { compileProgram, bindLateBuiltins, loadSnapshot } from './compile.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
@@ -362,7 +362,23 @@ export function targetUnits(target, root) {
  * `envExtra` is how a tool passes what JSON cannot hold -- a clock function, a keyboard queue, a
  * publish callback. Merged over the target's own options, per environment name.
  */
-export function buildTarget(target, { root, envExtra = {}, compile: overrides = {} } = {}) {
+/**
+ * A target from a STATIC BUNDLE instead of from its sources (P13.1): the program is loaded from a
+ * snapshot and its environment installed around it, as buildTarget does after compiling. No source
+ * is read and nothing is compiled. What a bundle does not carry yet is refused by name rather than
+ * skipped: translated assembly, TASM modules, shared modules.
+ */
+export function loadTargetBundle(target, snapshot, { envExtra = {}, shared = false } = {}) {
+  for (const k of ['asmTranslate', 'tasm', 'modules']) {
+    if (target[k] && Object.keys(target[k]).length) throw new Error(`a bundle of '${target.name}' would need its '${k}', which bundles do not carry yet`);
+  }
+  const program = loadSnapshot(snapshot, { shared });
+  const env = buildEnv(program.M, target.env ?? ['stdio'], { ...envExtra, dl: { modules: {}, ...(envExtra.dl ?? {}) } });
+  bindLateBuiltins(program);
+  return { program, env };
+}
+
+export function buildTarget(target, { root, envExtra = {}, compile: overrides = {}, onProgram = null } = {}) {
   const { units, dir, asm } = targetUnits(target, root);
   const missing = new Set();
   const dosPaths = new Set();
@@ -437,6 +453,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     window: c.window ?? (target.env ?? []).includes('ega'),
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
   });
+  // The one moment a static bundle can be taken: linked, and nothing installed or run yet.
+  onProgram?.(program);
   /*
    * A module's SONAME is what the program asks dlopen for -- linux/Makefile.i386 builds
    * `gamei386.$(SHLIBEXT)` and sys_linux.c requests exactly that string. Passed to the `dl`
