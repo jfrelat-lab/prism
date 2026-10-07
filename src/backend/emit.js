@@ -3643,6 +3643,9 @@ function evalConstNumber(ty, e) {
     case 'num': return Number(BigInt.asIntN(64, e.value));
     case 'char': return Number(e.value);
     case 'float': return e.value;
+    // offsetof is an integer constant expression and may initialise a static: MAME 0.37b5's
+    // ADSP-2100 core keeps a table of them (`offsetof(adsp2100_Regs, ax0.s)`) to find a register.
+    case 'offsetof': return Number(constEval(e));
     case 'unary':
       if (e.op === '-') return -evalConstNumber(ty, e.expr);
       if (e.op === '+') return evalConstNumber(ty, e.expr);

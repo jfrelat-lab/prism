@@ -50,6 +50,7 @@ import { installWsock } from './wsock.js';
 import { installGL, glBuiltins } from './gl.js';
 import { installGlut, glutBuiltins } from './glut.js';
 import { installGlu, gluBuiltins } from './glu.js';
+import { installZlib, zlibBuiltins, ZLIB_H } from './zlib.js';
 import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
 import { installGlx, glxBuiltins } from './glx.js';
 import { installFxMesa, fxmesaBuiltins, FXMESA_H } from './fxmesa.js';
@@ -216,6 +217,9 @@ export const ENV = {
   glut: { needs: ['gl'], install: (M, _c, o) => installGlut(M, o), builtins: glutBuiltins(T) },
   // GLU over that GL (src/env/glu.js): the projection helper, quadric spheres, mipmap building.
   glu: { needs: ['gl'], install: (M) => installGlu(M), builtins: gluBuiltins(T) },
+  // zlib's interface, imitated (src/env/zlib.js) and held to zlib 1.1.3 compiled from its own
+  // source (targets/zlib.json, tools/gate-zlib.mjs): what a program linked with -lz gets here.
+  zlib: { install: (M) => installZlib(M), headers: { 'zlib.h': ZLIB_H }, builtins: zlibBuiltins(T) },
   // GLX on the X11 shim, for GLQuake's gl_vidlinuxglx.c. See src/env/glx.js.
   // Mesa's 3Dfx context API, for Quake II's own Linux GL build (linux/gl_fxmesa.c). See src/env/fxmesa.js.
   fxmesa: { needs: ['gl'], install: (M, _c, o) => installFxMesa(M, o), headers: { 'GL/fxmesa.h': FXMESA_H }, builtins: fxmesaBuiltins(T) },

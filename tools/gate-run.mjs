@@ -1859,6 +1859,31 @@ int main(void)
 }
 `);
 
+// offsetof is an integer constant expression, so it may initialise a static -- alone, in
+// arithmetic, through a nested member and an array element. MAME 0.37b5's ADSP-2100 core finds
+// its registers through a table of them, and PRISM refused the table.
+C('offsetof-in-a-static-initialiser', `#include <stdio.h>
+#include <stddef.h>
+struct pair { short s; char c; };
+struct regs { char tag; struct pair ax0, ax1; int stack[4]; double d; };
+static unsigned table[] = {
+    offsetof(struct regs, tag), offsetof(struct regs, ax0.s), offsetof(struct regs, ax1.c),
+    offsetof(struct regs, stack[2]), offsetof(struct regs, d),
+    offsetof(struct regs, ax1) - offsetof(struct regs, ax0), sizeof(struct regs) - offsetof(struct regs, d),
+};
+static const int where = (int)offsetof(struct regs, stack) * 2 + 1;
+int main(void)
+{
+    unsigned i;
+    struct regs r;
+    for (i = 0; i < sizeof table / sizeof *table; i++) printf("%u ", table[i]);
+    printf("%d\\n", where);
+    *(short *)((char *)&r + table[1]) = 1234;
+    printf("%d\\n", r.ax0.s);
+    return 0;
+}
+`);
+
 // malloc of more than any machine has returns NULL, and a program may count on it: MAME 0.34's
 // readsamples asks for `sizeof(header) + (n - 1) * sizeof(entry)` with n == 0 -- a negative size,
 // four gigabytes once unsigned -- and takes the NULL to mean "no samples". PRISM trapped instead.

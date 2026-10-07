@@ -1,0 +1,20 @@
+{
+  "name": "zlib",
+  "title": "zlib 1.1.3 (Jean-loup Gailly and Mark Adler, 1998), with its own example program",
+  "dir": "corpus/zlib-1.1.3",
+  "fetch": "curl -Lo /tmp/zlib-1.1.3.tar.gz https://zlib.net/fossils/zlib-1.1.3.tar.gz && tar -xzf /tmp/zlib-1.1.3.tar.gz -C corpus",
+  "_doc": "Not a program to watch: a LIBRARY, and here as an oracle. MAME 0.37b5 links zlib (-lz) for its zips and PNGs and ships no source for it, and zlib 1.1.3 is the release of those years. Compiled by PRISM from Makefile.in's OBJS it is the real thing, deflate included; src/env/zlib.js is an imitation of the six functions MAME calls, and tools/gate-zlib.mjs holds the imitation to this build and this build to a native gcc one (P17.1). `example.c` is zlib's own self-test: it compresses and decompresses through every interface the library has and says what it found.",
+  "units": {
+    "list": [
+      "adler32.c", "compress.c", "crc32.c", "gzio.c", "uncompr.c", "deflate.c", "trees.c",
+      "zutil.c", "inflate.c", "infblock.c", "inftrees.c", "infcodes.c", "infutil.c", "inffast.c",
+      "example.c"
+    ]
+  },
+  "_units": "Makefile.in's OBJS, in its order, and example.o from its TEST_OBJS.",
+  "compile": {
+    "memory": 32,
+    "collect": true
+  },
+  "env": ["stdio"]
+}
