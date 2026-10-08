@@ -2066,6 +2066,9 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'string.h': STRING,
   // BSD's name for part of the same library; DJGPP and glibc both carry it.
   'strings.h': '#include <string.h>\n',
+  // ...and DOS compilers' name for the mem* half of it (Borland's, kept by DJGPP): MAME 0.37b5's
+  // m68kmame.c includes it for memset.
+  'mem.h': '#include <string.h>\n',
   'math.h': MATH,
   'limits.h': LIMITS,
   'assert.h': ASSERT,

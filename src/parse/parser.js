@@ -848,7 +848,20 @@ export class Parser {
         if (!this.isP(']')) {
           const save = this.i;
           try { n = Number(this.#constExpr()); }
-          catch { this.i = save; vla = this.assignment(); }
+          catch {
+            this.i = save;
+            const at = this.peek();
+            vla = this.assignment();
+            /*
+             * "Not a constant" is not the same as "a variable extent". `char path[MAXDIR]` with
+             * MAXDIR defined nowhere fell through to here, became a variable-length array of an
+             * unknown name, and -- having an initialiser -- quietly took the initialiser's size:
+             * one byte, where the program believed in 256. MAME's m68kmake overran it into the
+             * next buffer. gcc says "undeclared" and stops; so does this.
+             */
+            const unknown = undeclaredIn(vla);
+            if (unknown) throw new ParseError(`'${unknown}' undeclared, in the size of an array`, at);
+          }
         }
         this.expectP(']');
         suffixes.push({ kind: 'array', n, vla });
@@ -1858,6 +1871,24 @@ function ce(e) {
 }
 
 /** Parse a whole translation unit from preprocessed tokens. */
+/**
+ * The first name in an expression that nothing declares, or null. A name that is CALLED is not
+ * one: C89 lets a function be used before it is declared, and the expression parser has already
+ * given it the implicit `int f()`.
+ */
+function undeclaredIn(node) {
+  if (!node || typeof node !== 'object') return null;
+  if (Array.isArray(node)) { for (const x of node) { const u = undeclaredIn(x); if (u) return u; } return null; }
+  if (node.n === 'ident') return node.sym ? null : node.name;
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'type' || k === 'sym' || k === 'loc' || !v || typeof v !== 'object') continue;
+    if (node.n === 'call' && k === 'fn' && v.n === 'ident') continue;
+    const u = undeclaredIn(v);
+    if (u) return u;
+  }
+  return null;
+}
+
 /** Does this type contain a variable extent anywhere? A VLA of, or a pointer to, still counts. */
 function hasVla(t) {
   for (let x = t; x; x = x.k === 'array' ? x.of : x.k === 'ptr' ? x.to : null) {

@@ -411,6 +411,14 @@ const DIR_H = `
 #define _PRISM_DIR_H
 #include <unistd.h>
 #define MAXPATH 260
+/* The lengths of a path's parts, for fnsplit's buffers. DJGPP's values AS REMEMBERED, not read: no
+   DJGPP header is on this machine to transcribe them from. They size buffers and nothing else --
+   MAME 0.37b5's m68kmake keeps its output directory in a char[MAXDIR] -- and tools/mame-m68k.mjs
+   gives gcc the same numbers when it compares. */
+#define MAXDRIVE 3
+#define MAXDIR 256
+#define MAXFILE 256
+#define MAXEXT 255
 int findfirst(const char *path, void *ff, int attrib);
 int findnext(void *ff);
 #endif
