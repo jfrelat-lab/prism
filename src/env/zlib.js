@@ -16,10 +16,22 @@
 //  * `compress` writes STORED blocks. The stream is valid -- the real uncompress expands it to the
 //    same bytes, and the gate checks exactly that -- but it is not smaller, and it is not the
 //    bytes zlib's deflate would have written. PRISM has no compressor.
-//  * `inflate` asks for input a bit at a time. zlib 1.1.3 looks a whole table index ahead (up to
-//    nine bits for a literal), which is why it needs "an extra dummy byte after the compressed
-//    stream" -- unzip.c says so and supplies one. So at the same moment this may have consumed a
-//    byte less than zlib has: `avail_in` and `total_in` are kept, but are not held to zlib's.
+//  * How much INPUT `inflate` has taken when it returns, once the caller's room for output is the
+//    limit. Measured against the compiled library (tests/zlib/count.c), not supposed:
+//      - given all the room at once, as unzip.c gives it, `total_in`, `avail_in` and the return
+//        code are zlib's after every one of 58,024 calls (pieces of 16384, 257 and 7 bytes). The
+//        gate holds this.
+//      - given room 64 bytes at a time, `total_in` is zlib's after 0.1% of the calls, and zlib is
+//        AHEAD by up to 65,288 bytes: it decodes into a 32 KB window of its own and goes on
+//        reading input while that has space, where this stops at the caller's room. The output
+//        and the final return code are the same; the path to them is not.
+//      - and in the first case `total_out` MID-STREAM differs after 6% of the calls, by at most
+//        258 bytes (one match): this writes a symbol zlib is still waiting to see the bits
+//        beyond, its table look-ahead. Where a stream ends they are equal.
+//    (The first version of this note guessed "a byte less of input, from the look-ahead". The
+//    measure says the look-ahead shows in the output count, and the window in the input count.)
+//    A caller that obeys the contract -- offer more input when avail_in is 0, take what was
+//    written -- sees no difference; one that reads the counters mid-stream does.
 
 const Z_OK = 0, Z_STREAM_END = 1, Z_STREAM_ERROR = -2, Z_DATA_ERROR = -3, Z_BUF_ERROR = -5, Z_VERSION_ERROR = -6;
 

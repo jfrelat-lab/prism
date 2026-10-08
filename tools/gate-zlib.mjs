@@ -99,6 +99,42 @@ try {
   check(crossed === count, `each library expands what the other compressed: ${crossed} of ${count}`);
   check(refused >= count - 2, `a stream with a byte flipped is not taken for the data (${refused} of ${count}; a flip in the empty stream has nothing to hit)`);
 
+  /*
+   * How much INPUT inflate has taken at each return (tests/zlib/count.c prints total_in, total_out,
+   * avail_in and the code after every call). Given all the room at once -- unzip.c's call -- the
+   * imitation is zlib call for call, and that is held. Given room 64 bytes at a time it is NOT:
+   * zlib reads ahead into a 32 KB window of its own, the imitation stops at the caller's room.
+   * Only where the two END is held there, and the size of the difference is printed, not hidden.
+   */
+  const counted = (t, room) => run(t, streams, [String(count), String(room)]).out.trim().split('\n');
+  const countReal = (room) => counted(withReal('count', test('count.c')), room);
+  const countImitation = (room) => counted(withImitation('count'), room);
+  const allReal = countReal(0), allImitation = countImitation(0);
+  // total_out is compared apart: mid-stream the imitation is a few bytes AHEAD, having decoded a
+  // symbol zlib is still waiting to see the bits beyond (its table look-ahead). Held where streams end.
+  const inputOnly = (ls) => ls.map((l) => l.replace(/ out \d+/, '')).join('\n');
+  check(allReal.length > 10000 && inputOnly(allReal) === inputOnly(allImitation),
+    `given all the room at once, total_in, avail_in and the return code are zlib's after each of ${allReal.length} inflate calls`,
+    firstDiff(inputOnly(allImitation), inputOnly(allReal)));
+  {
+    const out = (l) => +l.split(' out ')[1].split(' ')[0];
+    let off = 0, most = 0;
+    allReal.forEach((l, i) => { const d = out(allImitation[i]) - out(l); if (d) off++; most = Math.max(most, Math.abs(d)); });
+    console.log(`     (not held, and measured: mid-stream total_out differs after ${off} of those calls, by at most ${most} bytes -- the imitation writes a symbol zlib is still looking ahead of)`);
+  }
+  const ends = (ls) => { const m = new Map(); for (const l of ls) m.set(l.split(' ')[0], l.replace(/^\S+ #\d+ in \d+ /, '').replace(/ left \d+/, '')); return [...m].join('|'); };
+  const fewReal = countReal(64), fewImitation = countImitation(64);
+  const keyed = new Map(fewImitation.map((l) => [l.split(' ').slice(0, 2).join(' '), +l.split(' in ')[1].split(' ')[0]]));
+  let both = 0, equal = 0, ahead = 0;
+  for (const l of fewReal) {
+    const k = l.split(' ').slice(0, 2).join(' ');
+    if (!keyed.has(k)) continue;
+    const d = +l.split(' in ')[1].split(' ')[0] - keyed.get(k);
+    both++; if (d === 0) equal++; ahead = Math.max(ahead, d);
+  }
+  check(ends(fewReal) === ends(fewImitation), 'given room 64 bytes at a time, every stream ends with the same output and the same code');
+  console.log(`     (not held, and measured: on the way there total_in is zlib's after ${equal} of ${both} calls; zlib is ahead by up to ${ahead.toLocaleString('en')} bytes)`);
+
   // ---- the imitation can be caught: each rule moved by one must break the agreement
   const mutate = (what, apply, undo) => {
     apply();
