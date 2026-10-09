@@ -1816,6 +1816,41 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     sdl.state.onPresent = () => {
       const { width: w, height: h, pixels } = sdl.state;
       if (!w || !h || !pixels) return;
+      /*
+       * A 16-BIT DISPLAY -- ScummVM's, 5-6-5, which its scalers write -- goes out as B,G,R,A like the
+       * OpenGL one above, converted whole at every present: a component's high bits repeated into its
+       * low ones, so that 31 is white. A 5-5-5 display (the masks say which) the same way.
+       */
+      const depth = sdl.state.depth;
+      if (depth === 15 || depth === 16) {
+        if (!out || w !== outW || h !== outH) {
+          if (out) prog.M.rt.free(out);
+          out = prog.M.rt.malloc(w * h * 4);
+          outW = w; outH = h;
+          Atomics.store(ctrl, SLOT.WIDTH, w);
+          Atomics.store(ctrl, SLOT.HEIGHT, h);
+          Atomics.store(ctrl, SLOT.PIXELS, out);
+          Atomics.store(ctrl, SLOT.PIXFMT, 32);
+          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+          log(`SDL 1.2 display ${w}x${h}, ${depth}-bit`);
+        }
+        const u8 = prog.M.u8, pitch = prog.M.mod.dv.getUint16(sdl.state.surface + 16, true);
+        const g6 = depth === 16;
+        for (let y = 0; y < h; y++) {
+          let src = pixels + y * pitch, dst = out + y * w * 4;
+          for (let x = 0; x < w; x++, src += 2, dst += 4) {
+            const p = u8[src] | (u8[src + 1] << 8);
+            const b = p & 31, g = g6 ? (p >> 5) & 63 : (p >> 5) & 31, r = g6 ? p >> 11 : (p >> 10) & 31;
+            u8[dst] = (b << 3) | (b >> 2);
+            u8[dst + 1] = g6 ? (g << 2) | (g >> 4) : (g << 3) | (g >> 2);
+            u8[dst + 2] = (r << 3) | (r >> 2);
+            u8[dst + 3] = 255;
+          }
+        }
+        reader.endFrame();
+        pace();
+        return;
+      }
       // Republished only when the mode actually changes; the surface does not move per frame.
       if (published !== pixels) {
         published = pixels;

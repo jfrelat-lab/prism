@@ -125,6 +125,20 @@ export const stmtMethods = {
 
   stmt(n, cx) {
     cx.node = n;
+    // A condition that declares: the object lives in a block around the statement, assigned where
+    // the condition is evaluated -- before each test, for a loop.
+    const cd = n.c?.k === 'condDecl' ? n.c : null;
+    if (cd && ['if', 'while', 'switch', 'for'].includes(n.k)) {
+      const scope = new Scope(cx.env.scope);
+      const inner = { ...cx, env: { ...cx.env, scope } };
+      const decl = this.localItem({ k: 'decl', specs: cd.specs, decl: cd.decl, loc: cd.loc }, inner);
+      const ent = scope.get(this.lastName(cd.decl.name));
+      if (ent.type.k === 'class') this.fail('a condition that declares an object of class type', n);
+      const id = { k: 'id', name: cd.decl.name, loc: cd.loc };
+      const c = n.k === 'if' || n.k === 'switch' ? null : { k: 'comma', a: { k: 'assign', op: '=', a: id, b: cd.init, loc: cd.loc }, b: id, loc: cd.loc };
+      const pre = c ? '' : this.stmt({ k: 'expr', e: { k: 'assign', op: '=', a: id, b: cd.init, loc: cd.loc }, loc: cd.loc }, inner);
+      return `{\n${indent([decl, pre, this.stmt({ ...n, c: c ?? id }, inner)].filter(Boolean).join('\n'))}\n}`;
+    }
     switch (n.k) {
       case 'null': return ';';
       case 'block': return this.block(n, cx);
@@ -167,8 +181,10 @@ export const stmtMethods = {
       case 'break': return [...this.unwind(cx, 'switch'), 'break;'].join('\n');
       case 'continue': return [...this.unwind(cx, 'loop'), 'continue;'].join('\n');
       case 'goto': return `goto ${n.name};`;
-      case 'label': return `${n.name}: ${this.stmt(n.s, cx)}`;
+      // C wants a statement after a label where C++ allows a declaration: an empty one goes between.
+      case 'label': return `${n.name}: ${n.s.k === 'decl' ? ';\n' : ''}${this.stmt(n.s, cx)}`;
       case 'return': return this.returnStmt(n, cx);
+      case 'using': this.using(n.item, cx.env.scope, cx.env); return '';
       default: this.fail(`statement ${n.k}`, n);
     }
   },
@@ -271,6 +287,7 @@ export const stmtMethods = {
       return [`${decl};`, e.c, ...after].filter(Boolean).join('\n');
     }
     const elem = this.isClassy(type);
+    if (type.k === 'array' && elem && it.init?.k === 'braces' && this.isAggregate(elem)) return done(`${st}${this.ct(type, name)} = ${this.bracesInit(it.init, type, cx)};`);
     if (type.k === 'array' && elem) {
       if (type.of.k !== 'class') this.fail('an array of arrays of objects', it);
       const ctor = this.defaultCtor(elem, it), d = this.dtorOf(elem);
@@ -318,31 +335,66 @@ export const stmtMethods = {
     const init = pick.copy ? `${ent.cname} = ${this.copyOf(pick.copy, cls, cx)};` : pick.f ? (this.use(pick.f), `${pick.f.cname}(${[`&${ent.cname}`, ...pick.cArgs].join(', ')});`) : '';
     return `if (!${g}) { ${g} = 1; ${init}${reg} }`;
   },
+  /** Does an initialiser read the value of a variable (as opposed to taking an address, or a constant)? */
+  readsVariable(x, env) {
+    switch (x.k) {
+      case 'paren': case 'cast': return this.readsVariable(x.e, env);
+      case 'id': {
+        const r = this.lookupName(x.name, env);
+        const e = r?.ent;
+        return e?.k === 'var' && !e.field && e.constValue === undefined && e.type.k !== 'array' && e.type.k !== 'func';
+      }
+      case 'bin': return this.readsVariable(x.a, env) || this.readsVariable(x.b, env);
+      case 'unary': return x.op !== '&' && this.readsVariable(x.e, env);
+      default: return false;
+    }
+  },
+  /** A class C initialises with braces: no constructor, base or virtual function, none in its members. */
+  isAggregate(cls) {
+    this.complete(cls, cls.node);
+    return !cls.ctors.length && !cls.bases.length && !cls.hasVptr && !this.needsCtor(cls) && !this.needsDtor(cls);
+  },
   /** `{ ... }` for an aggregate: each element converted to its member's or element's type. */
-  bracesInit(b, type, cx) {
+  bracesInit(b, type, cx, path = []) {
     if (type.k === 'array') {
-      return `{ ${b.items.map((x) => this.initElem(x, type.of, cx)).join(', ')} }`;
+      return `{ ${b.items.map((x, i) => this.initElem(x, type.of, cx, [...path, `[${i}]`])).join(', ')} }`;
     }
     if (type.k === 'class') {
       const cls = this.complete(type.cls, b);
       if (cls.ctors.length || cls.bases.length || cls.hasVptr) this.fail(`${cls.name} is not an aggregate`, cx.node);
-      return `{ ${b.items.map((x, i) => this.initElem(x, cls.fields[i]?.type ?? this.fail('too many initialisers', cx.node), cx)).join(', ')} }`;
+      return `{ ${b.items.map((x, i) => this.initElem(x, cls.fields[i]?.type ?? this.fail('too many initialisers', cx.node), cx, [...path, `.${cls.fields[i].cname}`])).join(', ')} }`;
     }
-    if (b.items.length === 1) return this.initElem(b.items[0], type, cx);
+    if (b.items.length === 1) return this.initElem(b.items[0], type, cx, path);
     this.fail('braces initialising a scalar', cx.node);
   },
-  initElem(x, type, cx) {
-    if (x.k === 'braces') return this.bracesInit(x, type, cx);
+  initElem(x, type, cx, path = []) {
+    if (x.k === 'braces') return this.bracesInit(x, type, cx, path);
+    /*
+     * At file scope, an element that reads a variable -- `Compact left_exit_rm2 = { ..., left_table2 }`,
+     * left_table2 a pointer initialised elsewhere -- is not a constant in C. C++ initialises it before
+     * main: the element is written as 0 here and assigned in the unit's initialisation function.
+     */
+    if (cx.dynFix && this.readsVariable(x, cx.env)) {
+      cx.dynFix.push({ path, x, type });
+      return '0';
+    }
     if (type.k === 'array' && x.k === 'str') return x.parts.join(' ');
     if (type.k === 'array' || (type.k === 'class' && !this.convert(this.expr(x, { ...cx, pending: [] }), T.uncst(type), cx))) this.fail('an initialiser without its braces', cx.node);
     return this.coerce(this.expr(x, cx), T.uncst(type), cx, cx.node, 'initialisation');
   },
 
   // ---------------------------------------------------------------- constructors and destructors
+  /**
+   * The class's tables, written once per unit. Each is laid out as the Itanium ABI lays one: the
+   * offset from the subobject it serves to the whole object, the class's type descriptor, then the
+   * slots -- and the vptr points at the first slot, so a call indexes it as it always did.
+   */
   vtableName(cls) {
     const name = `__vtbl_${cls.cname}`;
     if (!cls.vtableDone) {
       cls.vtableDone = true;
+      this.needStruct(cls);
+      const ti = this.typeinfo(cls);
       const slots = cls.vtable.map((f) => {
         if (f.pure && !f.body) return '0';
         // A class that declares no destructor under a virtual one still has its own to run.
@@ -351,14 +403,72 @@ export const stmtMethods = {
         this.use(f);
         return `(void *)${f.cname}`;
       });
-      this.out.vtables.push(`static void *${name}[${slots.length}] = { ${slots.join(', ')} };`);
+      this.out.vtables.push(`static void *${name}[${slots.length + 2}] = { ${['(void *)0', `(void *)&${ti}`, ...slots].join(', ')} };`);
+      cls.secondaryTables = this.secondaryGroups(cls).map((g, gi) => this.secondaryTable(cls, g, gi, ti));
     }
+    return name;
+  },
+  /**
+   * The table of one secondary subobject g of cls: g's own layout, each slot cls's final overrider.
+   * An overrider declared below g (in cls, or between) expects `this` to point at ITS class, so the
+   * slot holds a thunk that moves the pointer from g's subobject to there.
+   */
+  secondaryTable(cls, g, gi, ti) {
+    const name = `__vtbl_${cls.cname}_${gi}`;
+    const st = (c) => `struct ${c.cname}`;
+    const off = (path) => (path.length ? `(int)(unsigned int)&((${st(cls)} *)0)->${path.join('.')}` : '0');
+    // The classes from cls down to g, along g's path.
+    const chain = [cls];
+    for (const seg of g.xpath) chain.push(chain[chain.length - 1].bases[+seg.slice(3)]);
+    const slots = g.cls.vtable.map((f, j) => {
+      let final = null, at = -1;
+      if (f.isDtor) { final = this.dtorOf(cls); at = 0; }
+      else for (let c = 0; c < chain.length - 1 && !final; c++) { const m = chain[c].methods.find((x) => !x.isCtor && !x.isDtor && this.overrides(x, f)); if (m) { final = m; at = c; } }
+      if (!final) {
+        if (f.pure && !f.body) return '0';
+        this.use(f);
+        return `(void *)${f.cname}`;
+      }
+      this.use(final);
+      const thunk = `__thunk_${cls.cname}_${gi}_${j}`;
+      const ps = f.type.params.map((p, i) => this.ct(p.k === 'ref' ? T.ptr(p.to) : p, `__a${i}`));
+      const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
+      const sig = this.ct(ret, `${thunk}(${['void *__self', ...ps].join(', ')})`);
+      const top = `((${st(cls)} *)((char *)__self - ${off(g.xpath)}))`;
+      const target = at === 0 ? top : `(&${top}->${g.xpath.slice(0, at).join('.')})`;
+      const call = `${final.cname}(${[`(${st(final.cls)} *)${target}`, ...f.type.params.map((_, i) => `__a${i}`)].join(', ')})`;
+      this.out.protos.push(`static ${sig};`);
+      this.out.bodies.push(`static ${sig} {\n  ${ret.k === 'void' ? '' : 'return '}${call};\n}`);
+      return `(void *)${thunk}`;
+    });
+    this.out.vtables.push(`static void *${name}[${slots.length + 2}] = { ${[`(void *)(-${off(g.xpath)})`, `(void *)&${ti}`, ...slots].join(', ')} };`);
+    return { name, path: [...g.xpath, ...this.vptrPath(g.cls), '__vptr'] };
+  },
+  /**
+   * A class's type descriptor, for dynamic_cast: its name and its bases at their offsets. Each unit
+   * writes its own, so two are the same class when their NAMES are equal, not their addresses.
+   */
+  typeinfo(cls) {
+    const name = `__ti_${cls.cname}`;
+    if (cls.typeinfoDone) return name;
+    cls.typeinfoDone = true;
+    this.needStruct(cls);
+    if (!this.tiDeclared) {
+      this.tiDeclared = true;
+      this.out.types.push('struct __prism_ti;\nstruct __prism_ti_base { const struct __prism_ti *ti; int off; };\nstruct __prism_ti { const char *name; int n; const struct __prism_ti_base *b; };');
+    }
+    const bases = cls.bases.map((b, i) => `{ &${this.typeinfo(b)}, (int)(unsigned int)&((struct ${cls.cname} *)0)->__b${i} }`);
+    this.out.vars.push(`static const struct __prism_ti_base ${name}_b[${bases.length || 1}] = { ${bases.length ? bases.join(', ') : '{ 0, 0 }'} };`,
+      `static const struct __prism_ti ${name} = { "${cls.cname}", ${bases.length}, ${name}_b };`);
     return name;
   },
   setVptr(cls) {
     if (!cls.hasVptr) return [];
-    // An implicit destructor that must be virtual takes the slot its base's had.
-    return [`this->${[...this.vptrPath(cls), '__vptr'].join('.')} = __vtbl_${cls.cname};`].map((s) => (this.vtableName(cls), s));
+    const name = this.vtableName(cls);
+    return [
+      `this->${[...this.vptrPath(cls), '__vptr'].join('.')} = ${name} + 2;`,
+      ...cls.secondaryTables.map((t) => `this->${t.path.join('.')} = ${t.name} + 2;`),
+    ];
   },
   /** Bases, then the vptr, then members in the order they are declared -- whatever order the list is in. */
   ctorPrologue(f, cx) {
@@ -462,8 +572,22 @@ export const stmtMethods = {
   /** A global this unit only refers to: declared extern the first time it is used. */
   useGlobal(ent) {
     if (ent.declared || ent.definedHere) return;
+    // A class template's static member: its definition, made for this instance.
+    const tdef = ent.staticMember && ent.ownerCls?.template?.staticDefs?.find((d) => this.lastName(d.decl.name) === ent.name);
+    if (tdef) { this.defineTemplateStatic(ent, tdef); return; }
     ent.declared = true;
     this.out.protos.push(`extern ${this.ct(ent.type.k === 'ref' ? T.ptr(ent.type.to) : ent.type, ent.cname)};`);
+  },
+  /**
+   * The definition of a class template's static member for one instance. Every unit that uses the
+   * instance makes it, as g++ makes a COMDAT one; a zero (or absent) initialiser leaves a tentative
+   * definition, which the C linker merges into one object. Any other value would be defined twice.
+   */
+  defineTemplateStatic(ent, it) {
+    ent.definedHere = true;
+    const zero = !it.init || (it.init.k === 'num' && /^0+[uUlL]*$/.test(it.init.v));
+    if (!zero) this.fail(`${ent.ownerCls.name}::${ent.name}: a class template's static member initialised to something other than 0`, it);
+    this.out.vars.push(`${this.ct(ent.type.k === 'ref' ? T.ptr(ent.type.to) : ent.type, ent.cname)};`);
   },
   initContext(env) {
     this.initFn ??= { f: { name: '<static initialisation>', type: T.func(T.VOID, []), display: 'static initialisation' }, temps: [], ntemp: 0, cleanups: [{ vars: [], kind: 'fn' }] };
@@ -481,8 +605,22 @@ export const stmtMethods = {
       this.inits.push(...lines.filter(Boolean).map((l) => `  ${l}`));
       if (dtorVar) this.finis.push(...this.destroy([dtorVar], this.initContext(env)).map((l) => `  ${l}`));
     };
+    // Braces at file scope: constant elements in the C initialiser, the rest assigned before main.
+    const braces = (target) => {
+      const dynFix = [];
+      const text = this.bracesInit(it.init, type, { env, fn: null, pending: [], constOnly: true, node: it, dynFix });
+      // An object assigned before main cannot be const in C.
+      this.out.vars.push(`${dynFix.length ? target.replace(/^(static )?const /, '$1') : target} = ${text};`);
+      if (dynFix.length) {
+        const cx = this.initContext(env);
+        for (const d of dynFix) {
+          const { e, after } = this.full(d.x, cx, (m, c) => ({ c: this.coerce(this.expr(m, c), T.uncst(d.type), c, m, 'initialisation') }));
+          dynamic([`${ent.cname}${d.path.join('')} = ${e.c};`, ...after], null);
+        }
+      }
+    };
     if (cls) {
-      if (it.init?.k === 'braces') { this.out.vars.push(`${decl} = ${this.bracesInit(it.init, type, { env, fn: null, pending: [], constOnly: true, node: it })};`); return; }
+      if (it.init?.k === 'braces') { braces(decl); return; }
       this.out.vars.push(`${decl};`);
       const cx = this.initContext(env);
       const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
@@ -497,6 +635,8 @@ export const stmtMethods = {
       return;
     }
     if (type.k === 'array' && elem) {
+      // An array of aggregates with braces is C's, element by element.
+      if (it.init?.k === 'braces' && this.isAggregate(elem)) { braces(decl); return; }
       if (type.of.k !== 'class' || it.init) this.fail('an initialised array of objects at file scope', it);
       this.out.vars.push(`${decl};`);
       const ctor = this.defaultCtor(elem, it);
@@ -507,7 +647,7 @@ export const stmtMethods = {
     }
     const init = it.init ?? (it.ctorArgs?.length === 1 ? it.ctorArgs[0] : null);
     if (!init) { this.out.vars.push(`${decl};`); return; }
-    if (init.k === 'braces') { this.out.vars.push(`${decl} = ${this.bracesInit(init, type, { env, fn: null, pending: [], constOnly: true, node: it })};`); return; }
+    if (init.k === 'braces') { braces(decl); return; }
     if (type.k === 'array') {
       if (init.k !== 'str') this.fail('an array initialised by an expression', it);
       this.out.vars.push(`${decl} = ${init.parts.join(' ')};`);

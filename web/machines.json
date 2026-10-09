@@ -63,6 +63,7 @@
         { "program": "sdlpop", "file": "prince", "date": "Jan  9  2022" },
         { "program": "gears", "file": "gears", "date": "Sep 30  2026" },
         { "program": "tuxracer", "file": "tuxracer", "date": "Jan  2  2001" },
+        { "program": "scummvm", "file": "scummvm", "date": "Jul 26  2004" },
         { "program": "morph3d", "file": "morph3d", "date": "Jul 13  2010" },
         { "program": "texobj", "file": "texobj", "date": "Jul 13  2010" }
       ],

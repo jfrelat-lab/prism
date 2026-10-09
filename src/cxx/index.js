@@ -53,8 +53,8 @@ export function unitLanguage(file, cxx) {
 /** What the preprocessor predefines for a C++ unit, beyond the C set (g++ -std=gnu++98). */
 export const CXX_DEFINES = { __cplusplus: '199711L' };
 
-export function cxxToC(tokens, { file = 'unit.cpp' } = {}) {
+export function cxxToC(tokens, { file = 'unit.cpp', builtins = null } = {}) {
   // PRISM's own headers are C headers: their declarations have C linkage, as if in extern "C".
   const unit = parseCxx(tokens, { cLinkage: (t) => !!t?.loc?.file?.startsWith('<') });
-  return lowerCxx(unit, { tag: file });
+  return lowerCxx(unit, { tag: file, builtins });
 }

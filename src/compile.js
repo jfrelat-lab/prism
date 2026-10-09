@@ -800,7 +800,8 @@ function wireRebind(F, mod, emitted, rebind) {
 function unitTokens(pp, source, file, cxx) {
   if (unitLanguage(file, cxx) !== 'c++') return pp.run(source, file);
   for (const [k, v] of Object.entries(CXX_DEFINES)) pp.defineText(k, v);
-  const c = cxxToC(pp.run(source, file), { file });
+  // The C library this compiler knows without a header (BUILTINS) is the C++ unit's to call too.
+  const c = cxxToC(pp.run(source, file), { file, builtins: BUILTINS });
   return new Preprocessor({}).run(c, file);
 }
 

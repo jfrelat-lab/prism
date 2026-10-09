@@ -1904,6 +1904,19 @@ int main(void)
 }
 `);
 
+// offsetof written by hand, `&((struct S *)0)->b`, folded as a number under an operator too. The C a
+// C++ unit is lowered to records each virtual table's offset to the whole object as
+// `(void *)(-(int)&((struct C *)0)->__b1)` in a static table; the minus was refused.
+C('a-negated-offsetof-in-a-static-initialiser', `#include <stdio.h>
+struct S { int a[3]; struct { char c; short d; } in; int b; };
+static long table[4] = { -(long)&((struct S *)0)->b, (long)(void *)-(int)&((struct S *)0)->in.d, ~(long)&((struct S *)0)->in, +(long)&((struct S *)0)->b };
+int main(void)
+{
+    printf("%ld %ld %ld %ld\\n", table[0], table[1], table[2], table[3]);
+    return 0;
+}
+`);
+
 // A chain of && or || is emitted once per operand. Each operand used to be emitted twice, so a
 // chain of n cost 2^n to compile: MAME 0.37b5's fronthlp.c tests its command line with one `||` of
 // several dozen strcmp's, and its build never ended. Forty here: the old emitter does not finish.

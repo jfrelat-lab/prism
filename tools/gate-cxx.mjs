@@ -7,7 +7,11 @@
 // else. Constructors and destructors PRINT in several cases: the order and the count of those lines
 // is the lifetime rule under test.
 //
-// The subset is the one src/cxx/parse.js states (no exceptions, RTTI, namespaces or member templates).
+// The subset is the one src/cxx/parse.js states: no exceptions, no typeid, no member templates, no
+// virtual bases. Seven cases were written for ScummVM 0.6.1 (namespaces, function templates and their
+// value parameters, two polymorphic bases and dynamic_cast, pointers to member functions, conditions
+// that declare, file-scope aggregates that read variables, functions used before their definition),
+// each on the shape that program has.
 //
 //   node tools/gate-cxx.mjs [--verbose] [filter]
 import { sh, SCRATCH, version } from './oracle.mjs';
@@ -185,6 +189,240 @@ int main() {
         printf("%s\\n", raw);
     }
     printf("live after %d\\n", live);
+    return 0;
+}
+`);
+
+// Namespaces as ScummVM 0.6.1 uses them: Common, GUI and each engine's own, reopened across headers,
+// with using-directives in its .cpp files and operators found through their operands' namespace.
+C('namespaces', `
+#include <stdio.h>
+namespace Common {
+int count = 3;
+struct Point { int x, y; Point(int a, int b) : x(a), y(b) {} int sum() const; };
+Point operator+(const Point &a, const Point &b) { return Point(a.x + b.x, a.y + b.y); }
+int twice(int v) { return 2 * v; }
+namespace Inner { int depth() { return 2; } }
+}
+namespace Common {
+int Point::sum() const { return x + y + count; }
+int twice(double v) { return (int)(v * 4); }
+}
+namespace Sky {
+int twice(int v) { return 20 * v; }
+class Logic { public: int run(int v); static int calls; };
+int Logic::calls = 0;
+}
+int Sky::Logic::run(int v) { calls++; return twice(v) + Common::twice(v); }
+namespace {
+int hidden = 41;
+int bump() { return ++hidden; }
+}
+namespace CI = Common::Inner;
+using Common::Point;
+int main() {
+    Point p(1, 2), q(10, 20);
+    Point r = p + q;
+    Sky::Logic l;
+    printf("%d %d %d %d\\n", r.x, r.y, r.sum(), l.run(1));
+    {
+        using namespace Common;
+        printf("%d %d %d %d\\n", twice(5), twice(1.5), count, CI::depth());
+    }
+    int b = bump();
+    printf("%d %d %d\\n", b, hidden, Sky::Logic::calls);
+    return 0;
+}
+`);
+
+// Function templates, value parameters, an explicit specialisation and a default argument, the way
+// ScummVM 0.6.1 writes them: common/util.h's MIN/MAX/SWAP, the scalers' template<int bitFormat>
+// over ColorMasks<565> and <555>, and Common::Map's comparator.
+C('function-templates', `
+#include <stdio.h>
+template<typename T> inline T ABS(T x) { return (x >= 0) ? x : -x; }
+template<typename T> inline T MIN(T a, T b) { return (a < b) ? a : b; }
+template<typename T> inline void SWAP(T &a, T &b) { T tmp = a; a = b; b = tmp; }
+int MIN(int a, int b) { return a < b ? a - 1000 : b - 1000; }
+template<int bitFormat> struct ColorMasks { };
+template<> struct ColorMasks<565> { enum { highBits = 0xF7DEF7DE, greenMask = 0x07E0 }; };
+template<> struct ColorMasks<555> { enum { highBits = 0x7BDE7BDE, greenMask = 0x03E0 }; };
+template<int bitFormat> static inline unsigned int HALF(unsigned int a) { return (a & ColorMasks<bitFormat>::highBits) >> 1; }
+template<int bitFormat, int w1, int w2> static inline int MIX(int p, int q) { return (HALF<bitFormat>(p) * w1 + q * w2) / (w1 + w2); }
+template<class T> struct Less { int operator()(const T &x, const T &y) const { return x < y ? -1 : y < x ? 1 : 0; } };
+template<class K, class V, class C = Less<K> > struct Pair {
+    K k; V v;
+    int cmp(const K &o) const { C c; return c(k, o); }
+};
+template<class T> struct Box { T v; };
+int main() {
+    double d = -2.5;
+    short s1 = 3, s2 = 7;
+    printf("%d %g %d %d\\n", ABS(-4), ABS(d), MIN(s1, s2), MIN(3, 9));
+    unsigned u1 = 5, u2 = 9;
+    SWAP(u1, u2);
+    const char *a = "a", *b = "b";
+    SWAP(a, b);
+    printf("%u %u %s %s %g\\n", u1, u2, a, b, MIN<double>(1, 0.5));
+    printf("%x %x %d %d\\n", HALF<565>(0xffffffffu), HALF<555>(0xffffffffu), MIX<565, 1, 3>(64, 8), (int)ColorMasks<555>::greenMask);
+    Pair<int, const char *> p; p.k = 4; p.v = "x";
+    Box<Box<int> > bb; bb.v.v = 6;
+    printf("%d %d %d %s %d\\n", p.cmp(3), p.cmp(4), p.cmp(5), p.v, bb.v.v);
+    return 0;
+}
+`);
+
+// Two polymorphic bases, as ScummVM's GUI has them (ButtonWidget : StaticTextWidget, CommandSender):
+// the second base's table, the thunks that adjust `this`, and dynamic_cast down and across.
+C('multiple-polymorphic-bases', `
+#include <stdio.h>
+struct Pad { int pad[3]; };
+class CommandSender { public: int sent; CommandSender() : sent(0) {} virtual ~CommandSender() {} virtual int send(int c) { sent += c; return 1; } };
+class Widget { public: int id; Widget(int i) : id(i) {} virtual ~Widget() {} virtual int draw() { return id; } virtual const char *kind() { return "widget"; } };
+class Static : public Widget { public: Static(int i) : Widget(i) {} virtual int draw() { return 100 + id; } };
+class Button : public Static, public CommandSender {
+public:
+    int pressed;
+    Button(int i) : Static(i), pressed(0) {}
+    ~Button() { printf("~Button %d\\n", id); }
+    virtual int send(int c) { pressed += c; return 2; }
+    virtual const char *kind() { return "button"; }
+};
+class Odd : public Pad, public Widget { public: Odd() : Widget(7) {} virtual int draw() { return pad[0] + id; } };
+static int sendThrough(CommandSender *s, int c) { return s->send(c); }
+int main() {
+    Button *b = new Button(5);
+    Widget *w = b;
+    CommandSender *cs = b;
+    int r = sendThrough(cs, 3);
+    printf("%d %s %d %d %d\\n", w->draw(), w->kind(), r, b->pressed, cs->sent);
+    Button *back = dynamic_cast<Button *>(cs);
+    Static *st = dynamic_cast<Static *>(cs);
+    CommandSender *across = dynamic_cast<CommandSender *>(w);
+    Widget *plain = new Widget(1);
+    printf("%d %d %d %d %d\\n", back == b, st == b, across == cs, dynamic_cast<Button *>(plain) == 0, dynamic_cast<Button *>((Widget *)0) == 0);
+    Odd o; o.pad[0] = 30;
+    Widget *ow = &o;
+    printf("%d %d\\n", ow->draw(), dynamic_cast<Odd *>(ow) == &o);
+    delete w;
+    delete plain;
+    return 0;
+}
+`);
+
+// Pointers to member functions, the way ScummVM 0.6.1 has them: Sky::Logic's static table of
+// actions called through this->*, and the CRTP Debugger<T> that keeps its commands in a struct.
+C('member-pointers', `
+#include <stdio.h>
+#include <string.h>
+namespace Sky {
+class Logic {
+public:
+    int steps;
+    Logic() : steps(0) {}
+    void nop() { steps += 1; }
+    void walk() { steps += 10; }
+    virtual void talk() { steps += 100; }
+    virtual ~Logic() {}
+    void run(int which);
+};
+class Chatty : public Logic { public: virtual void talk() { steps += 1000; } };
+typedef void (Logic::*LogicTable)();
+static const LogicTable logicTable[] = { &Logic::nop, &Logic::walk, &Logic::talk };
+void Logic::run(int which) { (this->*logicTable[which])(); }
+}
+template <class T> class Debugger {
+public:
+    typedef int (T::*DebugProc)(int argc, const char **argv);
+    struct DCmd { char name[16]; DebugProc function; };
+    DCmd cmds[4]; int n;
+    Debugger() : n(0) {}
+    void reg(const char *name, DebugProc p) { strcpy(cmds[n].name, name); cmds[n].function = p; n++; }
+    int run(const char *name, int argc) {
+        for (int i = 0; i < n; i++) if (!strcmp(cmds[i].name, name)) return (((T *)this)->*cmds[i].function)(argc, 0);
+        return -1;
+    }
+};
+class SkyDebugger : public Debugger<SkyDebugger> {
+public:
+    int base;
+    SkyDebugger() : base(40) { reg("exit", &SkyDebugger::cmdExit); reg("add", &SkyDebugger::cmdAdd); }
+    int cmdExit(int argc, const char **argv) { return 0; }
+    int cmdAdd(int argc, const char **argv) { return base + argc; }
+};
+int main() {
+    Sky::Logic l; Sky::Chatty c;
+    for (int i = 0; i < 3; i++) { l.run(i); c.run(i); }
+    Sky::LogicTable none = 0, some = &Sky::Logic::walk;
+    Sky::Logic *p = &c;
+    (p->*some)();
+    (c.*Sky::logicTable[2])();
+    printf("%d %d %d %d\\n", l.steps, c.steps, none == 0, some != 0);
+    SkyDebugger d;
+    printf("%d %d %d\\n", d.run("add", 2), d.run("exit", 1), d.run("none", 0));
+    return 0;
+}
+`);
+
+// A declaration as a condition, as Sky::Logic::engine walks its list: `while (uint16 id = *logicList++)`.
+C('condition-declarations', `
+#include <stdio.h>
+static unsigned short list[] = { 3, 0xffff, 7, 9, 0 };
+int main() {
+    unsigned short *p = list;
+    int sum = 0, marks = 0;
+    while (unsigned short id = *p++) { if (id == 0xffff) { marks++; continue; } sum += id; }
+    if (int left = (int)(p - list)) printf("%d %d %d\\n", sum, marks, left);
+    for (int i = 0; int sq = (3 - i) * (3 - i); i++) sum += sq;
+    switch (int k = sum % 5) { case 0: printf("zero %d\\n", k); break; default: printf("k %d %d\\n", k, sum); }
+    return 0;
+}
+`);
+
+// File-scope aggregates that read other variables -- Sky's compact tables point at uint16 *left_table2,
+// which C cannot take as a constant -- and a label followed by a declaration (Sky::Logic::script).
+C('dynamic-aggregates', `
+#include <stdio.h>
+typedef unsigned short uint16;
+struct Compact { uint16 logic; uint16 *getToTable; uint16 extra[2]; };
+static uint16 junk1[4] = { 11, 22, 33, 44 };
+uint16 *left_table2 = (uint16 *)(&junk1);
+uint16 base = 5;
+Compact left_exit = { 1, left_table2, { 7, 8 } };
+Compact *const compacts[] = { &left_exit };
+static const Compact table[2] = { { 2, &junk1[1], { 0, 0 } }, { 3, left_table2 + 2, { base, 9 } } };
+int main() {
+    int n = 0;
+again:
+    int k = n * 2;
+    if (++n < 3) goto again;
+    printf("%d %d %d %d\\n", compacts[0]->logic, compacts[0]->getToTable[1], left_exit.extra[1], k);
+    printf("%d %d %d\\n", table[0].getToTable[0], table[1].getToTable[0], table[1].extra[0]);
+    return 0;
+}
+`);
+
+// Functions used before their definition is seen: Sky::Logic's table of member pointers above the
+// functions, Common::String's virtual destructor defined below the vtable that needs it.
+C('used-before-defined', `
+#include <stdio.h>
+class Str { public: int n; Str() : n(3) {} virtual ~Str(); virtual int len() const; };
+class Logic { public: int acc; Logic() : acc(0) {} void a(); void b(); void run(int i); };
+typedef void (Logic::*Fn)();
+static const Fn table[] = { &Logic::a, &Logic::b };
+static int helper(int x);
+int twice(int x) { return helper(x) * 2; }
+void Logic::run(int i) { (this->*table[i])(); }
+void Logic::a() { acc += 1; }
+void Logic::b() { acc += twice(5); }
+static int helper(int x) { return x + 1; }
+Str::~Str() { printf("~Str %d\\n", n); }
+int Str::len() const { return n * 10; }
+int main() {
+    Logic l; l.run(0); l.run(1);
+    Str *p = new Str();
+    printf("%d %d\\n", l.acc, p->len());
+    delete p;
     return 0;
 }
 `);

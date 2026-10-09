@@ -1,0 +1,33 @@
+{
+  "title": "SCUMMVM",
+  "subtitle": "The ScummVM team, 2004 · 0.6.1 with Beneath a Steel Sky (Revolution, 1994, freeware) — C++ over SDL 1.2",
+  "target": "scummvm",
+  "host": "sdl",
+  "args": "-psky-cd sky",
+  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "bass",
+    "hint": "sky-cd/ from bass-cd-1.0.zip (sky.dsk and sky.dnr), the freeware CD version the ScummVM project distributes"
+  },
+  "controls": [
+    [
+      "mouse",
+      "walk, look (right button), use (left button)"
+    ],
+    [
+      "Esc",
+      "skip the introduction"
+    ],
+    [
+      "F5",
+      "the control panel: save, load, quit"
+    ],
+    [
+      "Alt+Enter",
+      "full screen"
+    ]
+  ],
+  "_why": "The first program here whose C++ is a whole engine rather than a part of a game: namespaces, function templates with value parameters (its scalers, one instance per pixel format), an explicit specialisation, a class with two polymorphic bases (every GUI button), pointers to member functions (Sky's table of actions) and dynamic_cast, each added to src/cxx and held to g++ by tools/gate-cxx.mjs. The game is drawn in 8 bits, scaled into a 16-bit display by ScummVM's own scalers, and its music and speech come through SDL_OpenAudio's callback."
+}

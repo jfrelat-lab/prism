@@ -102,6 +102,27 @@ int main(void)
     VAL(SDLK_RALT); VAL(SDLK_LALT); VAL(SDLK_RMETA); VAL(SDLK_LMETA);
     VAL(SDLK_LAST);
 
+    /* What ScummVM 0.6.1's SDL backend asked for. */
+    SZ(SDL_AudioSpec); OFF(SDL_AudioSpec, freq); OFF(SDL_AudioSpec, format); OFF(SDL_AudioSpec, channels);
+    OFF(SDL_AudioSpec, silence); OFF(SDL_AudioSpec, samples); OFF(SDL_AudioSpec, size);
+    OFF(SDL_AudioSpec, callback); OFF(SDL_AudioSpec, userdata);
+    WID(SDL_AudioSpec, format); WID(SDL_AudioSpec, channels); WID(SDL_AudioSpec, samples); WID(SDL_AudioSpec, size);
+    SZ(SDL_CD); SZ(SDL_CDtrack); OFF(SDL_CD, status); OFF(SDL_CD, numtracks); OFF(SDL_CD, cur_frame); OFF(SDL_CD, track);
+    OFF(SDL_CDtrack, length); OFF(SDL_CDtrack, offset); SZ(CDstatus);
+    VAL(CD_TRAYEMPTY); VAL(CD_STOPPED); VAL(CD_PLAYING); VAL(CD_PAUSED); VAL(CD_ERROR); VAL(CD_FPS); VAL(SDL_INIT_CDROM);
+    OFF(SDL_Event, jaxis.axis); OFF(SDL_Event, jaxis.value); OFF(SDL_Event, jbutton.button); OFF(SDL_Event, jbutton.state);
+    WID(SDL_Event, jaxis.value);
+    VAL(SDL_JOYAXISMOTION); VAL(SDL_JOYBUTTONDOWN); VAL(SDL_JOYBUTTONUP); VAL(SDL_VIDEOEXPOSE);
+    VAL(SDL_BUTTON_WHEELUP); VAL(SDL_BUTTON_WHEELDOWN);
+    VAL(SDL_GRAB_QUERY); VAL(SDL_GRAB_OFF); VAL(SDL_GRAB_ON); SZ(SDL_GrabMode);
+    VAL(SDL_QUERY); VAL(SDL_IGNORE); VAL(SDL_DISABLE); VAL(SDL_ENABLE);
+    SZ(SDLMod); OFF(SDL_Event, key.keysym.mod); WID(SDL_Event, key.keysym.mod);
+    VAL(KMOD_LSHIFT); VAL(KMOD_RSHIFT); VAL(KMOD_LCTRL); VAL(KMOD_RCTRL); VAL(KMOD_LALT); VAL(KMOD_RALT);
+    VAL(KMOD_LMETA); VAL(KMOD_RMETA); VAL(KMOD_NUM); VAL(KMOD_CAPS);
+    VAL(KMOD_CTRL); VAL(KMOD_SHIFT); VAL(KMOD_ALT); VAL(KMOD_META);
+    VAL(SDLK_BACKSPACE); VAL(SDLK_TAB); VAL(SDLK_RETURN); VAL(SDLK_SPACE); VAL(SDLK_COMMA); VAL(SDLK_MINUS);
+    VAL(SDLK_PERIOD); VAL(SDLK_SLASH); VAL(SDLK_0); VAL(SDLK_9); VAL(SDLK_z); VAL(SDLK_DELETE); VAL(SDLK_EURO);
+
     VAL(MIX_DEFAULT_FORMAT); VAL(MIX_CHANNELS); VAL(MIX_DEFAULT_FREQUENCY); VAL(MIX_DEFAULT_CHANNELS); VAL(MIX_MAX_VOLUME);
     SZ(Mix_Chunk); OFF(Mix_Chunk, allocated); OFF(Mix_Chunk, abuf); OFF(Mix_Chunk, alen); OFF(Mix_Chunk, volume);
     WID(Mix_Chunk, alen); WID(Mix_Chunk, volume);

@@ -356,7 +356,9 @@ export class Preprocessor {
     // into #expand, so a per-call guard bounds each level but leaves the total work exponential —
     // measured: with hide sets disabled, a per-call guard of 100k ran for over ten minutes instead
     // of reporting a runaway. Found by sensitivity-checking the gate, not by a failing case.
-    if (depth === 0) this.work = 0;
+    // Both bounds are on GROWTH, so a long line is not taken for a runaway: the C a C++ unit is
+    // lowered to writes a data table on one line, and Sky's compact tables are 300,000 tokens long.
+    if (depth === 0) { this.work = 0; this.workLimit = 400_000 + 4 * input.length; this.sizeLimit = 200_000 + input.length; }
     const ts = input.slice();
     const out = [];
     let i = 0;
@@ -366,8 +368,8 @@ export class Preprocessor {
       // Two bounds, because they catch different runaways: a macro that rewrites to itself at
       // constant length spins without growing (iteration bound), while `#define a a b` explodes the
       // work list — and since expansion rewrites in place through splice(), that is quadratic.
-      if (++this.work > 400_000) throw new CppError('macro expansion did not terminate', t.loc);
-      if (ts.length > 200_000) throw new CppError('macro expansion grew without bound', t.loc);
+      if (++this.work > this.workLimit) throw new CppError('macro expansion did not terminate', t.loc);
+      if (ts.length > this.sizeLimit) throw new CppError('macro expansion grew without bound', t.loc);
 
       if (t.k !== ID || t.noexpand || hsHas(t, t.v)) { out.push(t); i++; continue; }
 

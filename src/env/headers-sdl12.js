@@ -12,7 +12,10 @@
 // the rest of SDL 1.2 before a program needs it is how a shim grows a surface nobody checks.
 // corpus/tuxracer-0.61 then asked for more -- SDL_OPENGL and the SDL_GL calls, the rest of the
 // keyboard, mouse motion, the resize event, the audio formats, SDL_RWFromFile -- and each of those
-// is in the gate's probe too.
+// is in the gate's probe too. corpus/scummvm-0.6.1's SDL backend then asked for the audio callback
+// (SDL_OpenAudio), the timer, the software blits and fills, CREATED-FROM surfaces, the CD-ROM, the
+// joystick and expose events and input grabbing -- read from the real headers in the oracle
+// container (/usr/include/SDL) and measured by the same gate.
 //
 // EVERY LAYOUT AND EVERY VALUE HERE WAS MEASURED against the real headers, with gcc -m32 in the
 // oracle container (libsdl1.2-dev), because the program reads surface->pixels and surface->pitch
@@ -104,6 +107,7 @@ const SDL_MAIN_12 = `
 #define SDL_INIT_TIMER    0x00000001
 #define SDL_INIT_AUDIO    0x00000010
 #define SDL_INIT_VIDEO    0x00000020
+#define SDL_INIT_CDROM    0x00000100
 #define SDL_INIT_JOYSTICK 0x00000200
 #define SDL_INIT_NOPARACHUTE 0x00100000
 #define SDL_INIT_EVERYTHING 0x0000FFFF
@@ -111,11 +115,65 @@ const SDL_MAIN_12 = `
 /* A file as SDL reads one. Opaque here: the only use is to hand one to a loader. */
 typedef struct SDL_RWops SDL_RWops;
 SDL_RWops *SDL_RWFromFile(const char *file, const char *mode);
+/* A macro calling ctx->close in SDL; the struct is opaque here, so it is a function. */
+int SDL_RWclose(SDL_RWops *ctx);
 
 #define AUDIO_U8     0x0008
 #define AUDIO_S16LSB 0x8010
 #define AUDIO_S16    AUDIO_S16LSB
 #define AUDIO_S16SYS AUDIO_S16LSB
+
+/* The audio device: SDL calls the callback for each buffer it needs (see SDL_OpenAudio in sdl12.js). */
+typedef struct SDL_AudioSpec {
+    int freq;
+    Uint16 format;
+    Uint8 channels;
+    Uint8 silence;
+    Uint16 samples;
+    Uint16 padding;
+    Uint32 size;
+    void (*callback)(void *userdata, Uint8 *stream, int len);
+    void *userdata;
+} SDL_AudioSpec;
+int SDL_OpenAudio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained);
+
+/* One periodic timer, the old interface: the callback returns the next interval, or 0 to stop. */
+typedef Uint32 (*SDL_TimerCallback)(Uint32 interval);
+int SDL_SetTimer(Uint32 interval, SDL_TimerCallback callback);
+
+/* The CD-ROM: there is no drive here, so SDL_CDNumDrives is 0 and SDL_CDOpen fails. */
+#define SDL_MAX_TRACKS 99
+#define SDL_AUDIO_TRACK 0x00
+#define SDL_DATA_TRACK  0x04
+typedef enum { CD_TRAYEMPTY, CD_STOPPED, CD_PLAYING, CD_PAUSED, CD_ERROR = -1 } CDstatus;
+#define CD_INDRIVE(status) ((int)(status) > 0)
+typedef struct SDL_CDtrack {
+    Uint8 id;
+    Uint8 type;
+    Uint16 unused;
+    Uint32 length;
+    Uint32 offset;
+} SDL_CDtrack;
+typedef struct SDL_CD {
+    int id;
+    CDstatus status;
+    int numtracks;
+    int cur_track;
+    int cur_frame;
+    SDL_CDtrack track[SDL_MAX_TRACKS + 1];
+} SDL_CD;
+#define CD_FPS 75
+int SDL_CDNumDrives(void);
+const char *SDL_CDName(int drive);
+SDL_CD *SDL_CDOpen(int drive);
+CDstatus SDL_CDStatus(SDL_CD *cdrom);
+int SDL_CDPlayTracks(SDL_CD *cdrom, int start_track, int start_frame, int ntracks, int nframes);
+int SDL_CDPlay(SDL_CD *cdrom, int start, int length);
+int SDL_CDPause(SDL_CD *cdrom);
+int SDL_CDResume(SDL_CD *cdrom);
+int SDL_CDStop(SDL_CD *cdrom);
+int SDL_CDEject(SDL_CD *cdrom);
+void SDL_CDClose(SDL_CD *cdrom);
 
 int SDL_Init(Uint32 flags);
 int SDL_InitSubSystem(Uint32 flags);
@@ -188,6 +246,18 @@ int SDL_LockSurface(SDL_Surface *surface);
 void SDL_UnlockSurface(SDL_Surface *surface);
 int SDL_Flip(SDL_Surface *screen);
 void SDL_UpdateRect(SDL_Surface *screen, Sint32 x, Sint32 y, Uint32 w, Uint32 h);
+void SDL_UpdateRects(SDL_Surface *screen, int numrects, SDL_Rect *rects);
+int SDL_VideoModeOK(int width, int height, int bpp, Uint32 flags);
+SDL_Surface *SDL_CreateRGBSurfaceFrom(void *pixels, int width, int height, int depth, int pitch,
+                                      Uint32 Rmask, Uint32 Gmask, Uint32 Bmask, Uint32 Amask);
+void SDL_GetRGB(Uint32 pixel, const SDL_PixelFormat * const fmt, Uint8 *r, Uint8 *g, Uint8 *b);
+int SDL_UpperBlit(SDL_Surface *src, SDL_Rect *srcrect, SDL_Surface *dst, SDL_Rect *dstrect);
+#define SDL_BlitSurface SDL_UpperBlit
+int SDL_FillRect(SDL_Surface *dst, SDL_Rect *dstrect, Uint32 color);
+int SDL_SaveBMP_RW(SDL_Surface *surface, SDL_RWops *dst, int freedst);
+#define SDL_SaveBMP(surface, file) SDL_SaveBMP_RW(surface, SDL_RWFromFile(file, "wb"), 1)
+typedef enum { SDL_GRAB_QUERY = -1, SDL_GRAB_OFF = 0, SDL_GRAB_ON = 1, SDL_GRAB_FULLSCREEN } SDL_GrabMode;
+SDL_GrabMode SDL_WM_GrabInput(SDL_GrabMode mode);
 int SDL_SetColors(SDL_Surface *surface, SDL_Color *colors, int firstcolor, int ncolors);
 int SDL_SetColorKey(SDL_Surface *surface, Uint32 flag, Uint32 key);
 Uint32 SDL_MapRGB(const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b);
@@ -215,7 +285,10 @@ void *SDL_GL_GetProcAddress(const char *proc);
  */
 typedef enum {
     SDLK_UNKNOWN = 0,
+    SDLK_BACKSPACE = 8, SDLK_TAB = 9, SDLK_RETURN = 13,
     SDLK_ESCAPE = 27,
+    SDLK_SPACE = 32, SDLK_COMMA = 44, SDLK_MINUS = 45, SDLK_PERIOD = 46, SDLK_SLASH = 47,
+    SDLK_0 = 48, SDLK_9 = 57, SDLK_z = 122, SDLK_DELETE = 127,
     SDLK_1 = 49, SDLK_2 = 50, SDLK_3 = 51, SDLK_4 = 52,
     SDLK_a = 97, SDLK_d = 100, SDLK_i = 105, SDLK_j = 106, SDLK_l = 108, SDLK_w = 119,
     SDLK_KP0 = 256, SDLK_KP1 = 257, SDLK_KP2 = 258, SDLK_KP3 = 259, SDLK_KP4 = 260,
@@ -230,11 +303,21 @@ typedef enum {
     SDLK_NUMLOCK = 300, SDLK_CAPSLOCK = 301, SDLK_SCROLLOCK = 302,
     SDLK_RSHIFT = 303, SDLK_LSHIFT = 304, SDLK_RCTRL = 305, SDLK_LCTRL = 306,
     SDLK_RALT = 307, SDLK_LALT = 308, SDLK_RMETA = 309, SDLK_LMETA = 310,
+    SDLK_EURO = 321,
     SDLK_LAST = 323
 } SDLKey;
 
-/* The program never reads a modifier; this is here to be four bytes wide in the right place. */
-typedef int SDLMod;
+/* The modifiers held when a key event was made: ScummVM reads them (Alt+Enter, Ctrl+key). */
+typedef enum {
+    KMOD_NONE = 0x0000, KMOD_LSHIFT = 0x0001, KMOD_RSHIFT = 0x0002, KMOD_LCTRL = 0x0040, KMOD_RCTRL = 0x0080,
+    KMOD_LALT = 0x0100, KMOD_RALT = 0x0200, KMOD_LMETA = 0x0400, KMOD_RMETA = 0x0800,
+    KMOD_NUM = 0x1000, KMOD_CAPS = 0x2000, KMOD_MODE = 0x4000, KMOD_RESERVED = 0x8000
+} SDLMod;
+#define KMOD_CTRL  (KMOD_LCTRL|KMOD_RCTRL)
+#define KMOD_SHIFT (KMOD_LSHIFT|KMOD_RSHIFT)
+#define KMOD_ALT   (KMOD_LALT|KMOD_RALT)
+#define KMOD_META  (KMOD_LMETA|KMOD_RMETA)
+SDLMod SDL_GetModState(void);
 
 typedef struct SDL_keysym {
     Uint8 scancode;
@@ -251,8 +334,17 @@ typedef struct SDL_keysym {
 #define SDL_MOUSEMOTION      4
 #define SDL_MOUSEBUTTONDOWN  5
 #define SDL_MOUSEBUTTONUP    6
+#define SDL_JOYAXISMOTION    7
+#define SDL_JOYBUTTONDOWN   10
+#define SDL_JOYBUTTONUP     11
 #define SDL_QUIT            12
 #define SDL_VIDEORESIZE     16
+#define SDL_VIDEOEXPOSE     17
+
+#define SDL_QUERY   -1
+#define SDL_IGNORE   0
+#define SDL_DISABLE  0
+#define SDL_ENABLE   1
 
 #define SDL_DEFAULT_REPEAT_DELAY    500
 #define SDL_DEFAULT_REPEAT_INTERVAL 30
@@ -281,6 +373,24 @@ typedef struct SDL_MouseButtonEvent {
     Uint16 x, y;
 } SDL_MouseButtonEvent;
 
+typedef struct SDL_JoyAxisEvent {
+    Uint8 type;
+    Uint8 which;
+    Uint8 axis;
+    Sint16 value;
+} SDL_JoyAxisEvent;
+
+typedef struct SDL_JoyButtonEvent {
+    Uint8 type;
+    Uint8 which;
+    Uint8 button;
+    Uint8 state;
+} SDL_JoyButtonEvent;
+
+typedef struct SDL_ExposeEvent {
+    Uint8 type;
+} SDL_ExposeEvent;
+
 typedef struct SDL_QuitEvent {
     Uint8 type;
 } SDL_QuitEvent;
@@ -297,7 +407,10 @@ typedef union SDL_Event {
     SDL_KeyboardEvent key;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;
+    SDL_JoyAxisEvent jaxis;
+    SDL_JoyButtonEvent jbutton;
     SDL_ResizeEvent resize;
+    SDL_ExposeEvent expose;
     SDL_QuitEvent quit;
 } SDL_Event;
 
@@ -311,6 +424,8 @@ Uint8 *SDL_GetKeyState(int *numkeys);
 #define SDL_BUTTON_LEFT   1
 #define SDL_BUTTON_MIDDLE 2
 #define SDL_BUTTON_RIGHT  3
+#define SDL_BUTTON_WHEELUP   4
+#define SDL_BUTTON_WHEELDOWN 5
 
 Uint8 SDL_GetMouseState(int *x, int *y);
 void SDL_WarpMouse(Uint16 x, Uint16 y);
@@ -322,6 +437,7 @@ SDL_Joystick *SDL_JoystickOpen(int device_index);
 void SDL_JoystickClose(SDL_Joystick *joystick);
 Sint16 SDL_JoystickGetAxis(SDL_Joystick *joystick, int axis);
 Uint8 SDL_JoystickGetButton(SDL_Joystick *joystick, int button);
+const char *SDL_JoystickName(int device_index);
 
 void SDL_LockAudio(void);
 void SDL_UnlockAudio(void);
@@ -338,6 +454,8 @@ export const SDL12_HEADERS = {
   'SDL/SDL.h': SDL_MAIN_12,
   'SDL_stdinc.h': SDL_STDINC_12,
   'SDL_endian.h': SDL_ENDIAN_12,
+  // Older programs include it by this name; in SDL 1.2 it only includes SDL_endian.h.
+  'SDL_byteorder.h': '#include "SDL_endian.h"\n',
   'SDL_mutex.h': SDL_MUTEX_12,
   'SDL_thread.h': SDL_THREAD_12,
 };

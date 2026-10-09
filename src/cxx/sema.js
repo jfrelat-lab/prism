@@ -13,6 +13,14 @@
 //                      at the end of the block, before every return/break/continue out of it, and for
 //                      a temporary at the end of the full expression
 //   a class template   one struct and one set of functions per set of arguments, made when used
+//   a function template one static function per set of arguments, deduced at the call
+//   a namespace        a prefix of the C names declared in it (N_x for a class, _ZN1N1fE... for a
+//                      function or a variable); an anonymous one's names are its unit's alone
+//   a second polymorphic base  its own table, whose overridden slots are thunks that move `this`
+//                      from that base back to the class; every table also carries its offset to the
+//                      whole object and a type descriptor, which is what dynamic_cast reads
+//   a pointer to member function  a C function pointer taking the object first; for a virtual
+//                      function, a thunk that calls through the object's table
 //
 // Layout is the C compiler's (types.js); names are mangled in the Itanium manner so that a C++
 // function never collides with a C one (ET has a Q_fabs on each side).
@@ -25,10 +33,27 @@ import { CxxError } from './parse.js';
 import { exprMethods } from './sema-expr.js';
 import { stmtMethods } from './sema-stmt.js';
 
+/**
+ * A scope. `ns` marks a namespace's (its name as a C prefix, and whether it is anonymous);
+ * `usings` are the namespaces a using-directive here makes visible.
+ */
 export class Scope {
-  constructor(parent = null, { cls = null } = {}) { this.parent = parent; this.map = new Map(); this.cls = cls; }
+  constructor(parent = null, { cls = null, ns = null } = {}) { this.parent = parent; this.map = new Map(); this.cls = cls; this.ns = ns; this.usings = []; }
   get(name) { return this.map.get(name); }
   set(name, ent) { this.map.set(name, ent); return ent; }
+  /** This scope's own entity for name, or one a using-directive here brings in. */
+  find(name, seen = new Set()) {
+    const e = this.map.get(name);
+    if (e) return e;
+    seen.add(this);
+    for (const u of this.usings) { if (seen.has(u)) continue; const r = u.find(name, seen); if (r) return r; }
+    return undefined;
+  }
+}
+/** The namespace a scope is in (null at file scope): the C prefix of the names declared there. */
+export function nsOf(scope) {
+  for (let s = scope; s; s = s.parent) if (s.ns) return s.ns;
+  return null;
 }
 
 const OP_CODE = { '+': 'pl', '-': 'mi', '*': 'ml', '/': 'dv', '%': 'rm', '^': 'eo', '&': 'an', '|': 'or', '~': 'co',
@@ -38,8 +63,10 @@ const OP_CODE = { '+': 'pl', '-': 'mi', '*': 'ml', '/': 'dv', '%': 'rm', '^': 'e
   new: 'nw', delete: 'dl', 'new[]': 'na', 'delete[]': 'da' };
 
 /** Lower a parsed C++ unit to C text. `tag` names the unit, for its static-initialiser function. */
-export function lowerCxx(unit, { tag = 'unit' } = {}) {
-  return new Sema(tag).run(unit);
+export function lowerCxx(unit, { tag = 'unit', builtins = null } = {}) {
+  const sema = new Sema(tag);
+  sema.builtins = builtins;
+  return sema.run(unit);
 }
 
 export class Sema {
@@ -93,7 +120,9 @@ export class Sema {
   // ---------------------------------------------------------------- top-level items
   item(it, env) {
     switch (it.k) {
-      case 'class': return it.template ? this.declareTemplate(it, env) : this.declareClass(it, env);
+      case 'class':
+        if (it.specArgs) return this.declareSpecialisation(it, env);
+        return it.template ? this.declareTemplate(it, env) : this.declareClass(it, env);
       case 'enum': return this.declareEnum(it, env);
       case 'fwdclass': {
         if (!env.scope.get(it.name)) env.scope.set(it.name, { k: 'type', type: { k: 'class', cls: this.newClass(it.name, it.key, it, env) } });
@@ -104,12 +133,85 @@ export class Sema {
         env.scope.set(this.lastName(it.decl.name), { k: 'type', type });
         return null;
       }
-      case 'decl': return this.declaration(it, env);
-      case 'func': return this.functionDefinition(it, env);
+      case 'decl': case 'func':
+        // A function template: `template<typename T> T MIN(T a, T b)`, not a member of a class template.
+        if (it.template?.length && it.decl.name.parts.length === 1) return this.declareFunctionTemplate(it, env);
+        return it.k === 'decl' ? this.declaration(it, env) : this.functionDefinition(it, env);
+      case 'namespace': {
+        const ns = this.namespace(it.name, env);
+        const inner = { scope: ns.scope, cls: null, bind: env.bind };
+        for (const x of it.items) this.item(x, inner);
+        return null;
+      }
+      case 'nsalias': {
+        const target = this.qualified(it.target, env, it);
+        if (target?.k !== 'namespace') this.fail(`'${this.qualText(it.target)}' is not a namespace`, it);
+        env.scope.set(it.name, target);
+        return null;
+      }
+      case 'usingns': case 'usingdecl': return this.using(it, env.scope, env);
       default: this.fail(`unexpected ${it.k} at file scope`, it);
     }
   }
   lastName(q) { return q.parts[q.parts.length - 1].name; }
+
+  // ---------------------------------------------------------------- namespaces
+  /**
+   * The namespace `name` declared in env's scope, made the first time it is opened. An anonymous
+   * one is its unit's own -- named after the unit, its names internal -- and visible around it.
+   */
+  namespace(name, env) {
+    const key = name ?? '<anonymous>';
+    const prior = env.scope.get(key);
+    if (prior?.k === 'namespace') return prior.ns;
+    const outer = nsOf(env.scope);
+    const own = name ?? `_GLOBAL__N_${this.tag}`;
+    const ns = { name: key, cname: outer ? `${outer.cname}_${own}` : own, internal: !name || !!outer?.internal };
+    ns.scope = new Scope(env.scope, { ns });
+    env.scope.set(key, { k: 'namespace', ns });
+    if (!name) env.scope.usings.push(ns.scope);
+    return ns;
+  }
+  /** `using namespace N;` adds N to the scope's directives; `using N::x;` declares x here as N's x. */
+  using(it, scope, env) {
+    if (it.k === 'usingns') {
+      const target = this.qualified(it.qname, env, it);
+      if (target?.k !== 'namespace') this.fail(`'${this.qualText(it.qname)}' is not a namespace`, it);
+      scope.usings.push(target.ns.scope);
+      return null;
+    }
+    const r = this.lookupName(it.qname, env) ?? this.fail(`'${this.qualText(it.qname)}' is not declared`, it);
+    scope.set(this.lastName(it.qname), r.ent);
+    return null;
+  }
+  /**
+   * What a qualified name's qualifier and name denote, without instantiating its last part: an
+   * entity ({ k: 'namespace' | 'type' | 'template' | 'funcs' | 'var' ... }) or null. Used where the
+   * name may be a namespace, which no type or value lookup returns.
+   */
+  qualified(q, env, node) {
+    let ent = null;
+    for (let i = 0; i < q.parts.length; i++) {
+      const p = q.parts[i];
+      if (i === 0) ent = q.global ? this.global.find(p.name) : this.lookupAny(p.name, env);
+      else if (ent.k === 'namespace') ent = ent.ns.scope.find(p.name);
+      else if (ent.k === 'type' && ent.type.k === 'class') { this.complete(ent.type.cls, node); ent = this.memberEntity(ent.type.cls, p.name)?.ent; }
+      else return null;
+      if (!ent) return null;
+      if (i + 1 < q.parts.length && ent.k === 'template' && p.targs) {
+        ent = { k: 'type', type: this.instantiate(ent.tmpl, p.targs.map((a) => this.templateArg(a, env, node)), node) };
+      }
+    }
+    return ent;
+  }
+  /** An unqualified name's entity, whatever it is, through the scopes outward. */
+  lookupAny(name, env) {
+    for (let s = env.scope; s; s = s.parent) {
+      const e = s.cls ? this.memberEntity(s.cls, name)?.ent : s.find(name);
+      if (e) return e;
+    }
+    return null;
+  }
 
   // ---------------------------------------------------------------- types
   /** The type a declaration's specifiers and declarator derivations name. */
@@ -144,27 +246,42 @@ export class Sema {
     this.fail(`type '${words.join(' ')}'`, node);
   }
   namedType(qname, env, node, elaborated) {
-    let scope = null, found = null;
+    let scope = null, found = null, ns = null;
     for (let i = 0; i < qname.parts.length; i++) {
       const p = qname.parts[i];
+      const more = i + 1 < qname.parts.length;
+      let ent;
       if (i === 0) {
         const b = env.bind?.get(p.name);
-        if (b && !p.targs) { found = b; }
-        else {
-          const ent = qname.global ? this.global.get(p.name) : this.lookupType(p.name, env);
+        if (b && !p.targs) {
+          if (b.k === 'tvalue') this.fail(`'${p.name}' is a value, not a type`, node);
+          found = b;
+        } else {
+          ent = qname.global ? this.global.find(p.name) : this.lookupType(p.name, env, more);
+          if (elaborated && !more) ent = this.lookupType(`struct ${p.name}`, env) ?? ent;
           if (!ent) {
             // `struct X *p` names a class not yet declared: an incomplete one, completed if defined.
             if (elaborated && qname.parts.length === 1) return this.forwardClass(p.name, elaborated, env, node);
             this.fail(`'${p.name}' does not name a type`, node);
           }
-          found = ent.k === 'template' ? this.instantiate(ent.tmpl, (p.targs ?? this.fail(`template ${p.name} needs arguments`, node)).map((a) => this.declType(a.specs, a.derivs, env, node)), node) : ent.type;
         }
+      } else if (ns) {
+        ent = ns.scope.find(p.name);
+        if (!ent || (ent.k !== 'type' && ent.k !== 'template' && ent.k !== 'namespace')) this.fail(`'${p.name}' is not a type in ${ns.name}`, node);
       } else {
-        const ent = scope.get(p.name);
-        if (!ent || ent.k !== 'type') this.fail(`'${p.name}' is not a type in ${qname.parts[i - 1].name}`, node);
-        found = ent.type;
+        ent = scope.get(p.name) ?? (scope.cls ? this.memberEntity(scope.cls, p.name)?.ent : null);
+        if (!ent || (ent.k !== 'type' && ent.k !== 'template')) this.fail(`'${p.name}' is not a type in ${qname.parts[i - 1].name}`, node);
       }
-      if (i + 1 < qname.parts.length) {
+      if (ent) {
+        if (ent.k === 'namespace') {
+          if (!more) this.fail(`namespace '${p.name}' used as a type`, node);
+          ns = ent.ns; scope = null;
+          continue;
+        }
+        found = ent.k === 'template' ? this.instantiate(ent.tmpl, (p.targs ?? this.fail(`template ${p.name} needs arguments`, node)).map((a) => this.templateArg(a, env, node)), node) : ent.type;
+      }
+      ns = null;
+      if (more) {
         if (found.k !== 'class') this.fail(`'${p.name}' is not a class`, node);
         // A class may qualify a name with itself while it is still being defined.
         if (!found.cls.defining) this.complete(found.cls, node);
@@ -173,11 +290,23 @@ export class Sema {
     }
     return found;
   }
-  /** A type by unqualified name: the scopes outward, each class scope including its bases. */
-  lookupType(name, env) {
+  /** A template argument: a type, or (for a parameter that is a value) an integer constant. */
+  templateArg(a, env, node) {
+    if (a.expr) {
+      const v = this.constInt(a.expr, env);
+      if (v === null) this.fail('a template argument that is not a constant', node);
+      return { k: 'tvalue', value: v };
+    }
+    return this.declType(a.specs, a.derivs, env, node);
+  }
+  /**
+   * A type by unqualified name: the scopes outward, each class scope including its bases. With
+   * `qualifier`, a namespace too -- the name is the first part of `N::T`.
+   */
+  lookupType(name, env, qualifier = false) {
     for (let s = env.scope; s; s = s.parent) {
-      const e = s.cls ? this.memberEntity(s.cls, name)?.ent : s.get(name);
-      if (e && (e.k === 'type' || e.k === 'template')) return e;
+      const e = s.cls ? this.memberEntity(s.cls, name)?.ent : s.find(name);
+      if (e && (e.k === 'type' || e.k === 'template' || (qualifier && e.k === 'namespace'))) return e;
     }
     return null;
   }
@@ -194,6 +323,13 @@ export class Sema {
     switch (d.k) {
       case 'ptr': { const p = T.ptr(t); return d.cv?.const ? T.cst(p) : p; }
       case 'ref': return t.k === 'ref' ? t : T.ref(t);
+      case 'memptr': {
+        const ct = this.namedType(d.qname, env, node);
+        if (ct.k !== 'class') this.fail('a pointer to member of something that is not a class', node);
+        if (t.k !== 'func') this.fail('a pointer to a data member is not supported', node);
+        const p = { k: 'memptr', cls: ct.cls, to: t };
+        return d.cv?.const ? T.cst(p) : p;
+      }
       case 'array': {
         let n = null;
         if (d.size) { n = this.constInt(d.size, env); if (n === null) this.fail('an array size that is not a constant', node); }
@@ -287,7 +423,11 @@ export class Sema {
     }
     return en;
   }
-  scopedName(name, env) { return env.cls ? `${env.cls.cname}_${name}` : name; }
+  scopedName(name, env) {
+    if (env.cls) return `${env.cls.cname}_${name}`;
+    const ns = nsOf(env.scope);
+    return ns ? `${ns.cname}_${name}` : name;
+  }
 
   // ---------------------------------------------------------------- classes
   newClass(name, key, node, env) {
@@ -303,9 +443,12 @@ export class Sema {
 
   declareClass(it, env, { cls = null, bind = env.bind } = {}) {
     if (!cls) {
-      const prior = it.name ? env.scope.get(it.name) : null;
+      // A class whose name a function already has (`struct stat` and `stat()`) is named by its tag only.
+      const hidden = it.name && env.scope.get(it.name)?.k === 'funcs';
+      const key = hidden ? `struct ${it.name}` : it.name;
+      const prior = key ? env.scope.get(key) : null;
       cls = prior?.k === 'type' && prior.type.k === 'class' && !prior.type.cls.complete ? prior.type.cls : this.newClass(it.name, it.key, it, env);
-      if (it.name) env.scope.set(it.name, { k: 'type', type: { k: 'class', cls } });
+      if (key) env.scope.set(key, { k: 'type', type: { k: 'class', cls } });
     }
     it.info = cls;
     cls.defining = true;
@@ -320,9 +463,12 @@ export class Sema {
       this.complete(bt.cls, it);
       cls.bases.push(bt.cls);
     }
-    if (cls.bases.length > 1 && cls.bases.slice(1).some((b) => b.hasVptr)) this.fail('multiple inheritance from a second polymorphic base is not supported', it);
-    cls.hasVptr = cls.bases.some((b) => b.hasVptr);
-    cls.vtable = cls.bases[0]?.hasVptr ? [...cls.bases[0].vtable] : [];
+    // The PRIMARY base is the first polymorphic one: it shares the class's address and its table
+    // (it is laid out first, as the Itanium ABI lays it). Every other polymorphic base keeps a table
+    // of its own -- see secondaryGroups.
+    cls.primaryBase = cls.bases.findIndex((b) => b.hasVptr);
+    cls.hasVptr = cls.primaryBase >= 0;
+    cls.vtable = cls.hasVptr ? [...cls.bases[cls.primaryBase].vtable] : [];
     // The class's own name names it inside itself (the injected class name).
     if (it.name) cls.scope.set(it.name, { k: 'type', type: { k: 'class', cls } });
 
@@ -339,7 +485,7 @@ export class Sema {
         const type = this.declType(m.specs, m.decl.derivs, cenv, m);
         const name = this.lastName(m.decl.name);
         if (m.specs.storage === 'static') {
-          const ent = { k: 'var', name, type, cname: `${cls.cname}_${name}`, global: true, storage: 'extern', staticMember: true };
+          const ent = { k: 'var', name, type, cname: `${cls.cname}_${name}`, global: true, storage: 'extern', staticMember: true, ownerCls: cls };
           if (type.c && T.isInteger(type) && m.init) { const v = this.constInt(m.init, cenv); if (v !== null) ent.constValue = v; }
           cls.scope.set(name, ent);
           continue;
@@ -357,7 +503,10 @@ export class Sema {
       if (f.isCtor) continue;
       const slot = cls.vtable.findIndex((b) => this.overrides(f, b));
       if (slot >= 0) { f.isVirtual = true; f.vindex = slot; cls.vtable[slot] = f; }
-      else if (f.isVirtual) { f.vindex = cls.vtable.length; cls.vtable.push(f); }
+      // An overrider of a secondary base's function is virtual too, with a slot of its own here.
+      else if (f.isVirtual || cls.bases.some((b, i) => i !== cls.primaryBase && b.hasVptr && this.allVirtuals(b).some((v) => this.overrides(f, v)))) {
+        f.isVirtual = true; f.vindex = cls.vtable.length; cls.vtable.push(f);
+      }
     }
     if (cls.vtable.length && !cls.hasVptr) { cls.hasVptr = true; cls.ownVptr = true; }
     return cls;
@@ -407,43 +556,170 @@ export class Sema {
   }
   /** The base members from cls to the subobject holding the vptr. */
   vptrPath(cls) {
-    if (cls.ownVptr) return [];
-    for (let i = 0; i < cls.bases.length; i++) if (cls.bases[i].hasVptr) return [`__b${i}`, ...this.vptrPath(cls.bases[i])];
-    return [];
+    if (cls.ownVptr || !(cls.primaryBase >= 0)) return [];
+    return [`__b${cls.primaryBase}`, ...this.vptrPath(cls.bases[cls.primaryBase])];
+  }
+  /** Every virtual function of a class, its secondary bases' included. */
+  allVirtuals(cls) {
+    return [...cls.vtable, ...cls.bases.flatMap((b, i) => (i !== cls.primaryBase && b.hasVptr ? this.allVirtuals(b) : []))];
+  }
+  /**
+   * The polymorphic subobjects of cls that do not share its table: { xpath, cls } for each, xpath
+   * the base members from cls to it. A secondary base's own secondaries are listed too; the primary
+   * base's are, under its path.
+   */
+  secondaryGroups(cls, path = [], out = []) {
+    cls.bases.forEach((b, i) => {
+      if (!b.hasVptr) return;
+      const p = [...path, `__b${i}`];
+      if (i !== cls.primaryBase) out.push({ xpath: p, cls: b });
+      this.secondaryGroups(b, p, out);
+    });
+    return out;
   }
 
   // ---------------------------------------------------------------- templates
   declareTemplate(it, env) {
-    const tmpl = { name: it.name, ast: it, params: it.template, env, outOfLine: [] };
+    const tmpl = { name: it.name, ast: it, params: it.template, env, outOfLine: [], specs: new Map() };
     this.templates.set(it.name, tmpl);
     env.scope.set(it.name, { k: 'template', tmpl });
     return tmpl;
   }
+  /** `template<> struct ColorMasks<565> { ... }`: the class used for those arguments instead of the template's. */
+  declareSpecialisation(it, env) {
+    const ent = this.lookupType(it.name, env);
+    if (ent?.k !== 'template') this.fail(`'${it.name}' is not a class template`, it);
+    const args = this.withDefaults(ent.tmpl, it.specArgs.map((a) => this.templateArg(a, env, it)), it);
+    ent.tmpl.specs.set(args.map(T.mangle).join(','), { ast: it, env });
+    return null;
+  }
+  /** The arguments of a template, its parameters' defaults filling those not given. */
+  withDefaults(tmpl, args, node) {
+    if (args.length > tmpl.params.length) this.fail(`template ${tmpl.name} takes ${tmpl.params.length} argument(s)`, node);
+    const out = [...args];
+    for (let i = out.length; i < tmpl.params.length; i++) {
+      const p = tmpl.params[i];
+      if (!p.def) this.fail(`template ${tmpl.name} takes ${tmpl.params.length} argument(s)`, node);
+      // A default is read where the template was declared, the parameters before it bound.
+      const denv = { scope: tmpl.env.scope, cls: tmpl.env.cls ?? null, bind: new Map([...(tmpl.env.bind ?? []), ...tmpl.params.slice(0, i).map((q, j) => [q.name, out[j]])]) };
+      out.push(p.value ? this.templateArg({ expr: p.def }, denv, node) : this.declType(p.def.specs, p.def.derivs, denv, node));
+    }
+    tmpl.params.forEach((p, i) => {
+      if (p.value !== (out[i].k === 'tvalue')) this.fail(`template ${tmpl.name}: argument ${i + 1} must be a ${p.value ? 'value' : 'type'}`, node);
+    });
+    return out;
+  }
   instantiate(tmpl, args, node) {
-    if (args.length !== tmpl.params.length) this.fail(`template ${tmpl.name} takes ${tmpl.params.length} argument(s)`, node);
+    args = this.withDefaults(tmpl, args, node);
     const key = `${tmpl.name}<${args.map(T.mangle).join(',')}>`;
     let cls = this.instances.get(key);
     if (cls) return { k: 'class', cls };
-    const bind = new Map([...(tmpl.env.bind ?? []), ...tmpl.params.map((p, i) => [p, args[i]])]);
+    const spec = tmpl.specs?.get(args.map(T.mangle).join(','));
+    const bind = new Map([...(tmpl.env.bind ?? []), ...(spec ? [] : tmpl.params.map((p, i) => [p.name, args[i]]))]);
     cls = this.newClass(tmpl.name, tmpl.ast.key, tmpl.ast, tmpl.env);
     cls.name = `${tmpl.name}<${args.map(T.show).join(', ')}>`;
-    cls.cname = `${tmpl.name}I${args.map(T.mangle).join('')}E`;
+    cls.cname = `${this.scopedName(tmpl.name, tmpl.env)}I${args.map(T.mangle).join('')}E`;
     cls.template = tmpl;
     cls.bind = bind;
     this.instances.set(key, cls);
     // Made complete when first needed so: `idList<idCameraEvent*>` may be named before its argument is.
     cls.pending = () => {
-      const info = tmpl.ast.info;
-      this.declareClass(tmpl.ast, tmpl.env, { cls, bind });
-      tmpl.ast.info = info;
+      const ast = spec ? spec.ast : tmpl.ast;
+      const info = ast.info;
+      this.declareClass(ast, spec ? spec.env : tmpl.env, { cls, bind });
+      ast.info = info;
       // The template's own name inside an instance is that instance.
       cls.scope.set(tmpl.name, { k: 'type', type: { k: 'class', cls } });
     };
     return { k: 'class', cls };
   }
 
+  // ---------------------------------------------------------------- function templates
+  /**
+   * A function template joins its name's overload set as a template: a call deduces its arguments,
+   * makes the instance and lets it compete with the plain functions of the same name.
+   */
+  declareFunctionTemplate(it, env) {
+    const name = this.lastName(it.decl.name);
+    let set = env.scope.get(name);
+    if (!set || set.k !== 'funcs') set = env.scope.set(name, { k: 'funcs', name, list: [] });
+    set.templates ??= [];
+    const nparams = it.decl.derivs[it.decl.derivs.length - 1].params.length;
+    // A definition after a declaration completes it; the instances are made from the definition.
+    let ft = set.templates.find((t) => t.params.length === it.template.length && t.nparams === nparams);
+    if (!ft) { ft = { name, params: it.template, nparams, ast: it, env, instances: new Map() }; set.templates.push(ft); }
+    if (it.k === 'func') ft.ast = it;
+    return ft;
+  }
+  /** The instance of ft a call with these explicit template arguments and argument expressions makes, or null. */
+  deduce(ft, explicit, args, env, node) {
+    const names = ft.params.map((p) => p.name);
+    const bind = new Map();
+    explicit.forEach((a, i) => { if (i < names.length) bind.set(names[i], this.templateArg(a, env, node)); });
+    if (explicit.length > names.length) return null;
+    const fd = ft.ast.decl.derivs[ft.ast.decl.derivs.length - 1];
+    if (args.length > fd.params.length && !fd.variadic) return null;
+    let ok = true;
+    // A parameter given explicitly is not deduced: its arguments are converted to it.
+    const open = names.slice(explicit.length);
+    fd.params.forEach((p, i) => { if (i < args.length && !this.deduceOne(p.specs, p.decl.derivs, args[i].t, bind, open)) ok = false; });
+    if (!ok) return null;
+    const out = [];
+    for (const p of ft.params) {
+      if (bind.has(p.name)) { out.push(bind.get(p.name)); continue; }
+      if (!p.def) return null;
+      const denv = { scope: ft.env.scope, cls: null, bind: new Map(ft.params.slice(0, out.length).map((q, j) => [q.name, out[j]])) };
+      out.push(p.value ? this.templateArg({ expr: p.def }, denv, node) : this.declType(p.def.specs, p.def.derivs, denv, node));
+    }
+    return this.instantiateFunction(ft, out, node);
+  }
+  /**
+   * Deduce from one parameter written `specs derivs` and the type of its argument: T, T*, T&, const T&.
+   * False when the argument cannot match or contradicts an earlier deduction.
+   */
+  deduceOne(specs, derivs, argT, bind, names) {
+    const ds = [...derivs];
+    let a = argT;
+    if (ds.length && ds[ds.length - 1].k === 'ref') ds.pop();
+    else { if (a.k === 'array') a = T.ptr(a.of); else if (a.k === 'func') a = T.ptr(a); a = T.uncst(a); }
+    while (ds.length) {
+      const d = ds.pop();
+      if (d.k !== 'ptr') return true;          // not a form deduced from: left to the instance's conversions
+      if (a.k !== 'ptr') return false;
+      a = a.to;
+    }
+    const st = specs.type;
+    if (st?.k !== 'named' || st.qname.parts.length !== 1 || st.qname.parts[0].targs) return true;
+    const n = st.qname.parts[0].name;
+    if (!names.includes(n)) return true;
+    if (specs.cv?.const) a = T.uncst(a);
+    const prior = bind.get(n);
+    if (prior) return prior.k !== 'tvalue' && T.same(prior, a);
+    bind.set(n, a);
+    return true;
+  }
+  instantiateFunction(ft, args, node) {
+    const key = args.map(T.mangle).join(',');
+    let f = ft.instances.get(key);
+    if (f) return f;
+    const it = ft.ast;
+    const env = { scope: ft.env.scope, cls: ft.env.cls ?? null, bind: new Map([...(ft.env.bind ?? []), ...ft.params.map((p, i) => [p.name, args[i]])]) };
+    const type = this.declType(it.specs, it.decl.derivs, env, it);
+    const fd = it.decl.derivs[it.decl.derivs.length - 1];
+    const ns = nsOf(ft.env.scope);
+    f = {
+      k: 'func', name: ft.name, display: `${ft.name}<${args.map(T.show).join(', ')}>`, cls: null, type, isStatic: true, cLink: false,
+      node: it, params: this.paramInfo(fd, env), inline: true, fileStatic: true, fromTemplate: true,
+    };
+    // Every unit that uses an instance makes its own, as g++ makes a weak one: static here.
+    f.cname = `${this.mangleName(ft.name, null, type, null, ns)}_I${args.map(T.mangle).join('')}E`;
+    ft.instances.set(key, f);
+    if (it.k === 'func') this.attachBody(f, it, env);
+    return f;
+  }
+
   // ---------------------------------------------------------------- functions
-  mangleName(name, cls, type, conv) {
+  mangleName(name, cls, type, conv, ns = null) {
     let n;
     if (conv) n = `cv${T.mangle(conv)}`;
     else if (name.startsWith('operator')) n = OP_CODE[name.slice(8)] ?? this.fail(`operator ${name.slice(8)}`);
@@ -453,6 +729,7 @@ export class Sema {
     // A parameter's own const is not part of the function's type: f(int) and f(const int) are one.
     const sig = type.params.length ? type.params.map((p) => T.mangle(T.uncst(p))).join('') : 'v';
     return cls ? `_ZN${type.thisConst ? 'K' : ''}${cls.cname.length}${cls.cname}${n}E${sig}${type.variadic ? 'z' : ''}`
+      : ns ? `_ZN${ns.cname.length}${ns.cname}${n}E${sig}${type.variadic ? 'z' : ''}`
       : `_Z${n}${sig}${type.variadic ? 'z' : ''}`;
   }
 
@@ -462,9 +739,11 @@ export class Sema {
     const part = m.decl.name.parts[m.decl.name.parts.length - 1];
     if (m.specs.friend) {
       // A friend is a function of the enclosing namespace, declared (or defined) from in here.
-      const outer = { scope: this.global, cls: null, bind: cenv.bind };
+      let home = cls.scope.parent;
+      while (home.cls && home.parent) home = home.parent;
+      const outer = { scope: home, cls: null, bind: cenv.bind };
       const f = this.declareFunction(m, outer, { name: raw });
-      if (def) this.attachBody(f, def, { scope: this.global, cls: null, bind: cenv.bind });
+      if (def) this.attachBody(f, def, { scope: home, cls: null, bind: cenv.bind });
       return f;
     }
     const isCtor = raw === cls.node.name || raw === cls.template?.name;
@@ -524,15 +803,17 @@ export class Sema {
     const type = this.declType(it.specs, it.decl.derivs, env, it);
     const cLink = !!it.cLink || name === 'main';
     let set = env.scope.get(name);
+    // A function named as a class is: the class stays reachable by its tag.
+    if (set?.k === 'type' && set.type.k === 'class') env.scope.set(`struct ${name}`, set);
     if (set && set.k !== 'funcs') set = null;
     let f = set?.list.find((x) => this.sameSignature(x.type, type));
     if (!f) {
       const fd = it.decl.derivs[it.decl.derivs.length - 1];
       f = {
         k: 'func', name, display: name, cls: null, type, isStatic: true, cLink, node: it, params: this.paramInfo(fd, env),
-        inline: !!it.specs.inline, fileStatic: it.specs.storage === 'static',
+        inline: !!it.specs.inline, fileStatic: it.specs.storage === 'static' || !!nsOf(env.scope)?.internal,
       };
-      f.cname = cLink ? name : this.mangleName(name, null, type, null);
+      f.cname = cLink ? name : this.mangleName(name, null, type, null, nsOf(env.scope));
       if (set) set.list.push(f); else env.scope.set(name, { k: 'funcs', name, list: [f] });
     } else {
       const fd = it.decl.derivs[it.decl.derivs.length - 1];
@@ -545,9 +826,15 @@ export class Sema {
   functionDefinition(it, env) {
     const q = it.decl.name.parts;
     if (q.length > 1) {
-      // A member defined outside its class: A::f, or a class template's A<T>::f.
+      // A member defined outside its class: A::f, or a class template's A<T>::f -- or a function of
+      // a namespace defined from outside it, N::f.
       const ownerName = q[q.length - 2].name;
-      const tmpl = this.templates.get(ownerName);
+      const owner = this.qualified({ parts: q.slice(0, -1).map((p) => ({ name: p.name })), global: it.decl.name.global }, env, it);
+      if (owner?.k === 'namespace') {
+        const nenv = { scope: owner.ns.scope, cls: null, bind: env.bind };
+        return this.functionDefinition({ ...it, decl: { ...it.decl, name: { parts: [q[q.length - 1]], global: false } } }, nenv);
+      }
+      const tmpl = owner?.k === 'template' ? owner.tmpl : null;
       if (it.template && tmpl) { tmpl.outOfLine.push(it); for (const cls of this.instances.values()) if (cls.template === tmpl && cls.complete) this.outOfLine(it, cls); return null; }
       const ot = this.namedType({ parts: q.slice(0, -1), global: it.decl.name.global }, env, it);
       if (ot.k !== 'class') this.fail(`'${ownerName}' is not a class`, it);
@@ -580,8 +867,16 @@ export class Sema {
     if (isFunc) return this.declareFunction(it, env);
     const q = d.name.parts;
     const name = this.lastName(d.name);
+    // `template <class T> T *Singleton<T>::_singleton = 0;`: defined for each instance that uses it --
+    // and its type means something only in one.
+    if (q.length > 1 && it.template) {
+      const owner = this.qualified({ parts: q.slice(0, -1).map((p) => ({ name: p.name })), global: d.name.global }, env, it);
+      if (owner?.k === 'template') { (owner.tmpl.staticDefs ??= []).push(it); return null; }
+    }
     let type = this.declType(it.specs, d.derivs, env, it);
     if (q.length > 1) {
+      const owner = this.qualified({ parts: q.slice(0, -1).map((p) => ({ name: p.name })), global: d.name.global }, env, it);
+      if (owner?.k === 'namespace') return this.declaration({ ...it, decl: { ...d, name: { parts: [q[q.length - 1]], global: false } } }, { scope: owner.ns.scope, cls: null, bind: env.bind });
       // The definition of a static data member: `int A::count = 0;`
       const ot = this.namedType({ parts: q.slice(0, -1), global: d.name.global }, env, it);
       const ent = ot.cls.scope.get(name);
@@ -593,9 +888,12 @@ export class Sema {
     if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
     const cLink = !!it.cLink;
     const prior = env.scope.get(name);
-    const ent = prior?.k === 'var' ? prior : env.scope.set(name, { k: 'var', name, type, cname: name, global: true, cLink });
+    // A namespace's variable is named after it in C, as its functions are (Itanium's _ZN...E).
+    const ns = nsOf(env.scope);
+    const cname = ns && !cLink ? `_ZN${ns.cname.length}${ns.cname}${name.length}${name}E` : name;
+    const ent = prior?.k === 'var' ? prior : env.scope.set(name, { k: 'var', name, type, cname, global: true, cLink });
     if (prior?.k === 'var' && prior.type.k === 'array' && prior.type.n == null) prior.type = type;
-    ent.storage = it.specs.storage;
+    ent.storage = ns?.internal && it.specs.storage !== 'extern' ? 'static' : it.specs.storage;
     if (type.c && T.isInteger(type) && it.init) { const v = this.constInt(it.init, env); if (v !== null) ent.constValue = v; }
     if (it.specs.storage === 'extern' && !it.init && !it.ctorArgs) { ent.externOnly = !ent.definedHere; return ent; }
     ent.definedHere = true; ent.externOnly = false;

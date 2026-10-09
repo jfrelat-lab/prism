@@ -6,6 +6,8 @@
 //
 //   { k:'void' }  { k:'prim', name }  { k:'ptr', to }  { k:'ref', to }  { k:'array', of, n }
 //   { k:'func', ret, params:[type], variadic, thisConst }  { k:'class', cls }  { k:'enum', en }
+//   { k:'memptr', cls, to }  a pointer to a member function of cls: in C, a pointer to a function
+//                         that takes the object first (a virtual one is reached through a thunk)
 // Any of them may carry `c: true` (const). A reference never does; its referent may.
 
 export const VOID = { k: 'void' };
@@ -44,6 +46,8 @@ export function same(a, b, { top = true } = {}) {
     case 'array': return same(a.of, b.of) && (a.n === b.n || a.n == null || b.n == null);
     case 'class': return a.cls === b.cls;
     case 'enum': return a.en === b.en;
+    case 'tvalue': return a.value === b.value;
+    case 'memptr': return a.cls === b.cls && same(a.to, b.to);
     case 'func':
       return same(a.ret, b.ret) && a.variadic === b.variadic && a.params.length === b.params.length
         && a.params.every((p, i) => same(p, b.params[i], { top: false }));
@@ -77,6 +81,8 @@ export function show(t) {
     case 'class': return c + t.cls.name;
     case 'enum': return c + (t.en.name ?? 'enum');
     case 'func': return `${show(t.ret)} (${t.params.map(show).join(', ')}${t.variadic ? ', ...' : ''})`;
+    case 'tvalue': return String(t.value);
+    case 'memptr': return `${show(t.to.ret)} (${t.cls.name}::*)(${t.to.params.map(show).join(', ')})`;
     default: return '?';
   }
 }
@@ -96,6 +102,9 @@ export function mangle(t) {
     case 'class': return `${c}${t.cls.cname.length}${t.cls.cname}`;
     case 'enum': return `${c}${t.en.cname.length}${t.en.cname}`;
     case 'func': return `F${mangle(t.ret)}${t.params.map(mangle).join('')}${t.variadic ? 'z' : ''}E`;
+    // A template's value argument: Itanium's L<value>E, a minus sign spelt n.
+    case 'tvalue': return `Li${t.value < 0 ? `n${-t.value}` : t.value}E`;
+    case 'memptr': return `${c}M${t.cls.cname.length}${t.cls.cname}${mangle(t.to)}`;
     default: throw new Error(`mangle: ${t.k}`);
   }
 }
@@ -117,6 +126,10 @@ export function cDecl(t, name = '') {
       return cDecl(t.to, t.to.k === 'array' || t.to.k === 'func' ? `(${inner})` : inner);
     }
     case 'array': return cDecl(t.of, `${name}[${t.n ?? ''}]`);
+    case 'memptr': {
+      const fn = { k: 'func', ret: t.to.ret, params: [ptr({ k: 'class', cls: t.cls }), ...t.to.params], variadic: t.to.variadic };
+      return cDecl(fn, `(*${t.c ? 'const ' : ''}${name})`);
+    }
     case 'func': {
       const ps = t.params.map((p) => cDecl(paramType(p)));
       if (t.variadic) ps.push('...');

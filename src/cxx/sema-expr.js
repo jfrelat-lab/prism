@@ -26,6 +26,7 @@ export const exprMethods = {
     switch (t.k) {
       case 'class': if (byValue) this.needStruct(t.cls); else this.forward(t.cls); break;
       case 'ptr': case 'ref': this.needType(t.to, false); break;
+      case 'memptr': this.forward(t.cls); this.needType(t.to, false); break;
       case 'array': this.needType(t.of, byValue); break;
       case 'func': this.needType(t.ret, t.ret.k === 'class'); for (const p of t.params) this.needType(p, p.k === 'class'); break;
       default:
@@ -42,8 +43,12 @@ export const exprMethods = {
     this.structsDone.add(cls);
     this.forward(cls);
     const lines = [];
-    cls.bases.forEach((b, i) => { this.needStruct(b); lines.push(`  struct ${b.cname} __b${i};`); });
+    // The table pointer first, then the primary base, then the other bases in order: the class and
+    // its primary chain share one address, which is what a table's offset to the top relies on.
     if (cls.ownVptr) lines.push('  void **__vptr;');
+    const order = cls.bases.map((_, i) => i);
+    if (cls.primaryBase > 0) order.splice(order.indexOf(cls.primaryBase), 1), order.unshift(cls.primaryBase);
+    for (const i of order) { const b = cls.bases[i]; this.needStruct(b); lines.push(`  struct ${b.cname} __b${i};`); }
     for (const f of cls.fields) lines.push(`  ${this.ct(f.type.k === 'ref' ? T.ptr(f.type.to) : f.type, f.cname)}${f.bits != null ? ` : ${f.bits}` : ''};`);
     // An empty class has size 1 in C++ and no spelling in C.
     if (!lines.length) lines.push('  char __empty;');
@@ -109,13 +114,26 @@ export const exprMethods = {
   // ---------------------------------------------------------------- functions in use
   /** Mark a function used: its prototype is written, and its body queued if this unit has it. */
   use(f) {
-    if (f.used) return f;
+    if (f.used) {
+      /*
+       * Used before its body was seen -- `&Logic::fnKillId` in a table above the definition, a
+       * destructor in a vtable above `String::~String() {...}` -- and defined since: the body is
+       * written now -- and a static or inline one gets its prototype made static to match.
+       */
+      if (!f.queued && f.body) {
+        f.queued = true;
+        if ((f.inline || f.fileStatic) && !f.cStatic && f.protoAt !== undefined) { f.cStatic = true; this.out.protos[f.protoAt] = `static ${this.out.protos[f.protoAt]}`; }
+        this.queue.push(f);
+      }
+      return f;
+    }
     f.used = true;
     const hasBody = !!f.body || !!f.implicit || (f.cls && this.findTemplateBody(f));
     const stat = hasBody ? (f.inline || f.fileStatic) : false;
     f.cStatic = stat;
+    f.protoAt = this.out.protos.length;
     this.out.protos.push(`${stat ? 'static ' : ''}${this.signature(f)};`);
-    if (hasBody) this.queue.push(f);
+    if (hasBody) { f.queued = true; this.queue.push(f); }
     return f;
   },
   /** A class template's member defined outside the class: found by name and signature for this instance. */
@@ -169,19 +187,27 @@ export const exprMethods = {
   lookupName(q, env) {
     const last = q.parts[q.parts.length - 1].name;
     if (q.parts.length > 1) {
+      const pre = this.qualified({ parts: q.parts.slice(0, -1), global: q.global }, env);
+      if (pre?.k === 'namespace') {
+        const ent = pre.ns.scope.find(last);
+        return ent ? { ent, path: [], owner: null, qualified: true } : null;
+      }
       const ot = this.namedType({ parts: q.parts.slice(0, -1), global: q.global }, env);
       if (ot.k !== 'class') return null;
       this.complete(ot.cls);
       const m = this.memberEntity(ot.cls, last);
       return m ? { ent: m.ent, path: m.path, owner: ot.cls, qualified: true, found: m.cls } : null;
     }
-    if (q.global) { const ent = this.global.get(last); return ent ? { ent, path: [], owner: null } : null; }
+    if (q.global) { const ent = this.global.find(last); return ent ? { ent, path: [], owner: null } : null; }
+    // A template's value parameter, bound in an instance: a constant, as an enumerator is.
+    const bound = env.bind?.get(last);
+    if (bound?.k === 'tvalue') return { ent: { k: 'enumerator', value: bound.value, type: T.INT }, path: [], owner: null };
     for (let s = env.scope; s; s = s.parent) {
       if (s.cls) {
         const m = this.memberEntity(s.cls, last);
         if (m) return { ent: m.ent, path: m.path, owner: s.cls, found: m.cls };
       } else {
-        const ent = s.get(last);
+        const ent = s.find(last);
         if (ent) return { ent, path: [], owner: null };
       }
     }
@@ -241,7 +267,16 @@ export const exprMethods = {
       }
       return null;
     }
-    if (V.k === 'prim' && V.name === 'bool' && F.k === 'ptr') return { rank: CONV, gen: () => `(${from.c} != 0)` };
+    if (V.k === 'prim' && V.name === 'bool' && (F.k === 'ptr' || F.k === 'memptr')) return { rank: CONV, gen: () => `(${from.c} != 0)` };
+    if (V.k === 'memptr') {
+      if (e.zero) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})0)` };
+      if (F.k !== 'memptr' || !T.same(F.to, V.to)) return null;
+      if (F.cls === V.cls) return { rank: EXACT, gen: () => from.c };
+      // A base's member as the derived class's, where the base sits at the derived class's address.
+      const path = this.derivedPath(V.cls, F.cls);
+      if (path && path.every((p) => p === '__b0')) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
+      return null;
+    }
     return null;
   },
   /** The path from class d to its base b ([] when they are one class); an incomplete class has no bases. */
@@ -361,6 +396,12 @@ export const exprMethods = {
     }
     return found[0];
   },
+  /** The namespace (or file) scope a class was declared in. */
+  homeScope(cls) {
+    let s = cls.scope.parent;
+    while (s.cls && s.parent) s = s.parent;
+    return s;
+  },
   allConversions(cls) { return [...cls.convs, ...cls.bases.flatMap((b) => this.allConversions(b))]; },
   /** e converted to `to`, or an error naming both types. */
   coerce(e, to, cx, node, what = 'conversion') {
@@ -407,7 +448,9 @@ export const exprMethods = {
     if (!viable.length) return null;
     const better = (a, b) => a.ranks.every((r, i) => r <= b.ranks[i]) && a.ranks.some((r, i) => r < b.ranks[i]);
     const best = viable.filter((a) => viable.every((b) => b === a || better(a, b) || (!better(b, a) && a === viable.find((x) => !viable.some((y) => better(y, x))))));
-    const winners = viable.filter((a) => !viable.some((b) => b !== a && better(b, a)));
+    let winners = viable.filter((a) => !viable.some((b) => b !== a && better(b, a)));
+    // Between a plain function and a template's instance that convert as well, the plain one.
+    if (winners.length > 1 && winners.some((w) => !w.f.fromTemplate)) winners = winners.filter((w) => !w.f.fromTemplate);
     if (winners.length !== 1) {
       // Two declarations of one function (a member seen through two paths) are not an ambiguity.
       const distinct = [...new Set(winners.map((w) => w.f))];
@@ -444,6 +487,8 @@ export const exprMethods = {
       let pre = '';
       if (!/^[A-Za-z_]\w*$/.test(p)) { const name = this.temp(cx, T.ptr({ k: 'class', cls: f.cls })); pre = `${name} = ${p}, `; p = name; }
       const root = this.vtableOwnerPath(f.cls);
+      // Reaching the table needs the struct, even where only a pointer to the class was declared.
+      this.needStruct(f.cls);
       const fnType = this.fnPtrType(f);
       call = `(${pre}((${fnType})(${p})->${[...root, '__vptr'].join('.')}[${f.vindex}])(${[p, ...cArgs].join(', ')}))`;
     } else call = `${f.cname}(${all.join(', ')})`;
@@ -513,8 +558,13 @@ export const exprMethods = {
       const m = this.memberEntity(first.t.cls, name);
       if (m?.ent.k === 'funcs') for (const f of m.ent.list) cands.push({ f, member: true });
     }
-    const g = this.global.get(name);
-    if (g?.k === 'funcs') for (const f of g.list) cands.push({ f, member: false });
+    // Non-members: by ordinary lookup from here, and in the namespace of each class operand (the
+    // argument-dependent lookup that finds Common::operator+ from inside Sky).
+    const seen = new Set(cands.map((c) => c.f));
+    const add = (e) => { if (e?.k === 'funcs') for (const f of e.list) if (!seen.has(f)) { seen.add(f); cands.push({ f, member: false }); } };
+    for (let s = cx.env.scope; s; s = s.parent) if (!s.cls) { const e = s.find(name); if (e) { add(e); break; } }
+    for (const o of operands) if (o.t.k === 'class') add(this.homeScope(o.t.cls).find(name));
+    add(this.global.find(name));
     if (!cands.length) return null;
     // Members take the first operand as their object; the others take every operand as an argument.
     const viable = [];
@@ -589,7 +639,9 @@ export const exprMethods = {
         const e = this.expr(n.e, sub);
         return { c: `sizeof(${this.ct(e.t)})`, t: T.UINT, lv: false };
       }
-      case 'cast': return this.castExpr(this.declType(n.type.specs, n.type.derivs, cx.env, n), this.expr(n.e, cx), cx, n);
+      case 'cast':
+        if (n.named === 'dynamic_cast') return this.dynamicCast(this.declType(n.type.specs, n.type.derivs, cx.env, n), this.expr(n.e, cx), cx, n);
+        return this.castExpr(this.declType(n.type.specs, n.type.derivs, cx.env, n), this.expr(n.e, cx), cx, n);
       case 'fcast': return this.functionalCast(n, cx);
       case 'new': return this.newExpr(n, cx);
       case 'delete': return this.deleteExpr(n, cx);
@@ -661,6 +713,8 @@ export const exprMethods = {
         if (ent.field) return this.fieldOf(this.thisObject(cx, n), ent, r.path, cx);
         return this.varExpr(ent, cx);
       case 'funcs': {
+        const targs = n.name.parts[n.name.parts.length - 1].targs ?? null;
+        if (ent.templates?.length) return { funcs: ent.list, templates: ent.templates, targs, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };
         // A function named without being called: its address, when it is not overloaded.
         if (ent.list.length !== 1) return { funcs: ent.list, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };
         const f = ent.list[0];
@@ -712,6 +766,9 @@ export const exprMethods = {
 
   callExpr(n, cx) {
     const args = n.args.map((a) => this.expr(a, cx));
+    let callee = n.fn;
+    while (callee.k === 'paren') callee = callee.e;
+    if (callee.k === 'pm') return this.memberPointerCall(callee, args, cx, n);
     // A member's conversion-function call spelt out: obj.operator T()
     if (n.fn.k === 'member' && n.fn.name.parts[n.fn.name.parts.length - 1].conv) {
       const obj = this.objectOf(n.fn, cx);
@@ -720,11 +777,24 @@ export const exprMethods = {
       if (!f) this.fail(`no conversion of ${obj.t.cls.name} to ${T.show(want)}`, n);
       return this.callMember(f, obj, [], cx, { node: n });
     }
-    const fn = n.fn.k === 'id' && !this.lookupName(n.fn.name, cx.env) ? this.fail(`'${this.qualText(n.fn.name)}' is not declared`, n.fn) : this.expr(n.fn, cx);
+    // A function of the C library no header declared (rand, strstr): called as C calls it.
+    if (n.fn.k === 'id' && n.fn.name.parts.length === 1 && !n.fn.name.global && this.builtins?.has(this.lastName(n.fn.name)) && !this.lookupName(n.fn.name, cx.env)) {
+      const name = this.lastName(n.fn.name);
+      if (cx.constOnly) cx.dynamic = true;
+      return { c: `${name}(${args.map((a) => this.variadicArg(a, cx)).join(', ')})`, t: this.cxxTypeOfC(this.builtins.get(name).ret), lv: false };
+    }
+    let fn = n.fn.k === 'id' && !this.lookupName(n.fn.name, cx.env) ? this.fail(`'${this.qualText(n.fn.name)}' is not declared`, n.fn) : this.expr(n.fn, cx);
     if (fn.dtorCall) {
       const d = this.dtorOf(fn.obj.t.cls);
       if (!d) return { c: '((void)0)', t: T.VOID, lv: false };
       return this.callResult(d, this.addrOf(fn.obj, cx), [], cx, { direct: false });
+    }
+    if (fn.templates) {
+      // The plain functions of the name, and an instance of each template whose arguments deduce.
+      const insts = fn.templates.map((ft) => this.deduce(ft, fn.targs ?? [], args, cx.env, n)).filter(Boolean);
+      const cands = [...(fn.targs ? [] : fn.funcs), ...insts];
+      if (!cands.length) this.fail(`no ${fn.templates[0].name} takes (${args.map((a) => T.show(a.t)).join(', ')})`, n);
+      fn = { ...fn, funcs: cands };
     }
     if (fn.funcs) {
       const first = fn.funcs[0];
@@ -758,10 +828,62 @@ export const exprMethods = {
     return { c: call, t: ft.ret, lv: false };
   },
 
+  /**
+   * `&C::f` as a value: the C function itself, or for a virtual one a thunk that calls through the
+   * object's table -- so that the pointer reaches the overrider of whatever object it is used on.
+   */
+  memberPointer(e, node) {
+    const fs = e.funcs.filter((f) => !f.isStatic);
+    if (fs.length !== 1) this.fail(`&${fs[0].display}: an overloaded member's address`, node);
+    const f = fs[0];
+    const t = { k: 'memptr', cls: f.cls, to: T.func(f.type.ret, f.type.params, f.type.variadic) };
+    this.use(f);
+    if (!f.isVirtual) return { c: `((${this.ct(t)})${f.cname})`, t, lv: false };
+    const name = `__vcall_${f.cname}`;
+    if (!f.vcallDone) {
+      f.vcallDone = true;
+      const ps = f.type.params.map((p, i) => this.ct(p.k === 'ref' ? T.ptr(p.to) : p, `__a${i}`));
+      const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
+      const sig = this.ct(ret, `${name}(${[this.ct(T.ptr({ k: 'class', cls: f.cls }), '__self'), ...ps].join(', ')})`);
+      const call = this.callResult(f, '__self', f.type.params.map((_, i) => `__a${i}`), { fn: null, pending: [], env: { scope: this.global } }, { direct: false });
+      this.out.protos.push(`static ${sig};`);
+      this.out.bodies.push(`static ${sig} {\n  ${ret.k === 'void' ? '' : 'return '}${f.type.ret.k === 'ref' ? call.addr : call.c};\n}`);
+    }
+    return { c: `((${this.ct(t)})${name})`, t, lv: false };
+  },
+  /** `(obj.*pm)(args)` and `(p->*pm)(args)`: the function, called with the object first. */
+  memberPointerCall(pm, args, cx, node) {
+    let o = this.expr(pm.obj, cx);
+    if (pm.arrow) {
+      o = this.decay(o);
+      if (o.t.k !== 'ptr' || o.t.to.k !== 'class') this.fail(`->* on ${T.show(o.t)}`, node);
+      o = { c: `(*${o.c})`, t: o.t.to, lv: true, addr: o.c };
+    }
+    const m = this.expr(pm.mp, cx);
+    if (m.t.k !== 'memptr') this.fail(`.* with ${T.show(m.t)}`, node);
+    if (o.t.k !== 'class') this.fail(`.* on ${T.show(o.t)}`, node);
+    const path = this.basePath(this.complete(o.t.cls, node), m.t.cls);
+    if (!path) this.fail(`${m.t.cls.name} is not a base of ${o.t.cls.name}`, node);
+    const ft = m.t.to;
+    if (args.length < ft.params.length || (args.length > ft.params.length && !ft.variadic)) this.fail('wrong number of arguments', node);
+    const cArgs = args.map((a, i) => (i < ft.params.length ? this.coerce(a, ft.params[i], cx, node, 'argument conversion') : this.variadicArg(a, cx)));
+    if (cx.constOnly) cx.dynamic = true;
+    const call = `(${m.c})(${[this.upcastPtr(this.addrOf(o, cx), path, m.t.cls), ...cArgs].join(', ')})`;
+    if (ft.ret.k === 'ref') return { c: `(*${call})`, t: ft.ret.to, lv: true, addr: call };
+    return { c: call, t: ft.ret, lv: false };
+  },
+  /** The C compiler's type (src/sema/types.js) as this front end's. */
+  cxxTypeOfC(t) {
+    if (t.k === 'void') return T.VOID;
+    if (t.k === 'ptr') return T.ptr(this.cxxTypeOfC(t.to));
+    return T.prim(t.name ?? 'int');
+  },
   unaryExpr(n, cx) {
     const e = this.expr(n.e, cx);
     if (n.op === '&') {
       if (e.funcs && e.t.k === 'func') return { c: e.c, t: T.ptr(e.t), lv: false };
+      // `&C::f`: a pointer to member function.
+      if (e.funcs && e.funcs[0]?.cls && !e.funcs[0].isStatic && !e.obj) return this.memberPointer(e, n);
       const o = this.overloaded('&', [e], cx, n);
       if (o) return o;
       if (!e.lv && !e.addr) this.fail('& of something that is not an lvalue', n);
@@ -791,7 +913,8 @@ export const exprMethods = {
     const a = this.builtinOperand(a0, cx, n), b = this.builtinOperand(b0, cx, n);
     const c = `(${a.c} ${n.op} ${b.c})`;
     if (CMP.has(n.op)) {
-      const ok = (T.isArith(a.t) && T.isArith(b.t)) || (a.t.k === 'ptr' && (b.t.k === 'ptr' || b.zero)) || (b.t.k === 'ptr' && a.zero);
+      const ok = (T.isArith(a.t) && T.isArith(b.t)) || (a.t.k === 'ptr' && (b.t.k === 'ptr' || b.zero)) || (b.t.k === 'ptr' && a.zero)
+        || (a.t.k === 'memptr' && (b.t.k === 'memptr' || b.zero)) || (b.t.k === 'memptr' && a.zero);
       if (!ok) this.fail(`${n.op} between ${T.show(a0.t)} and ${T.show(b0.t)}`, n);
       return { c, t: T.BOOL, lv: false };
     }
@@ -864,6 +987,45 @@ export const exprMethods = {
     return { c: `((${this.ct(V)})${s.c})`, t: V, lv: false, zero: e.zero && V.k === 'ptr' && V.to.k === 'void' };
   },
 
+  /**
+   * `dynamic_cast<D *>(p)`: up a hierarchy it is an ordinary conversion; down or across one, the
+   * object's table says what it is -- its offset to the whole object and the whole object's type
+   * descriptor, searched for D by name (src/cxx/sema-stmt.js, vtableName and typeinfo).
+   */
+  dynamicCast(to, e, cx, node) {
+    const V = T.uncst(to);
+    if (V.k !== 'ptr' || V.to.k !== 'class') this.fail(`dynamic_cast to ${T.show(to)}: only to a pointer to a class`, node);
+    const p = this.builtinOperand(e, cx, node);
+    if (p.t.k !== 'ptr' || p.t.to.k !== 'class') this.fail(`dynamic_cast of ${T.show(e.t)}`, node);
+    const from = this.complete(p.t.to.cls, node), want = this.complete(V.to.cls, node);
+    const up = this.derivedPath(from, want);
+    if (up) return { c: this.upcastPtr(p.c, up, want), t: V, lv: false };
+    if (!from.hasVptr) this.fail(`dynamic_cast from ${from.name}, which has no virtual function`, node);
+    this.needStruct(from);
+    this.typeinfo(want);
+    this.needDyncast();
+    const tmp = this.temp(cx, T.ptr({ k: 'class', cls: from }));
+    const vptr = `${tmp}->${[...this.vptrPath(from), '__vptr'].join('.')}`;
+    return { c: `((${this.ct(V)})__prism_dyncast((void *)(${tmp} = ${p.c}), ${tmp} ? ${vptr} : (void **)0, "${want.cname}"))`, t: V, lv: false };
+  },
+  needDyncast() {
+    if (this.dyncastDone) return;
+    this.dyncastDone = true;
+    this.out.protos.push('static void *__prism_dyncast(void *p, void **vptr, const char *name);');
+    this.out.bodies.push(
+      'static int __prism_ti_find(const struct __prism_ti *ti, const char *name, int off) {\n'
+      + '  int i, r; const char *a = ti->name, *b = name;\n'
+      + '  while (*a && *a == *b) a++, b++;\n'
+      + '  if (*a == *b) return off;\n'
+      + '  for (i = 0; i < ti->n; i++) { r = __prism_ti_find(ti->b[i].ti, name, off + ti->b[i].off); if (r >= 0) return r; }\n'
+      + '  return -1;\n}',
+      'static void *__prism_dyncast(void *p, void **vptr, const char *name) {\n'
+      + '  char *top; int r;\n'
+      + '  if (!p) return (void *)0;\n'
+      + '  top = (char *)p + (int)vptr[-2];\n'
+      + '  r = __prism_ti_find((const struct __prism_ti *)vptr[-1], name, 0);\n'
+      + '  return r < 0 ? (void *)0 : (void *)(top + r);\n}');
+  },
   /** `T(args)`: a conversion for a non-class T, a temporary built by a constructor for a class. */
   functionalCast(n, cx) {
     const t = T.uncst(this.declType(n.type.specs, n.type.derivs, cx.env, n));
@@ -941,6 +1103,7 @@ export const exprMethods = {
     const name = `__delete_${cls.cname}`;
     if (cls.deleteHelper) return name;
     cls.deleteHelper = true;
+    this.needStruct(cls);
     const d = this.dtorOf(cls);
     this.use(d);
     const self = this.ct(T.ptr({ k: 'class', cls }), 'p');

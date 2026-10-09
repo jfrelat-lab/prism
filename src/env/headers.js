@@ -943,6 +943,21 @@ int toupper(int c);
 #endif
 `;
 
+/*
+ * <sys/uio.h>: scatter/gather I/O. ScummVM 0.6.1's common/stdafx.h includes it on every Unix and
+ * calls neither function; declared with glibc's struct iovec so that a program which does gets the
+ * layout it expects, and left unimplemented until one does.
+ */
+const SYS_UIO = `
+#ifndef _PRISM_SYS_UIO_H
+#define _PRISM_SYS_UIO_H
+#include <sys/types.h>
+struct iovec { void *iov_base; size_t iov_len; };
+ssize_t readv(int fd, const struct iovec *iov, int iovcnt);
+ssize_t writev(int fd, const struct iovec *iov, int iovcnt);
+#endif
+`;
+
 const SYS_TYPES = `
 #ifndef _PRISM_SYS_TYPES_H
 #define _PRISM_SYS_TYPES_H
@@ -2012,6 +2027,7 @@ int sigaddset(sigset_t *set, int sig);
 `,
   'ctype.h': CTYPE,
   'sys/types.h': SYS_TYPES,
+  'sys/uio.h': SYS_UIO,
   /*
    * getopt's DECLARATIONS. Its definitions are C, in src/env/getopt.js, supplied by the `getopt`
    * environment -- externs here rather than tentative definitions like errno, because there really

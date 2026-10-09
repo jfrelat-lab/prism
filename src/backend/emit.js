@@ -3645,6 +3645,23 @@ export function collectAddressTaken(node, out) {
   }
 }
 
+/** The address `p->a.b` names when p is a constant (the offsetof idiom), or null. */
+function constMemberAddress(ty, e) {
+  if (e?.n !== 'member') return null;
+  let base, rec;
+  if (e.arrow) {
+    try { base = evalConstNumber(ty, e.base); } catch { return null; }
+    const pt = ty.decay(e.base.type ?? ty.INT);
+    rec = pt.k === 'ptr' ? pt.to : null;
+  } else {
+    base = constMemberAddress(ty, e.base);
+    rec = e.base.type;
+  }
+  if (base === null || !rec || !T.isRecord(rec)) return null;
+  const f = findField(rec, e.field);
+  return f && f.bits === undefined ? base + f.offset : null;
+}
+
 function evalConstNumber(ty, e) {
   switch (e.n) {
     case 'num': return Number(BigInt.asIntN(64, e.value));
@@ -3656,6 +3673,9 @@ function evalConstNumber(ty, e) {
     case 'unary':
       if (e.op === '-') return -evalConstNumber(ty, e.expr);
       if (e.op === '+') return evalConstNumber(ty, e.expr);
+      // `&((struct S *)0)->a.b`, offsetof written by hand, as a NUMBER -- so that it folds under an
+      // operator too: `-(int)&((S *)0)->b` is how a C++ table records its offset to the whole object.
+      if (e.op === '&') { const v = constMemberAddress(ty, e.expr); if (v !== null) return v; }
       if (e.op === '~') return ~evalConstNumber(ty, e.expr);
       if (e.op === '!') return evalConstNumber(ty, e.expr) === 0 ? 1 : 0;
       break;

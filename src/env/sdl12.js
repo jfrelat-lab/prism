@@ -35,6 +35,14 @@
 // mixes for itself (src/env/sdlmixer.js), so the calls where a program yields to SDL -- a delay, a
 // tick query, an event poll, a flip or a swap -- are also where the buffers due by the clock get
 // mixed: state.pump(), the audio thread's work done at the safepoints.
+//
+// AND FOR corpus/scummvm-0.6.1, whose SDL backend draws the game in 8 bits, converts it to a 16-bit
+// display with SDL_BlitSurface, runs its scalers over that and presents with SDL_UpdateRects: surfaces
+// of any depth SDL 1.2 lays out (8, 15, 16, 32 bits, described by their masks), blits that convert
+// between them, fills, surfaces made around the program's own pixels; the audio callback of
+// SDL_OpenAudio -- which is the mixer's post-mix hook by another name, so it is pumped by the same
+// clock; the periodic timer, fired at the same points; and honest answers for the CD-ROM and the
+// joystick, which are not here.
 
 /* SDL_Surface, SDL 1.2's. pitch is 16-BIT here -- SDL2 widened it, and the padding hides the
    difference from offsetof, which is why the gate measures member widths too. */
@@ -50,13 +58,29 @@ const P_NCOLORS = 0, P_COLORS = 4, P_SIZE = 8, COLOR_SIZE = 4;
 
 /* SDL_Event, SDL 1.2's. `type` is a Uint8 here and a Uint32 in SDL2 -- the difference that makes
    one version's PollEvent unusable by the other's program. */
-const E_TYPE = 0, E_KEY_STATE = 2, E_KEY_SYM = 8, E_KEY_UNICODE = 16,
+const E_TYPE = 0, E_KEY_STATE = 2, E_KEY_SCAN = 4, E_KEY_SYM = 8, E_KEY_MOD = 12, E_KEY_UNICODE = 16,
       E_BTN_BUTTON = 2, E_BTN_STATE = 3, E_BTN_X = 4, E_BTN_Y = 6,
       E_MOTION_STATE = 2, E_MOTION_X = 4, E_MOTION_Y = 6, E_MOTION_XREL = 8, E_MOTION_YREL = 10, E_SIZE = 20;
 
 const SDL_KEYDOWN = 2, SDL_KEYUP = 3, SDL_MOUSEMOTION = 4, SDL_MOUSEBUTTONDOWN = 5, SDL_MOUSEBUTTONUP = 6;
 const SDL_PRESSED = 1, SDL_RELEASED = 0;
+/* The modifier each modifier key holds, by its symbol (SDL_keysym.h). */
+const KMOD_OF = { 304: 0x0001, 303: 0x0002, 306: 0x0040, 305: 0x0080, 308: 0x0100, 307: 0x0200, 310: 0x0400, 309: 0x0800 };
 const SDL_OPENGL = 0x00000002;
+
+/* SDL_PixelFormat's loss and shift bytes, between the depth bytes and the masks. */
+const F_RLOSS = 6, F_RSHIFT = 10;
+/* SDL_AudioSpec: measured by tools/gate-sdl12abi.mjs like everything above. */
+const A_FREQ = 0, A_FORMAT = 4, A_CHANNELS = 6, A_SILENCE = 7, A_SAMPLES = 8, A_SIZE = 12, A_CALLBACK = 16, A_USERDATA = 20, A_BYTES = 24;
+const AUDIO_U8 = 0x0008, AUDIO_S16LSB = 0x8010;
+/* The masks SDL gives a display of each depth when the program names none: 16 bits is 5-6-5, the
+   format of every X server and frame buffer of the period; 15 is 5-5-5. 32 keeps this file's RGBA. */
+const DEFAULT_MASKS = {
+  15: [0x7c00, 0x03e0, 0x001f, 0],
+  16: [0xf800, 0x07e0, 0x001f, 0],
+  32: [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000],
+};
+const CD_ERROR = -1;
 
 /*
  * Scan code set 1 -> SDLKey, for a US keyboard. `extended` is the 0xE0 prefix: the arrows and the
@@ -87,6 +111,7 @@ for (let scan = 1; scan < SCAN_CHARS.length; scan++) {
 }
 
 import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
+import { freeRunningClock } from './clock.js';
 
 export function installSDL12(M, { onPresent = null, onPalette = null, keyboard = null,
                                  clock = freeRunningClock() } = {}) {
@@ -112,6 +137,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     opengl: false,          // the display is an OpenGL context: gl.js draws, SDL only swaps
     onSwap: null,           // host hook: called at SDL_GL_SwapBuffers with the GL layer
     mouse: null,            // host hook: { poll() -> { x, y, buttons } }, buttons as SDL's mask
+    mods: 0,                // the modifier keys held, as SDLMod bits
     clock,                   // one clock for GetTicks and Delay both, see env/clock.js
     ...MIXER_STATE,          // the mixer's bookkeeping, shared with the SDL 2 environment
   };
@@ -155,11 +181,12 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
   };
 
   /** A surface plus its format, laid out where the header says. Returns the surface's address. */
-  const makeSurface = (w, h, depth) => {
-    const bytes = depth === 8 ? 1 : 4;
-    const pitch = w * bytes;
-    const pix = M.rt.malloc(pitch * h);
-    M.u8.fill(0, pix, pix + pitch * h);
+  const makeSurface = (w, h, depth, { masks = null, pixels = 0, pitch: givenPitch = 0 } = {}) => {
+    const bytes = depth === 8 ? 1 : depth <= 16 ? 2 : depth === 24 ? 3 : 4;
+    const pitch = givenPitch || w * bytes;
+    // A surface made FROM the program's pixels uses them where they are; SDL does not copy them.
+    const pix = pixels || M.rt.malloc(pitch * h);
+    if (!pixels) M.u8.fill(0, pix, pix + pitch * h);
 
     const fmt = M.rt.malloc(F_SIZE);
     M.u8.fill(0, fmt, fmt + F_SIZE);
@@ -175,10 +202,16 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       d.setUint32(pal + P_COLORS, colors, true);
       d.setUint32(fmt + F_PALETTE, pal, true);
     } else {
-      d.setUint32(fmt + F_RMASK, 0x000000ff, true);
-      d.setUint32(fmt + F_GMASK, 0x0000ff00, true);
-      d.setUint32(fmt + F_BMASK, 0x00ff0000, true);
-      d.setUint32(fmt + F_AMASK, 0xff000000, true);
+      const m = masks && (masks[0] || masks[1] || masks[2]) ? masks : (DEFAULT_MASKS[depth] ?? DEFAULT_MASKS[32]);
+      // Each mask, and the shift and loss SDL derives from it: where the component sits, and how
+      // many of its 8 bits the format drops.
+      m.forEach((mask, i) => {
+        d.setUint32(fmt + F_RMASK + 4 * i, mask >>> 0, true);
+        let shift = 0, bits = 0;
+        if (mask) { while (!((mask >>> shift) & 1)) shift++; while ((mask >>> (shift + bits)) & 1) bits++; }
+        d.setUint8(fmt + F_RLOSS + i, 8 - Math.min(bits, 8));
+        d.setUint8(fmt + F_RSHIFT + i, shift);
+      });
     }
 
     const s = M.rt.malloc(S_SIZE);
@@ -197,6 +230,37 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
 
   const surfacePixels = (s) => (s ? dv().getUint32(s + S_PIXELS, true) : 0);
   const surfaceFormat = (s) => (s ? dv().getUint32(s + S_FORMAT, true) : 0);
+
+  /** What a blit or a fill needs to know about a surface, read from guest memory each time. */
+  const info = (s) => {
+    const d = dv(), fmt = surfaceFormat(s);
+    const bits = M.u8[fmt + F_BITS], bytes = M.u8[fmt + F_BYTES];
+    const pal = bits === 8 ? d.getUint32(fmt + F_PALETTE, true) : 0;
+    return {
+      w: d.getInt32(s + S_W, true), h: d.getInt32(s + S_H, true), pitch: d.getUint16(s + S_PITCH, true),
+      pixels: d.getUint32(s + S_PIXELS, true), fmt, bits, bytes,
+      colors: pal ? d.getUint32(pal + P_COLORS, true) : 0,
+      masks: [0, 1, 2, 3].map((i) => d.getUint32(fmt + F_RMASK + 4 * i, true)),
+      shifts: [0, 1, 2, 3].map((i) => M.u8[fmt + F_RSHIFT + i]),
+      losses: [0, 1, 2, 3].map((i) => M.u8[fmt + F_RLOSS + i]),
+      clip: [0, 2, 4, 6].map((o, i) => (i < 2 ? d.getInt16(s + S_CLIP + o, true) : d.getUint16(s + S_CLIP + o, true))),
+    };
+  };
+  const getPixel = (a, bytes) => (bytes === 1 ? M.u8[a] : bytes === 2 ? M.u8[a] | (M.u8[a + 1] << 8)
+    : bytes === 3 ? M.u8[a] | (M.u8[a + 1] << 8) | (M.u8[a + 2] << 16) : dv().getUint32(a, true));
+  const putPixel = (a, bytes, v) => {
+    M.u8[a] = v; if (bytes > 1) M.u8[a + 1] = v >>> 8; if (bytes > 2) M.u8[a + 2] = v >>> 16; if (bytes > 3) M.u8[a + 3] = v >>> 24;
+  };
+  /* A component widened back to 8 bits the way SDL does it: shifted up, the low bits left zero. */
+  const toRGB = (fi, p) => (fi.bits === 8
+    ? [M.u8[fi.colors + 4 * p], M.u8[fi.colors + 4 * p + 1], M.u8[fi.colors + 4 * p + 2]]
+    : [0, 1, 2].map((i) => (((p & fi.masks[i]) >>> fi.shifts[i]) << fi.losses[i]) & 0xff));
+  const fromRGB = (fi, r, g, b) => {
+    if (fi.bits === 8) return mapToPalette(r, g, b);
+    return ((((r >> fi.losses[0]) << fi.shifts[0]) | ((g >> fi.losses[1]) << fi.shifts[1]) | ((b >> fi.losses[2]) << fi.shifts[2]) | fi.masks[3]) >>> 0);
+  };
+  /** A rectangle argument, or the whole surface when it is NULL. */
+  const rectOf = (r, w, h) => (r ? [dv().getInt16(r, true), dv().getInt16(r + 2, true), dv().getUint16(r + 4, true), dv().getUint16(r + 6, true)] : [0, 0, w, h]);
 
   /*
    * Nearest colour in the palette, which is what SDL_MapRGB means on an 8-bit surface. The game
@@ -238,6 +302,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_SetVideoMode: (w, h, depth, flags) => {
       state.width = w | 0;
       state.height = h | 0;
+      state.depth = depth | 0 || 8;
       if (flags & SDL_OPENGL) {
         /*
          * An OpenGL display. The surface SDL hands back is one the program never draws into -- it
@@ -263,7 +328,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_GL_GetProcAddress: () => 0,
     SDL_GL_SwapBuffers: () => { state.pump(); if (state.onSwap) state.onSwap(M.gl); },
     SDL_GetVideoSurface: () => state.surface,
-    SDL_CreateRGBSurface: (_flags, w, h, depth) => makeSurface(w | 0, h | 0, depth | 0 || 32),
+    SDL_CreateRGBSurface: (_flags, w, h, depth, r, g, b, a) => makeSurface(w | 0, h | 0, depth | 0 || 32, { masks: [r >>> 0, g >>> 0, b >>> 0, a >>> 0] }),
     SDL_FreeSurface: () => 0,    // the guest heap is not reclaimed here; nothing leaks per frame
     SDL_LockSurface: () => 0,    // software surfaces are always addressable
     SDL_UnlockSurface: () => 0,
@@ -307,7 +372,9 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_MapRGB: (fmt, r, g, b) => {
       const bits = fmt ? M.u8[fmt + F_BITS] : 8;
       if (bits === 8) return mapToPalette(r & 0xff, g & 0xff, b & 0xff);
-      return ((r & 0xff) | ((g & 0xff) << 8) | ((b & 0xff) << 16) | 0xff000000) >>> 0;
+      // By the format's own masks: a 16-bit display is 5-6-5, not RGBA.
+      const fi = { bits, masks: [0, 1, 2, 3].map((i) => dv().getUint32(fmt + F_RMASK + 4 * i, true)), shifts: [0, 1, 2].map((i) => M.u8[fmt + F_RSHIFT + i]), losses: [0, 1, 2].map((i) => M.u8[fmt + F_RLOSS + i]) };
+      return fromRGB(fi, r & 0xff, g & 0xff, b & 0xff);
     },
     SDL_MapRGBA: (fmt, r, g, b, a) => {
       const bits = fmt ? M.u8[fmt + F_BITS] : 8;
@@ -315,9 +382,87 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       return ((r & 0xff) | ((g & 0xff) << 8) | ((b & 0xff) << 16) | ((a & 0xff) << 24)) >>> 0;
     },
 
+    SDL_UpdateRects: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); },
+    SDL_VideoModeOK: (_w, _h, bpp) => (bpp | 0) || 16,
+    SDL_CreateRGBSurfaceFrom: (pixels, w, h, depth, pitch, r, g, b, a) =>
+      makeSurface(w | 0, h | 0, depth | 0, { masks: [r >>> 0, g >>> 0, b >>> 0, a >>> 0], pixels, pitch: pitch | 0 }),
+    SDL_GetRGB: (pixel, fmt, rp, gp, bp) => {
+      const bits = M.u8[fmt + F_BITS];
+      const fi = bits === 8
+        ? { bits, colors: dv().getUint32(dv().getUint32(fmt + F_PALETTE, true) + P_COLORS, true) }
+        : { bits, masks: [0, 1, 2].map((i) => dv().getUint32(fmt + F_RMASK + 4 * i, true)), shifts: [0, 1, 2].map((i) => M.u8[fmt + F_RSHIFT + i]), losses: [0, 1, 2].map((i) => M.u8[fmt + F_RLOSS + i]) };
+      const [r, g, b] = toRGB(fi, pixel >>> 0);
+      if (rp) M.u8[rp] = r; if (gp) M.u8[gp] = g; if (bp) M.u8[bp] = b;
+    },
+
+    /*
+     * SDL_BlitSurface. The source rectangle is clipped to the source, the destination to its clip
+     * rectangle, and `dstrect` is given back the rectangle actually drawn, as SDL does. Between two
+     * surfaces of one format a row is a copy; otherwise each pixel goes through RGB -- an 8-bit
+     * source through ITS palette, which is how a game's 8-bit screen becomes a 16-bit display.
+     * A colour key is not applied: nothing here sets one on a surface it blits.
+     */
+    SDL_UpperBlit: (src, srcrect, dst, dstrect) => {
+      const S = info(src), D = info(dst);
+      let [sx, sy, w, h] = rectOf(srcrect, S.w, S.h);
+      let [dx, dy] = dstrect ? rectOf(dstrect, 0, 0) : [0, 0];
+      if (sx < 0) { w += sx; dx -= sx; sx = 0; }
+      if (sy < 0) { h += sy; dy -= sy; sy = 0; }
+      w = Math.min(w, S.w - sx); h = Math.min(h, S.h - sy);
+      const [cx, cy, cw, ch] = D.clip;
+      if (dx < cx) { w -= cx - dx; sx += cx - dx; dx = cx; }
+      if (dy < cy) { h -= cy - dy; sy += cy - dy; dy = cy; }
+      w = Math.min(w, cx + cw - dx); h = Math.min(h, cy + ch - dy);
+      if (w < 0) w = 0; if (h < 0) h = 0;
+      if (dstrect) { const d = dv(); d.setInt16(dstrect, dx, true); d.setInt16(dstrect + 2, dy, true); d.setUint16(dstrect + 4, w, true); d.setUint16(dstrect + 6, h, true); }
+      if (!w || !h) return 0;
+      const same = S.bytes === D.bytes && (S.bits === 8 ? D.bits === 8 : S.masks.every((m, i) => m === D.masks[i]));
+      for (let y = 0; y < h; y++) {
+        const sRow = S.pixels + (sy + y) * S.pitch + sx * S.bytes, dRow = D.pixels + (dy + y) * D.pitch + dx * D.bytes;
+        if (same) { M.u8.copyWithin(dRow, sRow, sRow + w * S.bytes); continue; }
+        for (let x = 0; x < w; x++) {
+          const [r, g, b] = toRGB(S, getPixel(sRow + x * S.bytes, S.bytes));
+          putPixel(dRow + x * D.bytes, D.bytes, fromRGB(D, r, g, b));
+        }
+      }
+      return 0;
+    },
+    SDL_FillRect: (dst, rect, color) => {
+      const D = info(dst);
+      let [x, y, w, h] = rectOf(rect, D.w, D.h);
+      const [cx, cy, cw, ch] = D.clip;
+      const x0 = Math.max(x, cx), y0 = Math.max(y, cy);
+      const x1 = Math.min(x + w, cx + cw), y1 = Math.min(y + h, cy + ch);
+      for (let yy = y0; yy < y1; yy++) {
+        const row = D.pixels + yy * D.pitch;
+        if (D.bytes === 1) M.u8.fill(color & 0xff, row + x0, row + x1);
+        else for (let xx = x0; xx < x1; xx++) putPixel(row + xx * D.bytes, D.bytes, color >>> 0);
+      }
+      return 0;
+    },
+    SDL_SaveBMP_RW: (_s, rw, freedst) => { if (freedst && rw) readRW(rw); state.setError('SDL_SaveBMP: no files are written here'); return -1; },
+    SDL_RWclose: (rw) => { readRW(rw); return 0; },
+    SDL_WM_GrabInput: (mode) => { if ((mode | 0) >= 0) state.grab = mode | 0; return state.grab ?? 0; },
+
+    // ---- the periodic timer: fired by pump(), at the points where the program yields to SDL ----
+    SDL_SetTimer: (interval, cb) => {
+      state.timer = cb && interval ? { cb, interval: interval >>> 0, next: state.clock.now() + (interval >>> 0) } : null;
+      return 0;
+    },
+
+    // ---- the CD-ROM: no drive -------------------------------------------------------------
+    SDL_CDNumDrives: () => 0,
+    SDL_CDName: () => 0,
+    SDL_CDOpen: () => { state.setError('No CD-ROM drive here'); return 0; },
+    SDL_CDStatus: () => CD_ERROR,
+    SDL_CDPlayTracks: () => -1, SDL_CDPlay: () => -1, SDL_CDPause: () => -1, SDL_CDResume: () => -1,
+    SDL_CDStop: () => -1, SDL_CDEject: () => -1,
+    SDL_CDClose: () => 0,
+
     // ---- input -----------------------------------------------------------------------------
     SDL_EnableUNICODE: () => 0,
     SDL_EnableKeyRepeat: () => 0,
+    SDL_GetModState: () => state.mods,
     SDL_GetMouseState: (xp, yp) => {
       if (xp) dv().setInt32(xp, pointer.x, true);
       if (yp) dv().setInt32(yp, pointer.y, true);
@@ -356,10 +501,15 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       if (!ev) return 1;
       const table = e.extended ? SDLK.extended : SDLK.plain;
       const sym = table[e.scan] ?? SDLK.plain[e.scan] ?? 0;
+      // The modifiers as they stand AFTER this event, which is what SDL reports with it.
+      const bit = KMOD_OF[sym] ?? 0;
+      state.mods = e.down ? (state.mods | bit) : (state.mods & ~bit);
       M.u8.fill(0, ev, ev + E_SIZE);
       d.setUint8(ev + E_TYPE, e.down ? SDL_KEYDOWN : SDL_KEYUP);
       d.setUint8(ev + E_KEY_STATE, e.down ? SDL_PRESSED : SDL_RELEASED);
+      d.setUint8(ev + E_KEY_SCAN, e.scan & 0xff);
       d.setInt32(ev + E_KEY_SYM, sym, true);
+      d.setInt32(ev + E_KEY_MOD, state.mods, true);
       d.setUint16(ev + E_KEY_UNICODE, e.ascii ?? 0, true);
       return 1;
     },
@@ -370,6 +520,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_JoystickClose: () => 0,
     SDL_JoystickGetAxis: () => 0,
     SDL_JoystickGetButton: () => 0,
+    SDL_JoystickName: () => noError,
 
     /*
      * ---- audio ----------------------------------------------------------------------------
@@ -379,10 +530,80 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
      */
     SDL_LockAudio: () => 0,
     SDL_UnlockAudio: () => 0,
-    SDL_PauseAudio: () => 0,
-    SDL_CloseAudio: () => 0,
+    /*
+     * Mutexes, for the same reason and with the same answer as the audio lock: the threads they
+     * keep apart are not here. A mutex is a guest block, so it is non-NULL and its own; taking one
+     * always succeeds.
+     */
+    SDL_CreateMutex: () => M.rt.malloc(4),
+    SDL_DestroyMutex: (m) => { if (m) M.rt.free(m); },
+    SDL_mutexP: () => 0,
+    SDL_mutexV: () => 0,
+    /*
+     * SDL_OpenAudio's callback is called with (userdata, stream, len) for every buffer -- the very
+     * shape of SDL_mixer's post-mix hook, so the device is the mixer's with no channels playing and
+     * the callback as its hook: one pump, one clock, one path to the page's audio. The device opens
+     * PAUSED, as SDL's does, until SDL_PauseAudio(0).
+     */
+    SDL_OpenAudio: (desired, obtained) => {
+      const d = dv();
+      const format = d.getUint16(desired + A_FORMAT, true), nch = M.u8[desired + A_CHANNELS];
+      if (format !== AUDIO_U8 && format !== AUDIO_S16LSB) { state.setError(`Unsupported audio format 0x${format.toString(16)}`); return -1; }
+      if (nch !== 1 && nch !== 2) { state.setError(`Unsupported number of audio channels: ${nch}`); return -1; }
+      const frames = Math.max(d.getUint16(desired + A_SAMPLES, true), 1);
+      state.freq = d.getInt32(desired + A_FREQ, true) || 22050; state.format = format; state.outChannels = nch; state.chunkFrames = frames;
+      state.mixBytes = frames * nch * (format === AUDIO_U8 ? 1 : 2);
+      state.mixBuf = M.rt.malloc(state.mixBytes);
+      state.postMix = d.getUint32(desired + A_CALLBACK, true);
+      state.postMixArg = d.getUint32(desired + A_USERDATA, true);
+      state.channels = null;
+      state.audioOpen = false;
+      M.u8[desired + A_SILENCE] = format === AUDIO_U8 ? 0x80 : 0;
+      d.setUint32(desired + A_SIZE, state.mixBytes, true);
+      if (obtained) M.u8.copyWithin(obtained, desired, desired + A_BYTES);
+      return 0;
+    },
+    SDL_PauseAudio: (on) => {
+      const run = !(on | 0) && !!state.mixBuf && !!state.postMix;
+      if (run && !state.audioOpen) { state.audioOpen = true; state.mixT0 = state.clock.now(); state.buffersMixed = 0; }
+      else if (!run && state.audioOpen) state.audioOpen = false;
+      else return 0;
+      if (state.onAudioOpen) state.onAudioOpen(state);
+      return 0;
+    },
+    SDL_CloseAudio: () => {
+      if (state.audioOpen && state.onAudioOpen) { state.audioOpen = false; state.onAudioOpen(state); }
+      state.audioOpen = false; state.postMix = 0;
+      return 0;
+    },
 
     ...mixerApi(M, state, { readRW }),
+  };
+
+  // The mixer's pump (installed by mixerApi above), then the timer: both are what SDL's threads
+  // would have done by now, done where the program next yields.
+  // NOT RE-ENTERED: SDL runs these on threads of its own, so a callback that asks for the time (and
+  // ScummVM's timer handler does) never finds itself called again from inside. Here that question
+  // is a pump point, and without this guard it recursed until the stack ran out.
+  const mixerPump = state.pump;
+  let pumping = false;
+  state.pump = () => {
+    if (pumping) return;
+    pumping = true;
+    try { pumpAll(); } finally { pumping = false; }
+  };
+  const pumpAll = () => {
+    mixerPump();
+    const t = state.timer;
+    if (!t) return;
+    const now = state.clock.now();
+    for (let n = 0; state.timer === t && now >= t.next && n < 64; n++) {
+      const again = M.icall(t.cb, [t.interval]) >>> 0;
+      if (!again) { if (state.timer === t) state.timer = null; break; }
+      t.interval = again; t.next += again;
+    }
+    // A program that stalled longer than 64 periods catches up from now, not from the past.
+    if (state.timer === t && now >= t.next) t.next = now + t.interval;
   };
 
   Object.assign(M.rt, api);
@@ -420,6 +641,22 @@ export function sdl12Builtins(T) {
     SDL_GL_SwapBuffers: f(V),
     SDL_Flip: f(I, P),
     SDL_UpdateRect: f(V, P, I, I, U, U),
+    SDL_UpdateRects: f(V, P, I, P),
+    SDL_VideoModeOK: f(I, I, I, I, U),
+    SDL_CreateRGBSurfaceFrom: f(P, P, I, I, I, I, U, U, U, U),
+    SDL_GetRGB: f(V, U, P, P, P, P),
+    SDL_UpperBlit: f(I, P, P, P, P),
+    SDL_FillRect: f(I, P, P, U),
+    SDL_SaveBMP_RW: f(I, P, P, I),
+    SDL_RWclose: f(I, P),
+    SDL_WM_GrabInput: f(I, I),
+    SDL_SetTimer: f(I, U, P),
+    SDL_CDNumDrives: f(I), SDL_CDName: f(P, I), SDL_CDOpen: f(P, I), SDL_CDStatus: f(I, P),
+    SDL_CDPlayTracks: f(I, P, I, I, I, I), SDL_CDPlay: f(I, P, I, I), SDL_CDPause: f(I, P), SDL_CDResume: f(I, P),
+    SDL_CDStop: f(I, P), SDL_CDEject: f(I, P), SDL_CDClose: f(V, P),
+    SDL_OpenAudio: f(I, P, P),
+    SDL_CreateMutex: f(P), SDL_DestroyMutex: f(V, P), SDL_mutexP: f(I, P), SDL_mutexV: f(I, P),
+    SDL_JoystickName: f(P, I),
     SDL_SetColors: f(I, P, P, I, I),
     SDL_SetColorKey: f(I, P, U, U),
     SDL_MapRGB: f(U, P, B, B, B),
@@ -433,6 +670,7 @@ export function sdl12Builtins(T) {
     SDL_WaitEvent: f(I, P),
     SDL_EnableUNICODE: f(I, I),
     SDL_EnableKeyRepeat: f(I, I, I),
+    SDL_GetModState: f(I),
     SDL_GetMouseState: f(B, P, P),
     SDL_WarpMouse: f(V, T.USHORT, T.USHORT),
 
