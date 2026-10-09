@@ -1,0 +1,26 @@
+{
+  "title": "INDIANA JONES AND THE FATE OF ATLANTIS",
+  "subtitle": "LucasArts, 1992 · the interactive demo, on ScummVM 0.6.1's SCUMM engine (v5)",
+  "target": "scummvm",
+  "host": "sdl",
+  "args": "-patlantis-demo playfate",
+  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "scumm",
+    "under": "atlantis-demo/",
+    "hint": "atlantis-demo/ from atlantis-dos-demo1-en.zip, the demo the ScummVM project distributes"
+  },
+  "controls": [
+    [
+      "mouse",
+      "a line of dialogue; a verb, then what it acts on"
+    ],
+    [
+      "Esc",
+      "skip a cutscene"
+    ]
+  ],
+  "_why": "SCUMM v5 on the same build: dialogue choices, verbs and an inventory. Held to a native g++ build frame by frame with a scripted player (gate-scummvm)."
+}

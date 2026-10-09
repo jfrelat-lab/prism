@@ -219,6 +219,12 @@ static void present(SDL_Surface *s) {
     for (x = 0; x < row; x++) h = (h ^ p[x]) * 16777619u;
   }
   printf("frame %d %08x\n", ++frames, h);
+  /* DUMPAT=n: the display's rows at frame n, raw, into /work/scummvm-frame.raw -- to look at a difference. */
+  if (getenv("DUMPAT") && atoi(getenv("DUMPAT")) == frames) {
+    FILE *o = fopen("/work/scummvm-frame.raw", "wb");
+    for (y = 0; o && y < d->h; y++) fwrite((const Uint8 *)d->pixels + y * d->pitch, 1, row, o);
+    if (o) fclose(o);
+  }
   if (frames == 1) printf("display %dx%dx%d masks %x %x %x\n", d->w, d->h, d->format->BitsPerPixel, d->format->Rmask, d->format->Gmask, d->format->Bmask);
   if (frames >= stop) { fflush(stdout); exit(0); }
 }

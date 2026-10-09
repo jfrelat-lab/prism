@@ -77,6 +77,15 @@ export const GAMES = {
     // File" expected), native and PRISM alike. Without the file the demo runs, silent.
     exclude: ['MONSTER.SOU'],
     title: 'Day of the Tentacle, non-interactive demo (dott-dos-ni-demo-en)' },
+  atlantis: { env: 'PRISM_SCUMMVM_ATLANTIS', home: 'scumm/atlantis-demo', folder: 'atlantis', name: 'playfate', input: [...click(70000, 150, 312), ...click(100000, 450, 250), ...click(115000, 160, 330)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-atlantis.json',
+    title: 'Indiana Jones and the Fate of Atlantis, demo (atlantis-dos-demo1-en)' },
+  monkey2: { env: 'PRISM_SCUMMVM_MONKEY2', home: 'scumm/monkey2-demo', folder: 'monkey2', name: 'mi2demo', input: [],
+    // ScummVM 0.6.1 stops this demo in its debugger ("room 5 not in room 5 at 0+0 in file mi2demo.001"),
+    // natively as here: the reference holds that too.
+    golden: 'goldens/scummvm-monkey2.json',
+    title: 'Monkey Island 2, non-interactive demo (monkey2-dos-ni-demo-en)' },
+  samnmax: { env: 'PRISM_SCUMMVM_SAMNMAX', home: 'scumm/samnmax-demo', folder: 'samnmax', name: 'snmdemo', input: [...move(20000, 320, 200), ...key(50000, 1)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-samnmax.json',
+    title: 'Sam & Max Hit the Road, demo (samnmax-dos-demo-en)' },
 };
 export const gameData = (g) => process.env[g.env] ?? join(homedir(), 'games', g.home);
 export const gameArgs = (g) => [`-p${g.folder}`, g.name];
@@ -147,9 +156,12 @@ async function nativeFrames(game, data, frames = FRAMES) {
     console.log('building the native ScummVM (once)...');
     cpSync(join(ROOT, 'corpus/scummvm-0.6.1'), dir, { recursive: true });
     copyFileSync(join(ROOT, 'tools/scummvmdiff/wrap.c'), join(dir, 'wrap.c'));
+    // The build date PRISM's preprocessor gives (src/compile.js TARGET_DEFINES): ScummVM prints
+    // __DATE__ and __TIME__ in its debugger, and Monkey Island 2's demo stops there.
+    writeFileSync(join(dir, 'prism-date.h'), '#undef __DATE__\n#define __DATE__ "Jan  1 1996"\n#undef __TIME__\n#define __TIME__ "00:00:00"\n');
     writeFileSync(join(dir, 'gxx33'), '#!/bin/sh\ncase "$1" in -dumpversion) echo 3.3; exit 0;; esac\nexec g++ "$@"\n', { mode: 0o755 });
     const wraps = ['SDL_GetTicks', 'SDL_Delay', 'SDL_PollEvent', 'SDL_WarpMouse', 'SDL_GetMouseState', 'time', 'SDL_SetTimer', 'SDL_OpenAudio', 'SDL_PauseAudio', 'SDL_CloseAudio', 'SDL_UpdateRects', 'SDL_UpdateRect', 'SDL_Flip'].map((n) => `--wrap=${n}`).join(',');
-    const r = sh(`cd scummvm-native && CXX=/work/scummvm-native/gxx33 ./configure --disable-simon --disable-sword1 --disable-sword2 --disable-queen --disable-alsa --disable-vorbis --disable-mad --disable-zlib --disable-mpeg2 >/dev/null && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make -j8 CXX=g++ CXXFLAGS='-O0 -ansi -fpermissive -fno-strict-aliasing -fwrapv -w' LIBS='wrap.o -lSDL -lm -Wl,${wraps}' >/dev/null 2>&1 && ls scummvm`, { timeout: 1200000 });
+    const r = sh(`cd scummvm-native && CXX=/work/scummvm-native/gxx33 ./configure --disable-simon --disable-sword1 --disable-sword2 --disable-queen --disable-alsa --disable-vorbis --disable-mad --disable-zlib --disable-mpeg2 >/dev/null && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make -j8 CXX=g++ CXXFLAGS='-O0 -ansi -fpermissive -fno-strict-aliasing -fwrapv -w -include /work/scummvm-native/prism-date.h' LIBS='wrap.o -lSDL -lm -Wl,${wraps}' >/dev/null 2>&1 && ls scummvm`, { timeout: 1200000 });
     if (r.code !== 0) throw new Error(`native build failed: ${r.stdout}${r.stderr}`.slice(-600));
   }
   mkdirSync(join(ROOT, '.oracle', game.folder), { recursive: true });

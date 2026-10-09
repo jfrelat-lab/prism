@@ -1,0 +1,22 @@
+{
+  "title": "MONKEY ISLAND 2: LECHUCK'S REVENGE",
+  "subtitle": "LucasArts, 1991 · the non-interactive demo, on ScummVM 0.6.1's SCUMM engine (v5)",
+  "target": "scummvm",
+  "host": "sdl",
+  "args": "-pmonkey2-demo mi2demo",
+  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "scumm",
+    "under": "monkey2-demo/",
+    "hint": "monkey2-demo/ from monkey2-dos-ni-demo-en.zip, the demo the ScummVM project distributes"
+  },
+  "controls": [
+    [
+      "Esc",
+      "skip a scene"
+    ]
+  ],
+  "_why": "ScummVM 0.6.1 stops this demo after its opening scene, in its own debugger (room 5 not in room 5 in mi2demo.001) -- natively as here, and the reference holds that too (gate-scummvm)."
+}

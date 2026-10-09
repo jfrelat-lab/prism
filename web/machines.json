@@ -66,6 +66,9 @@
         { "program": "scummvm", "file": "scummvm", "date": "Jul 26  2004" },
         { "program": "scummvm-monkey", "file": "monkey", "date": "Jul 26  2004" },
         { "program": "scummvm-dott", "file": "dott", "date": "Jul 26  2004" },
+        { "program": "scummvm-atlantis", "file": "atlantis", "date": "Jul 26  2004" },
+        { "program": "scummvm-monkey2", "file": "monkey2", "date": "Jul 26  2004" },
+        { "program": "scummvm-samnmax", "file": "samnmax", "date": "Jul 26  2004" },
         { "program": "morph3d", "file": "morph3d", "date": "Jul 13  2010" },
         { "program": "texobj", "file": "texobj", "date": "Jul 13  2010" }
       ],
