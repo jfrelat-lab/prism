@@ -255,6 +255,10 @@ export const BUILTINS = new Map(Object.entries({
   inportw: { ret: I, params: [I] },
   outportb: { ret: V, params: [I, I] },
   outportw: { ret: V, params: [I, I] },
+  inportl: { ret: T.ULONG, params: [I] },
+  outportl: { ret: V, params: [I, T.ULONG] },
+  ScreenClear: { ret: V, params: [] },
+  ScreenSetCursor: { ret: V, params: [I, I] },
   inp: { ret: I, params: [I] },
   outp: { ret: I, params: [I, I] },
 
@@ -831,8 +835,10 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
       if (d.storage === 'extern' && !d.init) continue;
       // A definition that fills a flexible array member is LARGER than its type says; the extra
       // storage has to be reserved here, before the next global takes the address after it.
-      const sym = mod.defineGlobal(d.name, d.type, d.type.size + flexibleExtra(d.type, d.init), { far: !!d.far });
-      globals.set(d.name, { addr: sym.addr, type: d.type });
+      // `T a[];` takes its length from another declaration of `a` -- see completeArray.
+      const type = d.type.k === 'array' && d.type.n === null && !d.init ? completeArray(unit.decls, d) : d.type;
+      const sym = mod.defineGlobal(d.name, type, type.size + flexibleExtra(type, d.init), { far: !!d.far });
+      globals.set(d.name, { addr: sym.addr, type });
     } else if (d.n === 'func') {
       const f0 = mod.defineFunc(d.name, d.type);
       f0.defined = true;                      // a body, not just a prototype
@@ -942,6 +948,19 @@ function leave(M, status) {
   }
   M.flushAll?.();
   return status;
+}
+
+/**
+ * The composite type of an incomplete array definition: the first declaration of the same name in
+ * the unit that gives a length, or the definition as it stands (a zero-length object, which is what
+ * C calls a tentative definition of `T a[]` that nothing completes -- one element, by 6.9.2p5, but
+ * gcc warns and so does nobody rely on it).
+ */
+function completeArray(decls, d) {
+  for (const o of decls) {
+    if (o.n === 'vardecl' && o.name === d.name && o.type?.k === 'array' && o.type.n !== null) return T.array(d.type.of, o.type.n);
+  }
+  return d.type;
 }
 
 /**
@@ -1059,8 +1078,16 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
          * access fail in the unit that could see the members.
          */
         if (d.storage === 'extern' && !d.init) { (p.externDecls ??= []).push(d); continue; }
-        const sym = mod.defineGlobal(link, d.type, d.type.size + flexibleExtra(d.type, d.init), { far: !!d.far });
-        (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type: d.type });
+        /*
+         * `T a[];` with no initialiser takes its length from another declaration of `a` in the unit
+         * -- C's composite type (6.2.7). MAME 0.37b5's generated 68000 core declares
+         * `extern void (*m68ki_instruction_jump_table[0x10000])(void);` and then defines it as
+         * `void (*m68ki_instruction_jump_table[])(void);`: the definition alone has no size, and
+         * the table of 65,536 handlers was written over whatever followed it.
+         */
+        const type = d.type.k === 'array' && d.type.n === null && !d.init ? completeArray(p.unit.decls, d) : d.type;
+        const sym = mod.defineGlobal(link, type, type.size + flexibleExtra(type, d.init), { far: !!d.far });
+        (internal ? p.globals : home.globals).set(d.name, { addr: sym.addr, type });
       } else if (d.n === 'func') {
         /*
          * A definition with NO storage class keeps the INTERNAL linkage of a prior static

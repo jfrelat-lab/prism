@@ -123,6 +123,15 @@ const STDIO = `
 #ifndef _PRISM_STDIO_H
 #define _PRISM_STDIO_H
 #include <stddef.h>
+/*
+ * DJGPP's <stdio.h> DEFINES va_list, where glibc's keeps it to itself: it carries the line
+ * __DJ_va_list, which <sys/djtypes.h> expands to the typedef (read at
+ * delorie.com/djgpp/doc/incs/stdio.h, not remembered). A DOS program may therefore use va_list
+ * after including only <stdio.h>, and MAME 0.37b5's src/msdos/msdos.c does.
+ */
+#ifdef __DJGPP__
+#include <stdarg.h>
+#endif
 typedef struct _PRISM_FILE FILE;
 /*
  * TENTATIVE definitions, not externs — the same reason as errno: these have to EXIST somewhere and no
@@ -557,6 +566,8 @@ char *__prism_va_next(va_list *ap, unsigned size);
 `;
 
 const TIMEH = `
+/* size_t, for strftime: a unit may include <time.h> before anything else (MAME 0.37b5's ticker.c). */
+#include <stddef.h>
 struct tm {
     int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst;
 };
@@ -884,6 +895,10 @@ int inportb(int port);
 int inportw(int port);
 void outportb(int port, int value);
 void outportw(int port, int value);
+unsigned long inportl(int port);
+void outportl(int port, unsigned long value);
+void ScreenClear(void);
+void ScreenSetCursor(int row, int col);
 int inp(int port);
 int outp(int port, int value);
 /*

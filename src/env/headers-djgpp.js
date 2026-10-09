@@ -7,6 +7,8 @@
 //
 // Every declaration below was put here because msdos.c or TwkUser.c names it. Nothing is anticipated.
 
+import { ALLEGRO39_H } from './allegro39.js';
+
 /*
  * DJGPP's memory-move helpers. On real hardware these copy across a selector into the low megabyte;
  * here the low megabyte is part of the same image, so `_dosmemputl(src, n, 0xa0000)` writes exactly
@@ -185,11 +187,16 @@ int  getg(int c);
 int  getb(int c);
 BITMAP *create_sub_bitmap(BITMAP *parent, int x, int y, int width, int height);
 
+#ifndef _PRISM_ALLEGRO39
+/* Allegro 3.0: a KEY_* constant is the PC's scan code. */
 #define KEY_LCONTROL 29
 #define KEY_PRTSCR   84
 #define KEY_F12      88
 #define KEY_RCONTROL 120
 #define KEY_ALTGR    121
+#else
+${ALLEGRO39_H}
+#endif
 #define KB_SCROLOCK_FLAG 0x0100
 #define KB_NUMLOCK_FLAG  0x0200
 #define KB_CAPSLOCK_FLAG 0x0400
@@ -253,6 +260,9 @@ const AUDIO = `
 #define AUDIO_FORMAT_MONO   0x0010
 #define AUDIO_FORMAT_STEREO 0x0020
 #define AUDIO_FORMAT_LOOP   0x0100
+/* "The data is raw PCM, not a file with a header." The real bit was not read from a SEAL header --
+   none is on this machine -- and nothing here depends on it: every wave this shim is given is raw. */
+#define AUDIO_FORMAT_RAW_SAMPLE 0x0400
 
 #define AUDIO_DEVICE_NONE   0x0000
 #define AUDIO_DEVICE_MAPPER 0xFFFF
@@ -411,10 +421,10 @@ const DIR_H = `
 #define _PRISM_DIR_H
 #include <unistd.h>
 #define MAXPATH 260
-/* The lengths of a path's parts, for fnsplit's buffers. DJGPP's values AS REMEMBERED, not read: no
-   DJGPP header is on this machine to transcribe them from. They size buffers and nothing else --
-   MAME 0.37b5's m68kmake keeps its output directory in a char[MAXDIR] -- and tools/mame-m68k.mjs
-   gives gcc the same numbers when it compares. */
+/* The lengths of a path's parts, for fnsplit's buffers: DJGPP's values, read from its <dir.h> as
+   the project publishes it (delorie.com/djgpp/doc/incs/dir.h). First written here from memory and
+   marked so; the header confirmed all five. MAME 0.37b5's m68kmake keeps its output directory in a
+   char[MAXDIR], and tools/mame-m68k.mjs gives gcc the same numbers when it compares. */
 #define MAXDRIVE 3
 #define MAXDIR 256
 #define MAXFILE 256
@@ -423,6 +433,9 @@ int findfirst(const char *path, void *ff, int attrib);
 int findnext(void *ff);
 #endif
 `;
+
+/** allegro.h as Allegro 3.9 has it: the same header with the renumbered keys and the driver lists. */
+export const ALLEGRO39_HEADER = `#define _PRISM_ALLEGRO39 1\n${ALLEGRO}`;
 
 export const DJGPP_HEADERS = {
   'go32.h': GO32,

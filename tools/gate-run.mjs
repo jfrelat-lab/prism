@@ -1884,6 +1884,81 @@ int main(void)
 }
 `);
 
+// `T a[];` defined after `extern T a[N];` is N long -- C's composite type -- and so is the reverse
+// order. MAME 0.37b5's generated 68000 core declares its 65,536-entry jump table the first way, and
+// the definition alone, taken as the type, gave it no storage: the table overwrote what followed.
+C('an-incomplete-array-takes-its-length-from-another-declaration', `#include <stdio.h>
+extern void (*table[0x100])(void);
+void (*table[])(void);
+int later[];
+extern int later[32];
+int after = 77;
+static void f(void) {}
+int main(void)
+{
+    int i;
+    for (i = 0; i < 0x100; i++) table[i] = f;
+    for (i = 0; i < 32; i++) later[i] = i;
+    printf("%d %d %d %d\\n", (int)sizeof table, (int)sizeof later, later[31], after);
+    return 0;
+}
+`);
+
+// A chain of && or || is emitted once per operand. Each operand used to be emitted twice, so a
+// chain of n cost 2^n to compile: MAME 0.37b5's fronthlp.c tests its command line with one `||` of
+// several dozen strcmp's, and its build never ended. Forty here: the old emitter does not finish.
+C('a-long-chain-of-or-compiles-once', `#include <stdio.h>
+#include <string.h>
+static int known(const char *a)
+{
+    return !strcmp(a, \"w0\") ||
+        !strcmp(a, \"w1\") ||
+        !strcmp(a, \"w2\") ||
+        !strcmp(a, \"w3\") ||
+        !strcmp(a, \"w4\") ||
+        !strcmp(a, \"w5\") ||
+        !strcmp(a, \"w6\") ||
+        !strcmp(a, \"w7\") ||
+        !strcmp(a, \"w8\") ||
+        !strcmp(a, \"w9\") ||
+        !strcmp(a, \"w10\") ||
+        !strcmp(a, \"w11\") ||
+        !strcmp(a, \"w12\") ||
+        !strcmp(a, \"w13\") ||
+        !strcmp(a, \"w14\") ||
+        !strcmp(a, \"w15\") ||
+        !strcmp(a, \"w16\") ||
+        !strcmp(a, \"w17\") ||
+        !strcmp(a, \"w18\") ||
+        !strcmp(a, \"w19\") ||
+        !strcmp(a, \"w20\") ||
+        !strcmp(a, \"w21\") ||
+        !strcmp(a, \"w22\") ||
+        !strcmp(a, \"w23\") ||
+        !strcmp(a, \"w24\") ||
+        !strcmp(a, \"w25\") ||
+        !strcmp(a, \"w26\") ||
+        !strcmp(a, \"w27\") ||
+        !strcmp(a, \"w28\") ||
+        !strcmp(a, \"w29\") ||
+        !strcmp(a, \"w30\") ||
+        !strcmp(a, \"w31\") ||
+        !strcmp(a, \"w32\") ||
+        !strcmp(a, \"w33\") ||
+        !strcmp(a, \"w34\") ||
+        !strcmp(a, \"w35\") ||
+        !strcmp(a, \"w36\") ||
+        !strcmp(a, \"w37\") ||
+        !strcmp(a, \"w38\") ||
+        !strcmp(a, \"w39\");
+}
+int main(void)
+{
+    printf("%d %d %d\\n", known("w0"), known("w39"), known("x"));
+    return 0;
+}
+`);
+
 // malloc of more than any machine has returns NULL, and a program may count on it: MAME 0.34's
 // readsamples asks for `sizeof(header) + (n - 1) * sizeof(entry)` with n == 0 -- a negative size,
 // four gigabytes once unsigned -- and takes the NULL to mean "no samples". PRISM trapped instead.

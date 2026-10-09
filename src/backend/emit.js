@@ -2293,12 +2293,19 @@ export class FunctionEmitter {
   }
 
   #binary(e) {
-    let a = this.#rval(e.a), b = this.#rval(e.b);
-    let at = this.ty.decay(a.type), bt = this.ty.decay(b.type);
     const op = e.op;
-
+    /*
+     * && and || FIRST, before either operand is emitted as a value. They used to come after
+     * `#rval(e.a), #rval(e.b)`, whose results they never used: every operand was emitted twice,
+     * once to be thrown away and once through #truth, so a chain of n of them cost 2^n. MAME
+     * 0.37b5's fronthlp.c tests its command line with one `||` of several dozen strcmp's, and the
+     * build did not end. Emitted once now -- which is also the only number of times an operand
+     * that hoists a statement may be emitted.
+     */
     if (op === '&&') return { js: `((${this.#truth(e.a)}&&${this.#truth(e.b)})?1:0)`, type: this.ty.INT };
     if (op === '||') return { js: `((${this.#truth(e.a)}||${this.#truth(e.b)})?1:0)`, type: this.ty.INT };
+    let a = this.#rval(e.a), b = this.#rval(e.b);
+    let at = this.ty.decay(a.type), bt = this.ty.decay(b.type);
 
     // Complex arithmetic works on the halves, so it cannot share the scalar paths below.
     if (T.isComplex(at) || T.isComplex(bt)) {

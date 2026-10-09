@@ -58,7 +58,9 @@ export function installPorts(M, { trace = false } = {}) {
       const p = port & 0xffff;
       if (seen) seen.set(`r${p.toString(16)}`, (seen.get(`r${p.toString(16)}`) || 0) + 1);
       const fn = readers.get(p);
-      return fn ? (fn(p, size) & (size === 2 ? 0xffff : 0xff)) : FLOATING;
+      if (!fn) return FLOATING;
+      const v = fn(p, size);
+      return size === 4 ? v >>> 0 : v & (size === 2 ? 0xffff : 0xff);
     },
 
     write(port, size, value) {
@@ -84,6 +86,12 @@ export function installPorts(M, { trace = false } = {}) {
     inportw: (p) => machine.read(p, 2) & 0xffff,
     outportb: (p, v) => { machine.write(p, 1, v | 0); },
     outportw: (p, v) => { machine.write(p, 2, v | 0); },
+    inportl: (p) => machine.read(p, 4) >>> 0,
+    outportl: (p, v) => { machine.write(p, 4, v | 0); },
+    // The text screen of pc.h. There is none here -- the page shows the program's output as a stream --
+    // so clearing it and moving its cursor have nothing to act on.
+    ScreenClear: () => {},
+    ScreenSetCursor: () => {},
     // DJGPP spells them both ways; a program may use either.
     inp: (p) => machine.read(p, 1) & 0xff,
     outp: (p, v) => { machine.write(p, 1, v | 0); return v | 0; },

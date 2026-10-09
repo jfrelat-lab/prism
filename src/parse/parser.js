@@ -397,6 +397,10 @@ export class Parser {
             type = T.array(type.of, len + 1);
           }
         }
+        // ...and `T a[];` with no initialiser, from an earlier declaration of `a` in this scope that
+        // gave the length: C's composite type. The later order is completeArray's, in compile.js.
+        const prior = type.k === 'array' && type.n === null && !init ? this.scope.ordinary.get(d.name) : null;
+        if (prior?.kind === 'var' && prior.type.k === 'array' && prior.type.n !== null) type = T.array(type.of, prior.type.n);
         this.scope.declare(d.name, { kind: type.k === 'func' ? 'func' : 'var', type });
         out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init, alias: datt.alias,
           ...(d.far ? { far: true } : {}) });

@@ -31,6 +31,9 @@ import { installEga } from './ega.js';
 import { installBorlandLib, BORLAND_LIB_HEADERS, BORLAND_LIB_BUILTINS } from './borland-lib.js';
 import { WATCOM_VARS } from './headers-watcom.js';
 import { installAllegro, ALLEGRO_VARS } from './allegro.js';
+import { KEYMAP39, KEY39_OF_SCAN } from './allegro39.js';
+import { ALLEGRO39_VARS } from './allegro39.js';
+import { ALLEGRO39_HEADER } from './headers-djgpp.js';
 import { installDj } from './dj.js';
 import { GETOPT_VARS } from './getopt.js';
 import { installX11 } from './x11.js';
@@ -113,6 +116,10 @@ export const ENV = {
   // globals, which is why no target file has to remember them.
   watcom: { install: (M, _c, o) => installWatcom(M, o), vars: WATCOM_VARS },
   allegro: { install: (M, _c, o) => installAllegro(M, o), vars: ALLEGRO_VARS },
+  // Allegro 3.9, which MAME 0.37b5 links: the same shim, the library's renumbered keys, its own
+  // allegro.h. Two versions of one library, so a build names one of the two (src/env/allegro39.js).
+  allegro39: { install: (M, _c, o) => installAllegro(M, { keymap: KEYMAP39, scanOf: KEY39_OF_SCAN, ...o }), vars: ALLEGRO_VARS + ALLEGRO39_VARS,
+    headers: { 'allegro.h': ALLEGRO39_HEADER } },
   // Borland C++ real mode: its <dos.h>, the vector table, and the seam `int n` is answered through.
   // ...and the parts of its runtime library a program calls by name (src/env/borland-lib.js).
   borland: {

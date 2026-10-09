@@ -37,6 +37,12 @@ export function installAllegro(M, {
   publish = null,          // the control block the page reads (src/env/webhost.js)
   keys = () => 0,          // scan code -> held?
   readKey = () => -1,      // blocking: the next typed key, as a PC scan code
+  /*
+   * Allegro 3.9 numbers its keys itself (src/env/allegro39.js): `keymap[n]` is the scan code the
+   * host reports for key n, and `scanOf[code]` the key a scan code is. Absent, a key IS its scan
+   * code, which is Allegro 3.0.
+   */
+  keymap = null, scanOf = null,
   onPresent = null,        // called once per frame the game presents
   stopAfterFrames = 0,
 } = {}) {
@@ -252,7 +258,14 @@ export function installAllegro(M, {
     // `key[]` itself is memory, refreshed by refreshKeys below; only the blocking reads are calls.
     readkey: () => {
       const scan = readKey();
-      return scan < 0 ? 0 : (scan << 8);           // Allegro returns (scancode << 8) | ascii
+      // Allegro returns (key << 8) | ascii; the key is the scan code in 3.0 and its own number in 3.9.
+      return scan < 0 ? 0 : ((scanOf ? scanOf[scan & 127] : scan) << 8);
+    },
+    // 3.9's reading of a key as a character. No text input is offered: the key number, no character.
+    ureadkey: (scancodeP) => {
+      const scan = readKey();
+      if (scancodeP) dv().setInt32(scancodeP, scan < 0 ? 0 : (scanOf ? scanOf[scan & 127] : scan), true);
+      return 0;
     },
     keypressed: () => 0,
     clear_keybuf: () => 0,
@@ -583,12 +596,15 @@ export function installAllegro(M, {
    * screen -- every update_screen_* routine is followed by this -- and it is that rectangle of that
    * bitmap, undoubled: the picture the game drew rather than the scan-out of one card.
    *
-   * 8-bit only. A 16-bit bitmap (the games MAME 0.34 gives more than 256 colours) is not presented.
+   * MAME 0.37b5 keeps all of that and changes two things. Its blit routines are HANDED the bitmap
+   * (`blitscreen_*(struct osd_bitmap *)`, in a unit of their own), and a 16-bit bitmap may hold pen
+   * numbers rather than pixels: a game that rewrites more than 256 colours draws with indexes and
+   * the routine turns each into a pixel through `palette_16bit_lookup` on the way to the card. So
+   * the caller says which bitmap, and whether its words go through that table (`lookup`).
    */
   let shown = 0, shownSize = 0;
-  function presentBitmap() {
+  function presentBitmap(b = dv().getInt32(g.scrbitmap, true), lookup = 0) {
     const d = dv();
-    const b = d.getInt32(g.scrbitmap, true);
     if (!b) return;
     const depth = d.getInt32(b + 8, true);
     const lines = d.getInt32(b + 16, true);
@@ -617,7 +633,8 @@ export function installAllegro(M, {
       for (let y = 0; y < h; y++) {
         let p = d.getInt32(lines + 4 * (sy + y), true) + 2 * sx;
         for (let x = 0; x < w; x++, p += 2, o += 4) {
-          const c = M.u8[p] | (M.u8[p + 1] << 8);
+          let c = M.u8[p] | (M.u8[p + 1] << 8);
+          if (lookup) c = M.u8[lookup + 4 * c] | (M.u8[lookup + 4 * c + 1] << 8);
           M.u8[o] = five(c & 31);
           M.u8[o + 1] = is15 ? five((c >> 5) & 31) : six((c >> 5) & 63);
           M.u8[o + 2] = five(is15 ? (c >> 10) & 31 : c >> 11);
@@ -668,6 +685,7 @@ export function installAllegro(M, {
    */
   function refreshKeys() {
     if (!g.key) return;
+    if (keymap) { for (let k = 1; k < keymap.length; k++) M.u8[g.key + k] = keymap[k] && keys(keymap[k]) ? 1 : 0; return; }
     for (let k = 0; k < 128; k++) M.u8[g.key + k] = keys(k) ? 1 : 0;
   }
 
@@ -697,6 +715,24 @@ export function installAllegro(M, {
       for (const name of blits) {
         const blit = program.F[name];
         program.F[name] = function (...a) { const r = blit.apply(this, a); presentBitmap(); return r; };
+      }
+    }
+    /*
+     * MAME 0.37b5 (see presentBitmap). Its routines are REPLACED, not followed: all but the two for
+     * the tweaked VGA modes end in assembly kept in a NASM file (asmblit.asm) that is not part of
+     * this build, and what they would do -- stretch the picture into one card's memory -- is the
+     * part of the display this shim never showed anyway.
+     */
+    const blits37 = Object.keys(program.F).filter((n) => /^blitscreen_/.test(n));
+    const video37 = { skiplines: sym('skiplines'), skipcolumns: sym('skipcolumns'),
+      displayLines: sym('gfx_display_lines'), displayColumns: sym('gfx_display_columns') };
+    const lookup16 = sym('palette_16bit_lookup');
+    if (blits37.length && lookup16 && Object.values(video37).every(Boolean)) {
+      Object.assign(g, video37);
+      g.scrbitmap = lookup16;    // any non-zero value: "this program is presented from its bitmap" (copyTo)
+      for (const name of blits37) {
+        const palettized = /_palettized$/.test(name);
+        program.F[name] = (bitmap) => { presentBitmap(bitmap, palettized ? dv().getInt32(lookup16, true) : 0); };
       }
     }
     // `screen` is a BITMAP* the program only ever passes back to us; give it a distinguishable value
@@ -754,7 +790,7 @@ export function allegroBuiltins(T) {
     create_bitmap: f(P, I, I), destroy_bitmap: f(V, P),
     bmp_write_line: f(T.ULONG, P, I),
     save_pcx: f(I, P, P, P),
-    readkey: f(I), keypressed: f(I), clear_keybuf: f(V),
+    readkey: f(I), keypressed: f(I), clear_keybuf: f(V), ureadkey: f(I, P),
     install_joystick: f(I, I), remove_joystick: f(V), load_joystick_data: f(I, P), save_joystick_data: f(I, P),
     calibrate_joystick: f(I, I), calibrate_joystick_name: f(P, I),
     install_mouse: f(I), remove_mouse: f(V), get_mouse_mickeys: f(V, P, P), set_leds: f(V, I),
