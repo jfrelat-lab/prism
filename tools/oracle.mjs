@@ -77,15 +77,19 @@ export function watcom(cmd, { target = 'linux' } = {}) {
  */
 export function watcomRun16(source, { model = 'ms', timeout = 30 } = {}) {
   up();
-  put('run16.c', source);
-  const build = watcom('cd /work && rm -f run16.o RUN16.EXE && ' +
+  // A directory of this process's own: tools/gates.mjs runs gates in parallel, and two gates that
+  // both build run16.c in one place read each other's programs (gate-abi16 and gate-abi16l did).
+  const w = `w16_${process.pid}`;
+  mkdirSync(join(SCRATCH, w), { recursive: true });
+  put(`${w}/run16.c`, source);
+  const build = watcom(`cd /work/${w} && rm -f run16.o RUN16.EXE && ` +
     `wcc -bt=dos -0 -${model} -q run16.c && wlink system dos file run16.o name RUN16.EXE`,
     { target: 'dos16' });
   if (build.code !== 0) throw new Error(`watcomRun16: ${build.stderr || build.stdout}`);
 
-  const dir = join(SCRATCH, 'dosrun');
+  const dir = join(SCRATCH, w, 'dosrun');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'RUN16.EXE'), readFileSync(join(SCRATCH, 'RUN16.EXE')));
+  writeFileSync(join(dir, 'RUN16.EXE'), readFileSync(join(SCRATCH, w, 'RUN16.EXE')));
   try { rmSync(join(dir, 'OUT.TXT')); } catch { /* first run */ }
   const r = spawnSync('dosbox-x', ['-silent', '-fastlaunch', '-nogui', '-nomenu',
     '-time-limit', String(timeout),
@@ -157,11 +161,14 @@ export function watcom16(prelude, queries, { model = 'ms', flags = '' } = {}) {
   const D = "#define D(v) ('0'+(((v)/1000)%10)), ('0'+(((v)/100)%10)), ('0'+(((v)/10)%10)), ('0'+((v)%10))\n" +
     "#define PROBE(i, v) char info_##i[] = { 'I','N','F','O',':', D(i), '=', D(v), ';', 0 };\n";
   const body = queries.map((q, i) => `PROBE(${i}, (int)(${q}))`).join('\n');
-  put('probe16.c', `${D}\n${prelude}\n${body}\n`);
-  const r = watcom(`cd /work && rm -f probe16.o && wcc -bt=dos -0 -${model} ${flags} -q probe16.c`,
+  // Per process, for the same reason as watcomRun16's.
+  const w = `w16_${process.pid}`;
+  mkdirSync(join(SCRATCH, w), { recursive: true });
+  put(`${w}/probe16.c`, `${D}\n${prelude}\n${body}\n`);
+  const r = watcom(`cd /work/${w} && rm -f probe16.o && wcc -bt=dos -0 -${model} ${flags} -q probe16.c`,
     { target: 'dos16' });
   if (r.code !== 0) throw new Error(`watcom16: ${r.stderr || r.stdout}`);
-  const bytes = omfData(readFileSync(join(SCRATCH, 'probe16.o')));
+  const bytes = omfData(readFileSync(join(SCRATCH, w, 'probe16.o')));
   const out = new Array(queries.length).fill(null);
   for (const m of bytes.matchAll(/INFO:(\d{4})=(\d{4});/g)) out[+m[1]] = +m[2];
   const missing = out.findIndex((v) => v === null);
