@@ -254,7 +254,20 @@ function makeLibc(M) {
   // A bump allocator with a free list good enough for programs that malloc and free in patterns.
   // Real code casts pointers to integers and relies on distinct allocations not overlapping, which
   // is the only property promised here.
-  const blocks = new Map();     // addr -> size
+  /*
+   * WHICH BLOCKS ARE OURS is written in the block, not kept in a table: the 8-byte header in front of
+   * each one holds its size and, after it, a tag made from its own address. free() trusts a pointer
+   * only if the tag is there, and wipes it, so a pointer this allocator never gave out -- or gave out
+   * and already took back -- is still left alone.
+   *
+   * It used to be a Map from address to size, and a Map is what made Lua's test suite slow: a
+   * program that allocates and frees millions of small blocks churns a V8 hash table that keeps
+   * deleted entries until it rebuilds itself, and in constructs.lua that table took 81% of the
+   * time -- on the one line that re-inserted a recycled block. The tag costs one store.
+   */
+  const TAG = 0x9e3779b9;
+  const tagOf = (addr) => (addr ^ TAG) >>> 0;
+  const owned = (p) => p >= 8 && p < M.mod.size && dv().getUint32(p - 4, true) === tagOf(p);
   /*
    * AND A REAL FREE LIST, which the comment above used to promise and the code did not have: `free`
    * only forgot the block, so M.heapEnd never came down and nothing was ever reused. That is
@@ -294,24 +307,24 @@ function makeLibc(M) {
       const addr = pool.pop();
       freedByEnd.delete(addr - 8 + size);
       dv().setUint32(addr - 8, n, true);
-      blocks.set(addr, n);
+      dv().setUint32(addr - 4, tagOf(addr), true);
       return addr;
     }
     if (M.heapEnd + size > M.heapTop) throw new Trap('out of memory in malloc');
     const addr = M.heapEnd + 8;
     M.heapEnd += size;
     dv().setUint32(addr - 8, n, true);
-    blocks.set(addr, n);
+    dv().setUint32(addr - 4, tagOf(addr), true);
     return addr;
   };
 
   const free = (p) => {
     if (!p) return;
-    const n = blocks.get(p);
-    blocks.delete(p);
     // Only a block this allocator handed out goes back on the list; anything else is left alone
     // rather than guessed at, because a wrong size here would hand out overlapping memory later.
-    if (n === undefined) return;
+    if (!owned(p)) return;
+    const n = dv().getUint32(p - 8, true);
+    dv().setUint32(p - 4, 0, true);
     const size = Math.ceil((n + 8) / 16) * 16;
     /*
      * Under a 16-bit layout the TOPMOST block goes back to the frontier, as Borland's heap gives it
@@ -339,7 +352,7 @@ function makeLibc(M) {
 
   const realloc = (p, n) => {
     if (!p) return malloc(n);
-    const old = blocks.get(p) ?? dv().getUint32(p - 8, true);
+    const old = dv().getUint32(p - 8, true);
     if (n <= old) return p;
     const q = malloc(n);
     M.copy(q, p, old);
