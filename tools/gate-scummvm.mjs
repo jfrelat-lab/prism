@@ -9,10 +9,13 @@
 // With PRISM_SCUMMVM_DATA=<dir holding sky.dsk and sky.dnr> (bass-cd-1.0.zip's sky-cd/), the game run
 // on the virtual clock (src/env/clock.js), where a delay advances time instead of waiting:
 //
-//   3. THE REFERENCE, replayed: each of the first 3,000 presented frames -- the introduction, then the
-//      first room -- is the picture a native g++ build of the same sources over the real SDL 1.2
+//   3. THE REFERENCE, replayed: each of the first 3,000 presented frames is the picture a native g++ build of the same sources over the real SDL 1.2
 //      presented (goldens/scummvm.json, written by tools/scummvmdiff.mjs only when the two agreed on
-//      every frame; time, timer and audio wrapped onto the same clock, everything that draws real);
+//      every frame; time, timer and audio wrapped onto the same clock, everything that draws real) --
+//      WITH A PLAYER: tools/scummvmdiff.mjs's input script skips the introduction (Esc), opens the
+//      control panel (F5) and moves the pointer in it, closes it, walks, clicks the door with each
+//      button (Sky does different things), dies, and clicks "play again". Swapping the two buttons in
+//      the shim differs from frame 378, losing F5 from frame 187 (measured by hand);
 //   4. music: audio buffers that are not silence (sound is not compared with anything);
 //   5. controls, red: with the game's files withheld no frame is presented, and a run with another
 //      scaler (-gnormal, 320x200) disagrees with the reference at its first frame -- the comparison

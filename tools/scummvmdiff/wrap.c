@@ -11,13 +11,21 @@
  *
  *   SDL_GetTicks    pump, then read the clock
  *   SDL_Delay       advance the clock, then pump
- *   SDL_PollEvent   pump; there are no events
+ *   SDL_PollEvent   pump; then the INPUT SCRIPT's events, made as sdl12.js makes them: the
+ *                   mouse first (a motion when the host pointer moved, then a press or release per
+ *                   changed button), then one key -- its symbol resolved by sdl12.js itself and
+ *                   written into the script, its modifiers tracked here by symbol as there
+ *   SDL_WarpMouse / SDL_GetMouseState   the host pointer, and SDL's own idea of it, as there
  *   SDL_UpdateRects / SDL_UpdateRect / SDL_Flip   pump, present -- and here, print the frame's hash
  *   SDL_OpenAudio / SDL_PauseAudio / SDL_CloseAudio   the device is a callback pumped by the clock
  *   SDL_SetTimer    the periodic timer, fired by the pump
  *   time            the date PRISM's libc answers
  *
  * The pump is not re-entered (a callback that asks for the time is inside it), as in sdl12.js.
+ * The script (EVENTS=<file>, written by tools/scummvmdiff.mjs) says what the host does and when, in
+ * the virtual clock's ms, taken at each SDL_PollEvent after its pump without reading the clock
+ * (a reading would advance it): `T k <scan> <down> <sym>` a key, `T m <x> <y> <buttons>` the pointer.
+ *
  * Each presented frame prints `frame N <hash>`: FNV-1a over the display's rows, w*bytes each, so a
  * difference of pitch between the two sides does not count.
  */
@@ -76,7 +84,100 @@ static void pump(void) {
 
 Uint32 __wrap_SDL_GetTicks(void) { pump(); return (Uint32)clock_now(); }
 void __wrap_SDL_Delay(Uint32 ms) { clock_delay((int)ms); pump(); }
-int __wrap_SDL_PollEvent(SDL_Event *e) { (void)e; pump(); return 0; }
+
+/* ---- input: src/env/sdl12.js SDL_PollEvent and gatherMouse, transcribed. */
+struct ev { int frame, kind, a, b, c; };
+static struct ev script[8192];
+static int nscript, scriptAt, loaded;
+static int host_x, host_y, host_b;             /* the host's pointer (state.mouse.poll) */
+static int ptr_x, ptr_y, ptr_b;                /* SDL's idea of it (sdl12.js `pointer`) */
+struct mev { int type, x, y, xrel, yrel, held, button; };
+static struct mev mq[64];
+static int mqn;
+struct kev { int scan, down, sym; };
+static struct kev kq[256];
+static int kqh, kqt, held_valid;
+static struct kev held;
+static int mods;
+static void load_script(void) {
+  const char *f = getenv("EVENTS");
+  FILE *fp;
+  char kind;
+  loaded = 1;
+  if (!f || !(fp = fopen(f, "r"))) return;
+  while (nscript < 8192) {
+    struct ev *e = &script[nscript];
+    if (fscanf(fp, "%d %c %d %d %d", &e->frame, &kind, &e->a, &e->b, &e->c) != 5) break;
+    e->kind = kind;
+    nscript++;
+  }
+  fclose(fp);
+}
+static void inject(int ms) {
+  if (!loaded) load_script();
+  while (scriptAt < nscript && script[scriptAt].frame <= ms) {
+    struct ev *e = &script[scriptAt++];
+    if (e->kind == 'k') { kq[kqt].scan = e->a; kq[kqt].down = e->b; kq[kqt].sym = e->c; kqt = (kqt + 1) & 255; }
+    else { host_x = e->a; host_y = e->b; host_b = e->c; }
+  }
+}
+static int kmod_of(int sym) {
+  switch (sym) {
+    case 304: return 0x0001; case 303: return 0x0002; case 306: return 0x0040; case 305: return 0x0080;
+    case 308: return 0x0100; case 307: return 0x0200; case 310: return 0x0400; case 309: return 0x0800;
+  }
+  return 0;
+}
+static void gather_mouse(void) {
+  int button;
+  if (host_x != ptr_x || host_y != ptr_y) {
+    struct mev m = { SDL_MOUSEMOTION, host_x, host_y, host_x - ptr_x, host_y - ptr_y, host_b, 0 };
+    if (mqn < 64) mq[mqn++] = m;
+    ptr_x = host_x; ptr_y = host_y;
+  }
+  for (button = 1; button <= 3; button++) {
+    int bit = 1 << (button - 1);
+    if ((host_b & bit) != (ptr_b & bit)) {
+      struct mev m = { host_b & bit ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP, host_x, host_y, 0, 0, 0, button };
+      if (mqn < 64) mq[mqn++] = m;
+    }
+  }
+  ptr_b = host_b;
+}
+int __wrap_SDL_PollEvent(SDL_Event *e) {
+  pump();
+  inject((int)t_ms);
+  gather_mouse();
+  if (mqn) {
+    struct mev m;
+    if (!e) return 1;
+    m = mq[0];
+    memmove(mq, mq + 1, --mqn * sizeof mq[0]);
+    memset(e, 0, sizeof *e);
+    e->type = m.type;
+    if (m.type == SDL_MOUSEMOTION) { e->motion.state = m.held; e->motion.x = m.x; e->motion.y = m.y; e->motion.xrel = m.xrel; e->motion.yrel = m.yrel; }
+    else { e->button.button = m.button; e->button.state = m.type == SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED; e->button.x = m.x; e->button.y = m.y; }
+    return 1;
+  }
+  {
+    struct kev k;
+    if (held_valid) { k = held; held_valid = 0; }
+    else if (kqh != kqt) { k = kq[kqh]; kqh = (kqh + 1) & 255; }
+    else return 0;
+    if (!e) { held = k; held_valid = 1; return 1; }
+    mods = k.down ? (mods | kmod_of(k.sym)) : (mods & ~kmod_of(k.sym));
+    memset(e, 0, sizeof *e);
+    e->type = k.down ? SDL_KEYDOWN : SDL_KEYUP;
+    e->key.state = k.down ? SDL_PRESSED : SDL_RELEASED;
+    e->key.keysym.scancode = k.scan & 0xff;
+    e->key.keysym.sym = k.sym;
+    e->key.keysym.mod = mods;
+    e->key.keysym.unicode = 0;
+    return 1;
+  }
+}
+void __wrap_SDL_WarpMouse(Uint16 x, Uint16 y) { host_x = x; host_y = y; }
+Uint8 __wrap_SDL_GetMouseState(int *x, int *y) { if (x) *x = ptr_x; if (y) *y = ptr_y; return ptr_b; }
 time_t __wrap_time(time_t *p) { if (p) *p = 852076800; return 852076800; }
 
 int __wrap_SDL_SetTimer(Uint32 interval, SDL_TimerCallback cb) {

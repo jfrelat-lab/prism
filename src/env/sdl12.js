@@ -110,6 +110,9 @@ for (let scan = 1; scan < SCAN_CHARS.length; scan++) {
   if (ch) SDLK.plain[scan] = ch;
 }
 
+/** The SDLKey this shim reports for a scan code (set 1, `extended` the 0xE0 prefix): the table above, as SDL_PollEvent reads it. */
+export const sdl12KeySym = (scan, extended) => (extended ? SDLK.extended : SDLK.plain)[scan] ?? SDLK.plain[scan] ?? 0;
+
 import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
 import { freeRunningClock } from './clock.js';
 
@@ -496,11 +499,13 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
         return 1;
       }
       if (!state.keyboard) return 0;
-      const e = state.keyboard.next ? state.keyboard.next() : null;
+      // SDL_PollEvent(NULL) asks whether there is an event and leaves it there: a key read to answer
+      // is kept for the next call rather than dropped.
+      const e = state.heldKey ?? (state.keyboard.next ? state.keyboard.next() : null);
+      state.heldKey = null;
       if (!e) return 0;
-      if (!ev) return 1;
-      const table = e.extended ? SDLK.extended : SDLK.plain;
-      const sym = table[e.scan] ?? SDLK.plain[e.scan] ?? 0;
+      if (!ev) { state.heldKey = e; return 1; }
+      const sym = sdl12KeySym(e.scan, e.extended);
       // The modifiers as they stand AFTER this event, which is what SDL reports with it.
       const bit = KMOD_OF[sym] ?? 0;
       state.mods = e.down ? (state.mods | bit) : (state.mods & ~bit);

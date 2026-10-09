@@ -35,6 +35,9 @@ export function virtualClock() {
     virtual: true,
     now: () => (t += 1 / 1024) | 0,
     delay: (ms) => { if (ms > 0) t += ms; },
+    // The time, without the step a reading takes: for a HOST that schedules by it (a scripted
+    // player) and must not move the guest's clock by looking at it.
+    peek: () => t | 0,
   };
 }
 
@@ -45,6 +48,7 @@ export function sleepingClock(sleep) {
     virtual: false,
     now: () => (performance.now() - t0) | 0,
     delay: (ms) => { if (ms > 0) sleep(ms); },
+    peek: () => (performance.now() - t0) | 0,
   };
 }
 
