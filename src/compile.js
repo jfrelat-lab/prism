@@ -1051,6 +1051,9 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
    */
   sharedGlobals.set('errno', { addr: mod.defineGlobal('errno', T.INT).addr, type: T.INT });
   const duplicates = [];
+  // Names some unit declared __attribute__((weak)): a second definition of one gives way.
+  const weakNames = new Set();
+  for (const p of parsed) for (const d of p.unit.decls) if (d.n === 'vardecl' && d.weak && d.type?.k === 'func' && d.storage !== 'static') weakNames.add(d.name);
   for (const p of parsed) {
     p.globals = new Map();
     p.funcs = new Map();
@@ -1117,6 +1120,13 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
          * three separate shared objects that never meet. Flattened into one program, the renderer's
          * won, so the engine printed through a refimport_t that was still zero.
          */
+        /*
+         * ...unless the name is WEAK, declared so by a prototype: then the first definition stands and
+         * this one is not emitted, which is what a linker does with g++'s COMDAT copies. The C a C++
+         * unit is lowered to marks a class template's members so (src/cxx), because two units that
+         * both see such a member's body both define it -- and a unit that does not see it calls it.
+         */
+        if (!isInternal && fn.defined && weakNames.has(link)) { d.weakDuplicate = true; continue; }
         if (!isInternal && fn.defined) {
           duplicates.push({ name: d.name, unit: basename(p.file), module: p.module ?? MAIN });
         }
@@ -1352,7 +1362,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
         }
         continue;
       }
-      if (d.n !== 'func') continue;
+      if (d.n !== 'func' || d.weakDuplicate) continue;
       const link = ctx.funcs.get(d.name)?.name ?? d.name;
       try {
         pieces.push(new FunctionEmitter(mod, { ...d, name: link }, ctx).emit());

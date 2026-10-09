@@ -354,9 +354,11 @@ export class Parser {
 
     for (;;) {
       this.lastAlias = null;
+      this.lastWeak = false;
       const d = this.#declarator(specs.type);
       const datt = this.#skipAttributeLike();
       if (!datt.alias && this.lastAlias) datt.alias = this.lastAlias;
+      if (this.lastWeak) datt.weak = true;
       if (datt.mode) d.type = applyMode(this.ty, d.type, datt.mode, this.peek());
       if (datt.aligned) d.type = T.withAlign(d.type, datt.aligned);
 
@@ -402,7 +404,7 @@ export class Parser {
         const prior = type.k === 'array' && type.n === null && !init ? this.scope.ordinary.get(d.name) : null;
         if (prior?.kind === 'var' && prior.type.k === 'array' && prior.type.n !== null) type = T.array(type.of, prior.type.n);
         this.scope.declare(d.name, { kind: type.k === 'func' ? 'func' : 'var', type });
-        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init, alias: datt.alias,
+        out.push({ n: 'vardecl', name: d.name, type, storage: specs.storage, init, alias: datt.alias, ...(datt.weak ? { weak: true } : {}),
           ...(d.far ? { far: true } : {}) });
       }
       if (this.eatP(',')) continue;
@@ -684,7 +686,7 @@ export class Parser {
 
   /** `__attribute__((...))` and `__asm__("...")` in a declaration; returns what we care about. */
   #skipAttributeLike() {
-    const found = { packed: false, aligned: null, alias: null, mode: null };
+    const found = { packed: false, aligned: null, alias: null, mode: null, weak: false };
     for (;;) {
       if (this.isKw('__attribute__') || this.isKw('__attribute')) {
         this.i++;
@@ -699,6 +701,8 @@ export class Parser {
         for (let k = 0; k < inner.length; k++) {
           const t = inner[k];
           if (t.k === ID && /^_*packed_*$/.test(t.v)) { found.packed = true; continue; }
+          // A WEAK definition gives way to another of the same name: the linker keeps one (compile.js).
+          if (t.k === ID && /^_*weak_*$/.test(t.v)) { found.weak = true; continue; }
           // Most attributes are safe to ignore (noinline, unused, format…). These are NOT: they
           // change the TYPE, so ignoring them produces a wrong program instead of a refusal —
           // gcc's simd-*.c miscompiled silently until this list existed.
@@ -880,6 +884,7 @@ export class Parser {
         // it was being skipped along with the noinlines and the unuseds.
         const post = this.#skipAttributeLike();
         if (post.alias) this.lastAlias = post.alias;
+        if (post.weak) this.lastWeak = true;
         continue;
       }
       break;

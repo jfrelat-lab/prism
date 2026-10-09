@@ -1080,7 +1080,19 @@ async function startRun(typedAs = null) {
     const busy = worker;                              // nothing may have started in the meantime
     try {
       if (program.needsData.lazy) lazyNames = await listData(program.needsData.dir, program.needsData.under ?? '');
-      else dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); });
+      else {
+        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); });
+        /*
+         * `under` keeps one game of a root holding several (scumm/ has a directory per demo), and
+         * `exclude` leaves out files the program cannot read -- DOTT's demo speech, on which ScummVM
+         * 0.6.1 asserts, native and here alike.
+         */
+        const { under = '', exclude = [] } = program.needsData;
+        if (under || exclude.length) {
+          dataFiles = Object.fromEntries(Object.entries(dataFiles)
+            .filter(([k]) => k.startsWith(under) && !exclude.includes(k.split('/').pop())));
+        }
+      }
     } catch (e) {
       termNote(e.message, A_ERR);
       termPromptIfTerminal();

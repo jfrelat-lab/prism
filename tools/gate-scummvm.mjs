@@ -1,12 +1,14 @@
-// gate-scummvm.mjs — ScummVM 0.6.1 builds whole from its C++, and runs Beneath a Steel Sky.
+// gate-scummvm.mjs — ScummVM 0.6.1 builds whole from its C++, and runs Beneath a Steel Sky and two SCUMM demos.
 //
 // What is held, without the game:
 //
 //   1. config.h is what the release's own configure writes (tools/scummvm-configure.mjs, in the
 //      oracle container), and targets/scummvm.json lists what the release's module lists name;
-//   2. all 85 units lower from C++ and compile, every function is emitted and no name is unresolved.
+//   2. all 150 units (the Sky and SCUMM engines) lower from C++ and compile, every function is emitted and no name is unresolved.
 //
-// With PRISM_SCUMMVM_DATA=<dir holding sky.dsk and sky.dnr> (bass-cd-1.0.zip's sky-cd/), the game run
+// For each game of tools/scummvmdiff.mjs's GAMES whose files are present -- Beneath a Steel Sky
+// (PRISM_SCUMMVM_DATA, sky.dsk and sky.dnr), the EGA demo of Monkey Island and the demo of Day of the
+// Tentacle (PRISM_SCUMMVM_MONKEY / _DOTT, else ~/games/scumm/...) -- the game run
 // on the virtual clock (src/env/clock.js), where a delay advances time instead of waiting:
 //
 //   3. THE REFERENCE, replayed: each of the first 3,000 presented frames is the picture a native g++ build of the same sources over the real SDL 1.2
@@ -47,9 +49,14 @@ if (process.argv[2] === '--child') {
       missingHeaders: b.missingHeaders,
     });
   } else {
-    const { prismFrames } = await import('./scummvmdiff.mjs');
+    // data is a game's key in scummvmdiff.mjs's GAMES, or 'none': the Sky build with no files.
+    const { prismFrames, GAMES, gameData, gameArgs } = await import('./scummvmdiff.mjs');
+    const g = GAMES[data] ?? GAMES.sky;
     const audio = {};
-    try { report.frames = await prismFrames(data, +mode, args.length ? args : undefined, audio); } catch (e) { report.error = e.message.split('\n')[0]; report.frames = []; }
+    try {
+      report.frames = await prismFrames(data === 'none' ? '' : gameData(g), +mode, args.length ? args : gameArgs(g), audio,
+        { input: g.input, folder: g.folder, exclude: g.exclude ?? [] });
+    } catch (e) { report.error = e.message.split('\n')[0]; report.frames = []; }
     Object.assign(report, audio);
   }
   process.stdout.write(JSON.stringify(report) + '\n', () => process.exit(0));
@@ -75,7 +82,7 @@ check(conf.status === 0, 'config.h is what the release\'s configure writes', (co
 
 const V = SRC;
 const objsOf = (mk) => [...readFileSync(join(V, mk), 'latin1').replace(/\\\n/g, ' ').matchAll(/([\w/.-]+)\.o\b/g)].map((m) => m[1]);
-const listed = [...['base', 'common', 'gui', 'sound', 'backends', 'sky'].flatMap((m) => objsOf(`${m}/module.mk`)), 'backends/sdl/sdl-common', 'backends/sdl/sdl'].map((o) => `${o}.cpp`);
+const listed = [...['base', 'common', 'gui', 'sound', 'backends', 'sky', 'scumm'].flatMap((m) => objsOf(`${m}/module.mk`)), 'backends/sdl/sdl-common', 'backends/sdl/sdl'].map((o) => `${o}.cpp`);
 const target = JSON.parse(readFileSync(join(ROOT, 'targets/scummvm.json'), 'utf8'));
 check(JSON.stringify(target.units.list) === JSON.stringify(listed), `targets/scummvm.json lists the ${listed.length} units the module lists name`);
 
@@ -84,22 +91,28 @@ check(!b.error, `the whole program builds: ${b.functions} functions`, b.error ??
 check(b.failures?.length === 0 && b.unresolved?.length === 0 && b.missingHeaders?.length === 0,
   'every function emitted, no name unresolved, no header missing', [...(b.failures ?? []), ...(b.unresolved ?? []), ...(b.missingHeaders ?? [])].slice(0, 6).join(' | '));
 
-const data = process.env.PRISM_SCUMMVM_DATA;
-const ran = data && existsSync(join(data, 'sky.dsk'));
-if (ran) {
-  const golden = JSON.parse(readFileSync(join(ROOT, 'goldens/scummvm.json'), 'utf8')).frames.slice(0, FRAMES);
-  const r = child(data, String(FRAMES));
+/*
+ * THE GAMES, each where scummvmdiff.mjs looks for it (its environment variable, else ~/games): each
+ * one present is run with its player and held to its reference; one absent is said to be.
+ */
+const { GAMES, gameData } = await import('./scummvmdiff.mjs');
+const ran = [];
+for (const [key, g] of Object.entries(GAMES)) {
+  if (!existsSync(gameData(g))) { console.log(`     (${g.title}: no ${gameData(g)}, set ${g.env}; not run)`); continue; }
+  ran.push(key);
+  const golden = JSON.parse(readFileSync(join(ROOT, g.golden), 'utf8')).frames.slice(0, FRAMES);
+  const r = child(key, String(FRAMES));
   const first = r.frames.findIndex((h, i) => h !== golden[i]);
   check(r.frames.length === FRAMES && first < 0,
-    `all ${r.frames.length} frames are the native build's, picture for picture (the last: ${r.frames.at(-1)})`,
+    `${key}: all ${r.frames.length} frames are the native build's, picture for picture (the last: ${r.frames.at(-1)})`,
     r.error ?? (first >= 0 ? `first difference at frame ${first + 1}: PRISM ${r.frames[first]}, native ${golden[first]}` : `${r.frames.length} frames`));
-  check(r.loud > 100, `music: ${r.loud} of ${r.buffers} audio buffers are not silence (not compared with anything)`);
-  const withheld = child('', '10');
-  check(withheld.frames.length === 0, 'control: with the game\'s files withheld, no frame is presented', withheld.error ?? '');
-  const other = child(data, '30', '-gnormal', '-psky', 'sky');
-  check(other.frames.length > 0 && other.frames[0] !== golden[0], 'control: another scaler (-gnormal) disagrees with the reference at its first frame', other.error ?? '');
-} else {
-  console.log('     (no PRISM_SCUMMVM_DATA: the game is not run)');
+  if (key === 'sky') {
+    check(r.loud > 100, `sky: music, ${r.loud} of ${r.buffers} audio buffers not silence (not compared with anything)`);
+    const withheld = child('none', '10');
+    check(withheld.frames.length === 0, 'control: with the game\'s files withheld, no frame is presented', withheld.error ?? '');
+    const other = child('sky', '30', '-gnormal', '-psky', 'sky');
+    check(other.frames.length > 0 && other.frames[0] !== golden[0], 'control: another scaler (-gnormal) disagrees with the reference at its first frame', other.error ?? '');
+  }
 }
-console.log(failed ? `gate-scummvm: ${failed} FAILED` : `gate-scummvm: ScummVM 0.6.1 builds whole${ran ? ' and draws Beneath a Steel Sky as g++ and SDL do, 3,000 frames' : ''}`);
+console.log(failed ? `gate-scummvm: ${failed} FAILED` : `gate-scummvm: ScummVM 0.6.1 builds whole${ran.length ? ` and draws ${ran.join(', ')} as g++ and SDL do, 3,000 frames each` : ''}`);
 process.exit(failed ? 1 : 0);

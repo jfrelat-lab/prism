@@ -98,7 +98,8 @@ export function mangle(t) {
     case 'prim': return c + PRIM_CODE[t.name];
     case 'ptr': return `${c}P${mangle(t.to)}`;
     case 'ref': return `R${mangle(t.to)}`;
-    case 'array': return `A${t.n ?? ''}_${mangle(t.of)}`;
+    // A length that is C text (see derive) is named by a digest of it: an identifier has no room for an expression.
+    case 'array': return `A${typeof t.n === 'string' ? `x${[...t.n].reduce((h, ch) => (Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0), 0x811c9dc5).toString(36)}` : t.n ?? ''}_${mangle(t.of)}`;
     case 'class': return `${c}${t.cls.cname.length}${t.cls.cname}`;
     case 'enum': return `${c}${t.en.cname.length}${t.en.cname}`;
     case 'func': return `F${mangle(t.ret)}${t.params.map(mangle).join('')}${t.variadic ? 'z' : ''}E`;

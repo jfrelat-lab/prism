@@ -60,7 +60,8 @@ export const stmtMethods = {
       this.use(d);
       const p = this.upcastPtr(`&${v.c}`, this.basePath(v.cls, d.cls), d.cls);
       if (v.count != null) out.push(`{ int __i; for (__i = ${v.count}; __i > 0; __i--) ${d.cname}(${this.upcastPtr(`&${v.c}[__i - 1]`, this.basePath(v.cls, d.cls), d.cls)}); }`);
-      else if (v.guard) out.push(`if (${v.guard}) ${d.cname}(${p});`);
+      // An expression, not an if: these lines are also joined into comma expressions (valueThen).
+      else if (v.guard) out.push(`((${v.guard}) ? (${d.cname}(${p}), 0) : 0);`);
       else out.push(`${d.cname}(${p});`);
     }
     return out;
@@ -87,7 +88,7 @@ export const stmtMethods = {
     cx.pending = [];
     try {
       const e = lower(n, cx);
-      const after = this.destroy(cx.pending.map((p) => ({ c: p.name, cls: p.cls })), cx);
+      const after = this.destroy(cx.pending.map((p) => ({ c: p.name, cls: p.cls, guard: p.guard })), cx);
       return { e, after };
     } finally { cx.pending = saved; }
   },
@@ -261,7 +262,7 @@ export const stmtMethods = {
       const saved = cx.pending;
       cx.pending = [];
       let c;
-      try { c = this.coerce(this.expr(it.init ?? it.ctorArgs[0], cx), type, cx, it, 'reference binding'); for (const p of cx.pending) cl.vars.push({ c: p.name, cls: p.cls }); } finally { cx.pending = saved; }
+      try { c = this.coerce(this.expr(it.init ?? it.ctorArgs[0], cx), type, cx, it, 'reference binding'); for (const p of cx.pending) cl.vars.push({ c: p.name, cls: p.cls, guard: p.guard }); } finally { cx.pending = saved; }
       return done(`${this.ct(T.ptr(type.to), name)} = ${c};`);
     }
     const cls = type.k === 'class' ? this.complete(type.cls, it) : null;

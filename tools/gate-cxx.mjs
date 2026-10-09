@@ -427,6 +427,94 @@ int main() {
 }
 `);
 
+// Shapes of ScummVM's SCUMM engine: a ?: whose value is an object (ScummEngine's _gameName), an array
+// sized by sizeof (player_v2.h's ChannelInfo), and byte ** to const byte *const * (script.cpp).
+C('scumm-shapes', `
+#include <stdio.h>
+#include <string.h>
+static int live = 0;
+class Str {
+public:
+    char buf[32];
+    Str(const char *s) { strcpy(buf, s); live++; }
+    Str(const Str &o) { strcpy(buf, o.buf); live++; }
+    ~Str() { live--; }
+    Str &operator=(const Str &o) { strcpy(buf, o.buf); return *this; }
+};
+static Str get(int i) { return Str(i ? "config" : "other"); }
+struct channel_data { unsigned short a, b, c, d; unsigned char e[6]; };
+union ChannelInfo { channel_data d; unsigned short array[sizeof(channel_data) / 2]; };
+typedef unsigned char byte;
+int main() {
+    {
+        Str name("start");
+        const char *base = 0, *fallback = "gamename";
+        for (int i = 0; i < 2; i++) {
+            name = i ? get(1) : base ? base : fallback;
+            printf("%s ", name.buf);
+        }
+        Str other = (live > 0) ? get(0) : Str("none");
+        printf("%s %d\\n", other.buf, (int)sizeof(ChannelInfo));
+    }
+    byte items[3] = { 7, 8, 9 };
+    byte *ptrs[3] = { &items[0], &items[1], &items[2] };
+    const byte *const *last = &ptrs[1];
+    ChannelInfo ci; ci.d.a = 5;
+    printf("%d %d live %d\\n", **last, ci.array[0], live);
+    return 0;
+}
+`);
+
+// Temporaries made in only one branch of ?:, && or ||: destroyed only when that branch ran. ScummEngine's
+// _gameName = ConfMan.hasKey("basename") ? ConfMan.get("basename") : ... destroyed a String it never built.
+C('conditional-temporaries', `
+#include <stdio.h>
+#include <string.h>
+static int made = 0, gone = 0;
+struct Str {
+    char *p;
+    Str(const char *s) { p = new char[strlen(s) + 1]; strcpy(p, s); made++; }
+    Str(const Str &o) { p = new char[strlen(o.p) + 1]; strcpy(p, o.p); made++; }
+    ~Str() { delete[] p; p = 0; gone++; }
+};
+static int has(const Str &k) { return k.p[0] == 'b'; }
+static int len(const Str &s) { return (int)strlen(s.p); }
+int main() {
+    int total = 0;
+    for (int i = 0; i < 4; i++) {
+        total += (i & 1) ? len(Str("basename")) : 0;
+        total += (i > 1 && has(Str("b"))) ? 10 : 0;
+        total += (i == 0 || len(Str("xyz")) == 3) ? 100 : 0;
+        Str name = has(Str(i & 2 ? "b" : "a")) ? Str("yes") : Str("no");
+        printf("%s ", name.p);
+    }
+    printf("\\n%d %d %d\\n", total, made, gone);
+    return 0;
+}
+`);
+
+// Multi-character constants, folded as gcc folds them (each character shifts left by eight): SCUMM
+// finds its resources by MKID('SMAP') in case labels, and a C++ front end that kept the first
+// character alone matched none of them.
+C('multichar-constants', `
+#include <stdio.h>
+#define MKID(a) (((a) >> 24) & 0xFF) | (((a) >> 8) & 0xFF00) | (((a) << 8) & 0xFF0000) | (((a) << 24) & 0xFF000000)
+enum { RMIH = 'RMIH', TWO = 'ab', ONE = 'z', ESC = '\\n', QUOTE = '\\'', OCT = '\\101' };
+static int kind(unsigned int tag) {
+    switch (tag) {
+    case MKID('SMAP'): return 1;
+    case MKID('RMIH'): return 2;
+    default: return 0;
+    }
+}
+int main() {
+    unsigned int smap = MKID('SMAP');
+    printf("%x %x %d %d %d %d\\n", (unsigned)RMIH, (unsigned)TWO, ONE, ESC, QUOTE, OCT);
+    printf("%d %d %d\\n", kind(smap), kind(MKID('RMIH')), kind(7));
+    return 0;
+}
+`);
+
 C('templates', `
 #include <stdio.h>
 template< class type >

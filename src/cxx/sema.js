@@ -332,7 +332,20 @@ export class Sema {
       }
       case 'array': {
         let n = null;
-        if (d.size) { n = this.constInt(d.size, env); if (n === null) this.fail('an array size that is not a constant', node); }
+        if (d.size) {
+          n = this.constInt(d.size, env);
+          /*
+           * A size this front end cannot fold -- `sizeof(channel_data)/2` in ScummVM's player_v2.h,
+           * whose answer is the C compiler's layout, not this file's -- is written in C for the C
+           * compiler to fold: the length becomes C text. Every use of it is C text too.
+           */
+          if (n === null) {
+            const cx = { env, fn: null, pending: [], constOnly: true, node };
+            const e = this.expr(d.size, cx);
+            if (cx.dynamic || !T.isInteger(e.t)) this.fail('an array size that is not a constant', node);
+            n = `(${e.c})`;
+          }
+        }
         return T.array(t, n);
       }
       case 'func': {
@@ -398,13 +411,24 @@ export class Sema {
     else type = T.INT;
     return { type, value };
   }
+  /*
+   * A character constant's value. With several characters -- SCUMM's MKID('SMAP'), a resource tag --
+   * it is gcc's: each character shifts the value left by eight, in an int. Taking the first character
+   * alone made `case MKID('SMAP')` never match, and Monkey Island's rooms had no z-buffers.
+   */
   charValue(lit) {
     const body = lit.replace(/^L?'|'$/g, '');
-    if (body[0] !== '\\') return body.charCodeAt(0);
-    const esc = { n: 10, t: 9, r: 13, 0: 0, a: 7, b: 8, f: 12, v: 11, '\\': 92, "'": 39, '"': 34, '?': 63 };
-    if (body[1] === 'x') return parseInt(body.slice(2), 16);
-    if (/[0-7]/.test(body[1])) return parseInt(body.slice(1), 8);
-    return esc[body[1]] ?? body.charCodeAt(1);
+    const esc = { n: 10, t: 9, r: 13, a: 7, b: 8, f: 12, v: 11, '\\': 92, "'": 39, '"': 34, '?': 63 };
+    const units = [];
+    for (let i = 0; i < body.length;) {
+      if (body[i] !== '\\') { units.push(body.charCodeAt(i++)); continue; }
+      const m = /^\\(x[0-9a-fA-F]+|[0-7]{1,3}|.)/.exec(body.slice(i));
+      const e = m[1];
+      units.push(e[0] === 'x' ? parseInt(e.slice(1), 16) : /^[0-7]/.test(e) ? parseInt(e, 8) : (esc[e] ?? e.charCodeAt(0)));
+      i += m[0].length;
+    }
+    if (units.length === 1) return units[0];
+    return units.reduce((v, u) => ((v << 8) | (u & 0xff)) | 0, 0);
   }
 
   // ---------------------------------------------------------------- enums

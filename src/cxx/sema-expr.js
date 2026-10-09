@@ -122,20 +122,28 @@ export const exprMethods = {
        */
       if (!f.queued && f.body) {
         f.queued = true;
-        if ((f.inline || f.fileStatic) && !f.cStatic && f.protoAt !== undefined) { f.cStatic = true; this.out.protos[f.protoAt] = `static ${this.out.protos[f.protoAt]}`; }
+        if ((f.inline || f.fileStatic) && !f.cStatic && f.protoAt !== undefined && !this.isWeak(f)) { f.cStatic = true; this.out.protos[f.protoAt] = `static ${this.out.protos[f.protoAt]}`; }
         this.queue.push(f);
       }
       return f;
     }
     f.used = true;
     const hasBody = !!f.body || !!f.implicit || (f.cls && this.findTemplateBody(f));
-    const stat = hasBody ? (f.inline || f.fileStatic) : false;
+    const weak = this.isWeak(f);
+    const stat = hasBody ? (f.inline || f.fileStatic) && !weak : false;
     f.cStatic = stat;
     f.protoAt = this.out.protos.length;
-    this.out.protos.push(`${stat ? 'static ' : ''}${this.signature(f)};`);
+    this.out.protos.push(`${stat ? 'static ' : ''}${this.signature(f)}${weak ? ' __attribute__((weak))' : ''};`);
     if (hasBody) { f.queued = true; this.queue.push(f); }
     return f;
   },
+  /**
+   * A class template's member is defined by every unit that sees its body and needed by units that
+   * may not: ScummVM's scummvm.cpp destroys a Common::Debugger<ScummDebugger> whose destructor only
+   * scumm/debugger.cpp can see. g++ emits each such copy as a weak (COMDAT) symbol and keeps one;
+   * so does this -- external, __attribute__((weak)), and the C linker keeps the first.
+   */
+  isWeak(f) { return !!f.cls?.template && !f.implicit; },
   /** A class template's member defined outside the class: found by name and signature for this instance. */
   findTemplateBody(f) {
     if (f.body) return true;
@@ -260,6 +268,8 @@ export const exprMethods = {
         return { rank: dropsConst ? CONV : F.to.c === V.to.c ? EXACT : QUAL, gen: () => (dropsConst ? `((${this.ct(T.uncst(V))})${from.c})` : from.c) };
       }
       if (dropsConst) return null;
+      // Several levels: `byte **` to `const byte *const *`, C++'s qualification conversion.
+      if (this.qualifiesTo(F.to, V.to)) return { rank: QUAL, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       if (V.to.k === 'void' && F.to.k !== 'func') return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       if (V.to.k === 'class' && F.to.k === 'class') {
         const path = this.derivedPath(F.to.cls, V.to.cls);
@@ -278,6 +288,22 @@ export const exprMethods = {
       return null;
     }
     return null;
+  },
+  /**
+   * C++'s rule for pointees through several levels of pointer (4.4): the same types, const never
+   * removed, and wherever it is added every level between there and the top const too -- so that
+   * `char **` cannot become `const char **`, through which a const char could be stored in a char *.
+   */
+  qualifiesTo(f, v) {
+    let allConst = true;
+    for (;;) {
+      if (f.c && !v.c) return false;
+      if (v.c && !f.c && !allConst) return false;
+      allConst = allConst && !!v.c;
+      if (f.k !== v.k) return false;
+      if (f.k !== 'ptr') return T.same(T.uncst(f), T.uncst(v));
+      f = f.to; v = v.to;
+    }
   },
   /** The path from class d to its base b ([] when they are one class); an incomplete class has no bases. */
   derivedPath(d, b) {
@@ -647,39 +673,7 @@ export const exprMethods = {
       case 'delete': return this.deleteExpr(n, cx);
       case 'bin': return this.binaryExpr(n, cx);
       case 'assign': return this.assignExpr(n, cx);
-      case 'cond': {
-        const c = this.condition(this.expr(n.c, cx), cx, n);
-        let a = this.expr(n.a, cx), b = this.expr(n.b, cx);
-        if (a.t.k === 'class' || b.t.k === 'class') {
-          if (a.t.k === 'class' && b.t.k === 'class' && a.t.cls === b.t.cls) {
-            if (a.lv && b.lv) { const ac = this.addrOf(a, cx), bc = this.addrOf(b, cx); const p = `(${c} ? ${ac} : ${bc})`; return { c: `(*${p})`, t: a.t, lv: true, addr: p }; }
-            return { c: `(${c} ? ${this.copyOf(a, a.t.cls, cx)} : ${this.copyOf(b, b.t.cls, cx)})`, t: T.uncst(a.t), lv: false };
-          }
-          // One side converts to the other's type.
-          const toA = this.convert(b, T.uncst(a.t), cx), toB = this.convert(a, T.uncst(b.t), cx);
-          if (toA && !toB) return { c: `(${c} ? ${this.coerce(a, T.uncst(a.t), cx, n)} : ${toA.gen()})`, t: T.uncst(a.t), lv: false };
-          if (toB && !toA) return { c: `(${c} ? ${toB.gen()} : ${this.coerce(b, T.uncst(b.t), cx, n)})`, t: T.uncst(b.t), lv: false };
-          this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
-        }
-        // Two lvalues of one type give an lvalue: `return i ? y : x;` from a function returning float &.
-        if ((a.lv || a.addr) && (b.lv || b.addr) && a.t.k !== 'array' && a.t.k !== 'func' && !a.bits && !b.bits && T.same(a.t, b.t)) {
-          const p = `(${c} ? ${this.addrOf(a, cx)} : ${this.addrOf(b, cx)})`;
-          return { c: `(*${p})`, t: a.t, lv: true, addr: p };
-        }
-        a = this.decay(a); b = this.decay(b);
-        let t;
-        if (a.t.k === 'void' || b.t.k === 'void') t = T.VOID;
-        else if (T.isArith(a.t) && T.isArith(b.t)) t = T.same(a.t, b.t, { top: false }) ? T.uncst(a.t) : T.usual(a.t, b.t);
-        else if (a.t.k === 'ptr' && b.zero) t = a.t;
-        else if (b.t.k === 'ptr' && a.zero) t = b.t;
-        else if (a.t.k === 'ptr' && b.t.k === 'ptr') {
-          const ab = this.scalarConv(b, a.t), ba = this.scalarConv(a, b.t);
-          if (ab) { b = { ...b, c: ab.gen() }; t = a.t; } else if (ba) { a = { ...a, c: ba.gen() }; t = b.t; } else this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
-        } else this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
-        if (a.t.k === 'ptr' && b.zero) b = { ...b, c: `((${this.ct(a.t)})0)` };
-        if (b.t.k === 'ptr' && a.zero) a = { ...a, c: `((${this.ct(b.t)})0)` };
-        return { c: `(${c} ? ${a.c} : ${b.c})`, t, lv: false };
-      }
+      case 'cond': return this.condExpr(n, cx);
       case 'comma': {
         const a = this.expr(n.a, cx), b = this.expr(n.b, cx);
         const o = this.overloaded(',', [a, b], cx, n);
@@ -690,6 +684,81 @@ export const exprMethods = {
     }
   },
   stripRef(t) { return t.k === 'ref' ? t.to : t; },
+  /*
+   * `c ? a : b`. A TEMPORARY MADE IN ONE BRANCH EXISTS ONLY IF THAT BRANCH RAN, and is destroyed only
+   * then: the condition is kept in a variable and each branch's temporaries are destroyed under it.
+   * Destroying them all, as this did, ran a String destructor on garbage whenever ScummEngine's
+   * `ConfMan.hasKey("basename") ? ConfMan.get("basename") : ...` took its second branch -- the first
+   * branch's String("basename") had never been built.
+   */
+  condExpr(n, cx) {
+    let c = this.condition(this.expr(n.c, cx), cx, n);
+    const cv = cx.fn && !cx.sizeofOnly ? this.temp(cx, T.INT) : null;
+    if (cv) c = `(${cv} = (${c}) != 0)`;
+    const pa = [], pb = [];
+    // A branch's temporaries are back in view while that branch is converted: copyOf hands a
+    // temporary over to the object it initialises by finding it there.
+    const side = (arr, make) => { const k = cx.pending.length; cx.pending.push(...arr.splice(0)); const r = make(); arr.push(...cx.pending.splice(k)); return r; };
+    const done = (r) => {
+      const keep = (arr, guard) => { for (const p of arr) cx.pending.push(guard ? { ...p, guard: p.guard ? `(${guard} && ${p.guard})` : guard } : p); };
+      keep(pa, cv); keep(pb, cv && `!${cv}`);
+      return r;
+    };
+    let a = side(pa, () => this.expr(n.a, cx)), b = side(pb, () => this.expr(n.b, cx));
+    if (a.t.k === 'class' || b.t.k === 'class') {
+      if (a.t.k === 'class' && b.t.k === 'class' && a.t.cls === b.t.cls) {
+        if (a.lv && b.lv) {
+          const ac = side(pa, () => this.addrOf(a, cx)), bc = side(pb, () => this.addrOf(b, cx));
+          const p = `(${c} ? ${ac} : ${bc})`;
+          return done({ c: `(*${p})`, t: a.t, lv: true, addr: p });
+        }
+        const va = side(pa, () => this.copyOf(a, a.t.cls, cx)), vb = side(pb, () => this.copyOf(b, b.t.cls, cx));
+        return done(this.classChoice(c, va, vb, a.t, cx));
+      }
+      // One side converts to the other's type.
+      const toA = this.convert(b, T.uncst(a.t), cx), toB = this.convert(a, T.uncst(b.t), cx);
+      if (toA && !toB) { const va = side(pa, () => this.coerce(a, T.uncst(a.t), cx, n)), vb = side(pb, () => toA.gen()); return done(this.choice(c, va, vb, T.uncst(a.t), cx)); }
+      if (toB && !toA) { const va = side(pa, () => toB.gen()), vb = side(pb, () => this.coerce(b, T.uncst(b.t), cx, n)); return done(this.choice(c, va, vb, T.uncst(b.t), cx)); }
+      this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
+    }
+    // Two lvalues of one type give an lvalue: `return i ? y : x;` from a function returning float &.
+    if ((a.lv || a.addr) && (b.lv || b.addr) && a.t.k !== 'array' && a.t.k !== 'func' && !a.bits && !b.bits && T.same(a.t, b.t)) {
+      const ac = side(pa, () => this.addrOf(a, cx)), bc = side(pb, () => this.addrOf(b, cx));
+      const p = `(${c} ? ${ac} : ${bc})`;
+      return done({ c: `(*${p})`, t: a.t, lv: true, addr: p });
+    }
+    a = this.decay(a); b = this.decay(b);
+    let t;
+    if (a.t.k === 'void' || b.t.k === 'void') t = T.VOID;
+    else if (T.isArith(a.t) && T.isArith(b.t)) t = T.same(a.t, b.t, { top: false }) ? T.uncst(a.t) : T.usual(a.t, b.t);
+    else if (a.t.k === 'ptr' && b.zero) t = a.t;
+    else if (b.t.k === 'ptr' && a.zero) t = b.t;
+    else if (a.t.k === 'ptr' && b.t.k === 'ptr') {
+      const ab = this.scalarConv(b, a.t), ba = this.scalarConv(a, b.t);
+      if (ab) { b = { ...b, c: ab.gen() }; t = a.t; } else if (ba) { a = { ...a, c: ba.gen() }; t = b.t; } else this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
+    } else this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
+    if (a.t.k === 'ptr' && b.zero) b = { ...b, c: `((${this.ct(a.t)})0)` };
+    if (b.t.k === 'ptr' && a.zero) a = { ...a, c: `((${this.ct(b.t)})0)` };
+    return done({ c: `(${c} ? ${a.c} : ${b.c})`, t, lv: false });
+  },
+  /** `c ? a : b` of two C values of type t: through a temporary when t is a class (see classChoice). */
+  choice(c, a, b, t, cx) {
+    return t.k === 'class' ? this.classChoice(c, a, b, t, cx) : { c: `(${c} ? ${a} : ${b})`, t, lv: false };
+  },
+  /*
+   * A ?: whose value is an OBJECT is, in C, a struct-valued conditional -- and C will not take its
+   * address or copy it into a temporary through one, which is everything the lowering does with a
+   * class rvalue next (ScummEngine's `_gameName = ConfMan.hasKey(...) ? ConfMan.get(...) : name`).
+   * So each branch fills one temporary and the conditional chooses its address: the same object
+   * whichever side ran, destroyed with the full expression unless something takes it over.
+   */
+  classChoice(c, a, b, t, cx) {
+    const name = this.temp(cx, T.uncst(t));
+    const cls = this.isClassy(t);
+    if (cls && this.dtorOf(cls)) cx.pending.push({ name, cls });
+    const p = `(${c} ? (${name} = ${a}, &${name}) : (${name} = ${b}, &${name}))`;
+    return { c: `(*${p})`, t: T.uncst(t), lv: false, addr: p, temporary: true, tempName: name };
+  },
   stringLength(n) {
     let len = 0;
     for (const p of n.parts) {
@@ -906,6 +975,22 @@ export const exprMethods = {
   },
 
   binaryExpr(n, cx) {
+    /*
+     * && and ||: the right operand's temporaries exist only if it was evaluated, so they are destroyed
+     * under the left operand's value, kept in a variable -- the same rule as condExpr's.
+     */
+    if ((n.op === '&&' || n.op === '||') && cx.fn && !cx.sizeofOnly) {
+      const l = this.expr(n.a, cx);
+      if (l.t.k !== 'class') {
+        const cv = this.temp(cx, T.INT);
+        const ca = `(${cv} = (${this.condition(l, cx, n)}) != 0)`;
+        const k = cx.pending.length;
+        const cb = this.condition(this.expr(n.b, cx), cx, n);
+        const guard = n.op === '&&' ? cv : `!${cv}`;
+        for (const p of cx.pending.splice(k)) cx.pending.push({ ...p, guard: p.guard ? `(${guard} && ${p.guard})` : guard });
+        return { c: `(${ca} ${n.op} ${cb})`, t: T.BOOL, lv: false };
+      }
+    }
     const a0 = this.expr(n.a, cx), b0 = this.expr(n.b, cx);
     const o = this.overloaded(n.op, [a0, b0], cx, n);
     if (o) return o;
