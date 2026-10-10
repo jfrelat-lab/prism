@@ -8,6 +8,15 @@
 //      unresolved" said nothing while the list missed the backend, whose sdl.cpp has main, since
 //      nothing then called anything at all.
 //
+// For each game of tools/scummvmdiff.mjs's GAMES whose files are present and that 0.10.0 runs
+// without an engine data file of its own (Beneath a Steel Sky needs sky.cpt):
+//
+//   3. THE REFERENCE, replayed: each of the first 3,000 presented frames is the picture a native g++
+//      build of 0.10.0 over the real SDL 1.2 presented (goldens/scummvm010-*.json, written by
+//      `tools/scummvmdiff.mjs --version=0.10.0 --write` only when the two agreed on every frame), with
+//      the same scripted player as 0.6.1's gate. The mouse cursor is drawn through SDL_SetColorKey:
+//      without the key, the Monkey Island demo differs from frame 74.
+//
 //   node tools/gate-scummvm010.mjs
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -19,6 +28,17 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SELF = fileURLToPath(import.meta.url);
 const SRC = join(ROOT, 'corpus/scummvm-0.10.0');
 
+// ---- a child that runs one game and reports its frames.
+if (process.argv[2] === '--run') {
+  const { prismFrames, GAMES, VERSIONS, gameData, gameArgs } = await import('./scummvmdiff.mjs');
+  const g = GAMES[process.argv[3]], v = VERSIONS['0.10.0'];
+  let report;
+  try {
+    report = { frames: await prismFrames(gameData(g), +process.argv[4], gameArgs(g, v), null, { input: g.input, folder: g.folder, exclude: g.exclude ?? [], target: v.target }) };
+  } catch (e) { report = { frames: [], error: e.message.split('\n')[0] }; }
+  process.stdout.write(JSON.stringify(report) + '\n', () => process.exit(0));
+  await new Promise(() => {});
+}
 // ---- the child: the build, in its own process (it wants more heap than a gate runner starts with).
 if (process.argv[2] === '--child') {
   const { loadTarget, buildTarget } = await import('../src/target.js');
@@ -59,5 +79,22 @@ check(b.functions > 0 && b.hasMain && b.failures?.length === 0 && b.unresolved?.
   `all ${listed.length} units lowered and compiled: ${b.functions ?? 0} functions, every one emitted, no name unresolved, no header missing, a main`,
   [...(b.failures ?? []), ...(b.unresolved ?? []), ...(b.missingHeaders ?? [])].slice(0, 6).join(' | '));
 
-console.log(failed ? `gate-scummvm010: ${failed} FAILED` : `gate-scummvm010: ScummVM 0.10.0 builds whole, ${listed.length} units, ${b.functions} functions`);
+const FRAMES = 3000;
+const { GAMES, VERSIONS, gameData } = await import('./scummvmdiff.mjs');
+const ran = [];
+for (const [key, g] of Object.entries(GAMES)) {
+  const golden = join(ROOT, VERSIONS['0.10.0'].golden(g));
+  if (key === 'sky') { console.log('     (Beneath a Steel Sky: 0.10.0 needs sky.cpt, an engine data file the ScummVM project distributes apart; not run)'); continue; }
+  if (!existsSync(gameData(g))) { console.log(`     (${g.title}: no ${gameData(g)}, set ${g.env}; not run)`); continue; }
+  if (!existsSync(golden)) { check(false, `${key}: a golden for 0.10.0`, `no ${golden}: tools/scummvmdiff.mjs --version=0.10.0 --game=${key} --write`); continue; }
+  ran.push(key);
+  const want = JSON.parse(readFileSync(golden, 'utf8')).frames.slice(0, FRAMES);
+  const run = spawnSync('node', ['--max-old-space-size=8192', SELF, '--run', key, String(FRAMES)], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 1200000 });
+  let got;
+  try { got = JSON.parse(run.stdout.trim().split('\n').at(-1)); } catch { got = { frames: [], error: (run.stderr || '').slice(-300) }; }
+  const first = got.frames.findIndex((h, i) => h !== want[i]);
+  check(got.frames.length === FRAMES && first < 0, `${key}: all ${got.frames.length} frames are the native 0.10.0 build's, picture for picture (the last: ${got.frames.at(-1)})`,
+    got.error ?? (first >= 0 ? `first difference at frame ${first + 1}: PRISM ${got.frames[first]}, native ${want[first]}` : `${got.frames.length} frames`));
+}
+console.log(failed ? `gate-scummvm010: ${failed} FAILED` : `gate-scummvm010: ScummVM 0.10.0 builds whole, ${listed.length} units, ${b.functions} functions${ran.length ? `, and draws ${ran.join(', ')} as g++ and SDL do, 3,000 frames each` : ''}`);
 process.exit(failed ? 1 : 0);

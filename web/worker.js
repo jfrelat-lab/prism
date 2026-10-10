@@ -75,6 +75,13 @@ self.onmessage = async (e) => {
   }
 };
 
+/** Run `fn` over `items`, at most `limit` at a time. */
+async function pooled(items, limit, fn) {
+  let next = 0;
+  const lane = async () => { while (next < items.length) await fn(items[next++]); };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+}
+
 async function start({ program, control, data, lazyData = [], argv, pipeSab = null, screen = null, options = {} }) {
   /*
    * A descriptor may carry the BUILD or merely name a target that does.
@@ -247,10 +254,12 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     tree.set(relKey.toLowerCase(), text);
     tree.set(`${program.root}/${relKey}`.toLowerCase(), text);
   };
-  await Promise.all(wanted.map(async (f) => {
+  // A bounded number of requests at a time: ScummVM 0.10.0's tree is over a thousand files, and all
+  // of them at once is a burst the browser answers with "Failed to fetch".
+  await pooled(wanted, 24, async (f) => {
     const r = await fetch(`/${program.root}/${f}`);
     if (r.ok) put(f, await r.text());
-  }));
+  });
   /*
    * Include directories that are NOT under the target's root -- PuTTY's generated tree is a sibling
    * of the source tree -- are fetched the same way and keyed by their repo path.

@@ -80,29 +80,50 @@ const MONKEY_INPUT = [
  * The two SCUMM demos are the ones the ScummVM project distributes.
  */
 export const GAMES = {
-  sky: { env: 'PRISM_SCUMMVM_DATA', home: 'bass/sky-cd', folder: 'sky', name: 'sky', input: INPUT, golden: 'goldens/scummvm.json',
+  sky: { env: 'PRISM_SCUMMVM_DATA', home: 'bass/sky-cd', folder: 'sky', name: 'sky', id010: 'sky', input: INPUT, golden: 'goldens/scummvm.json',
     title: 'Beneath a Steel Sky (bass-cd-1.0)' },
-  monkey: { env: 'PRISM_SCUMMVM_MONKEY', home: 'scumm/monkey1-ega-demo', folder: 'monkey', name: 'monkeyEGA', input: MONKEY_INPUT, golden: 'goldens/scummvm-monkey.json',
+  monkey: { env: 'PRISM_SCUMMVM_MONKEY', home: 'scumm/monkey1-ega-demo', folder: 'monkey', name: 'monkeyEGA', id010: 'monkey', input: MONKEY_INPUT, golden: 'goldens/scummvm-monkey.json',
     title: 'The Secret of Monkey Island, EGA demo (monkey1-dos-ega-demo-en)' },
-  dott: { env: 'PRISM_SCUMMVM_DOTT', home: 'scumm/dott-demo', folder: 'dott', name: 'dottdemo', input: [...move(30000, 320, 200), ...key(60000, 1)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-dott.json',
+  dott: { env: 'PRISM_SCUMMVM_DOTT', home: 'scumm/dott-demo', folder: 'dott', name: 'dottdemo', id010: 'tentacle', input: [...move(30000, 320, 200), ...key(60000, 1)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-dott.json',
     // Its speech: ScummVM 0.6.1 asserts on this demo's MONSTER.SOU (sound/voc.cpp:125, "Creative Voice
     // File" expected), native and PRISM alike. Without the file the demo runs, silent.
     exclude: ['MONSTER.SOU'],
     title: 'Day of the Tentacle, non-interactive demo (dott-dos-ni-demo-en)' },
-  atlantis: { env: 'PRISM_SCUMMVM_ATLANTIS', home: 'scumm/atlantis-demo', folder: 'atlantis', name: 'playfate', input: [...click(70000, 150, 312), ...click(100000, 450, 250), ...click(115000, 160, 330)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-atlantis.json',
+  atlantis: { env: 'PRISM_SCUMMVM_ATLANTIS', home: 'scumm/atlantis-demo', folder: 'atlantis', name: 'playfate', id010: 'atlantis', input: [...click(70000, 150, 312), ...click(100000, 450, 250), ...click(115000, 160, 330)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-atlantis.json',
     title: 'Indiana Jones and the Fate of Atlantis, demo (atlantis-dos-demo1-en)' },
-  monkey2: { env: 'PRISM_SCUMMVM_MONKEY2', home: 'scumm/monkey2-demo', folder: 'monkey2', name: 'mi2demo', input: [],
+  monkey2: { env: 'PRISM_SCUMMVM_MONKEY2', home: 'scumm/monkey2-demo', folder: 'monkey2', name: 'mi2demo', id010: 'monkey2', input: [],
     // ScummVM 0.6.1 stops this demo in its debugger ("room 5 not in room 5 at 0+0 in file mi2demo.001"),
     // natively as here: the reference holds that too.
     golden: 'goldens/scummvm-monkey2.json',
     title: 'Monkey Island 2, non-interactive demo (monkey2-dos-ni-demo-en)' },
-  samnmax: { env: 'PRISM_SCUMMVM_SAMNMAX', home: 'scumm/samnmax-demo', folder: 'samnmax', name: 'snmdemo', input: [...move(20000, 320, 200), ...key(50000, 1)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-samnmax.json',
+  samnmax: { env: 'PRISM_SCUMMVM_SAMNMAX', home: 'scumm/samnmax-demo', folder: 'samnmax', name: 'snmdemo', id010: 'samnmax', input: [...move(20000, 320, 200), ...key(50000, 1)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-samnmax.json',
     title: 'Sam & Max Hit the Road, demo (samnmax-dos-demo-en)' },
-  queen: { env: 'PRISM_SCUMMVM_QUEEN', home: 'queen/FOTAQ_Floppy', folder: 'queen', name: 'queen', input: QUEEN_INPUT, golden: 'goldens/scummvm-queen.json',
+  queen: { env: 'PRISM_SCUMMVM_QUEEN', home: 'queen/FOTAQ_Floppy', folder: 'queen', name: 'queen', id010: 'queen', input: QUEEN_INPUT, golden: 'goldens/scummvm-queen.json',
     title: 'Flight of the Amazon Queen, floppy version (FOTAQ_Floppy, freeware)' },
 };
 export const gameData = (g) => process.env[g.env] ?? join(homedir(), 'games', g.home);
-export const gameArgs = (g) => [`-p${g.folder}`, g.name];
+/*
+ * The two releases: the build PRISM makes (target), the native one beside it (its configure, run in
+ * the oracle container with a g++ that answers the version configure wants), the goldens, the game
+ * ids. 0.10.0's native build undefines __i386__ as targets/scummvm010.json does, so both sides take
+ * the same C paths where the release offers x86 assembly.
+ */
+export const VERSIONS = {
+  '0.6.1': {
+    target: 'targets/scummvm.json', corpus: 'corpus/scummvm-0.6.1', native: 'scummvm-native', gxx: '3.3',
+    configure: '--disable-simon --disable-sword1 --disable-sword2 --disable-alsa --disable-vorbis --disable-mad --disable-zlib --disable-mpeg2',
+    cflags: '', golden: (g) => g.golden, id: (g) => g.name,
+  },
+  '0.10.0': {
+    target: 'targets/scummvm010.json', corpus: 'corpus/scummvm-0.10.0', native: 'scummvm010-native', gxx: '4.1.2',
+    // --disable-touche here only: g++ 12 refuses its `template<> static void saveOrLoad(...)`, which the
+    // gccs of 2007 took; no game compared here is Touche's.
+    configure: '--disable-alsa --disable-vorbis --disable-tremor --disable-mad --disable-flac --disable-zlib --disable-mpeg2 --disable-fluidsynth --disable-nasm --disable-touche',
+    cflags: '-U__i386__ -Ui386', golden: (g) => g.golden.replace('goldens/scummvm', 'goldens/scummvm010'), id: (g) => g.id010 ?? g.name,
+  },
+};
+const VERSION = VERSIONS[arg('version', '0.6.1')] ?? (console.error(`no version ${arg('version')}: ${Object.keys(VERSIONS).join(', ')}`), process.exit(2));
+export const gameArgs = (g, v = VERSION) => [`-p${g.folder}`, v.id(g)];
 /** Every file of a game's directory, by name. */
 const gameFiles = (dir, exclude = []) => readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile() && !exclude.includes(f));
 
@@ -165,18 +186,18 @@ export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = nu
 }
 
 /** The native side, built on first use. */
-async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game), debugOut = null } = {}) {
-  const dir = join(ROOT, '.oracle/scummvm-native');
+async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game), debugOut = null, v = VERSION } = {}) {
+  const dir = join(ROOT, '.oracle', v.native), work = `/work/${v.native}`;
   if (!existsSync(join(dir, 'scummvm'))) {
-    console.log('building the native ScummVM (once)...');
-    cpSync(join(ROOT, 'corpus/scummvm-0.6.1'), dir, { recursive: true });
+    console.log(`building the native ScummVM ${v.corpus.replace(/^.*-/, '')} (once)...`);
+    cpSync(join(ROOT, v.corpus), dir, { recursive: true });
     copyFileSync(join(ROOT, 'tools/scummvmdiff/wrap.c'), join(dir, 'wrap.c'));
     // The build date PRISM's preprocessor gives (src/compile.js TARGET_DEFINES): ScummVM prints
     // __DATE__ and __TIME__ in its debugger, and Monkey Island 2's demo stops there.
     writeFileSync(join(dir, 'prism-date.h'), '#undef __DATE__\n#define __DATE__ "Jan  1 1996"\n#undef __TIME__\n#define __TIME__ "00:00:00"\n');
-    writeFileSync(join(dir, 'gxx33'), '#!/bin/sh\ncase "$1" in -dumpversion) echo 3.3; exit 0;; esac\nexec g++ "$@"\n', { mode: 0o755 });
-    const wraps = ['SDL_GetTicks', 'SDL_Delay', 'SDL_PollEvent', 'SDL_WarpMouse', 'SDL_GetMouseState', 'time', 'SDL_SetTimer', 'SDL_OpenAudio', 'SDL_PauseAudio', 'SDL_CloseAudio', 'SDL_UpdateRects', 'SDL_UpdateRect', 'SDL_Flip'].map((n) => `--wrap=${n}`).join(',');
-    const r = sh(`cd scummvm-native && CXX=/work/scummvm-native/gxx33 ./configure --disable-simon --disable-sword1 --disable-sword2 --disable-alsa --disable-vorbis --disable-mad --disable-zlib --disable-mpeg2 >/dev/null && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make -j8 CXX=g++ CXXFLAGS='-O0 -ansi -fpermissive -fno-strict-aliasing -fwrapv -w -include /work/scummvm-native/prism-date.h' LIBS='wrap.o -lSDL -lm -Wl,${wraps}' >/dev/null 2>&1 && ls scummvm`, { timeout: 1200000 });
+    writeFileSync(join(dir, 'gxx'), `#!/bin/sh\ncase "$1" in -dumpversion) echo ${v.gxx}; exit 0;; esac\nexec g++ "$@"\n`, { mode: 0o755 });
+    const wraps = ['SDL_GetTicks', 'SDL_Delay', 'SDL_PollEvent', 'SDL_WarpMouse', 'SDL_GetMouseState', 'time', 'SDL_SetTimer', 'SDL_AddTimer', 'SDL_RemoveTimer', 'SDL_OpenAudio', 'SDL_PauseAudio', 'SDL_CloseAudio', 'SDL_UpdateRects', 'SDL_UpdateRect', 'SDL_Flip'].map((n) => `--wrap=${n}`).join(',');
+    const r = sh(`cd ${v.native} && CXX=${work}/gxx ./configure ${v.configure} >/dev/null && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make -j8 CXX=g++ CXXFLAGS='-O0 -ansi -fpermissive -fno-strict-aliasing -fwrapv -w ${v.cflags} -include ${work}/prism-date.h' LIBS='wrap.o -lSDL -lm -Wl,${wraps}' >/dev/null 2>&1 && ls scummvm`, { timeout: 2400000 });
     if (r.code !== 0) throw new Error(`native build failed: ${r.stdout}${r.stderr}`.slice(-600));
   }
   mkdirSync(join(ROOT, '.oracle', game.folder), { recursive: true });
@@ -184,7 +205,7 @@ async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game)
   mkdirSync(join(ROOT, '.oracle', game.folder), { recursive: true });
   for (const f of gameFiles(data, game.exclude)) if (!existsSync(join(ROOT, '.oracle', game.folder, f))) copyFileSync(join(data, f), join(ROOT, '.oracle', game.folder, f));
   writeFileSync(join(ROOT, '.oracle/scummvm-events.txt'), await scriptFile(game.input));
-  const r = sh(`cd /work && EVENTS=/work/scummvm-events.txt SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy FRAMES=${frames} HOME=/tmp ./scummvm-native/scummvm ${args.join(' ')} 2>/dev/null`, { timeout: 1200000 });
+  const r = sh(`cd /work && EVENTS=/work/scummvm-events.txt SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy FRAMES=${frames} HOME=/tmp ./${v.native}/scummvm ${args.join(' ')} 2>/dev/null`, { timeout: 1200000 });
   if (debugOut) writeFileSync(debugOut, r.stdout);
   return [...r.stdout.matchAll(/^frame \d+ ([0-9a-f]{8})$/gm)].map((m) => m[1]);
 }
@@ -193,7 +214,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // --game=sky|monkey|dott (sky by default).
   const game = GAMES[arg('game', 'sky')] ?? (console.error(`no game ${arg('game')}: ${Object.keys(GAMES).join(', ')}`), process.exit(2));
   const data = gameData(game);
-  const GOLDEN = join(ROOT, game.golden);
+  const GOLDEN = join(ROOT, VERSION.golden(game));
   if (!existsSync(data)) { console.error(`no ${data}: set ${game.env} to the directory holding ${game.title}`); process.exit(2); }
   const pngAt = (arg('png-at', '') || '').split(',').filter(Boolean).map(Number);
   // --input=<file.json>: another script, [ms, 'key', scan, down] and [ms, 'mouse', x, y, buttons] rows (PRISM only).
@@ -202,7 +223,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // -- the diff of the two names the first decision that went differently, frames before a pixel does.
   const debug = arg('debug', ''), args = [...(debug ? [`-d${debug}`] : []), ...gameArgs(game)];
   const debugOut = (side) => (debug ? join(ROOT, `.oracle/scummvm-${side}-debug.txt`) : null);
-  const ours = await prismFrames(data, FRAMES, args, null, { debugOut: debugOut('prism'), pngAt, folder: game.folder, png: `scummvm-${arg('game', 'sky')}`, exclude: game.exclude ?? [], input: inputFile ? JSON.parse(readFileSync(inputFile, 'utf8')) : game.input });
+  const ours = await prismFrames(data, FRAMES, args, null, { debugOut: debugOut('prism'), pngAt, folder: game.folder, png: `scummvm${VERSION === VERSIONS['0.6.1'] ? '' : '010'}-${arg('game', 'sky')}`, target: VERSION.target, exclude: game.exclude ?? [], input: inputFile ? JSON.parse(readFileSync(inputFile, 'utf8')) : game.input });
   // --prism-only: PRISM's run alone (with --png-at), to write or look at an input script.
   if (process.argv.includes('--prism-only')) { console.log(`PRISM ${ours.length} frames, the last ${ours.at(-1)}`); process.exit(0); }
   const theirs = process.argv.includes('--check') ? JSON.parse(readFileSync(GOLDEN, 'utf8')).frames.slice(0, FRAMES) : await nativeFrames(game, data, FRAMES, { args, debugOut: debugOut('native') });
@@ -216,7 +237,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.includes('--write')) {
     mkdirSync(dirname(GOLDEN), { recursive: true });
     writeFileSync(GOLDEN, JSON.stringify({
-      _doc: `ScummVM 0.6.1 on ${game.title}: FNV-1a of the display at each presented frame, with the input script below, written by tools/scummvmdiff.mjs --write only when PRISM and a native g++ build over the real SDL 1.2 (time, timer, audio and input wrapped onto the same virtual clock) agreed on every frame.`,
+      _doc: `ScummVM ${arg('version', '0.6.1')} on ${game.title}: FNV-1a of the display at each presented frame, with the input script below, written by tools/scummvmdiff.mjs --write only when PRISM and a native g++ build over the real SDL 1.2 (time, timer, audio and input wrapped onto the same virtual clock) agreed on every frame.`,
       args: gameArgs(game), input: game.input, frames: ours,
     }) + '\n');
     console.log(`wrote ${GOLDEN}`);

@@ -81,7 +81,7 @@ const DEFAULT_MASKS = {
   32: [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000],
 };
 const CD_ERROR = -1;
-const SDL_SRCALPHA = 0x00010000;
+const SDL_SRCALPHA = 0x00010000, SDL_SRCCOLORKEY = 0x00001000;
 
 /*
  * Scan code set 1 -> SDLKey, for a US keyboard. `extended` is the 0xE0 prefix: the arrows and the
@@ -338,7 +338,15 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_UnlockSurface: () => 0,
     SDL_Flip: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); return 0; },
     SDL_UpdateRect: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); },
-    SDL_SetColorKey: () => 0,
+    // The colour key, kept where SDL keeps it (flags, format->colorkey); SDL_UpperBlit leaves the
+    // pixels that match it alone. ScummVM 0.10.0 draws its mouse cursor through one.
+    SDL_SetColorKey: (surf, flag, key) => {
+      if (!surf) return -1;
+      const d = dv(), fmt = d.getUint32(surf + 4, true), flags = d.getUint32(surf, true);
+      if (flag & SDL_SRCCOLORKEY) { d.setUint32(surf, (flags | SDL_SRCCOLORKEY) >>> 0, true); d.setUint32(fmt + 32, key >>> 0, true); }
+      else { d.setUint32(surf, (flags & ~SDL_SRCCOLORKEY) >>> 0, true); d.setUint32(fmt + 32, 0, true); }
+      return 0;
+    },
     // Per-surface alpha, recorded where SDL keeps it (flags, format->alpha); SDL_UpperBlit refuses to
     // blend with it rather than guess SDL's arithmetic.
     SDL_SetAlpha: (surf, flag, alpha) => {
@@ -415,7 +423,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
      * rectangle, and `dstrect` is given back the rectangle actually drawn, as SDL does. Between two
      * surfaces of one format a row is a copy; otherwise each pixel goes through RGB -- an 8-bit
      * source through ITS palette, which is how a game's 8-bit screen becomes a 16-bit display.
-     * A colour key is not applied: nothing here sets one on a surface it blits.
+     * A colour key (SDL_SetColorKey) is applied: its pixels are left alone.
      */
     SDL_UpperBlit: (src, srcrect, dst, dstrect) => {
       if ((dv().getUint32(src, true) & SDL_SRCALPHA) && M.u8[dv().getUint32(src + 4, true) + 36] !== 255) {
@@ -435,11 +443,19 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       if (dstrect) { const d = dv(); d.setInt16(dstrect, dx, true); d.setInt16(dstrect + 2, dy, true); d.setUint16(dstrect + 4, w, true); d.setUint16(dstrect + 6, h, true); }
       if (!w || !h) return 0;
       const same = S.bytes === D.bytes && (S.bits === 8 ? D.bits === 8 : S.masks.every((m, i) => m === D.masks[i]));
+      // A colour-keyed source: a pixel equal to the key, its alpha bits aside, is not copied (SDL 1.2's
+      // BlitNtoNKey, Blit1toNKey).
+      const keyed = (dv().getUint32(src, true) & SDL_SRCCOLORKEY) !== 0;
+      const rgbMask = S.bits === 8 ? 0xff : ~(S.masks[3] ?? 0) >>> 0;
+      const key = (dv().getUint32(dv().getUint32(src + 4, true) + 32, true) & rgbMask) >>> 0;
       for (let y = 0; y < h; y++) {
         const sRow = S.pixels + (sy + y) * S.pitch + sx * S.bytes, dRow = D.pixels + (dy + y) * D.pitch + dx * D.bytes;
-        if (same) { M.u8.copyWithin(dRow, sRow, sRow + w * S.bytes); continue; }
+        if (same && !keyed) { M.u8.copyWithin(dRow, sRow, sRow + w * S.bytes); continue; }
         for (let x = 0; x < w; x++) {
-          const [r, g, b] = toRGB(S, getPixel(sRow + x * S.bytes, S.bytes));
+          const p = getPixel(sRow + x * S.bytes, S.bytes);
+          if (keyed && ((p & rgbMask) >>> 0) === key) continue;
+          if (same) { putPixel(dRow + x * D.bytes, D.bytes, p); continue; }
+          const [r, g, b] = toRGB(S, p);
           putPixel(dRow + x * D.bytes, D.bytes, fromRGB(D, r, g, b));
         }
       }

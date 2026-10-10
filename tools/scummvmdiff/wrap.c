@@ -1,5 +1,5 @@
 /*
- * wrap.c -- the native side of tools/scummvmdiff.mjs: ScummVM 0.6.1 built by g++ against the REAL
+ * wrap.c -- the native side of tools/scummvmdiff.mjs: ScummVM (0.6.1, 0.10.0) built by g++ against the REAL
  * SDL 1.2, with exactly the parts of SDL that depend on time replaced, by `ld --wrap`, with what
  * src/env/sdl12.js does under PRISM's virtual clock (src/env/clock.js).
  *
@@ -19,6 +19,7 @@
  *   SDL_UpdateRects / SDL_UpdateRect / SDL_Flip   pump, present -- and here, print the frame's hash
  *   SDL_OpenAudio / SDL_PauseAudio / SDL_CloseAudio   the device is a callback pumped by the clock
  *   SDL_SetTimer    the periodic timer, fired by the pump
+ *   SDL_AddTimer / SDL_RemoveTimer   the newer timers (0.10.0's backend), fired by the pump before it
  *   time            the date PRISM's libc answers
  *
  * The pump is not re-entered (a callback that asks for the time is inside it), as in sdl12.js.
@@ -56,6 +57,17 @@ static SDL_TimerCallback timer_cb;
 static Uint32 timer_interval;
 static double timer_next;
 
+/* ---- the newer timers: sdl12.js SDL_AddTimer, fired after the audio and before SDL_SetTimer's, one
+   clock reading each, in the order they were added. */
+struct addtimer { int id; SDL_NewTimerCallback cb; void *param; Uint32 interval; double next; int live; };
+static struct addtimer timers[16];
+static int ntimers, next_timer_id;
+static int timer_live(int id) { int i; for (i = 0; i < ntimers; i++) if (timers[i].id == id && timers[i].live) return 1; return 0; }
+static void timer_drop(int id) {
+  int i, j;
+  for (i = 0; i < ntimers; i++) if (timers[i].id == id) { for (j = i; j < ntimers - 1; j++) timers[j] = timers[j + 1]; ntimers--; return; }
+}
+
 static int pumping;
 static void pump(void) {
   if (pumping) return;
@@ -67,6 +79,27 @@ static void pump(void) {
       memset(audio_buf, (audio_format & 0xff) == 8 ? 0x80 : 0, audio_bytes);
       audio_cb(audio_user, audio_buf, audio_bytes);
       mixed++;
+    }
+  }
+  if (ntimers) {
+    int ids[16], k, count = ntimers;
+    for (k = 0; k < count; k++) ids[k] = timers[k].id;
+    for (k = 0; k < count; k++) {
+      int i, n, now;
+      if (!timer_live(ids[k])) continue;
+      now = clock_now();
+      for (n = 0; timer_live(ids[k]) && n < 64; n++) {
+        Uint32 again;
+        for (i = 0; i < ntimers && timers[i].id != ids[k]; i++) {}
+        if (now < timers[i].next) break;
+        again = timers[i].cb(timers[i].interval, timers[i].param);
+        for (i = 0; i < ntimers && timers[i].id != ids[k]; i++) {}
+        if (i == ntimers) break;
+        if (!again) { timer_drop(ids[k]); break; }
+        timers[i].interval = again; timers[i].next += again;
+      }
+      for (i = 0; i < ntimers && timers[i].id != ids[k]; i++) {}
+      if (i < ntimers && now >= timers[i].next) timers[i].next = now + timers[i].interval;
     }
   }
   if (timer_cb) {
@@ -184,6 +217,20 @@ int __wrap_SDL_SetTimer(Uint32 interval, SDL_TimerCallback cb) {
   if (cb && interval) { timer_cb = cb; timer_interval = interval; timer_next = clock_now() + interval; }
   else timer_cb = 0;
   return 0;
+}
+
+SDL_TimerID __wrap_SDL_AddTimer(Uint32 interval, SDL_NewTimerCallback cb, void *param) {
+  struct addtimer *t;
+  if (!cb || ntimers == 16) return 0;
+  t = &timers[ntimers++];
+  t->id = ++next_timer_id; t->cb = cb; t->param = param; t->interval = interval; t->live = 1;
+  t->next = clock_now() + interval;
+  return (SDL_TimerID)(long)t->id;
+}
+SDL_bool __wrap_SDL_RemoveTimer(SDL_TimerID id) {
+  if (!timer_live((int)(long)id)) return SDL_FALSE;
+  timer_drop((int)(long)id);
+  return SDL_TRUE;
 }
 
 int __wrap_SDL_OpenAudio(SDL_AudioSpec *d, SDL_AudioSpec *o) {
