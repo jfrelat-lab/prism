@@ -326,6 +326,17 @@ export const stmtMethods = {
     if (cls) {
       const decl = `${st}${this.ct(T.uncst(type), name)}`;
       const d = this.dtorOf(cls);
+      // `static ActorFrameRange def = {0, 0};` (saga): an aggregate's braces are C's; what is not
+      // constant among them is assigned the first time control passes.
+      if (isStatic && it.init?.k === 'braces' && this.isCxxAggregate(cls)) {
+        const dynFix = [];
+        const text = this.bracesInit(it.init, type, { env: cx.env, fn: null, pending: [], constOnly: true, node: it, dynFix });
+        if (!dynFix.length) return done(`${decl} = ${text};`);
+        const g = `__guard_${name}_${++this.anon}`;
+        cx.env.scope.set(name, ent);
+        const sets = dynFix.map((dx) => { const { e, after } = this.full(dx.x, cx, (m, c) => ({ c: this.coerce(this.expr(m, c), T.uncst(dx.type), c, m, 'initialisation') })); return [`${name}${dx.path.join('')} = ${e.c};`, ...after].join(' '); });
+        return [`static ${this.ct(T.uncst(type), name)} = ${text};`, `static int ${g};`, `if (!${g}) { ${g} = 1; ${sets.join(' ')} }`].join('\n');
+      }
       if (isStatic) return done(this.staticLocal(ent, it, cx, decl, cls));
       if (d) cl.vars.push({ c: name, cls, ent });
       if (it.init && !it.ctorArgs) {
@@ -348,7 +359,28 @@ export const stmtMethods = {
     if (type.k === 'array' && elem && it.init?.k === 'braces' && this.isAggregate(elem)) return done(`${st}${this.ct(type, name)} = ${this.bracesInit(it.init, type, cx)};`);
     if (type.k === 'array' && elem) {
       if (type.of.k !== 'class') this.fail('an array of arrays of objects', it);
-      const ctor = this.defaultCtor(elem, it), d = this.dtorOf(elem);
+      const d = this.dtorOf(elem);
+      if (it.init?.k === 'braces') {
+        // Built element by element; a static one the first time control passes it, as C++ says.
+        const decl = `${st}${this.ct(T.array(T.uncst(type.of), type.n), name)};`;
+        if (isStatic) {
+          const id = ++this.anon;
+          const g = `__guard_${name}_${id}`;
+          if (!d) return done(`${decl}\nstatic int ${g};\nif (!${g}) {\n  ${g} = 1;\n${this.arrayFromBraces(name, type, it.init.items, cx, it).map((l) => `  ${l}`).join('\n')}\n}`);
+          // With a destructor, kept at file scope (as staticLocal keeps one object) so that the
+          // function atexit runs can reach it: destroyed at exit if it was ever built.
+          ent.cname = `__static_${name}_${id}`;
+          this.out.vars.push(`static ${this.ct(T.array(T.uncst(type.of), type.n), ent.cname)};`, `static int ${g};`);
+          const fini = `__fini_${ent.cname}`;
+          this.out.protos.push(`static void ${fini}(void);`);
+          this.out.bodies.push(`static void ${fini}(void) {\n${this.destroy([{ c: ent.cname, cls: elem, count: type.n }], this.initContext(cx.env)).map((l) => `  ${l}`).join('\n')}\n}`);
+          this.needAtexit = true;
+          return done(`if (!${g}) {\n  ${g} = 1;\n${this.arrayFromBraces(ent.cname, type, it.init.items, cx, it).map((l) => `  ${l}`).join('\n')}\n  atexit(${fini});\n}`);
+        }
+        if (d) cl.vars.push({ c: name, cls: elem, count: type.n });
+        return done([decl, ...this.arrayFromBraces(name, type, it.init.items, cx, it)].join('\n'));
+      }
+      const ctor = this.defaultCtor(elem, it);
       if (d) cl.vars.push({ c: name, cls: elem, count: type.n });
       const decl = `${st}${this.ct(type, name)};`;
       if (it.init) this.fail('an initialised array of objects', it);
@@ -368,6 +400,20 @@ export const stmtMethods = {
       return done(`${decl} = ${it.init.parts.join(' ')};`);
     }
     // The name is in scope in its own initialiser (`int x = x;` is legal, if useless).
+    if (isStatic) {
+      // A static whose initialiser is no constant is initialised the first time control passes it
+      // (gob's `static char *slotBase = _saveFiles[0] + strlen(_saveFiles[0]) - 2;`).
+      const probe = { env: cx.env, fn: null, pending: [], constOnly: true, node: it };
+      let c = null;
+      // No constant, whatever the reason: the guarded path says what is wrong, if anything is.
+      try { c = this.coerce(this.expr(it.init, probe), T.uncst(type), probe, it, 'initialisation'); } catch { c = null; }
+      if (probe.dynamic || c === null || this.readsVariable(it.init, cx.env)) {
+        const g = `__guard_${name}_${++this.anon}`;
+        cx.env.scope.set(name, ent);
+        const { e, after } = this.full(it.init, cx, (m, cc) => ({ c: this.coerce(this.expr(m, cc), T.uncst(type), cc, m, 'initialisation'), t: type }));
+        return [`static ${this.ct(T.uncst(type), name)};`, `static int ${g};`, `if (!${g}) { ${g} = 1; ${name} = ${e.c}; ${after.join(' ')} }`].join('\n');
+      }
+    }
     const { e, after } = this.full(it.init, cx, (m, c) => ({ c: this.coerce(this.expr(m, c), T.uncst(type), c, m, 'initialisation'), t: type }));
     return done([`${decl} = ${e.c};`, ...after].join('\n'));
   },
@@ -412,6 +458,32 @@ export const stmtMethods = {
     this.complete(cls, cls.node);
     return !cls.ctors.length && !cls.bases.length && !cls.hasVptr && !this.needsCtor(cls) && !this.needsDtor(cls);
   },
+  /**
+   * An aggregate as C++ means it -- no constructor, base or virtual function of its own -- whose
+   * members may still be objects with constructors: saga's `{ 0, Point(0, -1) }`. With braces, those
+   * members are assigned the values the braces give.
+   */
+  isCxxAggregate(cls) {
+    this.complete(cls, cls.node);
+    return !cls.ctors.length && !cls.ctorTemplates?.length && !cls.bases.length && !cls.hasVptr && !this.needsDtor(cls);
+  },
+  /**
+   * The statements that build an array of objects from braces, element by element: each one
+   * copy-initialised from its expression (kyra's `static const OpcodeV1 opcodeTable[] = {
+   * OpcodeV1(this, &KyraEngine_v1::o1_magicInMouseItem), ... }`), the rest default-constructed.
+   */
+  arrayFromBraces(target, type, items, cx, node) {
+    const elem = type.of.cls;
+    const lines = [];
+    items.forEach((x, i) => {
+      if (x.k === 'braces') this.fail(`${elem.name} has constructors: braces cannot initialise it`, node);
+      const { e, after } = this.full(x, cx, (m, c) => ({ c: `${target}[${i}] = ${this.coerce(this.expr(m, c), T.uncst(type.of), c, m, 'initialisation')};` }));
+      lines.push(e.c, ...after);
+    });
+    const ctor = items.length < type.n ? this.defaultCtor(elem, node) : null;
+    if (ctor) { this.use(ctor); lines.push(`{ int __i; for (__i = ${items.length}; __i < ${type.n}; __i++) ${ctor.cname}(${[`&${target}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`); }
+    return lines;
+  },
   /** `{ ... }` for an aggregate: each element converted to its member's or element's type. */
   bracesInit(b, type, cx, path = []) {
     if (type.k === 'array') {
@@ -427,14 +499,21 @@ export const stmtMethods = {
   },
   initElem(x, type, cx, path = []) {
     if (x.k === 'braces') return this.bracesInit(x, type, cx, path);
+    if (type.k === 'array' && x.k === 'str') return x.parts.join(' ');
     /*
      * At file scope, an element that reads a variable -- `Compact left_exit_rm2 = { ..., left_table2 }`,
      * left_table2 a pointer initialised elsewhere -- is not a constant in C. C++ initialises it before
      * main: the element is written as 0 here and assigned in the unit's initialisation function.
      */
-    if (cx.dynFix && this.readsVariable(x, cx.env)) {
+    // ...and so is one that runs code: saga's `{ 0, Point(0, -1) }` constructs a Point.
+    const runs = () => {
+      const probe = { ...cx, pending: [], dynamic: false, dynFix: null };
+      try { this.coerce(this.expr(x, probe), T.uncst(type), probe, cx.node, 'initialisation'); } catch { return true; }
+      return probe.dynamic;
+    };
+    if (cx.dynFix && (this.readsVariable(x, cx.env) || (type.k !== 'array' && runs()))) {
       cx.dynFix.push({ path, x, type });
-      return '0';
+      return type.k === 'class' ? '{ 0 }' : '0';
     }
     if (type.k === 'array' && x.k === 'str') return x.parts.join(' ');
     if (type.k === 'array' || (type.k === 'class' && !this.convert(this.expr(x, { ...cx, pending: [] }), T.uncst(type), cx))) this.fail('an initialiser without its braces', cx.node);
@@ -507,6 +586,9 @@ export const stmtMethods = {
         this.use(f);
         return `(void *)${f.cname}`;
       }
+      // A pure virtual overrider with no body leaves the slot empty, as in the class's own table
+      // (scumm's BaseScummFile::read, pure, overriding ReadStream's in a virtual base).
+      if (final.pure && !final.body) return '0';
       this.use(final);
       const thunk = `__thunk_${cls.cname}_${gi}_${j}`;
       const ps = f.type.params.map((p, i) => this.ct(p.k === 'ref' ? T.ptr(p.to) : p, `__a${i}`));
@@ -592,6 +674,9 @@ export const stmtMethods = {
       } else if (fld.type.k === 'array' && c) {
         const ctor = this.defaultCtor(c, f.defNode);
         if (ctor) { this.use(ctor); lines.push(`{ int __i; for (__i = 0; __i < ${fld.type.n}; __i++) ${ctor.cname}(${[`&${target}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`); }
+      } else if (init && !init.args.length) {
+        // `_defaultVal()`, `_fonts()`: value-initialised, which for a scalar or an array of them is zero.
+        lines.push(fld.type.k === 'array' ? `{ unsigned int __i; for (__i = 0; __i < sizeof(${target}); __i++) ((char *)${target})[__i] = 0; }` : `${target} = 0;`);
       } else if (init) {
         if (init.args.length !== 1) this.fail(`member ${fld.name} initialised with ${init.args.length} values`, f.defNode);
         const { e, after } = this.full(init.args[0], cx, (m, cc) => ({ c: this.coerce(this.expr(m, cc), fld.type.k === 'ref' ? fld.type : T.uncst(fld.type), cc, m, 'member initialisation'), t: fld.type }));
@@ -726,7 +811,13 @@ export const stmtMethods = {
     }
     if (type.k === 'array' && elem) {
       // An array of aggregates with braces is C's, element by element.
-      if (it.init?.k === 'braces' && this.isAggregate(elem)) { braces(decl); return; }
+      if (it.init?.k === 'braces' && (this.isAggregate(elem) || this.isCxxAggregate(elem))) { braces(decl); return; }
+      if (type.of.k === 'class' && it.init?.k === 'braces') {
+        this.out.vars.push(`${decl.replace(/^(static )?const /, '$1')};`);
+        dynamic(this.arrayFromBraces(ent.cname, type, it.init.items, this.initContext(env), it), null);
+        if (this.dtorOf(elem)) this.finis.push(...this.destroy([{ c: ent.cname, cls: elem, count: type.n }], this.initContext(env)).map((l) => `  ${l}`));
+        return;
+      }
       if (type.of.k !== 'class' || it.init) this.fail('an initialised array of objects at file scope', it);
       this.out.vars.push(`${decl};`);
       const ctor = this.defaultCtor(elem, it);

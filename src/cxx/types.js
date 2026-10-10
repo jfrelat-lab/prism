@@ -84,6 +84,7 @@ export function show(t) {
     case 'enum': return c + (t.en.name ?? 'enum');
     case 'func': return `${show(t.ret)} (${t.params.map(show).join(', ')}${t.variadic ? ', ...' : ''})`;
     case 'tvalue': return String(t.value);
+    case 'overload': return `&${t.display} (overloaded)`;
     case 'memptr': return `${show(t.to.ret)} (${t.cls.name}::*)(${t.to.params.map(show).join(', ')})`;
     default: return '?';
   }

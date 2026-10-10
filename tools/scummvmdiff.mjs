@@ -116,12 +116,12 @@ async function scriptFile(input) {
  * PRISM's side: the hash of the display at each presented frame -- and, given `audio`, how many of
  * the audio buffers were not silence (audio.buffers, audio.loud).
  */
-export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = null, { input = INPUT, pngAt = [], folder = 'sky', png = 'scummvm', exclude = [], debugOut = null } = {}) {
+export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = null, { input = INPUT, pngAt = [], folder = 'sky', png = 'scummvm', exclude = [], debugOut = null, target = 'targets/scummvm.json' } = {}) {
   const { loadTarget, buildTarget } = await import('../src/target.js');
   const { virtualClock } = await import('../src/env/clock.js');
   const files = {};
   if (data) for (const f of gameFiles(data, exclude)) files[`${folder}/${f}`] = new Uint8Array(readFileSync(join(data, f)));
-  const b = buildTarget(loadTarget(join(ROOT, 'targets/scummvm.json')), {
+  const b = buildTarget(loadTarget(join(ROOT, target)), {
     root: ROOT, compile: { safepoints: true }, envExtra: { stdio: { files }, sdl12: { clock: virtualClock() } },
   });
   const M = b.program.M, sdl = M.sdl.state, out = [];

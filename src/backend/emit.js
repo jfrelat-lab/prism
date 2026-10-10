@@ -1109,6 +1109,8 @@ export class FunctionEmitter {
         return null;
       case 'ident': {
         // An array or function name decays to its own address without needing `&`.
+        const l = this.locals?.get(e.name);
+        if (l) return l.kind === 'global' && l.type.k === 'array' ? l.addr : null;
         const g = this.ctx.globals?.get(e.name);
         if (g && g.type.k === 'array') return g.addr;
         const f = this.ctx.funcs?.get(e.name);
@@ -1200,6 +1202,10 @@ export class FunctionEmitter {
         return addr;
       }
       case 'ident': {
+        // A name in scope here first: a block-scope static is an object with a fixed address
+        // (saga's `static const char *hintPtr = hintBuf;`), an automatic one is no constant at all.
+        const l = this.locals?.get(e.name);
+        if (l) return l.kind === 'global' ? l.addr : null;
         const g = this.ctx.globals?.get(e.name);
         if (g) return g.addr;
         const f = this.ctx.funcs?.get(e.name);

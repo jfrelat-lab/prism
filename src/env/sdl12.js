@@ -81,6 +81,7 @@ const DEFAULT_MASKS = {
   32: [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000],
 };
 const CD_ERROR = -1;
+const SDL_SRCALPHA = 0x00010000;
 
 /*
  * Scan code set 1 -> SDLKey, for a US keyboard. `extended` is the 0xE0 prefix: the arrows and the
@@ -338,6 +339,17 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_Flip: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); return 0; },
     SDL_UpdateRect: (s) => { state.pump(); if (state.onPresent) state.onPresent(s || state.surface); },
     SDL_SetColorKey: () => 0,
+    // Per-surface alpha, recorded where SDL keeps it (flags, format->alpha); SDL_UpperBlit refuses to
+    // blend with it rather than guess SDL's arithmetic.
+    SDL_SetAlpha: (surf, flag, alpha) => {
+      if (!surf) return -1;
+      const d = dv(), fmt = d.getUint32(surf + 4, true);
+      const flags = d.getUint32(surf, true);
+      if (flag & SDL_SRCALPHA) { d.setUint32(surf, (flags | SDL_SRCALPHA) >>> 0, true); M.u8[fmt + 36] = alpha & 0xff; }
+      else { d.setUint32(surf, (flags & ~SDL_SRCALPHA) >>> 0, true); M.u8[fmt + 36] = 255; }
+      return 0;
+    },
+    SDL_WM_IconifyWindow: () => 0,
     SDL_WM_SetCaption: () => 0,
     SDL_WM_SetIcon: () => 0,
     SDL_WM_ToggleFullScreen: () => 0,   // 0 = refused, which the program treats as "stay windowed"
@@ -406,6 +418,9 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
      * A colour key is not applied: nothing here sets one on a surface it blits.
      */
     SDL_UpperBlit: (src, srcrect, dst, dstrect) => {
+      if ((dv().getUint32(src, true) & SDL_SRCALPHA) && M.u8[dv().getUint32(src + 4, true) + 36] !== 255) {
+        throw new Error('SDL_BlitSurface: a source with per-surface alpha is not blended here yet (SDL_SetAlpha)');
+      }
       const S = info(src), D = info(dst);
       let [sx, sy, w, h] = rectOf(srcrect, S.w, S.h);
       let [dx, dy] = dstrect ? rectOf(dstrect, 0, 0) : [0, 0];
@@ -451,6 +466,20 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_SetTimer: (interval, cb) => {
       state.timer = cb && interval ? { cb, interval: interval >>> 0, next: state.clock.now() + (interval >>> 0) } : null;
       return 0;
+    },
+    // The newer interface: any number, each with its parameter, fired at the same points. An ID is
+    // a small number the guest only hands back.
+    SDL_AddTimer: (interval, cb, param) => {
+      if (!cb) return 0;
+      const id = (state.nextTimerId = (state.nextTimerId ?? 0) + 1);
+      (state.timers ??= []).push({ id, cb, param, interval: interval >>> 0, next: state.clock.now() + (interval >>> 0) });
+      return id;
+    },
+    SDL_RemoveTimer: (id) => {
+      const i = (state.timers ?? []).findIndex((t) => t.id === id);
+      if (i < 0) return 0;
+      state.timers.splice(i, 1);
+      return 1;
     },
 
     // ---- the CD-ROM: no drive -------------------------------------------------------------
@@ -599,6 +628,17 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
   };
   const pumpAll = () => {
     mixerPump();
+    // SDL_AddTimer's timers, each as SDL_SetTimer's below, its parameter passed; removed by
+    // SDL_RemoveTimer or by returning 0.
+    for (const t of [...(state.timers ?? [])]) {
+      const now = state.clock.now();
+      for (let n = 0; state.timers.includes(t) && now >= t.next && n < 64; n++) {
+        const again = M.icall(t.cb, [t.interval, t.param]) >>> 0;
+        if (!again) { const i = state.timers.indexOf(t); if (i >= 0) state.timers.splice(i, 1); break; }
+        t.interval = again; t.next += again;
+      }
+      if (state.timers.includes(t) && now >= t.next) t.next = now + t.interval;
+    }
     const t = state.timer;
     if (!t) return;
     const now = state.clock.now();
@@ -655,7 +695,8 @@ export function sdl12Builtins(T) {
     SDL_SaveBMP_RW: f(I, P, P, I),
     SDL_RWclose: f(I, P),
     SDL_WM_GrabInput: f(I, I),
-    SDL_SetTimer: f(I, U, P),
+    SDL_SetTimer: f(I, U, P), SDL_AddTimer: f(P, U, P, P), SDL_RemoveTimer: f(I, P),
+    SDL_SetAlpha: f(I, P, U, B), SDL_WM_IconifyWindow: f(I),
     SDL_CDNumDrives: f(I), SDL_CDName: f(P, I), SDL_CDOpen: f(P, I), SDL_CDStatus: f(I, P),
     SDL_CDPlayTracks: f(I, P, I, I, I, I), SDL_CDPlay: f(I, P, I, I), SDL_CDPause: f(I, P), SDL_CDResume: f(I, P),
     SDL_CDStop: f(I, P), SDL_CDEject: f(I, P), SDL_CDClose: f(V, P),

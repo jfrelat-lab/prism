@@ -543,6 +543,31 @@ int main(void) {
 }
 `);
 
+// The address of a block-scope static is an address constant (saga's puzzle.cpp: `static const
+// char *hintPtr = hintBuf;`), and a static local shadowing a global is the one meant.
+C('static-local-address', `
+#include <stdio.h>
+#include <string.h>
+static int shadow = 5;
+static const char *hint(int k) {
+    static char hintBuf[64];
+    static const char *hintPtr = hintBuf;
+    static char *mid = hintBuf + 3;
+    sprintf(hintBuf, "piece %d", k);
+    return k ? hintPtr : mid;
+}
+int main(void) {
+    char x[16];
+    const char *b;
+    static int shadow = 7;
+    static int *ps = &shadow;
+    strcpy(x, hint(1));
+    b = hint(0);
+    printf("%s|%s %d\\n", x, b, *ps);
+    return 0;
+}
+`);
+
 // dirent.h's d_type, which ScummVM 0.10.0's posix-fs.cpp reads: the DT_ values are glibc's, and the
 // type of an entry is one a reader may be given -- DT_UNKNOWN here, which sends it to stat(), or the
 // real one there.

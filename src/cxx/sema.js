@@ -122,6 +122,12 @@ export class Sema {
     switch (it.k) {
       case 'class':
         if (it.specArgs) return this.declareSpecialisation(it, env);
+        // `struct ScummNESFile::Resource { ... }`: completes the class its owner declared.
+        if (it.owner) {
+          const ot = this.namedType(it.owner, env, it);
+          if (ot.k !== 'class') this.fail(`a class defined in ${it.owner.parts.map((p) => p.name).join('::')}, which is not a class`, it);
+          return this.declareClass(it, this.complete(ot.cls, it).env);
+        }
         return it.template ? this.declareTemplate(it, env) : this.declareClass(it, env);
       case 'enum': return this.declareEnum(it, env);
       case 'fwdclass': {
@@ -442,11 +448,27 @@ export class Sema {
     if (it.name) env.scope.set(it.name, { k: 'type', type });
     let next = 0;
     for (const v of it.values) {
-      if (v.e) { const x = this.constInt(v.e, env); if (x === null) this.fail(`enumerator ${v.name} is not a constant`, it); next = x; }
-      if (next < 0) en.unsigned = false;
-      if (next > 0x7fffffff) en.fitsInt = false;
-      env.scope.set(v.name, { k: 'enumerator', type, value: next });
-      next++;
+      if (v.e) {
+        const x = this.constInt(v.e, env);
+        if (x !== null) next = x;
+        else {
+          /*
+           * A value this front end cannot fold -- `sizeof(SubRoom) - sizeof(uint16)` in agos's
+           * intern.h, whose answer is the C compiler's layout -- is C text, as an array size may be
+           * (derive): every use writes it, and the C compiler folds it.
+           */
+          const cx = { env, fn: null, pending: [], constOnly: true, node: it };
+          const e = this.expr(v.e, cx);
+          if (cx.dynamic || !T.isInteger(e.t)) this.fail(`enumerator ${v.name} is not a constant`, it);
+          next = { text: `(${e.c})` };
+        }
+      }
+      if (typeof next === 'number') {
+        if (next < 0) en.unsigned = false;
+        if (next > 0x7fffffff) en.fitsInt = false;
+      }
+      env.scope.set(v.name, typeof next === 'number' ? { k: 'enumerator', type, value: next } : { k: 'enumerator', type, value: null, ctext: next.text });
+      next = typeof next === 'number' ? next + 1 : { text: `(${next.text} + 1)` };
     }
     return en;
   }
@@ -512,7 +534,10 @@ export class Sema {
     if (it.name) cls.scope.set(it.name, { k: 'type', type: { k: 'class', cls } });
 
     for (const m of it.members) {
+      if (m.template) { this.declareMemberTemplate(m, cls, cenv); continue; }
       if (m.k === 'class') { this.declareClass(m, cenv); continue; }
+      // `struct Resource;` inside a class: a nested class named now, defined later (kyra's FilenameTable).
+      if (m.k === 'fwdclass') { if (!cls.scope.get(m.name)) cls.scope.set(m.name, { k: 'type', type: { k: 'class', cls: this.newClass(m.name, m.key, m, cenv) } }); continue; }
       if (m.k === 'enum') { this.declareEnum(m, cenv); continue; }
       if (m.k === 'typedef') { cls.scope.set(this.lastName(m.decl.name), { k: 'type', type: this.declType(m.specs, m.decl.derivs, cenv, m) }); continue; }
       if (m.k === 'func') { this.memberFunction(m, cls, cenv, m); continue; }
@@ -530,7 +555,7 @@ export class Sema {
           continue;
         }
         const bits = m.bits ? this.constInt(m.bits, cenv) : null;
-        const field = { k: 'var', name, type, cname: name, field: cls, bits };
+        const field = { k: 'var', name, type, cname: name, field: cls, bits, mutable: !!m.specs.mutable };
         cls.fields.push(field);
         cls.scope.set(name, field);
       }
@@ -718,20 +743,59 @@ export class Sema {
    */
   declareFunctionTemplate(it, env) {
     const name = this.lastName(it.decl.name);
-    let set = env.scope.get(name);
-    if (!set || set.k !== 'funcs') set = env.scope.set(name, { k: 'funcs', name, list: [] });
+    // A definition after a declaration completes it; the instances are made from the definition.
+    return this.functionTemplateIn(this.funcSet(env.scope, name).templates, it, env, name);
+  }
+  /**
+   * A MEMBER template: a class template inside a class (List<T>::Node<T2>), or a function template
+   * that is a member -- a method, a static function or a constructor (List<T>::insert<iterator2>,
+   * Screen::decode<noXor>, Instruments(T)). Either is made per set of arguments as its namespace-scope
+   * counterpart is, with the enclosing class's own arguments still bound.
+   */
+  declareMemberTemplate(m, cls, cenv) {
+    if (m.k === 'class' || m.k === 'fwdclass') {
+      if (m.specArgs) this.fail(`${cls.name}::${m.name}: an explicit specialisation of a member template`, m);
+      const prior = cls.scope.get(m.name);
+      if (prior?.k === 'template') { if (m.k === 'class') Object.assign(prior.tmpl, { ast: m, params: m.template, env: cenv }); return; }
+      cls.scope.set(m.name, { k: 'template', tmpl: { name: m.name, ast: m, params: m.template, env: cenv, outOfLine: [], specs: new Map() } });
+      return;
+    }
+    const isFunc = m.decl?.derivs.length && m.decl.derivs[m.decl.derivs.length - 1].k === 'func';
+    if (!isFunc) this.fail(`${cls.name}: a member template that is neither a class nor a function`, m);
+    const raw = this.lastName(m.decl.name);
+    const isCtor = raw === cls.node.name || raw === cls.template?.name;
+    const name = isCtor ? '<ctor>' : raw;
+    const ft = this.functionTemplateIn(isCtor ? (cls.ctorTemplates ??= []) : this.funcSet(cls.scope, raw).templates, m, cenv, name);
+    ft.member = { cls, isStatic: m.specs.storage === 'static' || !!ft.member?.isStatic, isCtor };
+  }
+  /** The overload set of `name` in a scope, made if there is none. */
+  funcSet(scope, name) {
+    let set = scope.get(name);
+    if (!set || set.k !== 'funcs') set = scope.set(name, { k: 'funcs', name, list: [] });
     set.templates ??= [];
+    return set;
+  }
+  /** The function template in `list` declared as `it` declares it -- a definition completes a declaration. */
+  functionTemplateIn(list, it, env, name) {
     const fd = it.decl.derivs[it.decl.derivs.length - 1];
-    // A definition after a declaration completes it; the instances are made from the definition. Two
-    // templates are the same one only if their parameters are written alike, template parameters
+    // Two templates are the same one only if their parameters are written alike, template parameters
     // counted by position: func.h's two mem_fun differ by a `const` on the member function alone.
     const pos = new Map(it.template.map((p, i) => [p.name, `#${i}`]));
     const sig = JSON.stringify([it.template.length, fd.params.map((p) => [p.specs.type, p.specs.cv, p.decl.derivs]), fd.cv],
       (k, v) => (k === 'loc' ? undefined : k === 'name' && pos.has(v) ? pos.get(v) : v));
-    let ft = set.templates.find((t) => t.sig === sig);
-    if (!ft) { ft = { name, params: it.template, nparams: fd.params.length, sig, ast: it, env, instances: new Map() }; set.templates.push(ft); }
-    if (it.k === 'func') ft.ast = it;
+    let ft = list.find((t) => t.sig === sig);
+    if (!ft) { ft = { name, params: it.template, nparams: fd.params.length, sig, ast: it, env, instances: new Map() }; list.push(ft); }
+    if (it.k === 'func') {
+      Object.assign(ft, { ast: it, params: it.template });
+      // Instances made before the body was seen get it now.
+      for (const f of ft.instances.values()) if (!f.body) { this.attachBody(f, it, this.instanceEnv(ft, f.targs)); if (f.used) this.use(f); }
+    }
     return ft;
+  }
+  /** Where an instance of ft is read: its scope (the class's, for a member), its arguments bound by name. */
+  instanceEnv(ft, args) {
+    const cls = ft.member?.cls ?? ft.env.cls ?? null;
+    return { scope: ft.member ? cls.scope : ft.env.scope, cls, bind: new Map([...(ft.env.bind ?? []), ...ft.params.map((p, i) => [p.name, args[i]])]) };
   }
   /** The instance of ft a call with these explicit template arguments and argument expressions makes, or null. */
   deduce(ft, explicit, args, env, node) {
@@ -804,15 +868,32 @@ export class Sema {
     let f = ft.instances.get(key);
     if (f) return f;
     const it = ft.ast;
-    const env = { scope: ft.env.scope, cls: ft.env.cls ?? null, bind: new Map([...(ft.env.bind ?? []), ...ft.params.map((p, i) => [p.name, args[i]])]) };
-    const type = this.declType(it.specs, it.decl.derivs, env, it);
+    const env = this.instanceEnv(ft, args);
     const fd = it.decl.derivs[it.decl.derivs.length - 1];
+    if (ft.member) {
+      // A method, a static function or a constructor of the class, one per set of arguments; static
+      // in C as every instance is (each unit makes the ones it uses).
+      const { cls, isStatic, isCtor } = ft.member;
+      const type = isCtor ? this.derive(T.VOID, fd, env, it) : this.declType(it.specs, it.decl.derivs, env, it);
+      // Default arguments are the declaration's, which an out-of-line definition does not repeat.
+      const dd = (ft.declAst ?? it).decl.derivs;
+      f = {
+        k: 'func', name: ft.name, display: `${cls.name}::${isCtor ? cls.name : ft.name}<${args.map(T.show).join(', ')}>`, cls, type, isStatic,
+        isCtor, isDtor: false, conv: null, node: it, params: this.paramInfo(dd[dd.length - 1], env), inline: true, fileStatic: false, fromTemplate: true, targs: args, ft,
+      };
+      f.cname = `${this.mangleName(ft.name, cls, type, null)}_I${args.map(T.mangle).join('')}E`;
+      ft.instances.set(key, f);
+      if (it.k === 'func') this.attachBody(f, it, env);
+      return f;
+    }
+    const type = this.declType(it.specs, it.decl.derivs, env, it);
     const ns = nsOf(ft.env.scope);
     f = {
       k: 'func', name: ft.name, display: `${ft.name}<${args.map(T.show).join(', ')}>`, cls: null, type, isStatic: true, cLink: false,
-      node: it, params: this.paramInfo(fd, env), inline: true, fileStatic: true, fromTemplate: true,
+      node: it, params: this.paramInfo(fd, env), inline: true, fileStatic: it.specs?.storage === 'static' || !!ns?.internal, fromTemplate: true, targs: args, ft,
     };
-    // Every unit that uses an instance makes its own, as g++ makes a weak one: static here.
+    // Every unit that uses an instance makes its own; as g++ makes it, a weak external one (isWeak),
+    // which another unit may call without the body -- static only if the template itself is.
     f.cname = `${this.mangleName(ft.name, null, type, null, ns)}_I${args.map(T.mangle).join('')}E`;
     ft.instances.set(key, f);
     if (it.k === 'func') this.attachBody(f, it, env);
@@ -940,6 +1021,20 @@ export class Sema {
       const ot = this.namedType({ parts: q.slice(0, -1), global: it.decl.name.global }, env, it);
       if (ot.k !== 'class') this.fail(`'${ownerName}' is not a class`, it);
       this.complete(ot.cls, it);
+      // A member template's definition: `template<bool noXor> void Screen::decode(...) { ... }`.
+      if (it.template?.length) {
+        const raw = this.lastName(it.decl.name);
+        const isCtor = raw === ot.cls.node.name;
+        const list = isCtor ? ot.cls.ctorTemplates : ot.cls.scope.get(raw)?.templates;
+        if (!list?.length) this.fail(`${ot.cls.name} declares no member template ${raw}`, it);
+        const n = it.decl.derivs[it.decl.derivs.length - 1].params.length;
+        const ft = list.find((t) => t.nparams === n && t.params.length === it.template.length);
+        if (!ft) this.fail(`${ot.cls.name}::${raw}: no member template declared as this one is defined`, it);
+        // The definition's parameter names are the ones its body uses; instances made before it get it now.
+        Object.assign(ft, { declAst: ft.declAst ?? ft.ast, ast: it, params: it.template });
+        for (const f of ft.instances.values()) if (!f.body) { this.attachBody(f, it, this.instanceEnv(ft, f.targs)); if (f.used) this.use(f); }
+        return null;
+      }
       const f = this.outOfLine(it, ot.cls);
       // Not inline: this unit defines it for the whole program.
       if (!it.specs.inline) { f.inline = false; (this.defined ??= []).push(f); }

@@ -17,7 +17,7 @@
 import { sh, SCRATCH, version } from './oracle.mjs';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { compile } from '../src/compile.js';
+import { compile, compileProgram, builtinHeaderResolver } from '../src/compile.js';
 
 const VERBOSE = process.argv.includes('--verbose');
 const FILTER = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? null;
@@ -607,6 +607,350 @@ int main() {
 }
 `);
 
+// The member templates of ScummVM 0.10.0: common/list.h's Node<T2> and Iterator<T2> inside List<T>
+// and its insert<iterator2>; gui/debugger.h's DelegateDebuglet<T> inside a class template; kyra's
+// and wiz's static member function templates with a value parameter, defined out of the class (the
+// default from the declaration) and called with explicit arguments, also after '.'; infogrames'
+// constructor template.
+C('member-templates', `
+#include <stdio.h>
+template <class T>
+class List {
+public:
+    struct NodeBase { NodeBase *_prev, *_next; };
+    template <class T2>
+    struct Node : public NodeBase {
+        T2 _data;
+        Node(const T2 &x) : _data(x) {}
+    };
+    template <class T2>
+    class Iterator {
+        friend class List<T>;
+        NodeBase *_node;
+        explicit Iterator(NodeBase *node) : _node(node) {}
+    public:
+        Iterator() : _node(0) {}
+        Iterator<T2> &operator++() { if (_node) _node = _node->_next; return *this; }
+        T2 &operator*() const { return static_cast<Node<T2> *>(_node)->_data; }
+        bool operator!=(const Iterator<T2> &x) const { return _node != x._node; }
+    };
+    typedef Iterator<T> iterator;
+    typedef Iterator<const T> const_iterator;
+    NodeBase *_anchor;
+    List() { _anchor = new NodeBase; _anchor->_prev = _anchor; _anchor->_next = _anchor; }
+    ~List() { clear(); delete _anchor; }
+    void insert(iterator pos, const T &element) {
+        NodeBase *newNode = new Node<T>(element);
+        newNode->_next = pos._node;
+        newNode->_prev = pos._node->_prev;
+        newNode->_prev->_next = newNode;
+        newNode->_next->_prev = newNode;
+    }
+    template <typename iterator2>
+    void insert(iterator pos, iterator2 first, iterator2 last) {
+        for (; first != last; ++first)
+            insert(pos, *first);
+    }
+    void push_back(const T &element) { insert(end(), element); }
+    template <class U>
+    T convertFirst(U scale) const { T first = static_cast<Node<T> *>(_anchor->_next)->_data; return (T)(first * scale); }
+    void clear() {
+        NodeBase *p = _anchor->_next;
+        while (p != _anchor) { NodeBase *n = p->_next; delete static_cast<Node<T> *>(p); p = n; }
+        _anchor->_prev = _anchor->_next = _anchor;
+    }
+    iterator begin() { return iterator(_anchor->_next); }
+    iterator end() { return iterator(_anchor); }
+    const_iterator begin() const { return const_iterator(_anchor->_next); }
+    const_iterator end() const { return const_iterator(_anchor); }
+};
+
+template <class Owner>
+class Debugger {
+public:
+    class Debuglet {
+    public:
+        virtual ~Debuglet() {}
+        virtual bool operator()(int argc) = 0;
+    };
+    template <class T>
+    class DelegateDebuglet : public Debuglet {
+        typedef bool (T::*Method)(int argc);
+        T *_delegate;
+        const Method _method;
+    public:
+        DelegateDebuglet(T *delegate, Method method) : _delegate(delegate), _method(method) {}
+        virtual bool operator()(int argc) { return (_delegate->*_method)(argc); }
+    };
+public:
+    Debuglet *make(Owner *o, bool (Owner::*m)(int)) { return new DelegateDebuglet<Owner>(o, m); }
+};
+struct Console {
+    int base;
+    bool cmdBig(int argc) { return argc + base > 10; }
+};
+
+class Screen {
+public:
+    template<bool noXor> static void decode(unsigned char *dst, const unsigned char *src, int n);
+    template<int type> static int pixel(int c, int pal = 3);
+    void run(unsigned char *d, const unsigned char *s, bool x) { if (x) decode<true>(d, s, 4); else decode<false>(d, s, 4); }
+};
+template<bool noXor>
+void Screen::decode(unsigned char *dst, const unsigned char *src, int n) {
+    for (int i = 0; i < n; i++) dst[i] = noXor ? src[i] : (unsigned char)(dst[i] ^ src[i]);
+}
+template<int type>
+int Screen::pixel(int c, int pal) { return type == 1 ? c + pal : type == 2 ? c * pal : c; }
+
+class Instruments {
+    int _sum;
+    void init() { _sum = 0; }
+    bool load(int n) { _sum += n * 10; return true; }
+    bool load(const char *s) { while (*s) _sum += *s++; return true; }
+public:
+    Instruments() { init(); }
+    template<typename T> Instruments(T ins) { init(); load(ins); }
+    int sum() const { return _sum; }
+};
+
+int main() {
+    List<int> l;
+    l.push_back(3); l.push_back(4);
+    int more[3] = { 7, 8, 9 };
+    l.insert(l.end(), more, more + 3);
+    int s = 0;
+    for (List<int>::iterator it = l.begin(); it != l.end(); ++it) s = s * 10 + *it;
+    const List<int> &cl = l;
+    int c = 0;
+    for (List<int>::const_iterator it = cl.begin(); it != cl.end(); ++it) c += *it;
+    printf("list %d %d\\n", s, c);
+    printf("convert %d %d\\n", l.convertFirst(2.5), (int)l.convertFirst(3));
+
+    Console con; con.base = 8;
+    Debugger<Console> dbg;
+    Debugger<Console>::Debuglet *d1 = 0;
+    (void)d1;
+    printf("debuglet %d %d\\n", (int)(*dbg.make(&con, &Console::cmdBig))(1), (int)(*dbg.make(&con, &Console::cmdBig))(5));
+
+    unsigned char a[4] = { 1, 2, 3, 4 }, b[4] = { 15, 15, 15, 15 };
+    Screen sc;
+    sc.run(b, a, false);
+    printf("decode %d %d", b[0], b[3]);
+    sc.run(b, a, true);
+    printf(" %d %d\\n", b[0], b[3]);
+    printf("pixel %d %d %d %d\\n", Screen::pixel<1>(5), Screen::pixel<2>(5, 4), Screen::pixel<0>(5), sc.pixel<2>(6));
+
+    Instruments i0, i1(4), i2("AB");
+    printf("instruments %d %d %d\\n", i0.sum(), i1.sum(), i2.sum());
+    return 0;
+}
+`);
+
+// More of ScummVM 0.10.0: an enumerator sized by sizeof (agos's intern.h, written as C text for the C
+// compiler to fold); a nested class declared in its class and defined there or outside it (kyra's
+// FilenameTable, scumm's ScummNESFile::Resource); members value-initialised by () (HashMap's _defaultVal).
+C('scummvm010-types', `
+#include <stdio.h>
+struct Child { short type; Child *next; };
+struct SubRoom : Child { short roomShort; short exits[6]; };
+enum {
+    SubRoom_SIZE = sizeof(SubRoom) - sizeof(short),
+    SubRoom_NEXT,
+    Child_SIZE = sizeof(Child)
+};
+class Resource {
+public:
+    struct FilenameTable;
+    const FilenameTable *searchFile(int id) const;
+    struct FilenameTable { int id; const char *name; };
+    const FilenameTable *_table;
+};
+const Resource::FilenameTable *Resource::searchFile(int id) const { return _table[id].id == id ? &_table[id] : 0; }
+class NESFile {
+public:
+    struct Resource;
+    int extract(const Resource *res) const;
+};
+struct NESFile::Resource { int offset, length; };
+int NESFile::extract(const Resource *res) const { return res->offset + res->length; }
+template <class Key, class Val>
+class Map {
+    const Val _defaultVal;
+    int _count;
+    const char *_names[4];
+public:
+    Map() : _defaultVal(), _count(), _names() {}
+    Val get() const { return _defaultVal; }
+    int count() const { return _count + (_names[3] == 0); }
+};
+int main() {
+    static const Resource::FilenameTable files[2] = { { 0, "a" }, { 1, "b" } };
+    Resource r; r._table = files;
+    NESFile n; NESFile::Resource res = { 10, 5 };
+    Map<int, int> m; Map<int, const char *> m2;
+    int sizes[SubRoom_NEXT - SubRoom_SIZE + 1];
+    printf("%d %d %d %d\\n", (int)SubRoom_SIZE, (int)SubRoom_NEXT, (int)Child_SIZE, (int)sizeof(sizes));
+    printf("%s %d %d %d %d\\n", r.searchFile(1)->name, n.extract(&res), m.get(), m.count(), m2.get() == 0);
+    return 0;
+}
+`);
+
+// Lookup and conversions ScummVM 0.10.0 needs: argument-dependent lookup of an unqualified call
+// (enableSpecialDebugLevel); an ambiguous user conversion that only makes its candidate worse
+// (registerDefault("cdrom", 0)); a mutable member written through const; false and -0 as null pointer
+// constants; the address of a local const; the address of ++p, an lvalue in C++.
+C('scummvm010-lookup', `
+#include <stdio.h>
+namespace Common {
+class String {
+    union {
+        char _storage[8];
+        struct { mutable int *_refCount; unsigned _capacity; } _extern;
+    };
+    const char *_s;
+public:
+    String(const char *s) : _s(s) { _extern._refCount = 0; }
+    String(char c) : _s("c") { (void)c; _extern._refCount = 0; }
+    const char *c_str() const { return _s; }
+    void bump() const { static int n = 40; _extern._refCount = &n; }
+    int refs() const { return _extern._refCount ? *_extern._refCount : -1; }
+};
+bool enableLevel(const String &option) { return option.c_str()[0] == 'g'; }
+template<class T> int width(const T *) { return (int)sizeof(T); }
+}
+namespace Scumm {
+struct Config {
+    int which;
+    void registerDefault(const char *, const Common::String &) { which = 1; }
+    void registerDefault(const char *, const char *) { which = 2; }
+    void registerDefault(const char *, int) { which = 3; }
+    void registerDefault(const char *, bool) { which = 4; }
+};
+static void doOutput(const unsigned char *p, int n) { printf("out %d %d\\n", p[0], n); }
+int run() {
+    Config c;
+    c.registerDefault("cdrom", 0); int a = c.which;
+    c.registerDefault("enable_gs", false); int b = c.which;
+    c.registerDefault("x", "y"); int d = c.which;
+    Common::String s("gfx");
+    s.bump();
+    void *fd = 0;
+    const unsigned char newline_character = 10;
+    doOutput(&newline_character, 1);
+    printf("%d %d %d adl %d %d refs %d null %d\\n", a, b, d, (int)enableLevel(s), width(&s), s.refs(), (int)(fd == false));
+    const char *np = -0;
+    const char *str = "-12";
+    const char *&pick = (str[0] == '-') ? ++str : str;
+    printf("minus-zero %d pre %s %c\\n", (int)(np == 0), pick, *str);
+    return 0;
+}
+}
+int main() { return Scumm::run(); }
+`);
+
+// Statics in ScummVM 0.10.0: partial ordering of function templates (touche's saveOrLoadCommonArray);
+// saga's table of aggregates holding objects built by constructors; kyra's static local table of objects
+// and an overloaded member's address picked by its target type; gob's static local whose initialiser
+// reads the object, run the first time control passes it.
+C('scummvm010-statics', `
+#include <stdio.h>
+#include <string.h>
+// touche: partial ordering of function templates.
+struct WriteStream { int n; void put(int v) { n = n * 10 + v; } };
+struct ReadStream { int n; };
+template <class T> struct Array { T items[2]; };
+template <class S, class A> static int saveArray(S &s, A &array);
+template <class A> static int saveArray(WriteStream &s, A &array) { s.put(array.items[0]); s.put(array.items[1]); return 1; }
+template <class A> static int saveArray(ReadStream &, A &) { return 2; }
+template <class S> static int saveOne(S &, int) { return 3; }
+template <class S, class T> static int saveOne(S &, T *) { return 4; }
+
+// saga: a static table of aggregates holding objects built by their constructors.
+struct Point { short x, y; Point() : x(9), y(9) {} Point(short a, short b) : x(a), y(b) {} };
+struct PathDirectionData { int direction; Point coord; };
+static const PathDirectionData pathLUT[2][2] = {
+    { { 0, Point(0, -1) }, { 7, Point(-1, -1) } },
+    { { 1, Point(1, 0) }, { 4, Point(1, -1) } },
+};
+
+// kyra: a static local table of objects with constructors; an overloaded member's address chosen by
+// the type it is stored as; gob: a static local whose initialiser reads the object.
+struct Engine;
+struct Opcode {
+    typedef int (Engine::*Proc)(int);
+    Engine *e; Proc p;
+    Opcode(Engine *engine, Proc proc) : e(engine), p(proc) {}
+    int call(int a) const;
+};
+struct Engine {
+    char saves[2][12];
+    int base;
+    int magic(int a) { return a + base; }
+    int twice(int a) { return a * 2 + base; }
+    int load(int id, int &n) { n = id; return 1; }
+    bool load(const char *f, void *&p, int &size) { p = 0; size = (int)strlen(f); return true; }
+    typedef bool (Engine::*LoadFunc)(const char *, void *&, int &);
+    struct FileType { int type; LoadFunc load; };
+    int run(int k) {
+        static const Opcode table[] = { Opcode(this, &Engine::magic), Opcode(this, &Engine::twice) };
+        return table[k].call(5);
+    }
+    const char *slot(int s) {
+        static char *slotBase = saves[0] + strlen(saves[0]) - 2;
+        slotBase[0] = (char)('0' + s);
+        return saves[0];
+    }
+};
+int Opcode::call(int a) const { return (e->*p)(a); }
+static const Engine::FileType fileTypes[] = { { 1, &Engine::load } };
+
+int main() {
+    WriteStream w = { 0 }; ReadStream r = { 0 };
+    Array<int> arr = { { 3, 4 } };
+    int x = 0;
+    int o1 = saveArray(w, arr);
+    printf("order %d %d %d %d %d\\n", o1, w.n, saveArray(r, arr), saveOne(w, 1), saveOne(w, &x));
+    printf("lut %d %d %d %d\\n", pathLUT[0][1].direction, pathLUT[0][1].coord.x, pathLUT[1][0].coord.x, pathLUT[1][1].coord.y);
+    Engine e; e.base = 100;
+    strcpy(e.saves[0], "game.s00");
+    int a = e.run(0), b = e.run(1);
+    e.base = 1000;
+    int c = e.run(0);
+    void *p; int size;
+    bool ok = (e.*fileTypes[0].load)("abcdef", p, size);
+    const char *s1 = e.slot(3);
+    printf("kyra %d %d %d load %d %d gob %s\\n", a, b, c, (int)ok, size, s1);
+    return 0;
+}
+`);
+
+// scumm's BaseScummFile declares read() pure again over File's, which overrides ReadStream's in a
+// virtual base: BaseScummFile's table for that base has an empty slot, not a thunk to a function nobody
+// defines (the option checks below hold the program to having no unresolved name).
+C('virtual-base-pure', `
+#include <stdio.h>
+struct ReadStream { virtual ~ReadStream() {} virtual unsigned read(void *, unsigned) = 0; int ok() { char c; return read(&c, 1) == 1; } };
+struct SeekableReadStream : virtual ReadStream { virtual unsigned pos() const = 0; };
+struct File : SeekableReadStream { unsigned _pos; File() : _pos(0) {} unsigned read(void *, unsigned n) { _pos += n; return n; } unsigned pos() const { return _pos; } };
+struct BaseScummFile : File {
+    virtual unsigned read(void *dataPtr, unsigned dataSize) = 0;
+};
+struct ScummFile : BaseScummFile {
+    unsigned read(void *d, unsigned n) { return File::read(d, n) * 2; }
+};
+int main() {
+    ScummFile f;
+    ReadStream *r = &f;
+    char b[4];
+    unsigned got = r->read(b, 3);
+    unsigned at = f.pos();
+    int ok = r->ok();
+    printf("%u %u %d\\n", got, at, ok);
+    return 0;
+}
+`);
+
 // Virtual bases, on the shape of ScummVM 0.10.0's common/stream.h: Stream virtual under ReadStream and
 // WriteStream, a File reaching it by both, a stream two virtual levels down. One Stream however many
 // paths; virtual calls through each base; construction and destruction in the order C++ gives them.
@@ -1081,6 +1425,22 @@ if (!FILTER) {
     ['C: a pointer to an array of a struct not yet defined is refused', /^refused: .*incomplete element type 'struct Area'/.test(out(ROWS + AREA + MAIN, 'unit.c'))],
     ['...and its rows are sizeof(struct Area[11]) apart once it is', out(AREA + ROWS + MAIN, 'unit.c') === '110'],
   );
+  // A function template's instance is a weak external symbol, as g++ makes it: scumm's akos.cpp calls
+  // Wiz::decompressWizImage<kWizXMap>, whose body only wiz_he.cpp has.
+  const WIZ = 'struct Wiz { template<int type> static int decompress(int x); };\n';
+  const two = (() => {
+    try {
+      return compileProgram([
+        { file: 'wiz.cpp', source: `${WIZ}template<int type> int Wiz::decompress(int x) { return x * 10 + type; }\nint wizUse() { return Wiz::decompress<1>(2) + Wiz::decompress<2>(0); }\n` },
+        { file: 'akos.cpp', source: `#include <stdio.h>\n${WIZ}int wizUse();\nint main() { printf("%d %d\\n", Wiz::decompress<1>(5), wizUse()); return 0; }\n` },
+      ], { resolve: builtinHeaderResolver({}), memory: 8 << 20 }).run(['x']).stdout.trim();
+    } catch (e) { return `refused: ${e.message.split('\n')[0]}`; }
+  })();
+  option.push(['a member template instance defined in one unit is called from another', two === '51 23']);
+  // Nothing a program never defines is named: a pure virtual function under a virtual base was.
+  const pureSrc = cases.find((c) => c.name === 'virtual-base-pure')?.src ?? '';
+  const pureUndefined = (() => { try { return compileProgram([{ file: 'pure.cpp', source: pureSrc }], { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true }).undefined ?? []; } catch (e) { return [`refused: ${e.message}`]; } })();
+  option.push(['a pure virtual function under a virtual base leaves no name undefined', pureSrc !== '' && pureUndefined.length === 0]);
   for (const [what, ok] of option) {
     if (ok) { pass++; if (VERBOSE) console.log(`  ok   option: ${what}`); } else fails.push({ c: { name: `option: ${what}` }, why: 'the option did not do that' });
   }

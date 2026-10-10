@@ -45,6 +45,7 @@ typedef signed char Sint8;
 typedef unsigned short Uint16;
 typedef signed short Sint16;
 typedef unsigned int Uint32;
+typedef enum { SDL_FALSE = 0, SDL_TRUE = 1 } SDL_bool;
 typedef signed int Sint32;
 #endif
 `;
@@ -141,6 +142,21 @@ int SDL_OpenAudio(SDL_AudioSpec *desired, SDL_AudioSpec *obtained);
 typedef Uint32 (*SDL_TimerCallback)(Uint32 interval);
 int SDL_SetTimer(Uint32 interval, SDL_TimerCallback callback);
 
+/* Timers of the newer interface (ScummVM 0.10.0's backend): as many as are added, each with a
+   parameter; the callback returns the next interval, or 0 to stop. Fired where SDL_SetTimer's is. */
+typedef struct _SDL_TimerID *SDL_TimerID;
+typedef Uint32 (*SDL_NewTimerCallback)(Uint32 interval, void *param);
+SDL_TimerID SDL_AddTimer(Uint32 interval, SDL_NewTimerCallback callback, void *param);
+SDL_bool SDL_RemoveTimer(SDL_TimerID t);
+
+/* The version these declarations are, SDL 1.2.15's, and its macros (SDL_version.h). */
+#define SDL_MAJOR_VERSION 1
+#define SDL_MINOR_VERSION 2
+#define SDL_PATCHLEVEL 15
+#define SDL_VERSIONNUM(X, Y, Z) ((X)*1000 + (Y)*100 + (Z))
+#define SDL_COMPILEDVERSION SDL_VERSIONNUM(SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL)
+#define SDL_VERSION_ATLEAST(X, Y, Z) (SDL_COMPILEDVERSION >= SDL_VERSIONNUM(X, Y, Z))
+
 /* The CD-ROM: there is no drive here, so SDL_CDNumDrives is 0 and SDL_CDOpen fails. */
 #define SDL_MAX_TRACKS 99
 #define SDL_AUDIO_TRACK 0x00
@@ -236,6 +252,13 @@ typedef struct SDL_Surface {
 #define SDL_DOUBLEBUF   0x40000000
 #define SDL_FULLSCREEN  0x80000000
 #define SDL_SRCCOLORKEY 0x00001000
+#define SDL_RLEACCEL    0x00004000
+#define SDL_SRCALPHA    0x00010000
+#define SDL_ALPHA_OPAQUE 255
+#define SDL_ALPHA_TRANSPARENT 0
+/* Per-surface alpha. Recorded; a blit that would blend with it is refused until that blend is held
+   to SDL's own (ScummVM's on-screen messages are the one user, and only when shown). */
+int SDL_SetAlpha(SDL_Surface *surface, Uint32 flag, Uint8 alpha);
 
 SDL_Surface *SDL_SetVideoMode(int width, int height, int bpp, Uint32 flags);
 SDL_Surface *SDL_GetVideoSurface(void);
@@ -266,6 +289,8 @@ int SDL_ShowCursor(int toggle);
 void SDL_WM_SetCaption(const char *title, const char *icon);
 void SDL_WM_SetIcon(SDL_Surface *icon, Uint8 *mask);
 int SDL_WM_ToggleFullScreen(SDL_Surface *surface);
+/* There is no window manager to iconify to: 0, as SDL answers where it cannot. */
+int SDL_WM_IconifyWindow(void);
 
 /* An OpenGL display: SDL_SetVideoMode with SDL_OPENGL makes the context, and this pair is all a
    program then asks of SDL about it. */
@@ -287,7 +312,7 @@ typedef enum {
     SDLK_UNKNOWN = 0,
     SDLK_BACKSPACE = 8, SDLK_TAB = 9, SDLK_RETURN = 13,
     SDLK_ESCAPE = 27,
-    SDLK_SPACE = 32, SDLK_COMMA = 44, SDLK_MINUS = 45, SDLK_PERIOD = 46, SDLK_SLASH = 47,
+    SDLK_SPACE = 32, SDLK_PLUS = 43, SDLK_COMMA = 44, SDLK_EQUALS = 61, SDLK_MINUS = 45, SDLK_PERIOD = 46, SDLK_SLASH = 47,
     SDLK_0 = 48, SDLK_9 = 57, SDLK_z = 122, SDLK_DELETE = 127,
     SDLK_1 = 49, SDLK_2 = 50, SDLK_3 = 51, SDLK_4 = 52,
     SDLK_a = 97, SDLK_d = 100, SDLK_i = 105, SDLK_j = 106, SDLK_l = 108, SDLK_w = 119,

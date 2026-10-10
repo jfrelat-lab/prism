@@ -77,7 +77,7 @@ export const exprMethods = {
   isClassy(t) { while (t.k === 'array') t = t.of; return t.k === 'class' ? t.cls : null; },
   needsCtor(cls) {
     this.complete(cls, cls.node);
-    return cls.ctors.length > 0 || cls.hasVptr || cls.vbases.length > 0 || cls.bases.some((b) => this.needsCtor(b))
+    return cls.ctors.length > 0 || cls.ctorTemplates?.length > 0 || cls.hasVptr || cls.vbases.length > 0 || cls.bases.some((b) => this.needsCtor(b))
       || cls.fields.some((f) => { const c = this.isClassy(f.type); return c && this.needsCtor(c); });
   },
   needsDtor(cls) {
@@ -166,7 +166,7 @@ export const exprMethods = {
    * scumm/debugger.cpp can see. g++ emits each such copy as a weak (COMDAT) symbol and keeps one;
    * so does this -- external, __attribute__((weak)), and the C linker keeps the first.
    */
-  isWeak(f) { return !!f.cls?.template && !f.implicit; },
+  isWeak(f) { return (!!f.cls?.template && !f.implicit) || (!!f.fromTemplate && !f.fileStatic); },
   /** A class template's member defined outside the class: found by name and signature for this instance. */
   findTemplateBody(f) {
     if (f.body) return true;
@@ -257,14 +257,16 @@ export const exprMethods = {
     const c = obj.addr ? `(${obj.addr})->${steps}` : `(${this.materialize(obj, cx).c}).${steps}`;
     let t = ent.type;
     if (t.k === 'ref') return { c: `(*${c})`, t: t.to, lv: true, addr: c };
-    if (obj.t.c && t.k !== 'array') t = T.cst(t);
+    // A mutable member is not const through a const object (String's _refCount, in incRefCount() const).
+    if (obj.t.c && t.k !== 'array' && !ent.mutable) t = T.cst(t);
     return { c, t, lv: true, bits: ent.bits != null };
   },
   varExpr(ent, cx) {
     if (ent.global) this.useGlobal(ent);
     // A global's value too where C needs a constant: `const int combtuningR1 = 1116 + stereospread;`
     // (mt32's freeverb.h) is a static initialiser, and C does not fold a const variable.
-    if (ent.constValue !== undefined && (!ent.global || cx?.constOnly)) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false };
+    // Its address is still the variable's: `doOutput(&newline_character, 1)` (agos's charset.cpp).
+    if (ent.constValue !== undefined && (!ent.global || cx?.constOnly)) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false, constAddr: { c: `(&${ent.cname})`, t: T.ptr(ent.type) } };
     if (ent.type.k === 'ref') return { c: `(*${ent.cname})`, t: ent.type.to, lv: true, addr: ent.cname };
     return { c: ent.cname, t: ent.type, lv: true, known: true, constValue: ent.constValue };
   },
@@ -277,6 +279,11 @@ export const exprMethods = {
   },
   /** A standard conversion of e to the non-class, non-reference type V. */
   scalarConv(e, V) {
+    // `&C::f` of an overloaded member: the target type picks one (kyra's FileType table of LoadFunc).
+    if (e.memberOverload) {
+      const f = V.k === 'memptr' ? e.memberOverload.find((g) => T.same(this.memberPointerType(g).to, V.to)) : null;
+      return f ? { rank: EXACT, gen: () => this.memberPointer({ funcs: [f] }, e.node).c } : null;
+    }
     const from = this.decay(e), F = from.t;
     if (T.same(F, V, { top: false })) return { rank: EXACT, gen: () => from.c };
     if (T.isArith(V) && T.isArith(F)) {
@@ -447,7 +454,11 @@ export const exprMethods = {
     if (!found.length) return null;
     found.sort((a, b) => a.rank - b.rank);
     if (found.length > 1 && found[0].rank === found[1].rank && found[0].f !== found[1].f) {
-      this.fail(`ambiguous conversion from ${T.show(e.t)} to ${T.show(V)}: ${found[0].f.display} or ${found[1].f.display}`, cx.node);
+      // An AMBIGUOUS conversion still ranks as a user-defined one (13.3.3.1/10): it is an error only
+      // if the candidate needing it wins. `registerDefault("cdrom", 0)` takes the int overload,
+      // whatever 0 might become as a String.
+      const [a, b] = found;
+      return { rank: a.rank, f: a.f, gen: () => this.fail(`ambiguous conversion from ${T.show(e.t)} to ${T.show(V)}: ${a.f.display} or ${b.f.display}`, cx.node) };
     }
     return found[0];
   },
@@ -506,6 +517,13 @@ export const exprMethods = {
     let winners = viable.filter((a) => !viable.some((b) => b !== a && better(b, a)));
     // Between a plain function and a template's instance that convert as well, the plain one.
     if (winners.length > 1 && winners.some((w) => !w.f.fromTemplate)) winners = winners.filter((w) => !w.f.fromTemplate);
+    // Between instances of two templates, the more specialised template's (partial ordering):
+    // touche's saveOrLoadCommonArray(Common::WriteStream &, A &) over its (S &, A &).
+    if (winners.length > 1 && winners.every((w) => w.f.ft)) {
+      const less = (w) => winners.some((o) => o !== w && this.atLeastAsSpecialised(o.f.ft, w.f.ft) && !this.atLeastAsSpecialised(w.f.ft, o.f.ft));
+      const kept = winners.filter((w) => !less(w));
+      if (kept.length) winners = kept;
+    }
     if (winners.length !== 1) {
       // Two declarations of one function (a member seen through two paths) are not an ambiguity.
       const distinct = [...new Set(winners.map((w) => w.f))];
@@ -513,6 +531,27 @@ export const exprMethods = {
     }
     void best;
     return winners[0];
+  },
+  /**
+   * Is function template a at least as specialised as b (14.5.5.2)? a's parameter types, its own
+   * template parameters replaced by types made up for the purpose, are taken as arguments: b's
+   * parameters must deduce from them and then be exactly those types.
+   */
+  atLeastAsSpecialised(a, b) {
+    const fdOf = (ft) => ft.ast.decl.derivs[ft.ast.decl.derivs.length - 1];
+    const fa = fdOf(a), fb = fdOf(b);
+    if (fa.params.length !== fb.params.length) return false;
+    const envOf = (ft, bind) => ({ scope: ft.member ? ft.member.cls.scope : ft.env.scope, cls: ft.member?.cls ?? ft.env.cls ?? null, bind: new Map([...(ft.env.bind ?? []), ...bind]) });
+    const synth = a.params.map((p, i) => [p.name, p.value ? { k: 'tvalue', value: `__synth${i}` } : { k: 'prim', name: `__synth${i}` }]);
+    const strip = (t) => (t.k === 'ref' ? t.to : t);
+    try {
+      const argTs = fa.params.map((p) => strip(this.declType(p.specs, p.decl.derivs, envOf(a, synth), a.ast)));
+      const bind = new Map();
+      const names = b.params.map((p) => p.name);
+      if (!fb.params.every((p, i) => this.deduceOne(p.specs, p.decl.derivs, argTs[i], bind, names))) return false;
+      if (!b.params.every((p) => bind.has(p.name))) return false;
+      return fb.params.every((p, i) => T.same(T.uncst(strip(this.declType(p.specs, p.decl.derivs, envOf(b, bind), b.ast))), T.uncst(argTs[i])));
+    } catch { return false; }
   },
   variadicArg(e, cx) {
     if (e.t.k === 'class') return this.materialize(e, cx).c;
@@ -586,6 +625,13 @@ export const exprMethods = {
   /** The constructor of cls for these arguments and its converted arguments. */
   pickCtor(cls, args, cx, node) {
     this.complete(cls, node);
+    // A constructor template competes through the instance its arguments deduce (infogrames' Instruments(T)).
+    if (cls.ctorTemplates?.length) {
+      const insts = cls.ctorTemplates.map((ft) => this.deduce(ft, [], args, cx.env, node)).filter(Boolean);
+      const r = this.resolve([...cls.ctors, ...insts], args, null, cx, node, `constructor of ${cls.name}`);
+      if (!r) this.fail(`${cls.name} has no constructor taking (${args.map((a) => T.show(a.t)).join(', ')})`, node);
+      return { f: r.f, cArgs: [...r.convs.map((v) => v.gen()), ...this.defaultArgs(r.f, args.length, cx)] };
+    }
     if (!cls.ctors.length) {
       if (!args.length) return { f: this.defaultCtor(cls, node), cArgs: [] };
       if (args.length === 1 && args[0].t.k === 'class' && this.basePath(args[0].t.cls, cls)) return { copy: args[0] };
@@ -602,6 +648,22 @@ export const exprMethods = {
   },
 
   // ---------------------------------------------------------------- operators
+  /** The functions `name` names in the namespaces of the arguments' classes (pointed or referred to too), as a callee; or null. */
+  adlLookup(name, args) {
+    const list = [];
+    const templates = [];
+    for (const a of args) {
+      let t = a.t;
+      while (t.k === 'ptr' || t.k === 'ref') t = t.to;
+      if (t.k !== 'class') continue;
+      const e = this.homeScope(t.cls).find(name);
+      if (e?.k !== 'funcs') continue;
+      for (const f of e.list) if (!list.includes(f)) list.push(f);
+      for (const ft of e.templates ?? []) if (!templates.includes(ft)) templates.push(ft);
+    }
+    if (!list.length && !templates.length) return null;
+    return { funcs: list, ...(templates.length ? { templates, targs: null } : {}), t: T.VOID, c: '', lv: false };
+  },
   /** A user-defined operator for these operands, called; null when there is none. */
   overloaded(op, operands, cx, node, extra = []) {
     if (!operands.some((o) => o.t.k === 'class' || o.t.k === 'enum')) return null;
@@ -665,7 +727,8 @@ export const exprMethods = {
         return { c: n.v, t: v.type, lv: false, zero: !T.isFloat(v.type) && v.value === 0 };
       }
       case 'chr': return { c: n.v, t: /^L/.test(n.v) ? T.INT : T.CHAR, lv: false };
-      case 'bool': return { c: n.v ? '1' : '0', t: T.BOOL, lv: false };
+      // `false` is an integral constant 0, so a null pointer constant in C++98: `if (_fd == false)` (animation_he.cpp).
+      case 'bool': return { c: n.v ? '1' : '0', t: T.BOOL, lv: false, zero: !n.v };
       case 'str': return { c: n.parts.join(' '), t: T.array(T.cst(T.CHAR), this.stringLength(n) + 1), lv: true, str: true };
       case 'paren': { const e = this.expr(n.e, cx); return { ...e, c: `(${e.c})` }; }
       case 'this': { const o = this.thisObject(cx, n); return { c: 'this', t: T.ptr(o.t), lv: false }; }
@@ -686,7 +749,14 @@ export const exprMethods = {
         const o = this.overloaded(n.op, [e], cx, n, n.k === 'post' ? [{ c: '0', t: T.INT, lv: false, zero: true }] : []);
         if (o) return o;
         if (!e.lv) this.fail(`${n.op} needs an lvalue`, n);
-        return n.k === 'pre' ? { c: `(${n.op}${e.c})`, t: e.t, lv: true } : { c: `(${e.c}${n.op})`, t: T.uncst(e.t), lv: false };
+        if (n.k === 'post') return { c: `(${e.c}${n.op})`, t: T.uncst(e.t), lv: false };
+        // In C++ `++x` is x itself, an lvalue; in C it is a value. Where its address is wanted
+        // (resource_he.cpp: `cond ? ++str : str` passed on as an lvalue) it is written as x's,
+        // after the increment -- x read once, through a pointer, when it is more than a name.
+        let addr;
+        if (/^\(*[A-Za-z_]\w*\)*((->|\.)[A-Za-z_]\w*\)*)*$/.test(e.c)) addr = `(${n.op}${e.c}, &${e.c})`;
+        else if (cx.fn) { const p = this.temp(cx, T.ptr(e.t)); addr = `(${p} = &${e.c}, ${n.op}*${p}, ${p})`; }
+        return { c: `(${n.op}${e.c})`, t: e.t, lv: true, ...(addr ? { addr } : {}) };
       }
       case 'sizeof': {
         if (n.type) return { c: `sizeof(${this.ct(this.stripRef(this.declType(n.type.specs, n.type.derivs, cx.env, n)))})`, t: T.UINT, lv: false };
@@ -806,7 +876,7 @@ export const exprMethods = {
     if (!r) this.fail(`'${this.qualText(n.name)}' is not declared`, n);
     const { ent } = r;
     switch (ent.k) {
-      case 'enumerator': return { c: String(ent.value), t: ent.type, lv: false, enumerator: true };
+      case 'enumerator': return { c: ent.ctext ?? String(ent.value), t: ent.type, lv: false, enumerator: ent.ctext === undefined };
       case 'var':
         if (ent.field) return this.fieldOf(this.thisObject(cx, n), ent, r.path, cx);
         return this.varExpr(ent, cx);
@@ -857,8 +927,8 @@ export const exprMethods = {
       if (m.ent.staticMember) return this.varExpr(m.ent, cx);
       return this.fieldOf(obj, m.ent, [...lead, ...m.path], cx);
     }
-    if (m.ent.k === 'funcs') return { funcs: m.ent.list, obj, qualified, t: T.VOID, c: '', lv: false };
-    if (m.ent.k === 'enumerator') return { c: String(m.ent.value), t: m.ent.type, lv: false };
+    if (m.ent.k === 'funcs') return { funcs: m.ent.list, ...(m.ent.templates?.length ? { templates: m.ent.templates, targs: n.name.parts[n.name.parts.length - 1].targs ?? null } : {}), obj, qualified, t: T.VOID, c: '', lv: false };
+    if (m.ent.k === 'enumerator') return { c: m.ent.ctext ?? String(m.ent.value), t: m.ent.type, lv: false };
     this.fail(`member '${name}' of ${obj.t.cls.name} is not a value`, n);
   },
 
@@ -881,7 +951,11 @@ export const exprMethods = {
       if (cx.constOnly) cx.dynamic = true;
       return { c: `${name}(${args.map((a) => this.variadicArg(a, cx)).join(', ')})`, t: this.cxxTypeOfC(this.builtins.get(name).ret), lv: false };
     }
-    let fn = n.fn.k === 'id' && !this.lookupName(n.fn.name, cx.env) ? this.fail(`'${this.qualText(n.fn.name)}' is not declared`, n.fn) : this.expr(n.fn, cx);
+    // Not found by ordinary lookup, an unqualified name is looked for in the namespaces of its
+    // arguments' classes (argument-dependent lookup): Scumm's debugger calls
+    // `enableSpecialDebugLevel(option)` with a Common::String, and the function is Common's.
+    const adl = n.fn.k === 'id' && n.fn.name.parts.length === 1 && !n.fn.name.global && !this.lookupName(n.fn.name, cx.env) ? this.adlLookup(this.lastName(n.fn.name), args) : null;
+    let fn = adl ?? (n.fn.k === 'id' && !this.lookupName(n.fn.name, cx.env) ? this.fail(`'${this.qualText(n.fn.name)}' is not declared`, n.fn) : this.expr(n.fn, cx));
     if (fn.dtorCall) {
       const d = this.dtorOf(fn.obj.t.cls);
       if (!d) return { c: '((void)0)', t: T.VOID, lv: false };
@@ -930,11 +1004,13 @@ export const exprMethods = {
    * `&C::f` as a value: the C function itself, or for a virtual one a thunk that calls through the
    * object's table -- so that the pointer reaches the overrider of whatever object it is used on.
    */
+  memberPointerType(f) { return { k: 'memptr', cls: f.cls, to: T.func(f.type.ret, f.type.params, f.type.variadic, !!f.type.thisConst) }; },
   memberPointer(e, node) {
     const fs = e.funcs.filter((f) => !f.isStatic);
-    if (fs.length !== 1) this.fail(`&${fs[0].display}: an overloaded member's address`, node);
+    // Overloaded: which one is meant is the target's to say (scalarConv); until then, no value.
+    if (fs.length !== 1) return { memberOverload: fs, node, t: { k: 'overload', display: fs[0].display }, c: '', lv: false };
     const f = fs[0];
-    const t = { k: 'memptr', cls: f.cls, to: T.func(f.type.ret, f.type.params, f.type.variadic, !!f.type.thisConst) };
+    const t = this.memberPointerType(f);
     this.use(f);
     if (!f.isVirtual) return { c: `((${this.ct(t)})${f.cname})`, t, lv: false };
     const name = `__vcall_${f.cname}`;
@@ -984,6 +1060,7 @@ export const exprMethods = {
       if (e.funcs && e.funcs[0]?.cls && !e.funcs[0].isStatic && !e.obj) return this.memberPointer(e, n);
       const o = this.overloaded('&', [e], cx, n);
       if (o) return o;
+      if (e.constAddr) return { ...e.constAddr, lv: false };
       if (!e.lv && !e.addr) this.fail('& of something that is not an lvalue', n);
       return { c: e.addr ?? `(&${e.c})`, t: T.ptr(e.t), lv: false };
     }
@@ -998,7 +1075,8 @@ export const exprMethods = {
       case '!': return { c: `(!${v.c})`, t: T.BOOL, lv: false };
       case '-': case '+': case '~':
         if (!T.isArith(v.t)) this.fail(`${n.op} of ${T.show(e.t)}`, n);
-        return { c: `(${n.op}${v.c})`, t: T.promote(v.t), lv: false };
+        // `-0` is still an integral constant zero, so a null pointer constant (kyra's menu tables).
+        return { c: `(${n.op}${v.c})`, t: T.promote(v.t), lv: false, zero: n.op !== '~' && !!v.zero };
       default: this.fail(`unary ${n.op}`, n);
     }
   },
