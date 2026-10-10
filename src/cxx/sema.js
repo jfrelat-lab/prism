@@ -442,6 +442,7 @@ export class Sema {
     for (const v of it.values) {
       if (v.e) { const x = this.constInt(v.e, env); if (x === null) this.fail(`enumerator ${v.name} is not a constant`, it); next = x; }
       if (next < 0) en.unsigned = false;
+      if (next > 0x7fffffff) en.fitsInt = false;
       env.scope.set(v.name, { k: 'enumerator', type, value: next });
       next++;
     }
@@ -897,8 +898,9 @@ export class Sema {
       const owner = this.qualified({ parts: q.slice(0, -1).map((p) => ({ name: p.name })), global: d.name.global }, env, it);
       if (owner?.k === 'template') { (owner.tmpl.staticDefs ??= []).push(it); return null; }
     }
-    let type = this.declType(it.specs, d.derivs, env, it);
     if (q.length > 1) {
+      // (Its type is the class's declaration's: what follows A::x is read in A's scope, and
+      // `const char *Input::_commandKeys[LANGUAGE_COUNT]` names one of Input's enumerators.)
       const owner = this.qualified({ parts: q.slice(0, -1).map((p) => ({ name: p.name })), global: d.name.global }, env, it);
       if (owner?.k === 'namespace') return this.declaration({ ...it, decl: { ...d, name: { parts: [q[q.length - 1]], global: false } } }, { scope: owner.ns.scope, cls: null, bind: env.bind });
       // The definition of a static data member: `int A::count = 0;`
@@ -908,6 +910,7 @@ export class Sema {
       this.defineGlobal(ent, it, ot.cls.env);
       return ent;
     }
+    let type = this.declType(it.specs, d.derivs, env, it);
     if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, it.init.items.length);
     if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
     const cLink = !!it.cLink;

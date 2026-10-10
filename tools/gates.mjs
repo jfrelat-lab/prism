@@ -73,7 +73,7 @@ await new Promise((resolve) => {
         const line = verdict === 'SKIP' ? (lines.find((l) => l.startsWith('SKIP:')) ?? '').slice(6) : lines.at(-1) ?? '';
         rows.push({ g, verdict, secs, line });
         if (verdict !== 'SKIP') times[g] = Math.round(secs);
-        console.log(`${verdict} ${g.padEnd(30)} ${secs.toFixed(0).padStart(4)}s  ${line.slice(0, 96)}`);
+        console.log(`${verdict} ${g.padEnd(30)} ${secs.toFixed(0).padStart(4)}s  ${line.length > 96 ? `${line.slice(0, 95)}…` : line}`);
         next();
       });
     }

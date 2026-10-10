@@ -515,6 +515,54 @@ int main() {
 }
 `);
 
+// Grid::_area is `Area (*_area)[MAX_AREAS_NUMBER]`, and Grid was lowered before Area: the C struct
+// held a pointer to an array of a struct not yet defined, its rows 0 bytes apart, and every room
+// read the last room's walk areas (FOTAQ diverged from frame 606 of a scripted run).
+C('member-ptr-to-array', `
+#include <stdio.h>
+struct Box { short x1, y1, x2, y2; };
+struct Area { short mapNeighbours; Box box; short bottomScaleFactor; };
+class Grid {
+public:
+    Grid(int rooms);
+    Area *area(int r, int n) const;
+    Area (*_area)[11];
+};
+Grid::Grid(int rooms) { _area = new Area[rooms + 1][11]; }
+Area *Grid::area(int r, int n) const { return &_area[r][n]; }
+int main() {
+    Grid g(3);
+    for (int r = 0; r <= 3; r++) for (int n = 0; n < 11; n++) g._area[r][n].box.x1 = (short)(r * 100 + n);
+    printf("%d %d %d %d\\n", g._area[1][1].box.x1, g._area[2][1].box.x1, g.area(3, 10)->box.x1, g.area(2, 5)->box.x1);
+    printf("%d\\n", (int)((char *)g.area(1, 0) - (char *)g.area(0, 0)));
+    return 0;
+}
+`);
+
+// Shapes of ScummVM's Queen engine: new of arrays of a class with a constructor (Grid's
+// new Area[n][MAX_AREAS_NUMBER]), an enumerator promoting to int over bool (registerDefault), and a
+// static member defined with an enumerator of its class as its size (Input::_commandKeys).
+C('queen-shapes', `
+#include <stdio.h>
+static int made = 0, gone = 0;
+struct Box { short x1, y1; Box() : x1(1), y1(2) { made++; } ~Box() { gone++; } };
+struct Area { short n; Box box; int sum() const { return n + box.x1 + box.y1; } };
+enum { MAX_AREAS = 3 };
+class Logic { public: enum { DEFAULT_TALK_SPEED = 7 * 3, COUNT = 4 }; static const char *keys[COUNT]; };
+const char *Logic::keys[COUNT] = { "a", "b", "c", "d" };
+static const char *which(int) { return "int"; }
+static const char *which(bool) { return "bool"; }
+int main() {
+    int rooms = 2;
+    Area (*area)[MAX_AREAS] = new Area[rooms + 1][MAX_AREAS];
+    area[2][1].n = 10;
+    printf("%d %d %d\\n", area[0][0].sum(), area[2][1].sum(), made);
+    delete[] area;
+    printf("%d %s %s %s\\n", gone, which(Logic::DEFAULT_TALK_SPEED), which(false), Logic::keys[3]);
+    return 0;
+}
+`);
+
 C('templates', `
 #include <stdio.h>
 template< class type >
@@ -719,6 +767,15 @@ if (!FILTER) {
     ['a language that is neither c nor c++ is refused', /^refused: .*'c' or 'c\+\+'/.test(out(CLASS, 'unit.cpp', { language: { '*': 'objc' } }))],
     ['a key the option does not have is refused', /^refused: .*no 'standard'/.test(out(CLASS, 'unit.cpp', { standard: 'c++98' }))],
   ];
+  // What the lowering must never emit, the C front end refuses as gcc does ("array type has
+  // incomplete element type") rather than giving the rows a stride of 0.
+  const AREA = 'struct Area { short a; short b[4]; };\n';
+  const ROWS = '#include <stdio.h>\n#include <stdlib.h>\nstruct Grid { struct Area (*rows)[11]; };\n';
+  const MAIN = 'int main(void) { struct Grid g; g.rows = malloc(2 * sizeof *g.rows); printf("%d\\n", (int)((char *)g.rows[1] - (char *)g.rows[0])); return 0; }\n';
+  option.push(
+    ['C: a pointer to an array of a struct not yet defined is refused', /^refused: .*incomplete element type 'struct Area'/.test(out(ROWS + AREA + MAIN, 'unit.c'))],
+    ['...and its rows are sizeof(struct Area[11]) apart once it is', out(AREA + ROWS + MAIN, 'unit.c') === '110'],
+  );
   for (const [what, ok] of option) {
     if (ok) { pass++; if (VERBOSE) console.log(`  ok   option: ${what}`); } else fails.push({ c: { name: `option: ${what}` }, why: 'the option did not do that' });
   }

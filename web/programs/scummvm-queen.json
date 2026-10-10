@@ -1,0 +1,30 @@
+{
+  "title": "FLIGHT OF THE AMAZON QUEEN",
+  "subtitle": "Interactive Binary Illusions, 1995 · the floppy version, freeware, on ScummVM 0.6.1's Queen engine",
+  "target": "scummvm",
+  "host": "sdl",
+  "args": "-pFOTAQ_Floppy queen",
+  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "queen",
+    "under": "FOTAQ_Floppy/",
+    "hint": "FOTAQ_Floppy/queen.1 from FOTAQ_Floppy.zip, the freeware release the ScummVM project distributes"
+  },
+  "controls": [
+    [
+      "Esc",
+      "skip a scene"
+    ],
+    [
+      "left button",
+      "walk, or the verb in the panel"
+    ],
+    [
+      "right button",
+      "the default verb for what is under the pointer"
+    ]
+  ],
+  "_why": "The second engine of the build, not SCUMM: Queen's own, with its verb panel and inventory. Held to a native g++ build frame by frame (gate-scummvm)."
+}

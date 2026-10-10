@@ -1,9 +1,9 @@
 {
   "name": "scummvm",
-  "title": "ScummVM 0.6.1 (2004): Beneath a Steel Sky and the SCUMM games -- C++ over SDL 1.2",
+  "title": "ScummVM 0.6.1 (2004): Beneath a Steel Sky, Flight of the Amazon Queen and the SCUMM games -- C++ over SDL 1.2",
   "dir": "corpus/scummvm-0.6.1",
   "fetch": "curl -Lo /tmp/scummvm-0.6.1-src.tar.bz2 https://downloads.scummvm.org/frs/scummvm/0.6.1/scummvm-0.6.1-src.tar.bz2 && tar -xjf /tmp/scummvm-0.6.1-src.tar.bz2 -C corpus && node tools/scummvm-configure.mjs",
-  "_doc": "The game engine interpreter of 2004, in C++: namespaces, class and function templates with value parameters, an explicit specialisation, pointers to member functions, a class with two polymorphic bases, dynamic_cast -- the subset src/cxx grew for it (P14.6). Its data, outside the repository: the freeware Beneath a Steel Sky (bass-cd-1.0.zip), and the demos of Monkey Island 1 (EGA) and Day of the Tentacle the ScummVM project distributes.",
+  "_doc": "The game engine interpreter of 2004, in C++: namespaces, class and function templates with value parameters, an explicit specialisation, pointers to member functions, a class with two polymorphic bases, dynamic_cast -- the subset src/cxx grew for it (P14.6). Its data, outside the repository: the freeware Beneath a Steel Sky (bass-cd-1.0.zip) and Flight of the Amazon Queen (FOTAQ_Floppy.zip), and the demos of Monkey Island 1 (EGA) and Day of the Tentacle the ScummVM project distributes.",
   "units": {
     "list": [
       "base/engine.cpp",
@@ -154,11 +154,31 @@
       "scumm/smush/saud_channel.cpp",
       "scumm/smush/smush_mixer.cpp",
       "scumm/smush/smush_font.cpp",
+      "queen/bankman.cpp",
+      "queen/command.cpp",
+      "queen/credits.cpp",
+      "queen/cutaway.cpp",
+      "queen/debug.cpp",
+      "queen/display.cpp",
+      "queen/graphics.cpp",
+      "queen/grid.cpp",
+      "queen/input.cpp",
+      "queen/journal.cpp",
+      "queen/logic.cpp",
+      "queen/music.cpp",
+      "queen/musicdata.cpp",
+      "queen/queen.cpp",
+      "queen/resource.cpp",
+      "queen/restables.cpp",
+      "queen/sound.cpp",
+      "queen/state.cpp",
+      "queen/talk.cpp",
+      "queen/walk.cpp",
       "backends/sdl/sdl-common.cpp",
       "backends/sdl/sdl.cpp"
     ]
   },
-  "_units": "What configure selects for this build: the MODULES of Makefile.common (base, common, gui, sound, backends) and the module.mk of the two engines built, Sky and SCUMM, each module's MODULE_OBJS, and the SDL backend's OBJS (backends/sdl/build.rules). The other engines are disabled as configure disables them, with DISABLE_*.",
+  "_units": "What configure selects for this build: the MODULES of Makefile.common (base, common, gui, sound, backends) and the module.mk of the three engines built, Sky, SCUMM and Queen, each module's MODULE_OBJS, and the SDL backend's OBJS (backends/sdl/build.rules). The other engines are disabled as configure disables them, with DISABLE_*.",
   "include": [
     ".",
     "common",
@@ -171,7 +191,6 @@
     "DISABLE_SIMON": "1",
     "DISABLE_SWORD1": "1",
     "DISABLE_SWORD2": "1",
-    "DISABLE_QUEEN": "1",
     "_GNU_SOURCE": "1",
     "_REENTRANT": "1"
   },

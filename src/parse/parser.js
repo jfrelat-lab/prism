@@ -894,6 +894,9 @@ export class Parser {
     for (let k = suffixes.length - 1; k >= 0; k--) {
       const s = suffixes[k];
       if (s.kind === 'array') {
+        // As gcc: an array of a struct not yet defined has no element size, and taking it as 0 put
+        // every row of `struct Area (*p)[11]` at one address.
+        if (t.complete === false) throw new ParseError(`array type has incomplete element type '${t.k} ${t.tag}'`, this.peek());
         t = T.array(t, s.n);
         if (s.vla) t = { ...t, vla: s.vla };
       } else {

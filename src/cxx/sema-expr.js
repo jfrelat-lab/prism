@@ -27,7 +27,9 @@ export const exprMethods = {
       case 'class': if (byValue) this.needStruct(t.cls); else this.forward(t.cls); break;
       case 'ptr': case 'ref': this.needType(t.to, false); break;
       case 'memptr': this.forward(t.cls); this.needType(t.to, false); break;
-      case 'array': this.needType(t.of, byValue); break;
+      // C has no array of an incomplete type, not even behind a pointer: Area (*)[N] needs Area's
+      // definition, or its rows are 0 bytes apart (Queen's Grid::_area).
+      case 'array': this.needType(t.of, true); break;
       case 'func': this.needType(t.ret, t.ret.k === 'class'); for (const p of t.params) this.needType(p, p.k === 'class'); break;
       default:
     }
@@ -1139,6 +1141,17 @@ export const exprMethods = {
     this.needMalloc();
     if (cx.constOnly) cx.dynamic = true;
     const cls = t.k === 'class' ? this.complete(t.cls, n) : null;
+    /*
+     * `new Area[n][MAX_AREAS_NUMBER]` of a class with a constructor: the n arrays are n * MAX objects in
+     * a row, made by the same helper as `new Area[n * MAX]` -- the count kept in front -- and handed
+     * back as a pointer to the arrays. delete[] goes back through the helper (deleteExpr).
+     */
+    const inner = t.k === 'array' ? this.isClassy(t) : null;
+    if (inner && n.count && (this.defaultCtor(inner, n) || this.dtorOf(inner))) {
+      const count = this.coerce(this.expr(n.count, cx), T.UINT, cx, n);
+      const per = `(sizeof(${this.ct(t)}) / sizeof(${this.ct({ k: 'class', cls: inner })}))`;
+      return { c: `((${this.ct(pt)})${this.arrayHelper(inner, 'new')}((${count}) * ${per}))`, t: pt, lv: false };
+    }
     if (n.count) {
       const count = this.coerce(this.expr(n.count, cx), T.UINT, cx, n);
       const ctor = cls ? this.defaultCtor(cls, n) : null, dtor = cls ? this.dtorOf(cls) : null;
@@ -1165,6 +1178,10 @@ export const exprMethods = {
     this.needMalloc();
     const cls = e.t.to.k === 'class' ? this.complete(e.t.to.cls, n) : null;
     const dtor = cls ? this.dtorOf(cls) : null;
+    const inner = e.t.to.k === 'array' ? this.isClassy(e.t.to) : null;
+    if (n.array && inner && (this.defaultCtor(inner, n) || this.dtorOf(inner))) {
+      return { c: `${this.arrayHelper(inner, 'delete')}((${this.ct(T.ptr({ k: 'class', cls: inner }))})${e.c})`, t: T.VOID, lv: false };
+    }
     if (n.array) {
       const ctor = cls ? this.defaultCtor(cls, n) : null;
       if (!ctor && !dtor) return { c: `free((void *)${e.c})`, t: T.VOID, lv: false };

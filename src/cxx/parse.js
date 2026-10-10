@@ -884,6 +884,8 @@ class CxxParser {
     if (!this.startsType()) return false;
     // `T(args).m()` and `T(args);` are expressions; `T x`, `T *x`, `T &x`, `T<U> x`, `A::B x` declare.
     const j = this.resolvePath(0).end;
+    // `T (*p)[N]` and `T (&r)` declare: C++ settles that ambiguity for the declaration (6.8).
+    if (this.isP('(', j) && (this.isP('*', j + 1) || this.isP('&', j + 1))) return true;
     return !this.isP('(', j) && !this.isP('.', j) && !this.isP('->', j);
   }
 
@@ -992,7 +994,13 @@ class CxxParser {
       type = { specs, derivs };
     }
     let count = null, args = null;
-    if (this.eatP('[')) { count = this.expression(); this.expectP(']'); }
+    if (this.eatP('[')) {
+      count = this.expression(); this.expectP(']');
+      // `new Area[n][MAX_AREAS_NUMBER]`: the other dimensions are the element type's, constants.
+      const dims = [];
+      while (this.eatP('[')) { dims.push({ k: 'array', size: this.conditional() }); this.expectP(']'); }
+      if (dims.length) type = { ...type, derivs: [...type.derivs, ...dims.reverse()] };
+    }
     if (this.eatP('(')) { args = this.isP(')') ? [] : this.exprList(); this.expectP(')'); }
     return { k: 'new', type, count, args, loc };
   }

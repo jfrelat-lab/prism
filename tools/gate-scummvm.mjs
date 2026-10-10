@@ -4,7 +4,7 @@
 //
 //   1. config.h is what the release's own configure writes (tools/scummvm-configure.mjs, in the
 //      oracle container), and targets/scummvm.json lists what the release's module lists name;
-//   2. all 150 units (the Sky and SCUMM engines) lower from C++ and compile, every function is emitted and no name is unresolved.
+//   2. all 170 units (the Sky, SCUMM and Queen engines) lower from C++ and compile, every function is emitted and no name is unresolved.
 //
 // For each game of tools/scummvmdiff.mjs's GAMES whose files are present -- Beneath a Steel Sky
 // (PRISM_SCUMMVM_DATA, sky.dsk and sky.dnr), the EGA demo of Monkey Island and the demo of Day of the
@@ -82,7 +82,7 @@ check(conf.status === 0, 'config.h is what the release\'s configure writes', (co
 
 const V = SRC;
 const objsOf = (mk) => [...readFileSync(join(V, mk), 'latin1').replace(/\\\n/g, ' ').matchAll(/([\w/.-]+)\.o\b/g)].map((m) => m[1]);
-const listed = [...['base', 'common', 'gui', 'sound', 'backends', 'sky', 'scumm'].flatMap((m) => objsOf(`${m}/module.mk`)), 'backends/sdl/sdl-common', 'backends/sdl/sdl'].map((o) => `${o}.cpp`);
+const listed = [...['base', 'common', 'gui', 'sound', 'backends', 'sky', 'scumm', 'queen'].flatMap((m) => objsOf(`${m}/module.mk`)), 'backends/sdl/sdl-common', 'backends/sdl/sdl'].map((o) => `${o}.cpp`);
 const target = JSON.parse(readFileSync(join(ROOT, 'targets/scummvm.json'), 'utf8'));
 check(JSON.stringify(target.units.list) === JSON.stringify(listed), `targets/scummvm.json lists the ${listed.length} units the module lists name`);
 

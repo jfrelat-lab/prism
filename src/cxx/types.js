@@ -57,7 +57,9 @@ export function same(a, b, { top = true } = {}) {
 
 /** The integral promotion of an arithmetic type, and the usual arithmetic conversions of two. */
 export function promote(t) {
-  if (t.k === 'enum') return t.en.unsigned ? UINT : INT;
+  // An enumeration whose values all fit in an int promotes to int (C++03 4.5/2), whatever unsigned
+  // type gcc lays it out in: registerDefault(key, Logic::DEFAULT_TALK_SPEED) is the int overload.
+  if (t.k === 'enum') return t.en.fitsInt === false ? UINT : INT;
   if (isFloat(t)) return uncst(t);
   return intRank(t) < 3 ? INT : uncst(t);
 }
