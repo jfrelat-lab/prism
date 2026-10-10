@@ -45,7 +45,9 @@ if (process.argv[2] === '--child') {
     Object.assign(report, {
       functions: Object.keys(b.program.F).length,
       failures: (b.program.failures ?? []).map((x) => `${x.fn}: ${x.message}`),
-      unresolved: (b.program.undefined ?? []).map((u) => u.name),
+      // Functions AND variables: a variable declared and never defined is otherwise given storage
+      // silently, and read 0 (String::_builtinCapacity was, and String copied nothing).
+      unresolved: [...(b.program.undefined ?? []), ...(b.program.undefinedVars ?? [])].map((u) => u.name),
       missingHeaders: b.missingHeaders,
     });
   } else {

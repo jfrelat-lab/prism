@@ -25,13 +25,18 @@ export const stmtMethods = {
     const cx = { env, fn, pending: [], node: f.defNode ?? f.node };
     f.type.params.forEach((p, i) => {
       const name = this.paramName(f, i);
-      scope.set(name, { k: 'var', name, type: p, cname: name });
+      // A pinned class by value arrives by its address: the object is the caller's.
+      scope.set(name, { k: 'var', name, type: p, cname: this.pinnedType(p) ? `(*${name})` : name });
     });
     const lines = [];
-    // A parameter passed by value is the callee's object: destroyed when the function returns.
+    // A parameter passed by value is the callee's object: destroyed when the function returns --
+    // unless it is pinned, and the caller's.
     const top = { vars: [], kind: 'fn' };
     fn.cleanups.push(top);
-    f.type.params.forEach((p, i) => { const c = this.isClassy(p); if (c && p.k === 'class' && this.dtorOf(c)) top.vars.push({ c: this.paramName(f, i), cls: c }); });
+    f.type.params.forEach((p, i) => { const c = this.isClassy(p); if (c && p.k === 'class' && this.dtorOf(c) && !this.pinnedType(p)) top.vars.push({ c: this.paramName(f, i), cls: c }); });
+    // The named return value: when every return of a function returning a pinned class names the
+    // same local, that local is built in the caller's object (`*__sret`), as g++ builds it.
+    if (this.sret(f) && f.body) fn.nrvo = this.nrvoName(f.body);
 
     if (f.implicit) lines.push(...this.implicitBody(f, cx));
     else {
@@ -90,7 +95,7 @@ export const stmtMethods = {
           const args = f.implicit === 'copy' ? [{ c: `(*${this.upcastPtr('__o', this.basePath(cls, v), v)})`, t: T.cst({ k: 'class', cls: v }), lv: true }]
             : (init?.args ?? []).map((a) => this.expr(a, c));
           const pick = this.pickCtor(v, args, c, f.defNode ?? f.node);
-          if (pick.copy) return { c: `${vb(v)} = ${this.copyOf(pick.copy, v, c)};` };
+          if (pick.copy) return { c: this.pinned(v) ? this.constructAt(`(*(struct ${v.cname} *)&${vb(v)})`, v, args, c, f.defNode ?? f.node) : `${vb(v)} = ${this.copyOf(pick.copy, v, c)};` };
           if (!pick.f) return { c: '' };
           this.use(pick.f);
           return { c: `${this.baseName(pick.f)}(${[`(struct ${v.cname} *)&${vb(v)}`, ...pick.cArgs].join(', ')});` };
@@ -105,6 +110,25 @@ export const stmtMethods = {
   /** The function a subobject is built or destroyed by: the base-subobject one where there are two. */
   baseName(f) { return this.splits(f) ? `${f.cname}__base` : f.cname; },
 
+  /** The name every return of this body returns, if it is one local declared once in it; else null. */
+  nrvoName(body) {
+    const returns = [], decls = new Map();
+    const walk = (n) => {
+      if (!n || typeof n !== 'object') return;
+      if (Array.isArray(n)) { n.forEach(walk); return; }
+      if (n.k === 'class' || n.k === 'func') return;            // a local class's own functions
+      if (n.k === 'return') returns.push(n.e);
+      if (n.k === 'decl' && n.decl?.name && n.specs?.storage !== 'static' && n.specs?.storage !== 'extern') {
+        const nm = this.lastName(n.decl.name);
+        decls.set(nm, (decls.get(nm) ?? 0) + 1);
+      }
+      for (const [k, v] of Object.entries(n)) if (k !== 'loc' && v && typeof v === 'object') walk(v);
+    };
+    walk(body);
+    const ids = returns.map((e) => { while (e?.k === 'paren') e = e.e; return e?.k === 'id' && e.name.parts.length === 1 ? e.name.parts[0].name : null; });
+    if (!ids.length || ids.some((x) => x === null || x !== ids[0])) return null;
+    return decls.get(ids[0]) === 1 ? ids[0] : null;
+  },
   /** The destructor calls for these objects, last first. */
   destroy(vars, cx) {
     const out = [];
@@ -257,6 +281,19 @@ export const stmtMethods = {
       const { e, after } = this.full(n.e, cx);
       return [`${e.c};`, ...after, ...this.unwind(cx, 'fn'), 'return;'].join('\n');
     }
+    if (this.sret(f)) {
+      // Built in the caller's object: the named return value is already there; anything else is
+      // made there (a temporary of the class renamed to it, or a copy).
+      let x = n.e;
+      while (x?.k === 'paren') x = x.e;
+      // Only a local actually built there: the name alone is not enough -- detection.cpp's
+      // `char buf[128]; ...; return buf;` returns a String made from it.
+      if (cx.fn.nrvo && x?.k === 'id' && x.name.parts.length === 1 && x.name.parts[0].name === cx.fn.nrvo && this.lookupName(x.name, cx.env)?.ent?.cname === '(*__sret)') {
+        return [...this.unwind(cx, 'fn'), 'return;'].join('\n');
+      }
+      const { e, after } = this.full(n.e, cx, (m, c) => ({ c: this.constructAt('(*__sret)', ret.cls, [this.expr(m, c)], c, m) }));
+      return [e.c, ...after, ...this.unwind(cx, 'fn'), 'return;'].join('\n');
+    }
     // Returning a local object by name hands it over: no copy, and it is not destroyed here.
     let moved = null;
     if (ret.k === 'class' && (n.e.k === 'id' || (n.e.k === 'paren' && n.e.e.k === 'id'))) {
@@ -334,10 +371,24 @@ export const stmtMethods = {
         if (!dynFix.length) return done(`${decl} = ${text};`);
         const g = `__guard_${name}_${++this.anon}`;
         cx.env.scope.set(name, ent);
-        const sets = dynFix.map((dx) => { const { e, after } = this.full(dx.x, cx, (m, c) => ({ c: this.coerce(this.expr(m, c), T.uncst(dx.type), c, m, 'initialisation') })); return [`${name}${dx.path.join('')} = ${e.c};`, ...after].join(' '); });
+        const sets = dynFix.map((dx) => { const { e, after } = this.full(dx.x, cx, (m, c) => ({ c: this.dynSet(`${name}${dx.path.join('')}`, dx.type, this.expr(m, c), c, m) })); return [e.c, ...after].join(' '); });
         return [`static ${this.ct(T.uncst(type), name)} = ${text};`, `static int ${g};`, `if (!${g}) { ${g} = 1; ${sets.join(' ')} }`].join('\n');
       }
       if (isStatic) return done(this.staticLocal(ent, it, cx, decl, cls));
+      // A pinned object is built where it lives -- in the caller's object when it is the named
+      // return value, which is then not destroyed here.
+      if (this.pinned(cls) && it.init?.k !== 'braces') {
+        const nrvo = cx.fn.nrvo === name && this.sret(cx.fn.f) && cx.fn.f.type.ret.cls === cls;
+        const dest = nrvo ? '(*__sret)' : name;
+        if (nrvo) ent.cname = dest;
+        else if (d) cl.vars.push({ c: name, cls, ent });
+        const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
+          const args = it.ctorArgs ? it.ctorArgs.map((a) => this.expr(a, c)) : it.init ? [this.expr(it.init, c)] : [];
+          return { c: this.constructAt(dest, cls, args, c, it) };
+        });
+        cx.env.scope.set(name, ent);
+        return [nrvo ? '' : `${decl};`, e.c, ...after].filter(Boolean).join('\n');
+      }
       if (d) cl.vars.push({ c: name, cls, ent });
       if (it.init && !it.ctorArgs) {
         if (it.init.k === 'braces') return done(`${decl} = ${this.bracesInit(it.init, type, cx)};`);
@@ -436,7 +487,7 @@ export const stmtMethods = {
     }
     const args = (it.ctorArgs ?? (it.init ? [it.init] : [])).map((a) => this.expr(a, cx));
     const pick = this.pickCtor(cls, args, cx, it);
-    const init = pick.copy ? `${ent.cname} = ${this.copyOf(pick.copy, cls, cx)};` : pick.f ? (this.use(pick.f), `${pick.f.cname}(${[`&${ent.cname}`, ...pick.cArgs].join(', ')});`) : '';
+    const init = pick.copy ? (this.pinned(cls) ? this.constructAt(ent.cname, cls, args, cx, it) : `${ent.cname} = ${this.copyOf(pick.copy, cls, cx)};`) : pick.f ? (this.use(pick.f), `${pick.f.cname}(${[`&${ent.cname}`, ...pick.cArgs].join(', ')});`) : '';
     return `if (!${g}) { ${g} = 1; ${init}${reg} }`;
   },
   /** Does an initialiser read the value of a variable (as opposed to taking an address, or a constant)? */
@@ -477,12 +528,18 @@ export const stmtMethods = {
     const lines = [];
     items.forEach((x, i) => {
       if (x.k === 'braces') this.fail(`${elem.name} has constructors: braces cannot initialise it`, node);
-      const { e, after } = this.full(x, cx, (m, c) => ({ c: `${target}[${i}] = ${this.coerce(this.expr(m, c), T.uncst(type.of), c, m, 'initialisation')};` }));
+      // Copy-initialised in place: a pinned element's temporary is built there.
+      const { e, after } = this.full(x, cx, (m, c) => ({ c: this.constructAt(`${target}[${i}]`, elem, [this.expr(m, c)], c, m) }));
       lines.push(e.c, ...after);
     });
     const ctor = items.length < type.n ? this.defaultCtor(elem, node) : null;
     if (ctor) { this.use(ctor); lines.push(`{ int __i; for (__i = ${items.length}; __i < ${type.n}; __i++) ${ctor.cname}(${[`&${target}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`); }
     return lines;
+  },
+  /** An element of braces assigned before main: a pinned object built in place, anything else assigned. */
+  dynSet(dest, type, x, cx, node) {
+    if (this.pinnedType(T.uncst(type))) return this.constructAt(dest, T.uncst(type).cls, [x], cx, node);
+    return `${dest} = ${this.coerce(x, T.uncst(type), cx, node, 'initialisation')};`;
   },
   /** `{ ... }` for an aggregate: each element converted to its member's or element's type. */
   bracesInit(b, type, cx, path = []) {
@@ -591,13 +648,15 @@ export const stmtMethods = {
       if (final.pure && !final.body) return '0';
       this.use(final);
       const thunk = `__thunk_${cls.cname}_${gi}_${j}`;
-      const ps = f.type.params.map((p, i) => this.ct(p.k === 'ref' ? T.ptr(p.to) : p, `__a${i}`));
-      const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
+      // The C signature is the function's: a pinned result through __sret, pinned arguments by address, all passed on.
+      const sret = this.sret(f);
+      const ps = [...(sret ? [this.ct(T.ptr(T.uncst(f.type.ret)), '__sret')] : []), ...f.type.params.map((p, i) => this.ct(this.cParamType(p), `__a${i}`))];
+      const ret = sret ? T.VOID : f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
       const sig = this.ct(ret, `${thunk}(${['void *__self', ...ps].join(', ')})`);
       const top = `((${st(cls)} *)((char *)__self - ${off(g.xpath)}))`;
       const target = at === 0 ? top : g.virtual ? this.upcastPtr(top, this.basePath(cls, final.cls), final.cls)
         : `(&${top}->${g.xpath.slice(0, at).join('.')})`;
-      const call = `${final.cname}(${[`(${st(final.cls)} *)${target}`, ...f.type.params.map((_, i) => `__a${i}`)].join(', ')})`;
+      const call = `${final.cname}(${[`(${st(final.cls)} *)${target}`, ...(sret ? ['__sret'] : []), ...f.type.params.map((_, i) => `__a${i}`)].join(', ')})`;
       this.out.protos.push(`static ${sig};`);
       this.out.bodies.push(`static ${sig} {\n  ${ret.k === 'void' ? '' : 'return '}${call};\n}`);
       return `(void *)${thunk}`;
@@ -649,6 +708,12 @@ export const stmtMethods = {
       const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
         const args = (init?.args ?? []).map((a) => this.expr(a, c));
         const pick = this.pickCtor(b, args, c, f.defNode);
+        if (pick.copy && this.pinned(b)) {
+          // Never moved by its bytes: copied by the base-subobject copy constructor, in place.
+          const cc = this.copyCtorOf(b);
+          this.use(cc);
+          return { c: `${this.baseName(cc)}(${[`(struct ${b.cname} *)&this->__b${bi}`, this.upcastPtr(this.addrOf(pick.copy, c), this.basePath(pick.copy.t.cls, b), b), ...this.defaultArgs(cc, 1, c)].join(', ')});` };
+        }
         if (pick.copy) return { c: `this->__b${bi} = ${this.copyOf(pick.copy, b, c)};` };
         if (!pick.f) return { c: '' };
         this.use(pick.f);
@@ -665,7 +730,7 @@ export const stmtMethods = {
         const { e, after } = this.full({ k: 'ctor' }, cx, (_m, cc) => {
           const args = (init?.args ?? []).map((a) => this.expr(a, cc));
           const pick = this.pickCtor(c, args, cc, f.defNode);
-          if (pick.copy) return { c: `${target} = ${this.copyOf(pick.copy, c, cc)};` };
+          if (pick.copy) return { c: this.pinned(c) ? this.constructAt(target, c, args, cc, f.defNode) : `${target} = ${this.copyOf(pick.copy, c, cc)};` };
           if (!pick.f) return { c: '' };
           this.use(pick.f);
           return { c: `${pick.f.cname}(${[`&${target}`, ...pick.cArgs].join(', ')});` };
@@ -789,8 +854,8 @@ export const stmtMethods = {
       if (dynFix.length) {
         const cx = this.initContext(env);
         for (const d of dynFix) {
-          const { e, after } = this.full(d.x, cx, (m, c) => ({ c: this.coerce(this.expr(m, c), T.uncst(d.type), c, m, 'initialisation') }));
-          dynamic([`${ent.cname}${d.path.join('')} = ${e.c};`, ...after], null);
+          const { e, after } = this.full(d.x, cx, (m, c) => ({ c: this.dynSet(`${ent.cname}${d.path.join('')}`, d.type, this.expr(m, c), c, m) }));
+          dynamic([e.c, ...after], null);
         }
       }
     };
@@ -801,7 +866,7 @@ export const stmtMethods = {
       const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
         const args = (it.ctorArgs ?? (it.init ? [it.init] : [])).map((a) => this.expr(a, c));
         const pick = this.pickCtor(cls, args, c, it);
-        if (pick.copy) return { c: `${ent.cname} = ${this.copyOf(pick.copy, cls, c)};` };
+        if (pick.copy) return { c: this.pinned(cls) ? this.constructAt(ent.cname, cls, args, c, it) : `${ent.cname} = ${this.copyOf(pick.copy, cls, c)};` };
         if (!pick.f) return { c: '' };
         this.use(pick.f);
         return { c: `${pick.f.cname}(${[`&${ent.cname}`, ...pick.cArgs].join(', ')});` };

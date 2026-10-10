@@ -951,6 +951,76 @@ int main() {
 }
 `);
 
+// A class whose objects point into themselves, as ScummVM 0.10.0's Common::String does with its
+// small-string storage, is never moved by copying its bytes: built where it will live, returned
+// through a hidden pointer, passed by value by invisible reference -- every copy g++ makes or elides
+// printed, through plain calls, returns (by name too), conversions, new, function pointers, pointers
+// to members (virtual ones too) and a second base's thunk.
+C('pinned-objects', `
+#include <stdio.h>
+#include <string.h>
+static int made = 0;
+struct S {
+    static const unsigned CAP = 12;
+    char buf[CAP];
+    char *p;
+    int id;
+    S(const char *s) : p(buf), id(++made) { memset(buf, 0, CAP); strcpy(buf, s); printf("ctor %d %s\\n", id, buf); }
+    S(const S &o) : p(buf), id(++made) { strcpy(buf, o.p); printf("copy %d<-%d %s\\n", id, o.id, buf); }
+    ~S() { printf("dtor %d %s %s\\n", id, buf, p == buf ? "ok" : "MOVED"); }
+    S &operator=(const S &o) { strcpy(buf, o.p); printf("assign %d<-%d\\n", id, o.id); return *this; }
+    bool ok() const { return p == buf; }
+};
+static S make(const char *s) { return S(s); }
+static S named(const char *s) { S x(s); x.buf[0] = 'N'; return x; }
+static S pick(bool first) { S a("a"), b("b"); if (first) return a; return b; }
+static S chain() { return make("c"); }
+static S fromBuf(int n) { char buf[16]; buf[0] = 'b'; buf[1] = (char)('0' + n); buf[2] = 0; return buf; }
+static int take(S s) { return s.ok() ? s.id : -1; }
+static S operator+(const S &a, const S &b) { S t(a.p); strcat(t.buf, b.p); return t; }
+struct Holder { S s; int n; Holder() : s("h"), n(1) {} S get() const { return s; } };
+struct Wrap { S inner; Wrap(const S &x) : inner(x) {} };
+struct Base0 { int z; Base0() : z(0) {} virtual ~Base0() {} };
+struct Maker { virtual ~Maker() {} virtual S build(S seed) const { S r(seed.p); r.buf[0] = 'B'; return r; } };
+struct Both : Base0, Maker { S build(S seed) const { return seed + S("+"); } };
+typedef S (*MakeFn)(const char *);
+typedef S (Maker::*BuildFn)(S) const;
+struct Plugin { const char *name; MakeFn make; };
+static const Plugin plugins[] = { { "make", make }, { "named", named } };
+
+int main() {
+    S a = make("x");
+    S b = named("y");
+    S c = pick(true);
+    S d = chain();
+    printf("take %d\\n", take(a));
+    printf("take %d\\n", take(make("z")));
+    S e = a + b;
+    S f = S("w");
+    S g(make("v"));
+    a = make("q");
+    Holder h;
+    S i = h.get();
+    Wrap w(make("u"));
+    S *heap = new S(make("n"));
+    S fb = fromBuf(7);
+    printf("buf %s %d\\n", fb.buf, fb.ok());
+    MakeFn fp = make;
+    S j = fp("fp");
+    S k = plugins[1].make("pl");
+    Both both; Maker *mk = &both; Maker base;
+    BuildFn bf = &Maker::build;
+    S l = (base.*bf)(S("m"));
+    S m = (mk->*bf)(S("v"));
+    S o = mk->build(j);
+    printf("ptr %s %s %s %s %s %d\\n", j.buf, k.buf, l.buf, m.buf, o.buf, j.ok() && k.ok() && l.ok() && m.ok() && o.ok());
+    printf("ok %d %d %d %d %d %d %d %d %d %d %d\\n", a.ok(), b.ok(), c.ok(), d.ok(), e.ok(), f.ok(), g.ok(), i.ok(), w.inner.ok(), heap->ok(), h.s.ok());
+    printf("%s %s %s %s %s %s %s %s\\n", a.buf, b.buf, c.buf, d.buf, e.buf, f.buf, g.buf, heap->buf);
+    delete heap;
+    return 0;
+}
+`);
+
 // Virtual bases, on the shape of ScummVM 0.10.0's common/stream.h: Stream virtual under ReadStream and
 // WriteStream, a File reaching it by both, a stream two virtual levels down. One Stream however many
 // paths; virtual calls through each base; construction and destruction in the order C++ gives them.
@@ -1441,6 +1511,27 @@ if (!FILTER) {
   const pureSrc = cases.find((c) => c.name === 'virtual-base-pure')?.src ?? '';
   const pureUndefined = (() => { try { return compileProgram([{ file: 'pure.cpp', source: pureSrc }], { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true }).undefined ?? []; } catch (e) { return [`refused: ${e.message}`]; } })();
   option.push(['a pure virtual function under a virtual base leaves no name undefined', pureSrc !== '' && pureUndefined.length === 0]);
+  // A class's `static const unsigned CAP = 12;` is its value where it is used: no unit defines it, and
+  // read as a variable it was storage PRISM made up, holding 0 (String::_builtinCapacity).
+  const pinSrc = cases.find((c) => c.name === 'pinned-objects')?.src ?? '';
+  const pinLeft = (() => { try { const q = compileProgram([{ file: 'pin.cpp', source: pinSrc }], { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true }); return [...(q.undefined ?? []), ...(q.undefinedVars ?? [])].map((u) => u.name); } catch (e) { return [`refused: ${e.message}`]; } })();
+  option.push(['a static const member used for its value names no variable', pinSrc !== '' && pinLeft.length === 0]);
+  // DECLARE_SINGLETON: `template<> T *Singleton<T>::_singleton = 0;` defines that instance's member in
+  // its unit, used there or not; another unit uses it.
+  const SING = 'template <class T> struct Singleton { static T *_singleton; static T &instance() { if (!_singleton) _singleton = new T(); return *_singleton; } };\nstruct PM { int n; PM() : n(42) {} };\n';
+  const sing = (() => {
+    try {
+      const q = compileProgram([
+        { file: 'plugins.cpp', source: `${SING}template<> PM *Singleton<PM>::_singleton = 0;\nint defined_here = 1;\n` },
+        { file: 'main.cpp', source: `#include <stdio.h>\n${SING}int main() { int a = Singleton<PM>::_singleton == 0; int n = Singleton<PM>::instance().n; printf("%d %d %d\\n", a, n, Singleton<PM>::_singleton != 0); return 0; }\n` },
+      ], { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true });
+      // Left undefined, the member would get storage made up for it, holding 0 -- the same output:
+      // the check is that it is defined.
+      if (q.undefinedVars?.length) return `undefined: ${q.undefinedVars.map((u) => u.name).join(' ')}`;
+      return q.run(['x']).stdout.trim();
+    } catch (e) { return `refused: ${e.message.split('\n')[0]}`; }
+  })();
+  option.push(['an explicit specialisation of a static member is defined in its unit, used from another', sing === '1 42 1']);
   for (const [what, ok] of option) {
     if (ok) { pass++; if (VERBOSE) console.log(`  ok   option: ${what}`); } else fails.push({ c: { name: `option: ${what}` }, why: 'the option did not do that' });
   }

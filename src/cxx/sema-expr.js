@@ -21,7 +21,27 @@ const CMP = new Set(['==', '!=', '<', '>', '<=', '>=']);
 export const exprMethods = {
   // ---------------------------------------------------------------- C spelling of types
   /** The C declaration of `name` with type t, having made sure the structs it needs are declared. */
-  ct(t, name = '') { this.needType(t, true); return T.cDecl(t, name); },
+  ct(t, name = '') { this.needType(t, true); return T.cDecl(this.abiType(t), name); },
+  /**
+   * The type as C has to spell it: a function that returns a pinned class takes the hidden result
+   * pointer first (after the object, for a member) and returns nothing; one it takes by value comes
+   * by address. A function's own signature is written this way (signature), and so must every
+   * pointer to one -- 0.6.1's plugins keep a `List<DetectedGame> (*)(const FSList &)`.
+   */
+  abiType(t) {
+    switch (t.k) {
+      case 'ptr': { const to = this.abiType(t.to); return to === t.to ? t : { ...t, to }; }
+      case 'ref': { const to = this.abiType(t.to); return to === t.to ? t : { ...t, to }; }
+      case 'array': { const of = this.abiType(t.of); return of === t.of ? t : { ...t, of }; }
+      case 'memptr': { const to = this.abiType(t.to); return to === t.to ? t : { ...t, to }; }
+      case 'func': {
+        const sret = this.pinnedType(t.ret);
+        if (!sret && !t.params.some((p) => this.pinnedType(p))) return t;
+        return { ...t, ret: sret ? T.VOID : t.ret, params: [...(sret ? [T.ptr(T.uncst(t.ret))] : []), ...t.params.map((p) => this.cParamType(p))] };
+      }
+      default: return t;
+    }
+  },
   needType(t, byValue) {
     switch (t.k) {
       case 'class': if (byValue) this.needStruct(t.cls); else this.forward(t.cls); break;
@@ -85,6 +105,28 @@ export const exprMethods = {
     return !!cls.dtor || cls.bases.some((b) => this.needsDtor(b))
       || cls.fields.some((f) => { const c = this.isClassy(f.type); return c && this.needsDtor(c); });
   },
+  /**
+   * A PINNED class may not be moved by copying its bytes: one with a copy constructor of its own,
+   * or with a base or member that has one. ScummVM 0.10.0's Common::String points into itself
+   * (`_str == _storage`, its small-string storage), and a String moved like a C struct reads
+   * garbage. Such a class is treated as the Itanium ABI treats one with a non-trivial copy
+   * constructor: constructed where it will live, returned through a hidden pointer (`__sret`),
+   * passed by value through an invisible reference that the caller owns and destroys.
+   */
+  pinned(cls) {
+    if (cls.pinnedMemo !== undefined) return cls.pinnedMemo;
+    // Not known yet of a class only declared (a function type may name one by value before its definition).
+    if (!cls.complete && !cls.pending) return false;
+    this.complete(cls, cls.node);
+    cls.pinnedMemo = false;               // a class may hold a pointer to itself; never itself
+    return (cls.pinnedMemo = !!this.userCopyCtor(cls) || cls.bases.some((b) => this.pinned(b))
+      || cls.fields.some((f) => { const c = this.isClassy(f.type); return !!c && this.pinned(c); }));
+  },
+  pinnedType(t) { return t?.k === 'class' && this.pinned(t.cls); },
+  /** Does f return through a hidden pointer? */
+  sret(f) { return !f.isCtor && !f.isDtor && this.pinnedType(f.type.ret); },
+  /** A parameter's C type: a pinned class by value is passed by its address. */
+  cParamType(p) { return p.k === 'ref' ? T.ptr(p.to) : this.pinnedType(p) ? T.ptr(T.uncst(p)) : p; },
   userCopyCtor(cls) {
     return cls.ctors.find((f) => f.type.params.length >= 1 && f.type.params[0].k === 'ref' && f.type.params[0].to.k === 'class'
       && f.type.params[0].to.cls === cls && f.params.slice(1).every((p) => p.def));
@@ -183,9 +225,11 @@ export const exprMethods = {
   signature(f, suffix = '') {
     const ps = [];
     if (f.cls && !f.isStatic) ps.push(this.ct(T.ptr(f.type.thisConst ? T.cst({ k: 'class', cls: f.cls }) : { k: 'class', cls: f.cls }), 'this'));
-    f.type.params.forEach((p, i) => ps.push(this.ct(p.k === 'ref' ? T.ptr(p.to) : p, this.paramName(f, i))));
+    // A pinned class comes back through a hidden pointer, after `this`; one passed by value comes by its address.
+    if (this.sret(f)) ps.push(this.ct(T.ptr(T.uncst(f.type.ret)), '__sret'));
+    f.type.params.forEach((p, i) => ps.push(this.ct(this.cParamType(p), this.paramName(f, i))));
     if (f.type.variadic) ps.push('...');
-    const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
+    const ret = this.sret(f) ? T.VOID : f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
     return this.ct(ret, `${f.cname}${suffix}(${ps.length ? ps.join(', ') : 'void'})`);
   },
   paramName(f, i) { return f.params[i]?.name ?? `__p${i}`; },
@@ -262,11 +306,13 @@ export const exprMethods = {
     return { c, t, lv: true, bits: ent.bits != null };
   },
   varExpr(ent, cx) {
+    // A const integer with a known value is that value, as g++ folds it -- everywhere: C needs a
+    // constant in a static initialiser (`1116 + stereospread`, mt32's freeverb.h), and a class's
+    // `static const uint32 _builtinCapacity = 32;` is defined by no unit at all (common/str.h; read as
+    // a variable, memcpy copied whatever nothing held). Its address is still the variable's:
+    // `doOutput(&newline_character, 1)` (agos's charset.cpp).
+    if (ent.constValue !== undefined) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false, constAddr: { c: `(&${ent.cname})`, t: T.ptr(ent.type), ent } };
     if (ent.global) this.useGlobal(ent);
-    // A global's value too where C needs a constant: `const int combtuningR1 = 1116 + stereospread;`
-    // (mt32's freeverb.h) is a static initialiser, and C does not fold a const variable.
-    // Its address is still the variable's: `doOutput(&newline_character, 1)` (agos's charset.cpp).
-    if (ent.constValue !== undefined && (!ent.global || cx?.constOnly)) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false, constAddr: { c: `(&${ent.cname})`, t: T.ptr(ent.type) } };
     if (ent.type.k === 'ref') return { c: `(*${ent.cname})`, t: ent.type.to, lv: true, addr: ent.cname };
     return { c: ent.cname, t: ent.type, lv: true, known: true, constValue: ent.constValue };
   },
@@ -359,6 +405,15 @@ export const exprMethods = {
     const self = { k: 'class', cls };
     const path = this.basePath(e.t.cls, cls);
     const cc = this.copyCtorOf(cls);
+    if (this.pinned(cls)) {
+      // Never moved by its bytes: a temporary of the class is the object itself, left to die at the
+      // end of the full expression; anything else is copied into a temporary of the caller's.
+      if (e.temporary && e.tempName && !path.length) return e.c;
+      this.use(cc);
+      const name = this.temp(cx, self);
+      if (this.dtorOf(cls)) cx.pending.push({ name, cls });
+      return `(*(${cc.cname}(&${name}, ${[this.upcastPtr(this.addrOf(e, cx), path, cls), ...this.defaultArgs(cc, 1, cx)].join(', ')}), &${name}))`;
+    }
     if (!e.lv && !e.addr && !path.length) return e.c;                // a temporary is moved, not copied
     if (e.temporary && e.tempName && !path.length) {
       // The temporary a constructor just made IS the object it initialises: handed over, so not
@@ -403,6 +458,9 @@ export const exprMethods = {
       // A reference to const binds to a temporary made from the converted value.
       const v = this.convert(e, T.uncst(U), cx, { user, explicit });
       if (!v) return null;
+      // A pinned class's conversion already leaves an object in a temporary of its own (construct,
+      // copyOf): the reference is to that object, not to a byte copy of it.
+      if (this.pinnedType(T.uncst(U))) return { rank: v.rank, gen: () => `(&${v.gen()})` };
       return { rank: v.rank, gen: () => { const name = this.temp(cx, T.uncst(U)); const cls = this.isClassy(U); if (cls && this.dtorOf(cls)) cx.pending.push({ name, cls }); return `(${name} = ${v.gen()}, &${name})`; } };
     }
     const V = T.uncst(to);
@@ -572,6 +630,18 @@ export const exprMethods = {
   callResult(f, thisC, cArgs, cx, { direct = true, objC = null } = {}) {
     this.use(f);
     if (cx.constOnly) cx.dynamic = true;
+    // A pinned class by value goes by its address: the argument is the caller's own object (a
+    // temporary it made, or the one copied for the call), destroyed by the caller at the end of
+    // the full expression.
+    cArgs = cArgs.map((a, i) => (i < f.type.params.length && this.pinnedType(f.type.params[i]) ? `(&${a})` : a));
+    // A pinned result is built in a temporary of the caller's, whose address the callee is given.
+    let sretTemp = null;
+    if (this.sret(f)) {
+      const R = T.uncst(f.type.ret);
+      sretTemp = this.temp(cx, R);
+      if (this.dtorOf(R.cls)) cx.pending.push({ name: sretTemp, cls: R.cls });
+      cArgs = [`&${sretTemp}`, ...cArgs];
+    }
     const all = thisC ? [thisC, ...cArgs] : cArgs;
     let call;
     if (!direct && f.isVirtual) {
@@ -588,14 +658,16 @@ export const exprMethods = {
     } else call = `${f.cname}(${all.join(', ')})`;
     const r = f.type.ret;
     if (r.k === 'ref') return { c: `(*${call})`, t: r.to, lv: true, addr: call };
+    if (sretTemp) { const addr = `(${call}, &${sretTemp})`; return { c: `(*${addr})`, t: r, lv: false, addr, known: true, temporary: true, tempName: sretTemp }; }
     return { c: call, t: r, lv: false };
   },
   vtableOwnerPath(cls) { return this.vptrPath(cls); },
   fnPtrType(f) {
     const ps = [this.ct(T.ptr({ k: 'class', cls: f.cls }))];
-    for (const p of f.type.params) ps.push(this.ct(p.k === 'ref' ? T.ptr(p.to) : p));
+    if (this.sret(f)) ps.push(this.ct(T.ptr(T.uncst(f.type.ret))));
+    for (const p of f.type.params) ps.push(this.ct(this.cParamType(p)));
     if (f.type.variadic) ps.push('...');
-    const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
+    const ret = this.sret(f) ? T.VOID : f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
     return this.ct(ret, `(*)(${ps.join(', ')})`);
   },
   /** Call the member f on obj with already-lowered arguments. */
@@ -620,7 +692,40 @@ export const exprMethods = {
     if (!f) return `(${name})`;
     this.use(f);
     if (cx.constOnly) cx.dynamic = true;
+    // A pinned one stays in its temporary, as an lvalue the caller may take the address of, and dies
+    // with the full expression.
+    if (this.pinned(cls)) {
+      if (this.dtorOf(cls)) cx.pending.push({ name, cls });
+      return `(*(${f.cname}(${[`&${name}`, ...cArgs].join(', ')}), &${name}))`;
+    }
     return `(${f.cname}(${[`&${name}`, ...cArgs].join(', ')}), ${name})`;
+  },
+  /**
+   * The statement that makes an object of cls at the lvalue `dest` from constructor arguments --
+   * the one place a pinned object is built where it will live. An argument that is itself a
+   * temporary of cls was built in a temporary of this function: that temporary's name is rewritten
+   * to dest, so it is built there instead (the elision C++ does), and it no longer dies with the
+   * full expression.
+   */
+  constructAt(dest, cls, args, cx, node) {
+    const a = args.length === 1 ? args[0] : null;
+    if (a && this.pinned(cls) && a.temporary && a.tempName && a.t.k === 'class' && a.t.cls === cls) {
+      const i = cx.pending.findIndex((p) => p.name === a.tempName);
+      if (i >= 0) cx.pending.splice(i, 1);
+      return `(void)${a.c.replace(new RegExp(`\\b${a.tempName}\\b`, 'g'), dest)};`;
+    }
+    const pick = this.pickCtor(cls, args, cx, node);
+    if (pick.copy) {
+      const cc = this.copyCtorOf(cls);
+      if (!cc) return `${dest} = ${this.copyOf(pick.copy, cls, cx)};`;
+      this.use(cc);
+      const path = this.basePath(pick.copy.t.cls, cls);
+      return `${cc.cname}(${[`&${dest}`, this.upcastPtr(this.addrOf(pick.copy, cx), path, cls), ...this.defaultArgs(cc, 1, cx)].join(', ')});`;
+    }
+    if (!pick.f) return '';
+    this.use(pick.f);
+    if (cx.constOnly) cx.dynamic = true;
+    return `${pick.f.cname}(${[`&${dest}`, ...pick.cArgs].join(', ')});`;
   },
   /** The constructor of cls for these arguments and its converted arguments. */
   pickCtor(cls, args, cx, node) {
@@ -811,11 +916,28 @@ export const exprMethods = {
           const p = `(${c} ? ${ac} : ${bc})`;
           return done({ c: `(*${p})`, t: a.t, lv: true, addr: p });
         }
+        if (this.pinned(a.t.cls)) {
+          // Each branch builds the one object in place, so it may be built in turn where it is going.
+          const cls = a.t.cls, name = this.temp(cx, T.uncst(a.t));
+          const sa = side(pa, () => this.constructAt(name, cls, [a], cx, n).replace(/;$/, '')), sb = side(pb, () => this.constructAt(name, cls, [b], cx, n).replace(/;$/, ''));
+          if (this.dtorOf(cls)) cx.pending.push({ name, cls });
+          const p = `(${c} ? (${sa || '0'}, &${name}) : (${sb || '0'}, &${name}))`;
+          return done({ c: `(*${p})`, t: T.uncst(a.t), lv: false, addr: p, known: true, temporary: true, tempName: name });
+        }
         const va = side(pa, () => this.copyOf(a, a.t.cls, cx)), vb = side(pb, () => this.copyOf(b, b.t.cls, cx));
         return done(this.classChoice(c, va, vb, a.t, cx));
       }
       // One side converts to the other's type.
       const toA = this.convert(b, T.uncst(a.t), cx), toB = this.convert(a, T.uncst(b.t), cx);
+      const pinnedTo = toA && !toB && a.t.k === 'class' && this.pinned(a.t.cls) ? a.t : toB && !toA && b.t.k === 'class' && this.pinned(b.t.cls) ? b.t : null;
+      if (pinnedTo) {
+        // Each branch builds the one object in place, the converted one through its constructor.
+        const cls = pinnedTo.cls, name = this.temp(cx, T.uncst(pinnedTo));
+        const sa = side(pa, () => this.constructAt(name, cls, [a], cx, n).replace(/;$/, '')), sb = side(pb, () => this.constructAt(name, cls, [b], cx, n).replace(/;$/, ''));
+        if (this.dtorOf(cls)) cx.pending.push({ name, cls });
+        const p = `(${c} ? (${sa || '0'}, &${name}) : (${sb || '0'}, &${name}))`;
+        return done({ c: `(*${p})`, t: T.uncst(pinnedTo), lv: false, addr: p, known: true, temporary: true, tempName: name });
+      }
       if (toA && !toB) { const va = side(pa, () => this.coerce(a, T.uncst(a.t), cx, n)), vb = side(pb, () => toA.gen()); return done(this.choice(c, va, vb, T.uncst(a.t), cx)); }
       if (toB && !toA) { const va = side(pa, () => toB.gen()), vb = side(pb, () => this.coerce(b, T.uncst(b.t), cx, n)); return done(this.choice(c, va, vb, T.uncst(b.t), cx)); }
       this.fail(`?: between ${T.show(a.t)} and ${T.show(b.t)}`, n);
@@ -995,8 +1117,25 @@ export const exprMethods = {
     if (args.length < ft.params.length || (args.length > ft.params.length && !ft.variadic)) this.fail('wrong number of arguments', n);
     const cArgs = args.map((a, i) => (i < ft.params.length ? this.coerce(a, ft.params[i], cx, n, 'argument conversion') : this.variadicArg(a, cx)));
     if (cx.constOnly) cx.dynamic = true;
-    const call = `${p.c}(${cArgs.join(', ')})`;
+    return this.pointerCall(p.c, null, ft, cArgs, cx);
+  },
+  /**
+   * A call through a pointer -- to a function, or to a member function with the object first: the
+   * same convention as a direct call (callResult), a pinned result in a temporary of the caller's
+   * whose address goes first, pinned arguments by address.
+   */
+  pointerCall(callee, objC, ft, cArgs, cx) {
+    cArgs = cArgs.map((a, i) => (i < ft.params.length && this.pinnedType(ft.params[i]) ? `(&${a})` : a));
+    let sretTemp = null;
+    if (this.pinnedType(ft.ret)) {
+      const R = T.uncst(ft.ret);
+      sretTemp = this.temp(cx, R);
+      if (this.dtorOf(R.cls)) cx.pending.push({ name: sretTemp, cls: R.cls });
+      cArgs = [`&${sretTemp}`, ...cArgs];
+    }
+    const call = `${callee}(${[...(objC ? [objC] : []), ...cArgs].join(', ')})`;
     if (ft.ret.k === 'ref') return { c: `(*${call})`, t: ft.ret.to, lv: true, addr: call };
+    if (sretTemp) { const addr = `(${call}, &${sretTemp})`; return { c: `(*${addr})`, t: ft.ret, lv: false, addr, known: true, temporary: true, tempName: sretTemp }; }
     return { c: call, t: ft.ret, lv: false };
   },
 
@@ -1016,12 +1155,17 @@ export const exprMethods = {
     const name = `__vcall_${f.cname}`;
     if (!f.vcallDone) {
       f.vcallDone = true;
-      const ps = f.type.params.map((p, i) => this.ct(p.k === 'ref' ? T.ptr(p.to) : p, `__a${i}`));
-      const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
+      // The function's own C signature, a pinned result's pointer and pinned arguments' addresses
+      // passed on as they came, through the object's table.
+      const sret = this.sret(f);
+      const ps = [...(sret ? [this.ct(T.ptr(T.uncst(f.type.ret)), '__sret')] : []), ...f.type.params.map((p, i) => this.ct(this.cParamType(p), `__a${i}`))];
+      const ret = sret ? T.VOID : f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
       const sig = this.ct(ret, `${name}(${[this.ct(T.ptr({ k: 'class', cls: f.cls }), '__self'), ...ps].join(', ')})`);
-      const call = this.callResult(f, '__self', f.type.params.map((_, i) => `__a${i}`), { fn: null, pending: [], env: { scope: this.global } }, { direct: false });
+      this.needStruct(f.cls);
+      const slot = `((${this.fnPtrType(f)})__self->${[...this.vtableOwnerPath(f.cls), '__vptr'].join('.')}[${f.vindex}])`;
+      const call = `${slot}(${['__self', ...(sret ? ['__sret'] : []), ...f.type.params.map((_, i) => `__a${i}`)].join(', ')})`;
       this.out.protos.push(`static ${sig};`);
-      this.out.bodies.push(`static ${sig} {\n  ${ret.k === 'void' ? '' : 'return '}${f.type.ret.k === 'ref' ? call.addr : call.c};\n}`);
+      this.out.bodies.push(`static ${sig} {\n  ${ret.k === 'void' ? '' : 'return '}${call};\n}`);
     }
     return { c: `((${this.ct(t)})${name})`, t, lv: false };
   },
@@ -1042,9 +1186,7 @@ export const exprMethods = {
     if (args.length < ft.params.length || (args.length > ft.params.length && !ft.variadic)) this.fail('wrong number of arguments', node);
     const cArgs = args.map((a, i) => (i < ft.params.length ? this.coerce(a, ft.params[i], cx, node, 'argument conversion') : this.variadicArg(a, cx)));
     if (cx.constOnly) cx.dynamic = true;
-    const call = `(${m.c})(${[this.upcastPtr(this.addrOf(o, cx), path, m.t.cls), ...cArgs].join(', ')})`;
-    if (ft.ret.k === 'ref') return { c: `(*${call})`, t: ft.ret.to, lv: true, addr: call };
-    return { c: call, t: ft.ret, lv: false };
+    return this.pointerCall(`(${m.c})`, this.upcastPtr(this.addrOf(o, cx), path, m.t.cls), ft, cArgs, cx);
   },
   /** The C compiler's type (src/sema/types.js) as this front end's. */
   cxxTypeOfC(t) {
@@ -1060,7 +1202,7 @@ export const exprMethods = {
       if (e.funcs && e.funcs[0]?.cls && !e.funcs[0].isStatic && !e.obj) return this.memberPointer(e, n);
       const o = this.overloaded('&', [e], cx, n);
       if (o) return o;
-      if (e.constAddr) return { ...e.constAddr, lv: false };
+      if (e.constAddr) { if (e.constAddr.ent.global) this.useGlobal(e.constAddr.ent); return { c: e.constAddr.c, t: e.constAddr.t, lv: false }; }
       if (!e.lv && !e.addr) this.fail('& of something that is not an lvalue', n);
       return { c: e.addr ?? `(&${e.c})`, t: T.ptr(e.t), lv: false };
     }
@@ -1273,6 +1415,8 @@ export const exprMethods = {
       return { c: `(${alloc}, ${p})`, t: pt, lv: false };
     }
     const args = (n.args ?? []).map((a) => this.expr(a, cx));
+    // A pinned object is built in the memory new got for it: `new S(make())` copies nothing.
+    if (this.pinned(cls)) return { c: `(${alloc}, ${this.constructAt(`(*${p})`, cls, args, cx, n).replace(/;$/, '') || '0'}, ${p})`, t: pt, lv: false };
     const pick = this.pickCtor(cls, args, cx, n);
     if (pick.copy) return { c: `(${alloc}, *${p} = ${this.copyOf(pick.copy, cls, cx)}, ${p})`, t: pt, lv: false };
     if (!pick.f) return { c: `(${alloc}, ${p})`, t: pt, lv: false };

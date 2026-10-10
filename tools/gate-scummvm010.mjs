@@ -27,7 +27,9 @@ if (process.argv[2] === '--child') {
     functions: Object.keys(b.program.F).length,
     hasMain: 'main' in b.program.F,
     failures: (b.program.failures ?? []).map((x) => `${x.fn}: ${x.message}`),
-    unresolved: (b.program.undefined ?? []).map((u) => u.name),
+    // Functions AND variables: a variable declared and never defined is otherwise given storage
+    // silently, and read 0 (String::_builtinCapacity was, and String copied nothing).
+    unresolved: [...(b.program.undefined ?? []), ...(b.program.undefinedVars ?? [])].map((u) => u.name),
     missingHeaders: b.missingHeaders ?? [],
   }));
   process.exit(0);

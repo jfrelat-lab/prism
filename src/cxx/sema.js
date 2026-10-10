@@ -1065,7 +1065,10 @@ export class Sema {
     const name = this.lastName(d.name);
     // `template <class T> T *Singleton<T>::_singleton = 0;`: defined for each instance that uses it --
     // and its type means something only in one.
-    if (q.length > 1 && it.template) {
+    // (`template<> T *Singleton<T>::_singleton = 0;` -- DECLARE_SINGLETON -- is not that: an explicit
+    // specialisation names one instance and is that instance's definition, in this unit alone, used
+    // here or not. It is defined below as any static member is.)
+    if (q.length > 1 && it.template?.length) {
       const owner = this.qualified({ parts: q.slice(0, -1).map((p) => ({ name: p.name })), global: d.name.global }, env, it);
       if (owner?.k === 'template') { (owner.tmpl.staticDefs ??= []).push(it); return null; }
     }
@@ -1076,6 +1079,7 @@ export class Sema {
       if (owner?.k === 'namespace') return this.declaration({ ...it, decl: { ...d, name: { parts: [q[q.length - 1]], global: false } } }, { scope: owner.ns.scope, cls: null, bind: env.bind });
       // The definition of a static data member: `int A::count = 0;`
       const ot = this.namedType({ parts: q.slice(0, -1), global: d.name.global }, env, it);
+      if (ot.k === 'class') this.complete(ot.cls, it);       // an instance named first here is made now
       const ent = ot.cls.scope.get(name);
       if (!ent || !ent.staticMember) this.fail(`'${name}' is not a static member of ${ot.cls.name}`, it);
       this.defineGlobal(ent, it, ot.cls.env);
