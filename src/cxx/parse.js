@@ -316,7 +316,7 @@ class CxxParser {
     } finally { this.scope = outer; }
     this.closeAngle();
     // A class template is a template inside its own body too: `~idList<type>()`.
-    if ((this.isKw('class') || this.isKw('struct')) && this.isIdent(1) && (this.isP('{', 2) || this.isP(':', 2))) this.scope.set(this.peek(1).v, 'template');
+    if ((this.isKw('class') || this.isKw('struct')) && this.isIdent(1) && (this.isP('{', 2) || this.isP(':', 2) || this.isP(';', 2))) this.scope.set(this.peek(1).v, 'template');
     const saved = this.scope;
     this.scope = scope;
     let decl;
@@ -498,7 +498,7 @@ class CxxParser {
   classSpecifier() {
     const key = this.next().v;
     const loc = this.loc();
-    if (this.isKw('__attribute__')) this.skipAttribute();
+    while (this.isKw('__attribute__')) this.skipAttribute();
     let name = null;
     // An elaborated name may be qualified: `friend class Common::Singleton<NewGui>;`.
     if ((this.isIdent() && this.isP('::', 1)) || this.isP('::')) {
@@ -508,9 +508,10 @@ class CxxParser {
     }
     if (this.isIdent()) name = this.ident();
     // A class named as a function already is (`struct stat` after `stat()`) is reached by its tag only.
-    // `struct X x;` naming a class already known declares nothing: only a definition, or a first mention.
+    // `struct X x;` naming a class already known declares nothing: only a definition, a first mention, or
+    // `class X;` alone, which declares X here even past an outer X (Queen's `class Graphics;`).
     const defines = this.isP('{') || this.isP(':') || (this.isP('<') && this.isTemplate(name));
-    if (name && !this.isTemplate(name) && this.scope.names.get(name) !== 'func' && (defines || !this.scope.find(name))) this.scope.set(name, 'type');
+    if (name && !this.isTemplate(name) && this.scope.names.get(name) !== 'func' && (defines || this.isP(';') || !this.scope.find(name))) this.scope.set(name, 'type');
     // An explicit specialisation names its arguments: `template<> struct ColorMasks<565> { ... }`.
     const specArgs = name && this.isP('<') && this.isTemplate(name) ? this.templateArgs() : null;
     if (!this.isP('{') && !this.isP(':')) {
@@ -589,7 +590,7 @@ class CxxParser {
     }
     for (;;) {
       const d = this.declarator();
-      if (this.isKw('__attribute__')) this.skipAttribute();
+      while (this.isKw('__attribute__')) this.skipAttribute();
       if (this.isKw('__asm__') || this.isKw('asm')) { this.next(); this.expectP('('); while (!this.eatP(')')) this.next(); }
       const isFunc = d.derivs.length && d.derivs[d.derivs.length - 1].k === 'func';
       // A constructor's member initialisers, then a body.
@@ -749,7 +750,7 @@ class CxxParser {
     const t = this.peek(j);
     if (t.k === PUNCT) {
       if ([',', ')', '*', '&', '[', '='].includes(t.v)) return true;
-      if (t.v === '(') return this.isP('*', j + 1) || this.isP('&', j + 1);
+      if (t.v === '(') return this.isP('*', j + 1) || this.isP('&', j + 1) || this.isMemberPointerAhead(j + 1);
       return false;
     }
     return t.k === ID;

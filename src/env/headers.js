@@ -343,6 +343,7 @@ double log10(double x);
 double pow(double x, double y);
 double floor(double x);
 double modf(double x, double *ip);
+float modff(float x, float *ip);
 /* The classification functions, as glibc's <math.h> declares them (BSD's finite, and isnan/isinf). */
 int finite(double x);
 int isnan(double x);
@@ -741,15 +742,25 @@ struct flock { short l_type; short l_whence; long l_start; long l_len; int l_pid
 
 
 /*
- * dirent.h -- d_name and nothing else.
+ * dirent.h -- d_name, and d_type always DT_UNKNOWN.
  *
  * The other members are not omitted for brevity: this host has no inodes and no directory offsets,
- * so d_ino and d_off could only be invented. Every reader in the corpus uses d_name alone.
+ * so d_ino and d_off could only be invented. d_type is there because ScummVM 0.10.0's posix-fs.cpp
+ * reads it, and DT_UNKNOWN is an answer glibc gives too (on filesystems that do not record a type):
+ * the reader must then stat() the entry, which is what that code does.
  */
 const DIRENT = `
 #ifndef _PRISM_DIRENT_H
 #define _PRISM_DIRENT_H
-struct dirent { char d_name[256]; };
+struct dirent { char d_name[256]; unsigned char d_type; };
+#define DT_UNKNOWN 0
+#define DT_FIFO 1
+#define DT_CHR 2
+#define DT_DIR 4
+#define DT_BLK 6
+#define DT_REG 8
+#define DT_LNK 10
+#define DT_SOCK 12
 typedef struct __prism_DIR DIR;
 DIR *opendir(const char *path);
 struct dirent *readdir(DIR *d);

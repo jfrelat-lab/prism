@@ -88,6 +88,8 @@ export function installStdio(M, {
      * a file that was right there inside a pak it had failed to open.
      */
     while (p.startsWith('/')) p = p.slice(1);
+    // `.` alone is the directory every key is relative to: opendir(".") lists the whole store.
+    if (p === '.') return '';
     return p.replace(/\/\.\//g, '/');
   }
 
@@ -1143,7 +1145,8 @@ export function installStdio(M, {
      * separators after it contributes its SUBDIRECTORY name once, which is what a reader expects to
      * see and what Quake II's Sys_FindFirst walks to enumerate mods and save games.
      *
-     * `struct dirent` here is d_name alone, at offset 0 -- see the dirent.h in src/env/headers.js.
+     * `struct dirent` here is d_name at offset 0 and d_type (DT_UNKNOWN) at 256 -- see the dirent.h
+     * in src/env/headers.js.
      * The DIR handle is an index into a table on this side; the guest only ever passes it back.
      */
     opendir: (pathPtr) => {
@@ -1172,6 +1175,7 @@ export function installStdio(M, {
       const bytes = enc.encode(name.slice(0, 255));
       M.u8.set(bytes, d.buf);
       M.u8[d.buf + bytes.length] = 0;
+      M.u8[d.buf + 256] = 0;              // d_type: DT_UNKNOWN
       return d.buf;
     },
     rewinddir: (handle) => { const d = dirs[(handle | 0) - DIR_BASE]; if (d) d.i = 0; },

@@ -49,7 +49,7 @@ export function same(a, b, { top = true } = {}) {
     case 'tvalue': return a.value === b.value;
     case 'memptr': return a.cls === b.cls && same(a.to, b.to);
     case 'func':
-      return same(a.ret, b.ret) && a.variadic === b.variadic && a.params.length === b.params.length
+      return same(a.ret, b.ret) && a.variadic === b.variadic && !!a.thisConst === !!b.thisConst && a.params.length === b.params.length
         && a.params.every((p, i) => same(p, b.params[i], { top: false }));
     default: return false;
   }

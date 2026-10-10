@@ -528,6 +528,47 @@ int main(void)
 }
 `);
 
+// dirent.h's d_type, which ScummVM 0.10.0's posix-fs.cpp reads: the DT_ values are glibc's, and the
+// type of an entry is one a reader may be given -- DT_UNKNOWN here, which sends it to stat(), or the
+// real one there.
+C('dirent-type', `
+#include <stdio.h>
+#include <string.h>
+#include <dirent.h>
+int main(void)
+{
+    FILE *w = fopen("dirent-gate.tmp", "w");
+    fputs("x", w);
+    fclose(w);
+    printf("%d %d %d %d %d\\n", DT_UNKNOWN, DT_DIR, DT_REG, DT_LNK, DT_SOCK);
+    DIR *d = opendir(".");
+    struct dirent *e;
+    int seen = 0;
+    while (d && (e = readdir(d)) != NULL)
+        if (strcmp(e->d_name, "dirent-gate.tmp") == 0) { seen = 1; printf("type %s\\n", e->d_type == DT_UNKNOWN || e->d_type == DT_REG ? "given" : "wrong"); }
+    if (d) closedir(d);
+    printf("seen %d\\n", seen);
+    remove("dirent-gate.tmp");
+    return 0;
+}
+`);
+
+// modff, which mt32's partial.cpp calls: the float halves, signs kept (-0.0 for -0.5's integer part).
+C('modff', `
+#include <stdio.h>
+#include <math.h>
+int main(void)
+{
+    float xs[] = { 3.75f, -2.25f, -0.5f, 0.0f, 8388607.5f, 1e30f };
+    int i;
+    for (i = 0; i < 6; i++) {
+        float ip = 99.0f, fr = modff(xs[i], &ip);
+        printf("%.9g %.9g %d\\n", fr, ip, signbit(ip) != 0);
+    }
+    return 0;
+}
+`);
+
 // The parts of a stream that say NO. Every one of these was silently permissive, and each is what a
 // program checks when it wants to know whether something worked: gcc's suite never asks, and Lua's
 // files.lua asks about all of them.

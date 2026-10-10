@@ -515,6 +515,92 @@ int main() {
 }
 `);
 
+// ScummVM 0.10.0's common/util.h and common/func.h: two attributes after a declarator
+// (`error(...) GCC_PRINTF(1, 2) NORETURN`), and mem_fun, two function templates that differ only by
+// the `const` of the member function they take -- each deduced through `Result (T::*f)()`.
+C('mem-fun', `
+#include <stdio.h>
+#include <stdlib.h>
+void quit(const char *s, ...) __attribute__((format(printf, 1, 2))) __attribute__((__noreturn__));
+void quit(const char *s, ...) { printf("%s\\n", s); exit(3); }
+template<class Result, class T>
+class MemFunc0 {
+public:
+    typedef Result (T::*FuncType)();
+    MemFunc0(const FuncType &func) : _func(func) {}
+    Result operator()(T *v) const { return (v->*_func)(); }
+private:
+    FuncType _func;
+};
+template<class Result, class T>
+class ConstMemFunc0 {
+public:
+    typedef Result (T::*FuncType)() const;
+    ConstMemFunc0(const FuncType &func) : _func(func) {}
+    Result operator()(const T *v) const { return 100 + (v->*_func)(); }
+private:
+    FuncType _func;
+};
+template<class Result, class T>
+inline MemFunc0<Result, T> mem_fun(Result (T::*f)()) { return MemFunc0<Result, T>(f); }
+template<class Result, class T>
+inline ConstMemFunc0<Result, T> mem_fun(Result (T::*f)() const) { return ConstMemFunc0<Result, T>(f); }
+struct A {
+    int v;
+    int get() { return v; }
+    int peek() const { return v + 1; }
+};
+struct B { short s; short twice() const { return (short)(s * 2); } };
+int main() {
+    A a; a.v = 41;
+    B b; b.s = 7;
+    printf("%d %d %d\\n", mem_fun(&A::get)(&a), mem_fun(&A::peek)(&a), mem_fun(&B::twice)(&b));
+    quit("done");
+}
+`);
+
+// More of ScummVM 0.10.0: common/func.h declares `template <typename T> struct Hash;` and only
+// specialises it; Queen declares `class Graphics;` inside namespace Queen while a namespace Graphics
+// exists outside; mt32's freeverb.h initialises one const float from another.
+C('scummvm010-shapes', `
+#include <stdio.h>
+namespace Common {
+template<class Arg, class Result> struct UnaryFunction { typedef Arg ArgumentType; typedef Result ResultType; };
+template <typename T> struct Hash;
+template <> struct Hash<char> : public UnaryFunction<char, unsigned> {
+    unsigned operator()(char val) const { return (unsigned)val * 3; }
+};
+template <> struct Hash<int> : public UnaryFunction<int, unsigned> {
+    unsigned operator()(int val) const { return (unsigned)val + 1000; }
+};
+}
+namespace Graphics { struct Surface { int w; }; }
+namespace Queen {
+class Graphics;
+class Engine {
+public:
+    Graphics *graphics() const { return _graphics; }
+    Graphics *_graphics;
+};
+class Graphics { public: int n; };
+}
+const float scalewet = 3;
+const float initialwet = 1 / scalewet;
+static float later = initialwet * 2;
+const int stereospread = 23;
+const int combtuningR1 = 1116 + stereospread;
+static int combs[] = { combtuningR1, combtuningR1 * 2 };
+int main() {
+    Common::Hash<char> h; Common::Hash<int> hi;
+    Queen::Graphics g; g.n = 5;
+    Queen::Engine e; e._graphics = &g;
+    Graphics::Surface s; s.w = 2;
+    printf("%u %u %d %d %d %d\\n", h('a'), hi(7), e.graphics()->n, s.w, (int)(initialwet * 300), (int)(later * 300));
+    printf("%d %d %d\\n", combtuningR1, combs[0], combs[1]);
+    return 0;
+}
+`);
+
 // Grid::_area is `Area (*_area)[MAX_AREAS_NUMBER]`, and Grid was lowered before Area: the C struct
 // held a pointer to an array of a struct not yet defined, its rows 0 bytes apart, and every room
 // read the last room's walk areas (FOTAQ diverged from frame 606 of a scripted run).

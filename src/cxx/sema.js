@@ -125,6 +125,8 @@ export class Sema {
         return it.template ? this.declareTemplate(it, env) : this.declareClass(it, env);
       case 'enum': return this.declareEnum(it, env);
       case 'fwdclass': {
+        // `template <typename T> struct Hash;`: a class template whose specialisations come first.
+        if (it.template) { if (env.scope.get(it.name)?.k !== 'template') this.declareTemplate(it, env); return null; }
         if (!env.scope.get(it.name)) env.scope.set(it.name, { k: 'type', type: { k: 'class', cls: this.newClass(it.name, it.key, it, env) } });
         return null;
       }
@@ -605,6 +607,9 @@ export class Sema {
 
   // ---------------------------------------------------------------- templates
   declareTemplate(it, env) {
+    // The definition of a template declared earlier: the same template, its specialisations kept.
+    const prior = env.scope.get(it.name);
+    if (prior?.k === 'template' && prior.tmpl.ast.k === 'fwdclass') return Object.assign(prior.tmpl, { ast: it, params: it.template, env });
     const tmpl = { name: it.name, ast: it, params: it.template, env, outOfLine: [], specs: new Map() };
     this.templates.set(it.name, tmpl);
     env.scope.set(it.name, { k: 'template', tmpl });
@@ -650,6 +655,7 @@ export class Sema {
     // Made complete when first needed so: `idList<idCameraEvent*>` may be named before its argument is.
     cls.pending = () => {
       const ast = spec ? spec.ast : tmpl.ast;
+      if (ast.k === 'fwdclass') this.fail(`${cls.name}: the template is declared and never defined`, node);
       const info = ast.info;
       this.declareClass(ast, spec ? spec.env : tmpl.env, { cls, bind });
       ast.info = info;
@@ -669,10 +675,15 @@ export class Sema {
     let set = env.scope.get(name);
     if (!set || set.k !== 'funcs') set = env.scope.set(name, { k: 'funcs', name, list: [] });
     set.templates ??= [];
-    const nparams = it.decl.derivs[it.decl.derivs.length - 1].params.length;
-    // A definition after a declaration completes it; the instances are made from the definition.
-    let ft = set.templates.find((t) => t.params.length === it.template.length && t.nparams === nparams);
-    if (!ft) { ft = { name, params: it.template, nparams, ast: it, env, instances: new Map() }; set.templates.push(ft); }
+    const fd = it.decl.derivs[it.decl.derivs.length - 1];
+    // A definition after a declaration completes it; the instances are made from the definition. Two
+    // templates are the same one only if their parameters are written alike, template parameters
+    // counted by position: func.h's two mem_fun differ by a `const` on the member function alone.
+    const pos = new Map(it.template.map((p, i) => [p.name, `#${i}`]));
+    const sig = JSON.stringify([it.template.length, fd.params.map((p) => [p.specs.type, p.specs.cv, p.decl.derivs]), fd.cv],
+      (k, v) => (k === 'loc' ? undefined : k === 'name' && pos.has(v) ? pos.get(v) : v));
+    let ft = set.templates.find((t) => t.sig === sig);
+    if (!ft) { ft = { name, params: it.template, nparams: fd.params.length, sig, ast: it, env, instances: new Map() }; set.templates.push(ft); }
     if (it.k === 'func') ft.ast = it;
     return ft;
   }
@@ -709,6 +720,21 @@ export class Sema {
     else { if (a.k === 'array') a = T.ptr(a.of); else if (a.k === 'func') a = T.ptr(a); a = T.uncst(a); }
     while (ds.length) {
       const d = ds.pop();
+      if (d.k === 'memptr') {
+        // `Result (T::*f)()`: T from the class, then the member function's own type (func.h's mem_fun).
+        a = T.uncst(a);
+        if (a.k !== 'memptr') return false;
+        const q = d.qname.parts;
+        if (q.length === 1 && !q[0].targs && names.includes(q[0].name) && !this.bindOne(bind, q[0].name, { k: 'class', cls: a.cls })) return false;
+        a = a.to;
+        continue;
+      }
+      if (d.k === 'func') {
+        if (a.k !== 'func' || d.params.length !== a.params.length) return false;
+        if (!d.params.every((p, i) => this.deduceOne(p.specs, p.decl.derivs, a.params[i], bind, names))) return false;
+        a = a.ret;
+        continue;
+      }
       if (d.k !== 'ptr') return true;          // not a form deduced from: left to the instance's conversions
       if (a.k !== 'ptr') return false;
       a = a.to;
@@ -718,6 +744,10 @@ export class Sema {
     const n = st.qname.parts[0].name;
     if (!names.includes(n)) return true;
     if (specs.cv?.const) a = T.uncst(a);
+    return this.bindOne(bind, n, a);
+  }
+  /** Bind template parameter n to type a, or check a against what an earlier argument bound. */
+  bindOne(bind, n, a) {
     const prior = bind.get(n);
     if (prior) return prior.k !== 'tvalue' && T.same(prior, a);
     bind.set(n, a);

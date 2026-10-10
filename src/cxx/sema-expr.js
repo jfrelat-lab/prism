@@ -241,7 +241,9 @@ export const exprMethods = {
   },
   varExpr(ent, cx) {
     if (ent.global) this.useGlobal(ent);
-    if (ent.constValue !== undefined && !ent.global) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false };
+    // A global's value too where C needs a constant: `const int combtuningR1 = 1116 + stereospread;`
+    // (mt32's freeverb.h) is a static initialiser, and C does not fold a const variable.
+    if (ent.constValue !== undefined && (!ent.global || cx?.constOnly)) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false };
     if (ent.type.k === 'ref') return { c: `(*${ent.cname})`, t: ent.type.to, lv: true, addr: ent.cname };
     return { c: ent.cname, t: ent.type, lv: true, known: true, constValue: ent.constValue };
   },
@@ -907,7 +909,7 @@ export const exprMethods = {
     const fs = e.funcs.filter((f) => !f.isStatic);
     if (fs.length !== 1) this.fail(`&${fs[0].display}: an overloaded member's address`, node);
     const f = fs[0];
-    const t = { k: 'memptr', cls: f.cls, to: T.func(f.type.ret, f.type.params, f.type.variadic) };
+    const t = { k: 'memptr', cls: f.cls, to: T.func(f.type.ret, f.type.params, f.type.variadic, !!f.type.thisConst) };
     this.use(f);
     if (!f.isVirtual) return { c: `((${this.ct(t)})${f.cname})`, t, lv: false };
     const name = `__vcall_${f.cname}`;

@@ -658,7 +658,9 @@ export const stmtMethods = {
     const probe = { env, fn: null, pending: [], constOnly: true, node: it };
     let c = null;
     try { c = this.coerce(this.expr(init, probe), type.k === 'ref' ? type : T.uncst(type), probe, it, 'initialisation'); } catch (err) { if (!probe.dynamic) throw err; }
-    if (!probe.dynamic && c !== null) { this.out.vars.push(`${decl} = ${c};`); return; }
+    // Reading a variable C cannot fold is no constant in C either: `const float initialwet = 1 /
+    // scalewet;` (mt32's freeverb.h) is folded by g++ and runs before main here.
+    if (!probe.dynamic && c !== null && !this.readsVariable(init, env)) { this.out.vars.push(`${decl} = ${c};`); return; }
     this.out.vars.push(`${decl.replace(/^(static )?const /, '$1')};`);
     const cx = this.initContext(env);
     const { e, after } = this.full(init, cx, (m, cc) => ({ c: this.coerce(this.expr(m, cc), type.k === 'ref' ? type : T.uncst(type), cc, m, 'initialisation') }));

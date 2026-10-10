@@ -481,7 +481,7 @@ export const BUILTINS = new Map(Object.entries({
   log10f: { ret: FLT, params: [FLT] }, powf: { ret: FLT, params: [FLT, FLT] },
   floorf: { ret: FLT, params: [FLT] }, ceilf: { ret: FLT, params: [FLT] },
   lrintf: { ret: I, params: [FLT] }, lrint: { ret: I, params: [D] },
-  fabsf: { ret: FLT, params: [FLT] }, fmodf: { ret: FLT, params: [FLT, FLT] },
+  fabsf: { ret: FLT, params: [FLT] }, fmodf: { ret: FLT, params: [FLT, FLT] }, modff: { ret: FLT, params: [FLT, P] },
   ldexp: { ret: D, params: [D, I] }, ldexpf: { ret: FLT, params: [FLT, I] },
   frexp: { ret: D, params: [D, P] },
 

@@ -1338,6 +1338,7 @@ function makeLibc(M) {
     lrintf: (x) => lrintTiesEven(x), lrint: (x) => lrintTiesEven(x),
     fabsf: (x) => Math.fround(Math.abs(x)),
     fmodf: (x, y) => Math.fround(x % y),
+    modff: (x, ip) => { const i = Number.isFinite(x) ? Math.trunc(x) : x; M.mod.dv.setFloat32(ip, i, true); return Math.fround(Number.isFinite(x) ? x - i : (Number.isNaN(x) ? x : 0 * x)); },
     ldexp: (x, e) => x * Math.pow(2, e | 0),
     ldexpf: (x, e) => Math.fround(x * Math.pow(2, e | 0)),
     frexp: (x, ep) => {
