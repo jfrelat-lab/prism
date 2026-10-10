@@ -559,6 +559,225 @@ int main() {
 }
 `);
 
+// #pragma pack in C++: ScummVM 0.10.0 packs its file structures between common/pack-start.h and
+// pack-end.h. The lowering writes structs in another order than the source's, so each class carries
+// the value in force where it is defined, and its struct is written under it.
+C('pragma-pack', `
+#include <stdio.h>
+#define OFF(T, m) ((int)((char *)&((T *)16)->m - (char *)16))
+// ScummVM 0.10.0 packs its file structures between common/pack-start.h and pack-end.h.
+struct Loose { char c; int i; short s; };
+#pragma pack(1)
+struct Header { char tag[3]; unsigned int size; unsigned short count; };
+struct Entry { unsigned char kind; int offset; Loose inner; };
+#pragma pack()
+struct After { char c; int i; };
+#pragma pack(push, 2)
+struct Two { char c; int i; double d; };
+#pragma pack(pop)
+template<class T> struct Cell { char c; T t; };
+#pragma pack(1)
+struct Rec : public Header { char more; int last; };
+#pragma pack()
+int main() {
+#pragma mark - an unknown pragma in a function is passed over
+    Header h; h.size = 7;
+    printf("%d %d %d %d %d\\n", (int)sizeof(Loose), (int)sizeof(Header), (int)sizeof(Entry), (int)sizeof(After), (int)sizeof(Two));
+    printf("%d %d %d %d\\n", OFF(Header, size), OFF(Entry, inner), OFF(Two, d), (int)sizeof(Cell<int>));
+    printf("%d %d %u\\n", (int)sizeof(Rec), OFF(Rec, last), h.size);
+    return 0;
+}
+`);
+
+// Common::InSaveFile is handled by pointer alone where the engines read saves (thumbnail.cpp): a
+// call of ReadStream's member goes through __b0.__vp0[0], which reads InSaveFile's struct, so that
+// struct must be written although nothing here makes an InSaveFile.
+C('virtual-base-by-pointer', `
+#include <stdio.h>
+struct Stream { virtual ~Stream() {} int err; Stream() : err(0) {} };
+struct ReadStream : virtual Stream { virtual int readByte() = 0; int twice() { return readByte() * 2; } };
+struct Tag { int t; Tag() : t(5) {} };
+struct SeekableReadStream : virtual ReadStream { };
+struct InSaveFile : SeekableReadStream { };
+int load(InSaveFile *in);
+int use(InSaveFile *in) { return in->twice(); }
+int main() {
+    printf("%d\\n", (int)sizeof(int));
+    return 0;
+}
+`);
+
+// Virtual bases, on the shape of ScummVM 0.10.0's common/stream.h: Stream virtual under ReadStream and
+// WriteStream, a File reaching it by both, a stream two virtual levels down. One Stream however many
+// paths; virtual calls through each base; construction and destruction in the order C++ gives them.
+C('virtual-bases-streams', `
+#include <stdio.h>
+static int seq = 0;
+class Stream {
+public:
+    int errs;
+    Stream() : errs(0) { printf("%d Stream()\\n", ++seq); }
+    Stream(int e) : errs(e) { printf("%d Stream(%d)\\n", ++seq, e); }
+    virtual ~Stream() { printf("%d ~Stream %d\\n", ++seq, errs); }
+    virtual bool ioFailed() const { return errs != 0; }
+    virtual void clearIOFailed() { errs = 0; }
+    int count() const { return errs * 10; }
+};
+class WriteStream : virtual public Stream {
+public:
+    int written;
+    WriteStream() : written(0) { printf("%d WriteStream()\\n", ++seq); }
+    ~WriteStream() { printf("%d ~WriteStream %d\\n", ++seq, written); }
+    virtual unsigned write(const void *, unsigned n) = 0;
+    void writeByte(char c) { write(&c, 1); }
+};
+class ReadStream : virtual public Stream {
+public:
+    ReadStream() { printf("%d ReadStream()\\n", ++seq); }
+    ~ReadStream() { printf("%d ~ReadStream\\n", ++seq); }
+    virtual unsigned read(void *, unsigned n) = 0;
+    virtual bool eos() const = 0;
+    int readByte() { char c = 0; return read(&c, 1) ? c : -1; }
+};
+class SeekableReadStream : virtual public ReadStream {
+public:
+    SeekableReadStream() { printf("%d SeekableReadStream()\\n", ++seq); }
+    virtual unsigned pos() const = 0;
+    virtual void seek(int off) = 0;
+};
+class MemoryStream : public SeekableReadStream {
+    const char *_p; unsigned _n, _pos;
+public:
+    MemoryStream(const char *p, unsigned n) : _p(p), _n(n), _pos(0) { printf("%d MemoryStream(%u)\\n", ++seq, n); }
+    ~MemoryStream() { printf("%d ~MemoryStream\\n", ++seq); }
+    unsigned read(void *d, unsigned n) { unsigned k = 0; while (k < n && _pos < _n) ((char *)d)[k++] = _p[_pos++]; if (k < n) errs = 1; return k; }
+    bool eos() const { return _pos >= _n; }
+    unsigned pos() const { return _pos; }
+    void seek(int off) { _pos = off; }
+};
+class File : public SeekableReadStream, public WriteStream {
+    char _buf[16]; unsigned _len, _pos;
+public:
+    File() : Stream(7), _len(0), _pos(0) { printf("%d File()\\n", ++seq); }
+    ~File() { printf("%d ~File %u\\n", ++seq, _len); }
+    unsigned read(void *d, unsigned n) { unsigned k = 0; while (k < n && _pos < _len) ((char *)d)[k++] = _buf[_pos++]; return k; }
+    unsigned write(const void *s, unsigned n) { unsigned k = 0; while (k < n && _len < 16) _buf[_len++] = ((const char *)s)[k++]; written += k; return k; }
+    bool eos() const { return _pos >= _len; }
+    unsigned pos() const { return _pos; }
+    void seek(int off) { _pos = off; }
+    bool ioFailed() const { return errs > 5; }
+};
+static int drain(ReadStream &r) { int s = 0, c; while ((c = r.readByte()) >= 0) s += c; return s; }
+static bool failed(Stream *s) { return s->ioFailed(); }
+int main() {
+    {
+        MemoryStream m("abc", 3);
+        int d = drain(m);
+        printf("drain %d eos %d failed %d count %d\\n", d, m.eos(), failed(&m), m.count());
+        m.clearIOFailed();
+        SeekableReadStream *s = &m;
+        s->seek(1);
+        int c = s->readByte();
+        printf("pos %u read %d\\n", s->pos(), c);
+    }
+    {
+        File f;
+        WriteStream *w = &f;
+        w->writeByte('x'); w->writeByte('y');
+        ReadStream *r = &f;
+        Stream *a = w, *b = r;
+        printf("same %d failed %d %d errs %d\\n", a == b, failed(&f), failed(w), b->errs);
+        int c1 = r->readByte(); int c2 = r->readByte(); int c3 = r->readByte();
+        printf("read %d %d %d\\n", c1, c2, c3);
+        f.clearIOFailed();
+        printf("failed %d written %d\\n", a->ioFailed(), f.written);
+    }
+    Stream *heap = new File;
+    heap->errs = 9;
+    printf("heap failed %d\\n", heap->ioFailed());
+    delete heap;
+    return 0;
+}
+`);
+
+// The rules a virtual base brings: only the most derived class's initialiser builds it, the others'
+// are skipped; the final overrider may come from a sibling path (dominance); dynamic_cast down from it and
+// across; implicit copy and assignment; a virtual base with no virtual function; a class template, an
+// array and a member of such classes.
+C('virtual-bases-rules', `
+#include <stdio.h>
+// Only the most derived class's initialiser builds a virtual base; the others' are skipped.
+struct V { int v; V() : v(-1) { printf("V()\\n"); } V(int x) : v(x) { printf("V(%d)\\n", x); } };
+struct B : virtual V { B() : V(1) { printf("B v=%d\\n", v); } };
+struct D : B { D() : V(2) { printf("D v=%d\\n", v); } };
+struct D2 : B { D2() { printf("D2 v=%d\\n", v); } };
+
+// Dominance: B1 overrides f, C1 calls it, and in E the call from C1 reaches B1's.
+struct A { int tag; A() : tag(10) {} virtual ~A() {} virtual int f() { return tag; } virtual int h() { return 1; } };
+struct B1 : virtual A { int f() { return tag + 100; } };
+struct C1 : virtual A { int g() { return f() * 2; } int h() { return 7; } };
+struct E : B1, C1 { int k; E() : k(3) {} };
+
+// A virtual base with no virtual function, data only; and one reached through two levels.
+struct P { int x, y; P() : x(4), y(5) {} };
+struct Q : virtual P { int q; Q() : q(6) {} int sum() const { return x + y + q; } };
+struct R : virtual Q { int r; R() : r(7) {} int all() const { return sum() + r + x; } };
+struct S : R, virtual P { int s; S() : s(8) {} };
+
+// Copies and assignment, implicit.
+struct W : virtual V { int w; W() : V(30), w(31) {} };
+struct X : W { int xx; X() : xx(32) {} };
+
+// A class template with a virtual base, and an array and a member of such classes.
+template<class T> struct Box : virtual V { T t; Box() : V(50), t(51) {} T get() const { return t + (T)v; } };
+struct Holder { X member; X arr[2]; int n; Holder() : n(2) {} };
+
+static int viaC(C1 *c) { return c->g(); }
+static int viaA(A *a) { return a->f() + a->h(); }
+
+int main() {
+    { D d; D2 d2; printf("%d %d\\n", d.v, d2.v); }
+    {
+        E e;
+        A *a = &e; C1 *c = &e; B1 *b = &e;
+        printf("viaC %d viaA %d b->f %d e.f %d\\n", viaC(c), viaA(a), b->f(), e.f());
+        E *back = dynamic_cast<E *>(a);
+        C1 *cross = dynamic_cast<C1 *>(b);
+        B1 *none = dynamic_cast<B1 *>((A *)0);
+        printf("dyn %d %d %d %d\\n", back == &e, cross == c, none == 0, dynamic_cast<B1 *>(c) == b);
+        A *heap = new E;
+        printf("heap %d\\n", heap->f());
+        delete heap;
+    }
+    {
+        S s;
+        R *r = &s; Q *q = &s; P *p = &s;
+        printf("S %d %d %d %d %d\\n", s.all(), r->all(), q->sum(), p->x, (int)((P *)q == p));
+        p->x = 40;
+        printf("S %d %d\\n", s.all(), q->sum());
+    }
+    {
+        X a; a.v = 33; a.w = 34; a.xx = 35;
+        X b(a);
+        printf("copy %d %d %d\\n", b.v, b.w, b.xx);
+        X c; c = a;
+        V *pv = &c;
+        printf("assign %d %d %d %d\\n", c.v, c.w, c.xx, pv->v);
+        a.v = 1;
+        printf("apart %d %d\\n", b.v, c.v);
+    }
+    {
+        Box<int> bi; Box<short> bs;
+        printf("box %d %d\\n", bi.get(), (int)bs.get());
+        Holder h;
+        h.arr[1].v = 77;
+        V *pv = &h.arr[1];
+        printf("holder %d %d %d %d\\n", h.member.v, h.arr[0].v, pv->v, h.n);
+    }
+    return 0;
+}
+`);
+
 // More of ScummVM 0.10.0: common/func.h declares `template <typename T> struct Hash;` and only
 // specialises it; Queen declares `class Graphics;` inside namespace Queen while a namespace Graphics
 // exists outside; mt32's freeverb.h initialises one const float from another.

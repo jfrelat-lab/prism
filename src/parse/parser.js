@@ -1185,7 +1185,14 @@ export class Parser {
 
   expression() {
     let e = this.assignment();
-    while (this.isP(',')) { this.i++; e = { n: 'comma', a: e, b: this.assignment(), type: null }; }
+    // A comma expression has its right operand's type, decayed: `__typeof__((t = f(), t))`, which the
+    // C++ lowering writes, was an int while this was left null.
+    while (this.isP(',')) {
+      this.i++;
+      const b = this.assignment();
+      const t = b.type?.k === 'array' ? T.ptr(b.type.of) : b.type?.k === 'func' ? T.ptr(b.type) : b.type ?? null;
+      e = { n: 'comma', a: e, b, type: t };
+    }
     return e;
   }
 

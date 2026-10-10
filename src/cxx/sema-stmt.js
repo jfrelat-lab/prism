@@ -47,8 +47,63 @@ export const stmtMethods = {
     const decls = [...fn.temps];
     if (needRet) decls.unshift(`${this.ct(ret.k === 'ref' ? T.ptr(ret.to) : ret, '__ret')};`);
     if (fn.usesEnd && ret.k !== 'void') lines.push('return __ret;');
-    this.out.bodies.push(`${f.cStatic ? 'static ' : ''}${this.signature(f)} {\n${indent([...decls, ...lines].join('\n'))}\n}`);
+    const split = this.splits(f);
+    this.out.bodies.push(`${f.cStatic ? 'static ' : ''}${this.signature(f, split ? '__base' : '')} {\n${indent([...decls, ...lines].join('\n'))}\n}`);
+    if (split) this.writeComplete(f);
   },
+  /**
+   * A class with virtual bases has two of each constructor and of its destructor, as the Itanium
+   * ABI has: the body above is the BASE-subobject one (`__base`), which leaves the virtual bases
+   * alone, and this is the COMPLETE-object one, the only one that builds or destroys them. It points
+   * every `__vp` of every subobject at the one copy of its virtual base, constructs the virtual bases
+   * first (with the initialiser this constructor gives them, else their default constructor), gives
+   * them this class's tables, then runs the base-subobject constructor. The destructor runs the
+   * base-subobject one first, then destroys the virtual bases, last constructed first.
+   */
+  writeComplete(f) {
+    const cls = f.cls;
+    if (f.type.variadic) this.fail(`${f.display}: a variadic constructor of a class with virtual bases`, f.node);
+    const fn = { f, temps: [], ntemp: 0, cleanups: [{ vars: [], kind: 'fn' }], usesEnd: false };
+    const scope = new Scope(cls.scope);
+    const cx = { env: { scope, cls, bind: cls.bind ?? null }, fn, pending: [], node: f.defNode ?? f.node };
+    f.type.params.forEach((p, i) => { const name = this.paramName(f, i); scope.set(name, { k: 'var', name, type: p, cname: name }); });
+    const lines = [];
+    const call = `${f.cname}__base(${['this', ...f.type.params.map((_, i) => this.paramName(f, i))].join(', ')});`;
+    const vb = (v) => `this->__vb${cls.vbases.indexOf(v)}`;
+    if (f.isDtor) {
+      lines.push(call);
+      [...cls.vbases].reverse().forEach((v) => lines.push(...this.destroy([{ c: vb(v), cls: v, base: true }], cx)));
+    } else {
+      // Every pointer to a virtual base, in every subobject of the complete object.
+      const point = (c, at) => c.bases.forEach((b, i) => {
+        if (c.virt[i]) lines.push(`this->${at}__vp${i} = (struct ${b.cname} *)&${vb(b)};`);
+        else point(b, `${at}__b${i}.`);
+      });
+      point(cls, '');
+      cls.vbases.forEach((v, k) => point(v, `__vb${k}.`));
+      const inits = new Map();
+      for (const i of f.inits ?? []) inits.set(this.lastName(i.name), i);
+      for (const v of cls.vbases) {
+        const init = inits.get(v.node?.name) ?? inits.get(v.template?.name) ?? inits.get(v.name);
+        const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
+          // The implicit copy constructor copies them too, from the other object's.
+          const args = f.implicit === 'copy' ? [{ c: `(*${this.upcastPtr('__o', this.basePath(cls, v), v)})`, t: T.cst({ k: 'class', cls: v }), lv: true }]
+            : (init?.args ?? []).map((a) => this.expr(a, c));
+          const pick = this.pickCtor(v, args, c, f.defNode ?? f.node);
+          if (pick.copy) return { c: `${vb(v)} = ${this.copyOf(pick.copy, v, c)};` };
+          if (!pick.f) return { c: '' };
+          this.use(pick.f);
+          return { c: `${this.baseName(pick.f)}(${[`(struct ${v.cname} *)&${vb(v)}`, ...pick.cArgs].join(', ')});` };
+        });
+        if (e.c) lines.push(e.c, ...after);
+      }
+      if (cls.hasVptr) { this.vtableName(cls); lines.push(...cls.vbaseTables.map((t) => `this->${t.path.join('.')} = ${t.name} + 2;`)); }
+      lines.push(call);
+    }
+    this.out.bodies.push(`${f.cStatic ? 'static ' : ''}${this.signature(f)} {\n${indent([...fn.temps, ...lines].join('\n'))}\n}`);
+  },
+  /** The function a subobject is built or destroyed by: the base-subobject one where there are two. */
+  baseName(f) { return this.splits(f) ? `${f.cname}__base` : f.cname; },
 
   /** The destructor calls for these objects, last first. */
   destroy(vars, cx) {
@@ -58,11 +113,13 @@ export const stmtMethods = {
       const d = this.dtorOf(v.cls);
       if (!d) continue;
       this.use(d);
-      const p = this.upcastPtr(`&${v.c}`, this.basePath(v.cls, d.cls), d.cls);
-      if (v.count != null) out.push(`{ int __i; for (__i = ${v.count}; __i > 0; __i--) ${d.cname}(${this.upcastPtr(`&${v.c}[__i - 1]`, this.basePath(v.cls, d.cls), d.cls)}); }`);
+      // A base subobject (`base`) is destroyed by the base-subobject destructor, through its part's address.
+      const p = v.base ? `(struct ${d.cls.cname} *)&${v.c}` : this.upcastPtr(`&${v.c}`, this.basePath(v.cls, d.cls), d.cls);
+      const dn = v.base ? this.baseName(d) : d.cname;
+      if (v.count != null) out.push(`{ int __i; for (__i = ${v.count}; __i > 0; __i--) ${dn}(${this.upcastPtr(`&${v.c}[__i - 1]`, this.basePath(v.cls, d.cls), d.cls)}); }`);
       // An expression, not an if: these lines are also joined into comma expressions (valueThen).
-      else if (v.guard) out.push(`((${v.guard}) ? (${d.cname}(${p}), 0) : 0);`);
-      else out.push(`${d.cname}(${p});`);
+      else if (v.guard) out.push(`((${v.guard}) ? (${dn}(${p}), 0) : 0);`);
+      else out.push(`${dn}(${p});`);
     }
     return out;
   },
@@ -405,9 +462,27 @@ export const stmtMethods = {
         return `(void *)${f.cname}`;
       });
       this.out.vtables.push(`static void *${name}[${slots.length + 2}] = { ${['(void *)0', `(void *)&${ti}`, ...slots].join(', ')} };`);
-      cls.secondaryTables = this.secondaryGroups(cls).map((g, gi) => this.secondaryTable(cls, g, gi, ti));
+      const groups = this.secondaryGroups(cls);
+      cls.secondaryTables = groups.map((g, gi) => this.secondaryTable(cls, g, gi, ti));
+      // The tables of the virtual bases' subobjects: set by the complete object's constructor only.
+      cls.vbaseTables = this.vbaseGroups(cls).map((g, k) => this.secondaryTable(cls, g, groups.length + k, ti));
     }
     return name;
+  },
+  /**
+   * The final overrider in class c of virtual function f, searched below f's class: c's own, else
+   * one a base of c on the way to f's class has -- the dominance rule, which with a virtual base can
+   * pick a function from a sibling path. Null when nothing below f's class overrides it.
+   */
+  finalOverrider(c, f) {
+    const m = c.methods.find((x) => !x.isCtor && !x.isDtor && this.overrides(x, f));
+    if (m) return m;
+    for (const b of c.bases) {
+      if (b === f.cls || !this.basePath(b, f.cls)) continue;
+      const r = this.finalOverrider(b, f);
+      if (r) return r;
+    }
+    return null;
   },
   /**
    * The table of one secondary subobject g of cls: g's own layout, each slot cls's final overrider.
@@ -420,10 +495,12 @@ export const stmtMethods = {
     const off = (path) => (path.length ? `(int)(unsigned int)&((${st(cls)} *)0)->${path.join('.')}` : '0');
     // The classes from cls down to g, along g's path.
     const chain = [cls];
-    for (const seg of g.xpath) chain.push(chain[chain.length - 1].bases[+seg.slice(3)]);
+    if (!g.virtual) for (const seg of g.xpath) chain.push(chain[chain.length - 1].bases[+seg.slice(3)]);
     const slots = g.cls.vtable.map((f, j) => {
       let final = null, at = -1;
       if (f.isDtor) { final = this.dtorOf(cls); at = 0; }
+      // In a virtual base, the overrider may be anywhere below it, reached through any path.
+      else if (g.virtual) { final = this.finalOverrider(cls, f); at = final?.cls === cls ? 0 : 1; }
       else for (let c = 0; c < chain.length - 1 && !final; c++) { const m = chain[c].methods.find((x) => !x.isCtor && !x.isDtor && this.overrides(x, f)); if (m) { final = m; at = c; } }
       if (!final) {
         if (f.pure && !f.body) return '0';
@@ -436,7 +513,8 @@ export const stmtMethods = {
       const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
       const sig = this.ct(ret, `${thunk}(${['void *__self', ...ps].join(', ')})`);
       const top = `((${st(cls)} *)((char *)__self - ${off(g.xpath)}))`;
-      const target = at === 0 ? top : `(&${top}->${g.xpath.slice(0, at).join('.')})`;
+      const target = at === 0 ? top : g.virtual ? this.upcastPtr(top, this.basePath(cls, final.cls), final.cls)
+        : `(&${top}->${g.xpath.slice(0, at).join('.')})`;
       const call = `${final.cname}(${[`(${st(final.cls)} *)${target}`, ...f.type.params.map((_, i) => `__a${i}`)].join(', ')})`;
       this.out.protos.push(`static ${sig};`);
       this.out.bodies.push(`static ${sig} {\n  ${ret.k === 'void' ? '' : 'return '}${call};\n}`);
@@ -449,16 +527,22 @@ export const stmtMethods = {
    * A class's type descriptor, for dynamic_cast: its name and its bases at their offsets. Each unit
    * writes its own, so two are the same class when their NAMES are equal, not their addresses.
    */
-  typeinfo(cls) {
-    const name = `__ti_${cls.cname}`;
-    if (cls.typeinfoDone) return name;
-    cls.typeinfoDone = true;
+  typeinfo(cls, part = false) {
+    // With virtual bases, the descriptor of the class as a BASE lists its other bases only; the
+    // complete object's adds each virtual base once, at its place in the complete object.
+    part = part && cls.vbases.length > 0;
+    const name = `__ti_${cls.cname}${part ? '__p' : ''}`;
+    const done = part ? 'typeinfoPartDone' : 'typeinfoDone';
+    if (cls[done]) return name;
+    cls[done] = true;
     this.needStruct(cls);
     if (!this.tiDeclared) {
       this.tiDeclared = true;
       this.out.types.push('struct __prism_ti;\nstruct __prism_ti_base { const struct __prism_ti *ti; int off; };\nstruct __prism_ti { const char *name; int n; const struct __prism_ti_base *b; };');
     }
-    const bases = cls.bases.map((b, i) => `{ &${this.typeinfo(b)}, (int)(unsigned int)&((struct ${cls.cname} *)0)->__b${i} }`);
+    const at = (m) => `(int)(unsigned int)&((struct ${part ? this.partName(cls) : cls.cname} *)0)->${m}`;
+    const bases = cls.bases.flatMap((b, i) => (cls.virt[i] ? [] : [`{ &${this.typeinfo(b, true)}, ${at(`__b${i}`)} }`]));
+    if (!part) cls.vbases.forEach((v, k) => bases.push(`{ &${this.typeinfo(v, true)}, ${at(`__vb${k}`)} }`));
     this.out.vars.push(`static const struct __prism_ti_base ${name}_b[${bases.length || 1}] = { ${bases.length ? bases.join(', ') : '{ 0, 0 }'} };`,
       `static const struct __prism_ti ${name} = { "${cls.cname}", ${bases.length}, ${name}_b };`);
     return name;
@@ -478,6 +562,7 @@ export const stmtMethods = {
     const inits = new Map();
     for (const i of f.inits ?? []) inits.set(this.lastName(i.name), i);
     cls.bases.forEach((b, bi) => {
+      if (cls.virt[bi]) return;              // built by the complete object's constructor (writeComplete)
       const init = inits.get(b.node?.name) ?? inits.get(b.template?.name) ?? inits.get(b.name);
       const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
         const args = (init?.args ?? []).map((a) => this.expr(a, c));
@@ -485,7 +570,7 @@ export const stmtMethods = {
         if (pick.copy) return { c: `this->__b${bi} = ${this.copyOf(pick.copy, b, c)};` };
         if (!pick.f) return { c: '' };
         this.use(pick.f);
-        return { c: `${pick.f.cname}(${[`&this->__b${bi}`, ...pick.cArgs].join(', ')});` };
+        return { c: `${this.baseName(pick.f)}(${[`(struct ${b.cname} *)&this->__b${bi}`, ...pick.cArgs].join(', ')});` };
       });
       if (e.c) lines.push(e.c, ...after);
     });
@@ -523,7 +608,7 @@ export const stmtMethods = {
       if (!c) continue;
       lines.push(...this.destroy([{ c: `this->${fld.cname}`, cls: c, count: fld.type.k === 'array' ? fld.type.n : null }], cx));
     }
-    [...cls.bases].map((b, i) => [b, i]).reverse().forEach(([b, i]) => lines.push(...this.destroy([{ c: `this->__b${i}`, cls: b }], cx)));
+    [...cls.bases].map((b, i) => [b, i]).reverse().forEach(([b, i]) => { if (!cls.virt[i]) lines.push(...this.destroy([{ c: `this->__b${i}`, cls: b, base: true }], cx)); });
     return lines;
   },
   /** The body of a member the class never declared: what the language says it does. */
@@ -534,11 +619,15 @@ export const stmtMethods = {
     if (f.implicit === 'ctor') return this.ctorPrologue({ ...f, inits: [] }, cx);
     if (f.implicit === 'dtor') return this.dtorEpilogue(cls, cx);
     cls.bases.forEach((b, i) => {
-      const src = `&${o}->__b${i}`, dst = `&this->__b${i}`;
+      // A virtual base is copied by the complete object's constructor (writeComplete), and assigned
+      // here through its pointer -- once per path to it, as g++'s implicit operator= does too.
+      if (cls.virt[i]) { if (f.implicit === 'assign') lines.push(this.assignStmt(b, `this->__vp${i}[0]`, `${o}->__vp${i}[0]`, cx)); return; }
+      const st = `struct ${b.cname} *`;
+      const src = `(${st})&${o}->__b${i}`, dst = `(${st})&this->__b${i}`;
       if (f.implicit === 'copy') {
         const cc = this.copyCtorOf(b);
-        if (cc) { this.use(cc); lines.push(`${cc.cname}(${[dst, src, ...this.defaultArgs(cc, 1, cx)].join(', ')});`); } else lines.push(`this->__b${i} = ${o}->__b${i};`);
-      } else lines.push(this.assignStmt(b, `this->__b${i}`, `${o}->__b${i}`, cx));
+        if (cc) { this.use(cc); lines.push(`${this.baseName(cc)}(${[dst, src, ...this.defaultArgs(cc, 1, cx)].join(', ')});`); } else lines.push(`this->__b${i} = ${o}->__b${i};`);
+      } else lines.push(this.assignStmt(b, b.vbases.length ? `(*${dst})` : `this->__b${i}`, b.vbases.length ? `(*${src})` : `${o}->__b${i}`, cx));
     });
     if (f.implicit === 'copy') lines.push(...this.setVptr(cls));
     for (const fld of cls.fields) {

@@ -7,7 +7,7 @@
 // nothing else; every other question is sema's.
 //
 // What is parsed (and what is refused, loudly, rather than half-read):
-//   classes and structs with access specifiers, bases (single or multiple, `virtual` refused),
+//   classes and structs with access specifiers, bases (single, multiple or virtual),
 //   member functions inline or out of line, constructors with initialiser lists, destructors,
 //   virtual functions, static members, friends, nested typedefs and enums, operator overloading
 //   including conversion functions, references, default arguments, class templates with their
@@ -16,7 +16,7 @@
 //   namespaces (nested, reopened, anonymous) with using-directives and using-declarations; function
 //   templates; template parameters that are values, with defaults; explicit specialisations of class
 //   templates; pointers to member functions and .* / ->*; dynamic_cast; declarations as conditions.
-//   Not parsed: exceptions, typeid, member templates, virtual bases.
+//   Not parsed: exceptions, typeid, member templates.
 
 import { ID, NUM, STR, CHR, PUNCT, EOF } from '../cpp/token.js';
 
@@ -279,7 +279,24 @@ class CxxParser {
   // comparing line numbers stopped at once and `#pragma mark -` left `mark -` to be parsed.
   skipPragma() {
     this.next();
-    while (!this.done && !this.peek().bol) this.next();
+    const words = [];
+    while (!this.done && !this.peek().bol) words.push(this.next().v);
+    /*
+     * `#pragma pack` is acted on, as the C parser acts on it: it is struct layout. ScummVM 0.10.0
+     * packs its file structures between common/pack-start.h and pack-end.h with `#pragma pack(1)`
+     * and `#pragma pack()`. Each class records the value in force where it is defined, and the
+     * lowering writes it around that class's struct -- the structs come out in another order.
+     */
+    const m = /^pragmapack\((.*)\)$/.exec(words.join(''));
+    if (!m) return;
+    const arg = m[1];
+    this.packStack ??= [];
+    const push = /^push(?:,(\d+))?$/.exec(arg);
+    if (arg === '') this.pack = null;
+    else if (arg === 'pop') this.pack = this.packStack.pop() ?? null;
+    else if (push) { this.packStack.push(this.pack ?? null); if (push[1]) this.pack = +push[1] || null; }
+    else if (/^\d+$/.test(arg)) this.pack = +arg || null;
+    else this.fail(`#pragma pack(${arg}) is not understood`);
   }
 
   // ---------------------------------------------------------------- templates
@@ -529,10 +546,9 @@ class CxxParser {
           if (this.eatKw('virtual')) { virt = true; continue; }
           break;
         }
-        if (virt) this.fail('virtual base classes are not supported');
         const at = this.i;
         const r = this.resolvePath(0);
-        bases.push({ qname: this.qualName({ allowOperator: false }), access });
+        bases.push({ qname: this.qualName({ allowOperator: false }), access, virt });
         // What the base declares is in scope in the derived class: its typedefs name types here too.
         if (r?.scope && this.i - at === r.end) (baseScopes ??= []).push(r.scope);
         if (!this.eatP(',')) break;
@@ -555,6 +571,7 @@ class CxxParser {
     try {
       while (!this.isP('}') && !this.done) {
         if (this.eatP(';')) continue;
+        if (this.isP('#')) { this.skipPragma(); continue; }
         if ((this.isKw('public') || this.isKw('private') || this.isKw('protected')) && this.isP(':', 1)) {
           access = this.next().v; this.next(); continue;
         }
@@ -564,7 +581,7 @@ class CxxParser {
       }
     } finally { this.scope = saved; }
     this.expectP('}');
-    return { k: 'class', key, name, bases, members, loc, cLinkage: this.cLinkage(this.ts[this.i - 1]), ...(specArgs ? { specArgs } : {}) };
+    return { k: 'class', key, name, bases, members, loc, cLinkage: this.cLinkage(this.ts[this.i - 1]), pack: this.pack ?? null, ...(specArgs ? { specArgs } : {}) };
   }
 
   // ---------------------------------------------------------------- declarations
@@ -804,7 +821,7 @@ class CxxParser {
     this.scope = new PScope(this.scope, saved.cls);
     const stmts = [];
     try {
-      while (!this.isP('}') && !this.done) stmts.push(this.statement());
+      while (!this.isP('}') && !this.done) { if (this.isP('#')) { this.skipPragma(); continue; } stmts.push(this.statement()); }
     } finally { this.scope = saved; }
     this.expectP('}');
     return { k: 'block', stmts, loc };

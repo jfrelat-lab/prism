@@ -461,7 +461,7 @@ export class Sema {
     const cls = {
       k: 'classinfo', name: name ?? `<anonymous>`, cname: name ? this.scopedName(name, env) : `__anon${++this.anon}`,
       key, complete: false, bases: [], fields: [], scope: null, ctors: [], dtor: null, convs: [], methods: [],
-      hasVptr: false, ownVptr: false, vtable: [], cLink: false, node,
+      hasVptr: false, ownVptr: false, vtable: [], cLink: false, node, virt: [], vbases: [],
     };
     cls.scope = new Scope(env.scope, { cls });
     this.classes.push(cls);
@@ -484,16 +484,28 @@ export class Sema {
     cls.node = it;
     const cenv = { scope: cls.scope, cls, bind };
     cls.env = cenv;
+    cls.virt = [];
     for (const b of it.bases) {
       const bt = this.namedType(b.qname, env.bind === bind ? env : { ...env, bind }, it);
       if (bt.k !== 'class') this.fail('a base that is not a class', it);
       this.complete(bt.cls, it);
       cls.bases.push(bt.cls);
+      cls.virt.push(!!b.virt);
     }
-    // The PRIMARY base is the first polymorphic one: it shares the class's address and its table
-    // (it is laid out first, as the Itanium ABI lays it). Every other polymorphic base keeps a table
-    // of its own -- see secondaryGroups.
-    cls.primaryBase = cls.bases.findIndex((b) => b.hasVptr);
+    /*
+     * A VIRTUAL base is one subobject however many paths lead to it. It is not in the class's own
+     * struct but after it, in the complete object's (`struct X`, against the part `struct X__p` a
+     * derived class embeds), reached through a pointer each class that names it virtual keeps
+     * (`__vpI`), which the complete object's constructor sets. The order is the one C++ constructs
+     * them in: depth first, left to right, a base before the class that names it.
+     */
+    cls.vbases = [];
+    const visit = (c) => c.bases.forEach((b, i) => { visit(b); if (c.virt[i] && !cls.vbases.includes(b)) cls.vbases.push(b); });
+    visit(cls);
+    // The PRIMARY base is the first polymorphic one that is not virtual: it shares the class's
+    // address and its table (it is laid out first, as the Itanium ABI lays it). Every other
+    // polymorphic base keeps a table of its own -- see secondaryGroups and vbaseGroups.
+    cls.primaryBase = cls.bases.findIndex((b, i) => b.hasVptr && !cls.virt[i]);
     cls.hasVptr = cls.primaryBase >= 0;
     cls.vtable = cls.hasVptr ? [...cls.bases[cls.primaryBase].vtable] : [];
     // The class's own name names it inside itself (the injected class name).
@@ -531,7 +543,8 @@ export class Sema {
       const slot = cls.vtable.findIndex((b) => this.overrides(f, b));
       if (slot >= 0) { f.isVirtual = true; f.vindex = slot; cls.vtable[slot] = f; }
       // An overrider of a secondary base's function is virtual too, with a slot of its own here.
-      else if (f.isVirtual || cls.bases.some((b, i) => i !== cls.primaryBase && b.hasVptr && this.allVirtuals(b).some((v) => this.overrides(f, v)))) {
+      // (Through the primary base too: what it inherits from a virtual base has no slot in its table.)
+      else if (f.isVirtual || cls.bases.some((b) => b.hasVptr && this.allVirtuals(b).some((v) => this.overrides(f, v)))) {
         f.isVirtual = true; f.vindex = cls.vtable.length; cls.vtable.push(f);
       }
     }
@@ -567,20 +580,39 @@ export class Sema {
     const ent = cls.scope.get(name);
     if (ent && !(ent.k === 'type' && ent.type.k === 'class' && ent.type.cls === cls && false)) return { ent, path, cls };
     for (let i = 0; i < cls.bases.length; i++) {
-      const r = this.memberEntity(cls.bases[i], name, [...path, `__b${i}`]);
+      const r = this.memberEntity(cls.bases[i], name, [...path, this.baseStep(cls, i)]);
       if (r) return r;
     }
     return null;
   }
+  /**
+   * The step from a class to its base i in a path of members: the embedded base, or for a virtual
+   * one the object its pointer points at -- `__vp1[0]`, so that a path still joins with '.' into C.
+   */
+  baseStep(cls, i) { return cls.virt?.[i] ? `__vp${i}[0]` : `__b${i}`; }
   /** Is `d` the class `b` or derived from it? The path of base members from d to b, or null. */
-  basePath(d, b, path = []) {
+  basePath(d, b) {
+    const p = this.basePathFrom(d, b, []);
+    // A path that is not only first bases reads members of d's struct: a class handled by pointer
+    // alone (Common::InSaveFile in thumbnail.cpp, reaching ReadStream through __b0.__vp0[0]) must
+    // still have its struct written.
+    if (p && !p.every((s) => s === '__b0')) this.needStruct(d);
+    return p;
+  }
+  basePathFrom(d, b, path) {
     if (d === b) return path;
     for (let i = 0; i < d.bases.length; i++) {
-      const r = this.basePath(d.bases[i], b, [...path, `__b${i}`]);
+      const r = this.basePathFrom(d.bases[i], b, [...path, this.baseStep(d, i)]);
       if (r) return r;
     }
     return null;
   }
+  /** Does a path go through a virtual base (so that it has no constant offset)? */
+  isVirtualPath(path) { return path.some((p) => p.startsWith('__vp')); }
+  /** The struct a class is embedded as when it is a base: its part, without its virtual bases. */
+  partName(cls) { return cls.vbases?.length ? `${cls.cname}__p` : cls.cname; }
+  /** Are this class's constructors and destructor two functions each: the complete object's and a base's? */
+  splits(f) { return !!f.cls && (f.isCtor || f.isDtor) && f.cls.vbases?.length > 0; }
   /** The base members from cls to the subobject holding the vptr. */
   vptrPath(cls) {
     if (cls.ownVptr || !(cls.primaryBase >= 0)) return [];
@@ -597,10 +629,24 @@ export class Sema {
    */
   secondaryGroups(cls, path = [], out = []) {
     cls.bases.forEach((b, i) => {
-      if (!b.hasVptr) return;
+      if (!b.hasVptr || cls.virt?.[i]) return;
       const p = [...path, `__b${i}`];
       if (i !== cls.primaryBase) out.push({ xpath: p, cls: b });
       this.secondaryGroups(b, p, out);
+    });
+    return out;
+  }
+  /**
+   * The polymorphic subobjects of the complete object that lie in its virtual bases: each virtual
+   * base at `__vbK`, and that base's own secondaries under it. Only the complete object has them,
+   * so only its constructor sets their tables.
+   */
+  vbaseGroups(cls) {
+    const out = [];
+    cls.vbases.forEach((v, k) => {
+      if (!v.hasVptr) return;
+      out.push({ xpath: [`__vb${k}`], cls: v, virtual: true });
+      for (const g of this.secondaryGroups(v, [`__vb${k}`])) out.push({ ...g, virtual: true });
     });
     return out;
   }

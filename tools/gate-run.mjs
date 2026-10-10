@@ -528,6 +528,21 @@ int main(void)
 }
 `);
 
+// __typeof__ of a comma expression is its right operand's type: the C++ lowering reads a pointer
+// once into a local that way, `__typeof__((t = new_object(), t)) u = ...`, and it was an int.
+C('typeof-comma', `
+#include <stdio.h>
+struct S { int a, b; };
+static int n;
+int main(void) {
+  struct S s = { 1, 2 }, *t;
+  __typeof__((n = 1, &s)) p = &s;
+  __typeof__((t = &s)) q = &s;
+  printf("%d %d %d\\n", p->b, q->a, (int)sizeof(__typeof__((n, s))));
+  return 0;
+}
+`);
+
 // dirent.h's d_type, which ScummVM 0.10.0's posix-fs.cpp reads: the DT_ values are glibc's, and the
 // type of an entry is one a reader may be given -- DT_UNKNOWN here, which sends it to stat(), or the
 // real one there.

@@ -50,18 +50,34 @@ export const exprMethods = {
     if (cls.ownVptr) lines.push('  void **__vptr;');
     const order = cls.bases.map((_, i) => i);
     if (cls.primaryBase > 0) order.splice(order.indexOf(cls.primaryBase), 1), order.unshift(cls.primaryBase);
-    for (const i of order) { const b = cls.bases[i]; this.needStruct(b); lines.push(`  struct ${b.cname} __b${i};`); }
+    for (const i of order) {
+      const b = cls.bases[i];
+      if (cls.virt[i]) { this.forward(b); lines.push(`  struct ${b.cname} *__vp${i};`); continue; }
+      this.needStruct(b);
+      lines.push(`  struct ${this.partName(b)} __b${i};`);
+    }
     for (const f of cls.fields) lines.push(`  ${this.ct(f.type.k === 'ref' ? T.ptr(f.type.to) : f.type, f.cname)}${f.bits != null ? ` : ${f.bits}` : ''};`);
     // An empty class has size 1 in C++ and no spelling in C.
     if (!lines.length) lines.push('  char __empty;');
-    this.out.types.push(`${cls.key === 'union' ? 'union' : 'struct'} ${cls.cname} {\n${lines.join('\n')}\n};`);
+    const key = cls.key === 'union' ? 'union' : 'struct';
+    // With virtual bases, two structs: the part a derived class embeds, and the complete object --
+    // the same members first, so a pointer to either reads them at the same offsets, then each
+    // virtual base once.
+    // A class defined under `#pragma pack(n)` is laid out under it here too, wherever its struct lands.
+    const pk = cls.node?.pack;
+    const packed = (text) => (pk ? `#pragma pack(push, ${pk})\n${text}\n#pragma pack(pop)` : text);
+    if (cls.vbases.length) {
+      this.out.types.push(packed(`${key} ${cls.cname}__p {\n${lines.join('\n')}\n};`));
+      cls.vbases.forEach((v, k) => { this.needStruct(v); lines.push(`  struct ${this.partName(v)} __vb${k};`); });
+    }
+    this.out.types.push(packed(`${key} ${cls.cname} {\n${lines.join('\n')}\n};`));
   },
 
   // ---------------------------------------------------------------- special members
   isClassy(t) { while (t.k === 'array') t = t.of; return t.k === 'class' ? t.cls : null; },
   needsCtor(cls) {
     this.complete(cls, cls.node);
-    return cls.ctors.length > 0 || cls.hasVptr || cls.bases.some((b) => this.needsCtor(b))
+    return cls.ctors.length > 0 || cls.hasVptr || cls.vbases.length > 0 || cls.bases.some((b) => this.needsCtor(b))
       || cls.fields.some((f) => { const c = this.isClassy(f.type); return c && this.needsCtor(c); });
   },
   needsDtor(cls) {
@@ -75,7 +91,7 @@ export const exprMethods = {
   },
   needsCopy(cls) {
     this.complete(cls, cls.node);
-    return !!this.userCopyCtor(cls) || cls.hasVptr || cls.bases.some((b) => this.needsCopy(b))
+    return !!this.userCopyCtor(cls) || cls.hasVptr || cls.vbases.length > 0 || cls.bases.some((b) => this.needsCopy(b))
       || cls.fields.some((f) => { const c = this.isClassy(f.type); return c && this.needsCopy(c); });
   },
   userAssign(cls) {
@@ -85,7 +101,7 @@ export const exprMethods = {
   },
   needsAssign(cls) {
     this.complete(cls, cls.node);
-    return !!this.userAssign(cls) || cls.hasVptr || cls.bases.some((b) => this.needsAssign(b))
+    return !!this.userAssign(cls) || cls.hasVptr || cls.vbases.length > 0 || cls.bases.some((b) => this.needsAssign(b))
       || cls.fields.some((f) => { const c = this.isClassy(f.type); return c && this.needsAssign(c); });
   },
   /** The implicitly declared member of this kind, made once. */
@@ -124,7 +140,10 @@ export const exprMethods = {
        */
       if (!f.queued && f.body) {
         f.queued = true;
-        if ((f.inline || f.fileStatic) && !f.cStatic && f.protoAt !== undefined && !this.isWeak(f)) { f.cStatic = true; this.out.protos[f.protoAt] = `static ${this.out.protos[f.protoAt]}`; }
+        if ((f.inline || f.fileStatic) && !f.cStatic && f.protoAt !== undefined && !this.isWeak(f)) {
+          f.cStatic = true;
+          for (let k = 0; k < (this.splits(f) ? 2 : 1); k++) this.out.protos[f.protoAt + k] = `static ${this.out.protos[f.protoAt + k]}`;
+        }
         this.queue.push(f);
       }
       return f;
@@ -136,6 +155,8 @@ export const exprMethods = {
     f.cStatic = stat;
     f.protoAt = this.out.protos.length;
     this.out.protos.push(`${stat ? 'static ' : ''}${this.signature(f)}${weak ? ' __attribute__((weak))' : ''};`);
+    // The base-subobject constructor or destructor beside the complete object's (see writeFunction).
+    if (this.splits(f)) this.out.protos.push(`${stat ? 'static ' : ''}${this.signature(f, '__base')}${weak ? ' __attribute__((weak))' : ''};`);
     if (hasBody) { f.queued = true; this.queue.push(f); }
     return f;
   },
@@ -159,13 +180,13 @@ export const exprMethods = {
     }
     return !!f.body;
   },
-  signature(f) {
+  signature(f, suffix = '') {
     const ps = [];
     if (f.cls && !f.isStatic) ps.push(this.ct(T.ptr(f.type.thisConst ? T.cst({ k: 'class', cls: f.cls }) : { k: 'class', cls: f.cls }), 'this'));
     f.type.params.forEach((p, i) => ps.push(this.ct(p.k === 'ref' ? T.ptr(p.to) : p, this.paramName(f, i))));
     if (f.type.variadic) ps.push('...');
     const ret = f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
-    return this.ct(ret, `${f.cname}(${ps.length ? ps.join(', ') : 'void'})`);
+    return this.ct(ret, `${f.cname}${suffix}(${ps.length ? ps.join(', ') : 'void'})`);
   },
   paramName(f, i) { return f.params[i]?.name ?? `__p${i}`; },
 
@@ -319,8 +340,12 @@ export const exprMethods = {
   upcastPtr(c, path, base) {
     if (!path.length) return c;
     if (path.every((p) => p === '__b0')) return `((struct ${base.cname} *)${c})`;
-    // A base that is not first sits at an offset; a null pointer stays null.
-    return `(${c} ? &(${c})->${path.join('.')} : (struct ${base.cname} *)0)`;
+    // A base that is not first sits at an offset; a null pointer stays null. The pointer is read
+    // twice, so anything but a plain name is read once into a local first: `new File` converted to
+    // a second or virtual base made two objects when the expression was written out twice.
+    if (/^\(*&?\(*[A-Za-z_]\w*\)*((->|\.)[A-Za-z_]\w*(\[0\])?\)*)*$/.test(c)) return `(${c} ? &(${c})->${path.join('.')} : (struct ${base.cname} *)0)`;
+    const u = `__up${++this.anon}`;
+    return `({ __typeof__(${c}) ${u} = (${c}); ${u} ? &${u}->${path.join('.')} : (struct ${base.cname} *)0; })`;
   },
   /** A copy of the class value e (of class cls or derived from it), as a C rvalue of struct cls. */
   copyOf(e, cls, cx) {
@@ -1067,6 +1092,8 @@ export const exprMethods = {
     // Down a class hierarchy: back from a base to the class that contains it.
     if (V.k === 'ptr' && s.t.k === 'ptr' && V.to.k === 'class' && s.t.to.k === 'class' && V.to.cls.complete) {
       const path = this.basePath(V.to.cls, s.t.to.cls);
+      // C++ forbids it (a virtual base is at no fixed place in what derives from it): dynamic_cast is the way.
+      if (path && this.isVirtualPath(path)) this.fail(`a cast from ${T.show(s.t)} down through a virtual base to ${T.show(V)}`, node);
       if (path && path.length && !path.every((p) => p === '__b0')) {
         this.needStruct(V.to.cls);
         return { c: `((${this.ct(V)})((char *)${s.c} - (unsigned int)&((${this.ct(V)})0)->${path.join('.')}))`, t: V, lv: false };
