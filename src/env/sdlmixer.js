@@ -288,6 +288,7 @@ export function mixerApi(M, state, { readRW = null } = {}) {
     const due = Math.floor(((state.clock.now() - state.mixT0) * state.freq) / (1000 * state.chunkFrames)) + 1;
     while (state.buffersMixed < due) {
       mixBuffer();
+      if (state.onMixed) state.onMixed(state.mixBuf, state.mixBytes);   // every one: a comparison's
       if (state.onAudio && due - state.buffersMixed < 2) state.onAudio(state.mixBuf, state.chunkFrames, state);
     }
   };

@@ -16,6 +16,9 @@
 //      `tools/scummvmdiff.mjs --version=0.10.0 --write` only when the two agreed on every frame), with
 //      the same scripted player as 0.6.1's gate. The mouse cursor is drawn through SDL_SetColorKey:
 //      without the key, the Monkey Island demo differs from frame 74.
+//   4. THE SOUND, the same way: each buffer the audio callback filled before the last frame is the
+//      one the native build's filled (FNV-1a of its bytes, wrap.c), and the buffers are not all one
+//      -- silence hashes alike, and a silent run would agree with any other silent one.
 //
 //   node tools/gate-scummvm010.mjs
 import { readFileSync, existsSync } from 'node:fs';
@@ -34,7 +37,9 @@ if (process.argv[2] === '--run') {
   const g = GAMES[process.argv[3]], v = VERSIONS['0.10.0'];
   let report;
   try {
-    report = { frames: await prismFrames(gameData(g), +process.argv[4], gameArgs(g, v), null, { input: g.input, folder: g.folder, exclude: g.exclude ?? [], target: v.target, extra: gameExtras(g, v) }) };
+    // Arguments after the frame count go before the game's own: a control's.
+    const frames = await prismFrames(gameData(g), +process.argv[4], [...process.argv.slice(5), ...gameArgs(g, v)], null, { input: g.input, folder: g.folder, exclude: g.exclude ?? [], target: v.target, extra: gameExtras(g, v) });
+    report = { frames, audio: frames.audio };
   } catch (e) { report = { frames: [], error: e.message.split('\n')[0] }; }
   process.stdout.write(JSON.stringify(report) + '\n', () => process.exit(0));
   await new Promise(() => {});
@@ -61,7 +66,7 @@ let failed = 0;
 const check = (ok, what, detail = '') => {
   if (!ok) failed++;
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);
-  if (detail) console.log(`       ${detail}`);
+  if (detail && !ok) console.log(`       ${detail}`);   // why it failed
 };
 
 const conf = spawnSync('node', [join(ROOT, 'tools/scummvm010-configure.mjs'), '--check'], { encoding: 'utf8' });
@@ -89,7 +94,7 @@ for (const [key, g] of Object.entries(GAMES)) {
   if (absent.length) { console.log(`     (${g.title}: no ${absent.join(', ')}, an engine data file 0.10.0 needs; not run)`); continue; }
   if (!existsSync(golden)) { check(false, `${key}: a golden for 0.10.0`, `no ${golden}: tools/scummvmdiff.mjs --version=0.10.0 --game=${key} --write`); continue; }
   ran.push(key);
-  const want = JSON.parse(readFileSync(golden, 'utf8')).frames.slice(0, FRAMES);
+  const gold = JSON.parse(readFileSync(golden, 'utf8')), want = gold.frames.slice(0, FRAMES);
   const run = spawnSync('node', ['--max-old-space-size=8192', SELF, '--run', key, String(FRAMES)], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 1200000 });
   let got;
   try { got = JSON.parse(run.stdout.trim().split('\n').at(-1)); } catch { got = { frames: [], error: (run.stderr || '').slice(-300) }; }
@@ -97,6 +102,28 @@ for (const [key, g] of Object.entries(GAMES)) {
   const count = Math.min(FRAMES, g.ends ?? FRAMES);   // a game that quits presents fewer
   check(got.frames.length === count && want.length === count && first < 0, `${key}: all ${got.frames.length} frames are the native 0.10.0 build's, picture for picture (the last: ${got.frames.at(-1)})`,
     got.error ?? (first >= 0 ? `first difference at frame ${first + 1}: PRISM ${got.frames[first]}, native ${want[first]}` : `${got.frames.length} frames`));
+  const hear = gold.audio ?? [], heard = got.audio ?? [], firstA = heard.findIndex((h, i) => h !== hear[i]), kinds = new Set(hear).size;
+  // A game silent on both sides says why (`quiet`); every other one has sound to compare.
+  check(gold.audio && heard.length === hear.length && firstA < 0 && (g.quiet ? kinds === 1 : kinds > 1),
+    g.quiet ? `${key}: silent on both sides, all ${heard.length} buffers -- ${g.quiet}`
+      : `${key}: all ${heard.length} audio buffers are the native build's, sample for sample (${kinds} of them different)`,
+    !gold.audio ? `the golden has no sound: tools/scummvmdiff.mjs --version=0.10.0 --game=${key} --write`
+      : firstA >= 0 ? `first difference at buffer ${firstA + 1}: PRISM ${heard[firstA]}, native ${hear[firstA]}`
+      : heard.length !== hear.length ? `PRISM filled ${heard.length} buffers, native ${hear.length}`
+      : g.quiet ? `${kinds} different buffers where silence was expected` : 'the buffers are all one: nothing to compare');
+  if (key === 'sky') {
+    const runOf = (frames, ...extra) => {
+      const c = spawnSync('node', ['--max-old-space-size=8192', SELF, '--run', key, String(frames), ...extra], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 1200000 });
+      try { return JSON.parse(c.stdout.trim().split('\n').at(-1)); } catch { return { frames: [], error: (c.stderr || '').slice(-300) }; }
+    };
+    // The sound's own control: the music at another volume (-m100) changes the buffers while the
+    // pictures are still the reference's (Sky's introduction waits on its music, so later they part:
+    // frame 189 on 0.6.1, 227 on 0.10.0) -- the comparison hears a difference when there is one.
+    const quieter = runOf(150, '-m100');
+    const sameFrames = (quieter.frames ?? []).length === 150 && quieter.frames.every((h, i) => h === want[i]);
+    const diffAt = (quieter.audio ?? []).findIndex((h, i) => h !== (gold.audio ?? [])[i]);
+    check(sameFrames && diffAt >= 0, `control: the music at another volume (-m100) keeps the 150 first frames and differs from the reference's sound at buffer ${diffAt + 1}`, quieter.error ?? (sameFrames ? 'the sound did not change' : 'the frames changed'));
+  }
 }
-console.log(failed ? `gate-scummvm010: ${failed} FAILED` : `gate-scummvm010: ScummVM 0.10.0 builds whole, ${listed.length} units, ${b.functions} functions${ran.length ? `, and draws ${ran.join(', ')} as g++ and SDL do, 3,000 frames each` : ''}`);
+console.log(failed ? `gate-scummvm010: ${failed} FAILED` : `gate-scummvm010: ScummVM 0.10.0 builds whole, ${listed.length} units, ${b.functions} functions${ran.length ? `, and draws and sounds ${ran.join(', ')} as g++ and SDL do, 3,000 frames each` : ''}`);
 process.exit(failed ? 1 : 0);

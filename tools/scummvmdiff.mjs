@@ -96,8 +96,9 @@ export const GAMES = {
   atlantis: { env: 'PRISM_SCUMMVM_ATLANTIS', home: 'scumm/atlantis-demo', folder: 'atlantis', name: 'playfate', id010: 'atlantis', input: [...click(70000, 150, 312), ...click(100000, 450, 250), ...click(115000, 160, 330)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-atlantis.json',
     title: 'Indiana Jones and the Fate of Atlantis, demo (atlantis-dos-demo1-en)' },
   monkey2: { env: 'PRISM_SCUMMVM_MONKEY2', home: 'scumm/monkey2-demo', folder: 'monkey2', name: 'mi2demo', id010: 'monkey2', input: [],
-    // ScummVM 0.6.1 stops this demo in its debugger ("room 5 not in room 5 at 0+0 in file mi2demo.001"),
-    // natively as here: the reference holds that too.
+    // ScummVM 0.6.1 and 0.10.0 stop this demo in their debugger ("room 5 not in room 5 at 0+0 in file
+    // mi2demo.001"), natively as here: the reference holds that too, and its silence.
+    quiet: 'the demo stops in the ScummVM debugger ("room 5 not in room 5") before its music starts, natively too',
     golden: 'goldens/scummvm-monkey2.json',
     title: 'Monkey Island 2, non-interactive demo (monkey2-dos-ni-demo-en)' },
   samnmax: { env: 'PRISM_SCUMMVM_SAMNMAX', home: 'scumm/samnmax-demo', folder: 'samnmax', name: 'snmdemo', id010: 'samnmax', input: [...move(20000, 320, 200), ...key(50000, 1)].sort((a, b) => a[0] - b[0]), golden: 'goldens/scummvm-samnmax.json',
@@ -108,7 +109,7 @@ export const GAMES = {
   // PROVENANCE.txt beside each), run by 0.10.0 only.
   gob1: { env: 'PRISM_SCUMMVM_GOB1', home: 'scummvm-demos/gob1-dos-demo1-en/files', folder: 'gob1', id010: 'gob1', only010: true, input: [],
     golden: 'goldens/scummvm-gob1.json', title: 'Gobliiins, demo (gob1-dos-demo1-en)' },
-  agidemo: { env: 'PRISM_SCUMMVM_AGIDEMO', home: 'scummvm-demos/agi-dos-pack1-demo-en/files', folder: 'agidemo', id010: 'agidemo', only010: true, input: [],
+  agidemo: { env: 'PRISM_SCUMMVM_AGIDEMO', home: 'scummvm-demos/agi-dos-pack1-demo-en/files', folder: 'agidemo', id010: 'agidemo', only010: true, input: [...key(2000, 28), ...key(6000, 3), ...key(7000, 28)].sort((a, b) => a[0] - b[0]),   // Return at the title, then 2 and Return in the menu: Police Quest's demo
     // The AGI engine sets its render mode only from render_mode or platform, neither of which a game
     // named on the command line has: left unset, the native build drew CGA (whatever its heap held)
     // and PRISM EGA from frame 7. The option is the release's own.
@@ -161,8 +162,9 @@ async function scriptFile(input) {
 }
 
 /**
- * PRISM's side: the hash of the display at each presented frame -- and, given `audio`, how many of
- * the audio buffers were not silence (audio.buffers, audio.loud).
+ * PRISM's side: the hash of the display at each presented frame, and in `.audio` the hash of each
+ * buffer the audio callback filled until then -- and, given `audio`, how many of the buffers the
+ * page would hear were not silence (audio.buffers, audio.loud).
  */
 export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = null, { input = INPUT, pngAt = [], folder = 'sky', png = 'scummvm', exclude = [], debugOut = null, target = 'targets/scummvm.json', extra = [] } = {}) {
   const { loadTarget, buildTarget } = await import('../src/target.js');
@@ -174,6 +176,12 @@ export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = nu
     root: ROOT, compile: { safepoints: true }, envExtra: { stdio: { files }, sdl12: { clock: virtualClock() } },
   });
   const M = b.program.M, sdl = M.sdl.state, out = [];
+  out.audio = [];
+  sdl.onMixed = (buf, len) => {
+    let x = 0x811c9dc5;
+    for (let i = buf; i < buf + len; i++) x = Math.imul(x ^ M.u8[i], 16777619) >>> 0;
+    out.audio.push(x.toString(16).padStart(8, '0'));
+  };
   // The host, as the page is one: a queue of key events and a pointer the shim polls.
   const keys = [], host = { x: 0, y: 0, buttons: 0 };
   sdl.keyboard = { next: () => keys.shift() ?? null };
@@ -213,9 +221,19 @@ export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = nu
   return out;
 }
 
-/** The native side, built on first use. */
+const WRAPS = ['SDL_GetTicks', 'SDL_Delay', 'SDL_PollEvent', 'SDL_WarpMouse', 'SDL_GetMouseState', 'time', 'SDL_SetTimer', 'SDL_AddTimer', 'SDL_RemoveTimer', 'SDL_OpenAudio', 'SDL_PauseAudio', 'SDL_CloseAudio', 'SDL_UpdateRects', 'SDL_UpdateRect', 'SDL_Flip'].map((n) => `--wrap=${n}`).join(',');
+
+/** The native side, built on first use, and linked again when wrap.c has changed. */
 async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game), debugOut = null, v = VERSION } = {}) {
   const dir = join(ROOT, '.oracle', v.native), work = `/work/${v.native}`;
+  const wrapSrc = readFileSync(join(ROOT, 'tools/scummvmdiff/wrap.c'), 'utf8');
+  if (existsSync(join(dir, 'scummvm')) && readFileSync(join(dir, 'wrap.c'), 'utf8') !== wrapSrc) {
+    console.log('wrap.c changed: linking the native build again...');
+    writeFileSync(join(dir, 'wrap.c'), wrapSrc);
+    rmSync(join(dir, 'scummvm'));
+    const r = sh(`cd ${v.native} && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make CXX=g++ LIBS='wrap.o -lSDL -lm -Wl,${WRAPS}' >/dev/null 2>&1 && ls scummvm`, { timeout: 2400000 });
+    if (r.code !== 0) throw new Error(`native link failed: ${r.stdout}${r.stderr}`.slice(-600));
+  }
   if (!existsSync(join(dir, 'scummvm'))) {
     console.log(`building the native ScummVM ${v.corpus.replace(/^.*-/, '')} (once)...`);
     cpSync(join(ROOT, v.corpus), dir, { recursive: true });
@@ -224,8 +242,7 @@ async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game)
     // __DATE__ and __TIME__ in its debugger, and Monkey Island 2's demo stops there.
     writeFileSync(join(dir, 'prism-date.h'), '#undef __DATE__\n#define __DATE__ "Jan  1 1996"\n#undef __TIME__\n#define __TIME__ "00:00:00"\n');
     writeFileSync(join(dir, 'gxx'), `#!/bin/sh\ncase "$1" in -dumpversion) echo ${v.gxx}; exit 0;; esac\nexec g++ "$@"\n`, { mode: 0o755 });
-    const wraps = ['SDL_GetTicks', 'SDL_Delay', 'SDL_PollEvent', 'SDL_WarpMouse', 'SDL_GetMouseState', 'time', 'SDL_SetTimer', 'SDL_AddTimer', 'SDL_RemoveTimer', 'SDL_OpenAudio', 'SDL_PauseAudio', 'SDL_CloseAudio', 'SDL_UpdateRects', 'SDL_UpdateRect', 'SDL_Flip'].map((n) => `--wrap=${n}`).join(',');
-    const r = sh(`cd ${v.native} && CXX=${work}/gxx ./configure ${v.configure} >/dev/null && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make -j8 CXX=g++ CXXFLAGS='-O0 -ansi -fpermissive -fno-strict-aliasing -fwrapv -w ${v.cflags} -include ${work}/prism-date.h' LIBS='wrap.o -lSDL -lm -Wl,${wraps}' >/dev/null 2>&1 && ls scummvm`, { timeout: 2400000 });
+    const r = sh(`cd ${v.native} && CXX=${work}/gxx ./configure ${v.configure} >/dev/null && gcc -O0 -c -I/usr/include/SDL wrap.c -o wrap.o && make -j8 CXX=g++ CXXFLAGS='-O0 -ansi -fpermissive -fno-strict-aliasing -fwrapv -w ${v.cflags} -include ${work}/prism-date.h' LIBS='wrap.o -lSDL -lm -Wl,${WRAPS}' >/dev/null 2>&1 && ls scummvm`, { timeout: 2400000 });
     if (r.code !== 0) throw new Error(`native build failed: ${r.stdout}${r.stderr}`.slice(-600));
   }
   mkdirSync(join(ROOT, '.oracle', game.folder), { recursive: true });
@@ -236,7 +253,9 @@ async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game)
   writeFileSync(join(ROOT, '.oracle/scummvm-events.txt'), await scriptFile(game.input));
   const r = sh(`cd /work && EVENTS=/work/scummvm-events.txt SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy FRAMES=${frames} HOME=/tmp ./${v.native}/scummvm ${args.join(' ')} 2>/dev/null`, { timeout: 1200000 });
   if (debugOut) writeFileSync(debugOut, r.stdout);
-  return [...r.stdout.matchAll(/^frame \d+ ([0-9a-f]{8})$/gm)].map((m) => m[1]);
+  const out = [...r.stdout.matchAll(/^frame \d+ ([0-9a-f]{8})$/gm)].map((m) => m[1]);
+  out.audio = [...r.stdout.matchAll(/^audio \d+ ([0-9a-f]{8})$/gm)].map((m) => m[1]);
+  return out;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -255,7 +274,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const ours = await prismFrames(data, FRAMES, args, null, { debugOut: debugOut('prism'), pngAt, folder: game.folder, png: `scummvm${VERSION === VERSIONS['0.6.1'] ? '' : '010'}-${arg('game', 'sky')}`, target: VERSION.target, extra: gameExtras(game), exclude: game.exclude ?? [], input: inputFile ? JSON.parse(readFileSync(inputFile, 'utf8')) : game.input });
   // --prism-only: PRISM's run alone (with --png-at), to write or look at an input script.
   if (process.argv.includes('--prism-only')) { console.log(`PRISM ${ours.length} frames, the last ${ours.at(-1)}`); process.exit(0); }
-  const theirs = process.argv.includes('--check') ? JSON.parse(readFileSync(GOLDEN, 'utf8')).frames.slice(0, FRAMES) : await nativeFrames(game, data, FRAMES, { args, debugOut: debugOut('native') });
+  let theirs;
+  if (process.argv.includes('--check')) {
+    const g = JSON.parse(readFileSync(GOLDEN, 'utf8'));
+    theirs = g.frames.slice(0, FRAMES);
+    theirs.audio = g.audio ?? null;
+  } else theirs = await nativeFrames(game, data, FRAMES, { args, debugOut: debugOut('native') });
   const n = Math.min(ours.length, theirs.length);
   let first = -1;
   for (let i = 0; i < n; i++) if (ours[i] !== theirs[i]) { first = i; break; }
@@ -264,11 +288,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // A game that quits (`ends`) presents that many frames on both sides.
   if (ours.length !== theirs.length || n < Math.min(FRAMES, game.ends ?? FRAMES)) { console.log('the runs presented different numbers of frames'); process.exit(1); }
   console.log(`all ${n} frames agree; the last is ${ours[n - 1]}`);
+  // The sound, buffer by buffer: every one the callback filled before the last frame.
+  if (theirs.audio) {
+    const a = ours.audio, t = theirs.audio, na = Math.min(a.length, t.length);
+    const firstA = a.findIndex((h, i) => i < na && h !== t[i]);
+    if (firstA >= 0 && firstA < na) { console.log(`first audio difference at buffer ${firstA + 1} of ${t.length}: PRISM ${a[firstA]}, reference ${t[firstA]}`); process.exit(1); }
+    if (a.length !== t.length) { console.log(`the runs filled different numbers of audio buffers: PRISM ${a.length}, reference ${t.length}`); process.exit(1); }
+    // How many differ from one another: silence hashes alike, and a run of it would agree vacuously.
+    console.log(`all ${a.length} audio buffers agree, ${new Set(a).size} of them different${a.length ? `; the last is ${a.at(-1)}` : ''}`);
+  }
   if (process.argv.includes('--write')) {
     mkdirSync(dirname(GOLDEN), { recursive: true });
     writeFileSync(GOLDEN, JSON.stringify({
-      _doc: `ScummVM ${arg('version', '0.6.1')} on ${game.title}: FNV-1a of the display at each presented frame, with the input script below, written by tools/scummvmdiff.mjs --write only when PRISM and a native g++ build over the real SDL 1.2 (time, timer, audio and input wrapped onto the same virtual clock) agreed on every frame.`,
-      args: gameArgs(game), input: game.input, frames: ours,
+      _doc: `ScummVM ${arg('version', '0.6.1')} on ${game.title}: FNV-1a of the display at each presented frame, and of each buffer the audio callback filled until the last, with the input script below, written by tools/scummvmdiff.mjs --write only when PRISM and a native g++ build over the real SDL 1.2 (time, timer, audio and input wrapped onto the same virtual clock) agreed on every frame and every buffer.`,
+      args: gameArgs(game), input: game.input, frames: ours, audio: ours.audio,
     }) + '\n');
     console.log(`wrote ${GOLDEN}`);
   }

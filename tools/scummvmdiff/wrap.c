@@ -28,7 +28,8 @@
  * (a reading would advance it): `T k <scan> <down> <sym>` a key, `T m <x> <y> <buttons>` the pointer.
  *
  * Each presented frame prints `frame N <hash>`: FNV-1a over the display's rows, w*bytes each, so a
- * difference of pitch between the two sides does not count.
+ * difference of pitch between the two sides does not count. Each buffer the audio callback fills
+ * prints `audio N <hash>`, FNV-1a over its bytes: the sound, compared as the pictures are.
  */
 #include <SDL.h>
 #include <stdio.h>
@@ -47,7 +48,7 @@ static int clock_now(void) { t_ms += 1.0 / 1024; return (int)t_ms; }
 static void clock_delay(int ms) { if (ms > 0) t_ms += ms; }
 
 /* ---- the audio device: src/env/sdl12.js SDL_OpenAudio over src/env/sdlmixer.js's pump. */
-static int audio_open, audio_freq, audio_frames, audio_bytes, audio_format, mix_t0, mixed;
+static int audio_open, audio_freq, audio_frames, audio_bytes, audio_format, mix_t0, mixed, audio_count;
 static Uint8 *audio_buf;
 static void (*audio_cb)(void *, Uint8 *, int);
 static void *audio_user;
@@ -76,9 +77,13 @@ static void pump(void) {
     int now = clock_now();
     int due = (int)floor(((double)(now - mix_t0) * audio_freq) / (1000.0 * audio_frames)) + 1;
     while (mixed < due) {
+      Uint32 h = 0x811c9dc5u;
+      int i;
       memset(audio_buf, (audio_format & 0xff) == 8 ? 0x80 : 0, audio_bytes);
       audio_cb(audio_user, audio_buf, audio_bytes);
       mixed++;
+      for (i = 0; i < audio_bytes; i++) h = (h ^ audio_buf[i]) * 16777619u;
+      printf("audio %d %08x\n", ++audio_count, h);
     }
   }
   if (ntimers) {
