@@ -146,6 +146,10 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     ...MIXER_STATE,          // the mixer's bookkeeping, shared with the SDL 2 environment
   };
 
+  // time() moves on with this clock, by whole seconds (src/runtime/runtime.js), read without the
+  // step a guest's own reading takes; the clock is read at call time, as a host may replace it.
+  M.timeSeconds = () => Math.floor(state.clock.peek() / 1000);
+
   const intern = (s) => M.mod.intern([...enc.encode(s), 0]);
   const noError = intern('');
   state.error = noError;

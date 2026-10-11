@@ -1166,7 +1166,10 @@ function makeLibc(M) {
     clock: () => { M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockOf ? M.clockOf(M.clockTicks) >>> 0 : M.clockTicks; },
     // uclock returns a 64-bit count, so a BigInt — see the i64 note in emit.js.
     uclock: () => { M.uclockTicks += 19886n; return M.uclockTicks; },
-    time: (p) => { const t = 852076800; if (p) dv().setInt32(p, t, true); return t; },
+    // A fixed date, so a run is reproducible -- moving on with the program's clock where it has one
+    // (M.timeSeconds, src/env/sdl12.js): Simon the Sorcerer starts its scenes when time()'s second
+    // changes, and on a frozen date it waited forever on a black screen.
+    time: (p) => { const t = 852076800 + (M.timeSeconds ? M.timeSeconds() : 0); if (p) dv().setInt32(p, t, true); return t; },
 
     /**
      * setjmp/longjmp. The buffer records the shadow-stack frame that called setjmp and the resume

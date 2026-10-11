@@ -20,7 +20,7 @@
  *   SDL_OpenAudio / SDL_PauseAudio / SDL_CloseAudio   the device is a callback pumped by the clock
  *   SDL_SetTimer    the periodic timer, fired by the pump
  *   SDL_AddTimer / SDL_RemoveTimer   the newer timers (0.10.0's backend), fired by the pump before it
- *   time            the date PRISM's libc answers
+ *   time            the date PRISM's libc answers, moving on with the clock by whole seconds
  *
  * The pump is not re-entered (a callback that asks for the time is inside it), as in sdl12.js.
  * The script (EVENTS=<file>, written by tools/scummvmdiff.mjs) says what the host does and when, in
@@ -216,7 +216,9 @@ int __wrap_SDL_PollEvent(SDL_Event *e) {
 }
 void __wrap_SDL_WarpMouse(Uint16 x, Uint16 y) { host_x = x; host_y = y; }
 Uint8 __wrap_SDL_GetMouseState(int *x, int *y) { if (x) *x = ptr_x; if (y) *y = ptr_y; return ptr_b; }
-time_t __wrap_time(time_t *p) { if (p) *p = 852076800; return 852076800; }
+/* PRISM's date, moving on with the virtual clock by whole seconds and without a reading's step
+   (runtime.js time(), sdl12.js M.timeSeconds). */
+time_t __wrap_time(time_t *p) { time_t t = 852076800 + (time_t)((int)t_ms / 1000); if (p) *p = t; return t; }
 
 int __wrap_SDL_SetTimer(Uint32 interval, SDL_TimerCallback cb) {
   if (cb && interval) { timer_cb = cb; timer_interval = interval; timer_next = clock_now() + interval; }

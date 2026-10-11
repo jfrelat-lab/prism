@@ -123,9 +123,16 @@ export const GAMES = {
     // The demo quits after its 872nd frame, natively as here.
     ends: 872,
     golden: 'goldens/scummvm-kyra1.json', title: 'The Legend of Kyrandia, non-interactive demo (kyra1-dos-ni-demo-en)' },
-  // Not here: the Simon the Sorcerer 1 floppy demo and the Nippon Safes Amiga demo the project
-  // distributes today are other builds than 0.10.0's tables name (GDEMO and ICON.DAT; disk0 and fr
-  // differ by MD5); 0.10.0 takes them on a partial match and waits on a black screen, natively too.
+  simon2: { env: 'PRISM_SCUMMVM_SIMON2', home: 'scummvm-demos/simon2-dos-cd-demo-en/files', folder: 'simon2', id010: 'simon2', only010: true, input: [],
+    golden: 'goldens/scummvm-simon2.json', title: 'Simon the Sorcerer 2, CD demo (simon2-dos-cd-demo-en)' },
+  // The AGOS demos start their scenes when time()'s second changes: on the frozen date time() once
+  // answered they waited on a black screen, natively as here.
+  simon1: { env: 'PRISM_SCUMMVM_SIMON1', home: 'scummvm-demos/simon1-dos-floppy-demo-en/files', folder: 'simon1', id010: 'simon1', only010: true, input: [],
+    golden: 'goldens/scummvm-simon1.json', title: 'Simon the Sorcerer 1, floppy demo (simon1-dos-floppy-demo-en)' },
+  // Not here: the Nippon Safes Amiga demo. Its text boxes wait for a click, and with clicks the
+  // native build FAULTS, in 0.10.0's own code: PathBuilder::correctPathPoint reads queryPath(x, 200),
+  // a row past the 320x200 walk mask, before testing the bound (engines/parallaction/walk.cpp). PRISM
+  // reads on where the native build stopped; the 149 frames before the fault agreed.
 };
 export const gameData = (g) => process.env[g.env] ?? join(homedir(), 'games', g.home);
 /*
