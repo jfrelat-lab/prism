@@ -81,9 +81,10 @@ const MONKEY_INPUT = [
  */
 export const GAMES = {
   sky: { env: 'PRISM_SCUMMVM_DATA', home: 'bass/sky-cd', folder: 'sky', name: 'sky', id010: 'sky', input: INPUT,
-    // 0.10.0's Sky engine reads its compact data from sky.cpt, an engine data file of the ScummVM project
-    // (~/games/bass/engine-data, PROVENANCE.txt there), given beside the game's files.
-    extra010: ['bass/engine-data/sky.cpt'], golden: 'goldens/scummvm.json',
+    // 0.10.0's Sky engine reads its compact data from sky.cpt, an engine data file of the ScummVM project:
+    // the one 0.10.0's release shipped (~/games/scummvm-engine-data-0.10.0, PROVENANCE.txt there; 2 bytes
+    // from the one in git today), given beside the game's files.
+    extra010: ['scummvm-engine-data-0.10.0/sky.cpt'], golden: 'goldens/scummvm.json',
     title: 'Beneath a Steel Sky (bass-cd-1.0)' },
   monkey: { env: 'PRISM_SCUMMVM_MONKEY', home: 'scumm/monkey1-ega-demo', folder: 'monkey', name: 'monkeyEGA', id010: 'monkey', input: MONKEY_INPUT, golden: 'goldens/scummvm-monkey.json',
     title: 'The Secret of Monkey Island, EGA demo (monkey1-dos-ega-demo-en)' },
@@ -116,8 +117,8 @@ export const GAMES = {
   sword2: { env: 'PRISM_SCUMMVM_SWORD2', home: 'scummvm-demos/sword2-win-demo-en/files', folder: 'sword2', id010: 'sword2demo', only010: true, input: [],
     golden: 'goldens/scummvm-sword2.json', title: 'Broken Sword 2, demo (sword2-win-demo-en)' },
   kyra1: { env: 'PRISM_SCUMMVM_KYRA1', home: 'scummvm-demos/kyra1-dos-ni-demo-en/files', folder: 'kyra1', id010: 'kyra1', only010: true, input: [],
-    // The Kyra engine reads KYRA.DAT, the data file 0.10.0's release shipped (~/games/scummvm-demos/engine-data-0.10.0).
-    extra010: ['scummvm-demos/engine-data-0.10.0/KYRA.DAT'],
+    // The Kyra engine reads KYRA.DAT, the data file 0.10.0's release shipped (~/games/scummvm-engine-data-0.10.0).
+    extra010: ['scummvm-engine-data-0.10.0/KYRA.DAT'],
     // The demo quits after its 872nd frame, natively as here.
     ends: 872,
     golden: 'goldens/scummvm-kyra1.json', title: 'The Legend of Kyrandia, non-interactive demo (kyra1-dos-ni-demo-en)' },
