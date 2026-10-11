@@ -8,8 +8,8 @@
 //      unresolved" said nothing while the list missed the backend, whose sdl.cpp has main, since
 //      nothing then called anything at all.
 //
-// For each game of tools/scummvmdiff.mjs's GAMES whose files are present and that 0.10.0 runs
-// without an engine data file of its own (Beneath a Steel Sky needs sky.cpt):
+// For each game of tools/scummvmdiff.mjs's GAMES whose files are present -- and, for Beneath a Steel
+// Sky, sky.cpt, the engine data file 0.10.0 reads beside the game's (~/games/bass/engine-data):
 //
 //   3. THE REFERENCE, replayed: each of the first 3,000 presented frames is the picture a native g++
 //      build of 0.10.0 over the real SDL 1.2 presented (goldens/scummvm010-*.json, written by
@@ -30,11 +30,11 @@ const SRC = join(ROOT, 'corpus/scummvm-0.10.0');
 
 // ---- a child that runs one game and reports its frames.
 if (process.argv[2] === '--run') {
-  const { prismFrames, GAMES, VERSIONS, gameData, gameArgs } = await import('./scummvmdiff.mjs');
+  const { prismFrames, GAMES, VERSIONS, gameData, gameArgs, gameExtras } = await import('./scummvmdiff.mjs');
   const g = GAMES[process.argv[3]], v = VERSIONS['0.10.0'];
   let report;
   try {
-    report = { frames: await prismFrames(gameData(g), +process.argv[4], gameArgs(g, v), null, { input: g.input, folder: g.folder, exclude: g.exclude ?? [], target: v.target }) };
+    report = { frames: await prismFrames(gameData(g), +process.argv[4], gameArgs(g, v), null, { input: g.input, folder: g.folder, exclude: g.exclude ?? [], target: v.target, extra: gameExtras(g, v) }) };
   } catch (e) { report = { frames: [], error: e.message.split('\n')[0] }; }
   process.stdout.write(JSON.stringify(report) + '\n', () => process.exit(0));
   await new Promise(() => {});
@@ -80,12 +80,13 @@ check(b.functions > 0 && b.hasMain && b.failures?.length === 0 && b.unresolved?.
   [...(b.failures ?? []), ...(b.unresolved ?? []), ...(b.missingHeaders ?? [])].slice(0, 6).join(' | '));
 
 const FRAMES = 3000;
-const { GAMES, VERSIONS, gameData } = await import('./scummvmdiff.mjs');
+const { GAMES, VERSIONS, gameData, gameExtras } = await import('./scummvmdiff.mjs');
 const ran = [];
 for (const [key, g] of Object.entries(GAMES)) {
   const golden = join(ROOT, VERSIONS['0.10.0'].golden(g));
-  if (key === 'sky') { console.log('     (Beneath a Steel Sky: 0.10.0 needs sky.cpt, an engine data file the ScummVM project distributes apart; not run)'); continue; }
   if (!existsSync(gameData(g))) { console.log(`     (${g.title}: no ${gameData(g)}, set ${g.env}; not run)`); continue; }
+  const absent = gameExtras(g, VERSIONS['0.10.0']).filter((f) => !existsSync(f));
+  if (absent.length) { console.log(`     (${g.title}: no ${absent.join(', ')}, an engine data file 0.10.0 needs; not run)`); continue; }
   if (!existsSync(golden)) { check(false, `${key}: a golden for 0.10.0`, `no ${golden}: tools/scummvmdiff.mjs --version=0.10.0 --game=${key} --write`); continue; }
   ran.push(key);
   const want = JSON.parse(readFileSync(golden, 'utf8')).frames.slice(0, FRAMES);

@@ -80,7 +80,10 @@ const MONKEY_INPUT = [
  * The two SCUMM demos are the ones the ScummVM project distributes.
  */
 export const GAMES = {
-  sky: { env: 'PRISM_SCUMMVM_DATA', home: 'bass/sky-cd', folder: 'sky', name: 'sky', id010: 'sky', input: INPUT, golden: 'goldens/scummvm.json',
+  sky: { env: 'PRISM_SCUMMVM_DATA', home: 'bass/sky-cd', folder: 'sky', name: 'sky', id010: 'sky', input: INPUT,
+    // 0.10.0's Sky engine reads its compact data from sky.cpt, an engine data file of the ScummVM project
+    // (~/games/bass/engine-data, PROVENANCE.txt there), given beside the game's files.
+    extra010: ['bass/engine-data/sky.cpt'], golden: 'goldens/scummvm.json',
     title: 'Beneath a Steel Sky (bass-cd-1.0)' },
   monkey: { env: 'PRISM_SCUMMVM_MONKEY', home: 'scumm/monkey1-ega-demo', folder: 'monkey', name: 'monkeyEGA', id010: 'monkey', input: MONKEY_INPUT, golden: 'goldens/scummvm-monkey.json',
     title: 'The Secret of Monkey Island, EGA demo (monkey1-dos-ega-demo-en)' },
@@ -124,6 +127,8 @@ export const VERSIONS = {
 };
 const VERSION = VERSIONS[arg('version', '0.6.1')] ?? (console.error(`no version ${arg('version')}: ${Object.keys(VERSIONS).join(', ')}`), process.exit(2));
 export const gameArgs = (g, v = VERSION) => [`-p${g.folder}`, v.id(g)];
+/** Files a release needs beside the game's own: absolute paths. */
+export const gameExtras = (g, v = VERSION) => (v === VERSIONS['0.10.0'] ? (g.extra010 ?? []) : []).map((f) => join(homedir(), 'games', f));
 /** Every file of a game's directory, by name. */
 const gameFiles = (dir, exclude = []) => readdirSync(dir).filter((f) => statSync(join(dir, f)).isFile() && !exclude.includes(f));
 
@@ -137,11 +142,12 @@ async function scriptFile(input) {
  * PRISM's side: the hash of the display at each presented frame -- and, given `audio`, how many of
  * the audio buffers were not silence (audio.buffers, audio.loud).
  */
-export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = null, { input = INPUT, pngAt = [], folder = 'sky', png = 'scummvm', exclude = [], debugOut = null, target = 'targets/scummvm.json' } = {}) {
+export async function prismFrames(data, frames = FRAMES, args = ARGS, audio = null, { input = INPUT, pngAt = [], folder = 'sky', png = 'scummvm', exclude = [], debugOut = null, target = 'targets/scummvm.json', extra = [] } = {}) {
   const { loadTarget, buildTarget } = await import('../src/target.js');
   const { virtualClock } = await import('../src/env/clock.js');
   const files = {};
   if (data) for (const f of gameFiles(data, exclude)) files[`${folder}/${f}`] = new Uint8Array(readFileSync(join(data, f)));
+  if (data) for (const f of extra) files[`${folder}/${f.replace(/^.*\//, '')}`] = new Uint8Array(readFileSync(f));
   const b = buildTarget(loadTarget(join(ROOT, target)), {
     root: ROOT, compile: { safepoints: true }, envExtra: { stdio: { files }, sdl12: { clock: virtualClock() } },
   });
@@ -204,6 +210,7 @@ async function nativeFrames(game, data, frames = FRAMES, { args = gameArgs(game)
   rmSync(join(ROOT, '.oracle', game.folder), { recursive: true, force: true });
   mkdirSync(join(ROOT, '.oracle', game.folder), { recursive: true });
   for (const f of gameFiles(data, game.exclude)) if (!existsSync(join(ROOT, '.oracle', game.folder, f))) copyFileSync(join(data, f), join(ROOT, '.oracle', game.folder, f));
+  for (const f of gameExtras(game, v)) copyFileSync(f, join(ROOT, '.oracle', game.folder, f.replace(/^.*\//, '')));
   writeFileSync(join(ROOT, '.oracle/scummvm-events.txt'), await scriptFile(game.input));
   const r = sh(`cd /work && EVENTS=/work/scummvm-events.txt SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy FRAMES=${frames} HOME=/tmp ./${v.native}/scummvm ${args.join(' ')} 2>/dev/null`, { timeout: 1200000 });
   if (debugOut) writeFileSync(debugOut, r.stdout);
@@ -223,7 +230,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // -- the diff of the two names the first decision that went differently, frames before a pixel does.
   const debug = arg('debug', ''), args = [...(debug ? [`-d${debug}`] : []), ...gameArgs(game)];
   const debugOut = (side) => (debug ? join(ROOT, `.oracle/scummvm-${side}-debug.txt`) : null);
-  const ours = await prismFrames(data, FRAMES, args, null, { debugOut: debugOut('prism'), pngAt, folder: game.folder, png: `scummvm${VERSION === VERSIONS['0.6.1'] ? '' : '010'}-${arg('game', 'sky')}`, target: VERSION.target, exclude: game.exclude ?? [], input: inputFile ? JSON.parse(readFileSync(inputFile, 'utf8')) : game.input });
+  const ours = await prismFrames(data, FRAMES, args, null, { debugOut: debugOut('prism'), pngAt, folder: game.folder, png: `scummvm${VERSION === VERSIONS['0.6.1'] ? '' : '010'}-${arg('game', 'sky')}`, target: VERSION.target, extra: gameExtras(game), exclude: game.exclude ?? [], input: inputFile ? JSON.parse(readFileSync(inputFile, 'utf8')) : game.input });
   // --prism-only: PRISM's run alone (with --png-at), to write or look at an input script.
   if (process.argv.includes('--prism-only')) { console.log(`PRISM ${ours.length} frames, the last ${ours.at(-1)}`); process.exit(0); }
   const theirs = process.argv.includes('--check') ? JSON.parse(readFileSync(GOLDEN, 'utf8')).frames.slice(0, FRAMES) : await nativeFrames(game, data, FRAMES, { args, debugOut: debugOut('native') });
