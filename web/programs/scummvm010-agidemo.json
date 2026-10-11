@@ -1,0 +1,22 @@
+{
+  "title": "SIERRA AGI DEMOS",
+  "subtitle": "Sierra On-Line · demo pack 1, on ScummVM 0.10.0 (2007): its AGI engine",
+  "target": "scummvm010",
+  "host": "sdl",
+  "args": "--render-mode=ega -pagi-dos-pack1-demo-en/files agidemo",
+  "argsHint": "--render-mode=ega|cga|amiga: the AGI engine leaves its colours unset without it. Then -p<dir> where the game is, and its id. Other switches: -g<scaler>, -f full screen, -m<volume> music, -s<volume> effects.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "scummvm-demos",
+    "under": "agi-dos-pack1-demo-en/files/",
+    "hint": "agi-dos-pack1-demo-en/files/ from agi-dos-pack1-demo-en.zip, the demo the ScummVM project distributes"
+  },
+  "controls": [
+    [
+      "keyboard",
+      "what the demo asks for"
+    ]
+  ],
+  "_why": "Held to a native g++ build of 0.10.0 frame by frame (gate-scummvm010, 3,000 frames), both with --render-mode=ega: without it the render mode is an uninitialised member, which the native build read as CGA."
+}

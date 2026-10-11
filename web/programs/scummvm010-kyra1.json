@@ -1,0 +1,25 @@
+{
+  "title": "THE LEGEND OF KYRANDIA",
+  "subtitle": "Westwood Studios, 1992 · the non-interactive demo, on ScummVM 0.10.0 (2007): its Kyra engine",
+  "target": "scummvm010",
+  "host": "sdl",
+  "args": "-pkyra1-dos-ni-demo-en/files kyra1",
+  "argsHint": "-p<dir> where the game is, then its id. The Kyra engine also reads KYRA.DAT, put beside the game's files. Other switches: -g<scaler>, -f full screen, -m<volume> music, -s<volume> effects.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "scummvm-demos",
+    "under": "kyra1-dos-ni-demo-en/files/",
+    "also": [
+      { "dir": "scummvm-engine-data-0.10.0", "file": "KYRA.DAT", "as": "kyra1-dos-ni-demo-en/files/KYRA.DAT" }
+    ],
+    "hint": "kyra1-dos-ni-demo-en/files/ from kyra1-dos-ni-demo-en.zip, the demo the ScummVM project distributes, and scummvm-engine-data-0.10.0/KYRA.DAT, the one 0.10.0's own release shipped"
+  },
+  "controls": [
+    [
+      "",
+      "nothing: the demo plays itself, and ends"
+    ]
+  ],
+  "_why": "Held to a native g++ build of 0.10.0 frame by frame to its last frame (gate-scummvm010, 872 frames). Before the static member array fix it asserted on its first screens: ARRAYSIZE(_soundFiles) was 0."
+}

@@ -1,0 +1,26 @@
+{
+  "title": "GOBLIIINS",
+  "subtitle": "Coktel Vision, 1991 · the demo, on ScummVM 0.10.0 (2007): its Gob engine",
+  "target": "scummvm010",
+  "host": "sdl",
+  "args": "-pgob1-dos-demo1-en/files gob1",
+  "argsHint": "-p<dir> where the game is, then its id. Other switches: -g<scaler> (1x, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f full screen, -m<volume> music, -s<volume> effects, -z the games each engine knows.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "scummvm-demos",
+    "under": "gob1-dos-demo1-en/files/",
+    "hint": "gob1-dos-demo1-en/files/ from gob1-dos-demo1-en.zip, the demo the ScummVM project distributes"
+  },
+  "controls": [
+    [
+      "mouse",
+      "pick a goblin at the bottom, then where it goes or what it uses"
+    ],
+    [
+      "Esc",
+      "skip the introduction"
+    ]
+  ],
+  "_why": "The first of 0.10.0's engines beyond SCUMM, Sky and Queen held to a native g++ build frame by frame (gate-scummvm010, 3,000 frames). It found a C++ defect: a static member array declared [] kept size 0 after its definition."
+}

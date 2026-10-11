@@ -700,18 +700,20 @@ function log(line, kind = 'info') {
 // `serve.mjs --games=` -- and starting the program fetches that root and nothing else. Cached, so a
 // second run of the same game starts at once.
 let dataFiles = {};
-const dataCache = new Map();               // root -> { name: Uint8Array }
+const dataCache = new Map();               // root + under -> { name: Uint8Array }
 
 /**
  * One data root, fetched once. Progress goes to the machine's own screen, because that is where you
  * are looking: a 50 MB pak takes a moment and a page that simply sits there looks broken.
  */
-async function loadData(root, say) {
-  if (dataCache.has(root)) return dataCache.get(root);
+async function loadData(root, say, under = '') {
+  // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
+  const key = `${root}\0${under}`;
+  if (dataCache.has(key)) return dataCache.get(key);
   const r = await fetch(`/__data/?root=${encodeURIComponent(root)}`);
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
-  const { files } = await r.json();
-  if (!files.length) throw new Error(`the data directory '${root}' is empty`);
+  const files = (await r.json()).files.filter((f) => f.startsWith(under));
+  if (!files.length) throw new Error(`the data directory '${root}/${under}' is empty`);
   say?.(`loading ${files.length} data file${files.length === 1 ? '' : 's'} from ${root}/…`);
   const out = {};
   await Promise.all(files.map(async (f) => {
@@ -720,7 +722,7 @@ async function loadData(root, say) {
     // for another's when two ROM sets share a filename.
     out[f] = new Uint8Array(await (await fetch(`/__data/${f}`)).arrayBuffer());
   }));
-  dataCache.set(root, out);
+  dataCache.set(key, out);
   return out;
 }
 
@@ -1081,16 +1083,25 @@ async function startRun(typedAs = null) {
     try {
       if (program.needsData.lazy) lazyNames = await listData(program.needsData.dir, program.needsData.under ?? '');
       else {
-        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); });
         /*
          * `under` keeps one game of a root holding several (scumm/ has a directory per demo), and
          * `exclude` leaves out files the program cannot read -- DOTT's demo speech, on which ScummVM
          * 0.6.1 asserts, native and here alike.
          */
-        const { under = '', exclude = [] } = program.needsData;
-        if (under || exclude.length) {
-          dataFiles = Object.fromEntries(Object.entries(dataFiles)
-            .filter(([k]) => k.startsWith(under) && !exclude.includes(k.split('/').pop())));
+        const { under = '', exclude = [], also = [] } = program.needsData;
+        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, under);
+        if (exclude.length) dataFiles = Object.fromEntries(Object.entries(dataFiles).filter(([k]) => !exclude.includes(k.split('/').pop())));
+        /*
+         * `also`: single files of another root, put where the program looks for them -- ScummVM
+         * 0.10.0's engine data (KYRA.DAT) has a root of its own and is read beside the game's files.
+         */
+        if (also.length) {
+          dataFiles = { ...dataFiles };
+          for (const { dir, file, as } of also) {
+            const f = (await loadData(dir, null, file))[file];
+            if (!f) throw new Error(`no ${file} in the data directory '${dir}'`);
+            dataFiles[as] = f;
+          }
         }
       }
     } catch (e) {
