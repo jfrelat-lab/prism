@@ -118,6 +118,7 @@ export const sdl12KeySym = (scan, extended) => (extended ? SDLK.extended : SDLK.
 import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
 import { freeRunningClock } from './clock.js';
 import { pngToSurface } from './sdl2-image.js';
+import { format } from '../runtime/runtime.js';
 import { isPng } from './png.js';
 
 export function installSDL12(M, { onPresent = null, onPalette = null, keyboard = null,
@@ -326,6 +327,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_InitSubSystem: () => 0,
     SDL_Quit: () => 0,
     SDL_GetError: () => state.error,
+    SDL_SetError: (fmt, va) => { state.setError(format(M, fmt, va ?? [])); },
     // A limiter built on sleeping SPINS when the sleep does nothing, so the host answers instead.
     SDL_Delay: (ms) => { state.clock.delay(ms | 0); state.pump(); return 0; },
     SDL_GetTicks: () => { state.pump(); return state.clock.now(); },
@@ -339,13 +341,17 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     },
 
     // ---- SDL_image 1.2: the kind of surface IMG_png.c makes of a PNG (src/env/sdl2-image.js) ----
-    IMG_Load: (name) => {
-      const path = M.mod.cstr(name);
-      const key = M.files ? M.files.find(path, { guess: false }) : null;
-      if (key === null) { state.setError(`Couldn't open ${path}`); return 0; }
-      return imageSurface(M.files.store.get(key), path);
+    //      IMG_Load itself is C (src/env/sdl12-image.js, the `sdlimage12` env), over libjpeg; it asks
+    //      here for an RWops' bytes, and for a PNG's surface.
+    prism_RW_bytes: (rw, lenp) => {
+      const bytes = readRW(rw);
+      if (!bytes) { state.setError('Couldn\'t read the data source'); return 0; }
+      const p = M.rt.malloc(Math.max(bytes.length, 1));
+      M.u8.set(bytes, p);
+      dv().setInt32(lenp, bytes.length, true);
+      return p;
     },
-    IMG_Load_RW: (rw, _freesrc) => imageSurface(readRW(rw), 'an RWops'),
+    prism_IMG_LoadPNG: (p, len) => imageSurface(M.u8.slice(p, p + len), 'the image'),
 
     // ---- video -----------------------------------------------------------------------------
     SDL_SetVideoMode: (w, h, depth, flags) => {
@@ -765,7 +771,8 @@ export function sdl12Builtins(T) {
     SDL_GetError: f(P),
     SDL_Delay: f(V, U),
     SDL_GetTicks: f(U),
-    SDL_RWFromFile: f(P, P, P), IMG_Load: f(P, P), IMG_Load_RW: f(P, P, I),
+    SDL_SetError: { ret: V, params: [P], variadic: true },
+    SDL_RWFromFile: f(P, P, P), prism_RW_bytes: f(P, P, P), prism_IMG_LoadPNG: f(P, P, I),
 
     SDL_SetVideoMode: f(P, I, I, I, U),
     SDL_GetVideoSurface: f(P),

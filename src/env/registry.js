@@ -36,6 +36,7 @@ import { ALLEGRO39_VARS } from './allegro39.js';
 import { ALLEGRO39_HEADER } from './headers-djgpp.js';
 import { installDj } from './dj.js';
 import { GETOPT_VARS } from './getopt.js';
+import { SDL12_IMAGE_C } from './sdl12-image.js';
 import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
@@ -144,6 +145,8 @@ export const ENV = {
    * translation unit for every program would change the JavaScript every existing target emits.
    */
   getopt: { install: () => ({}), vars: GETOPT_VARS },
+  // SDL_image 1.2 as C over the program's libjpeg (src/env/sdl12-image.js).
+  sdlimage12: { install: () => ({}), vars: SDL12_IMAGE_C },
   // POSIX's time zone variables, for a program that reads them (Tcl's clock). There is no zone: GMT.
   // The environment as an array, for a program that walks it (Tcl copies it into $env). It is empty:
   // getenv answers from the host's own table (stdio.js), and nothing here is inherited from a parent.

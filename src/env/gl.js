@@ -853,6 +853,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.dirty = true;
     },
     glReadPixels: (x, y, w, h, format, type, out) => {
+      // The depth buffer, as floats in [0, 1]: Cube reads the one under its crosshair every frame.
+      if (format === 0x1902 && type === 0x1406) {
+        readFramebuffer();                                   // whatever is pending is drawn first
+        if (webgl) throw new Error('gl: glReadPixels of the depth buffer on the WebGL backend is not implemented');
+        for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) dv().setFloat32(out + 4 * (j * w + i), s.depth[(y + j) * s.width + x + i], true);
+        return;
+      }
       const fb = readFramebuffer(), n = format === FMT.RGBA ? 4 : format === FMT.RGB ? 3 : 0;
       if (!n || type !== 0x1401) throw new Error('gl: glReadPixels wants GL_RGB or GL_RGBA, GL_UNSIGNED_BYTE');
       for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {

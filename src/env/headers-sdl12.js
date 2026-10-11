@@ -243,6 +243,7 @@ int SDL_Init(Uint32 flags);
 int SDL_InitSubSystem(Uint32 flags);
 void SDL_Quit(void);
 char *SDL_GetError(void);
+void SDL_SetError(const char *fmt, ...);
 void SDL_Delay(Uint32 ms);
 Uint32 SDL_GetTicks(void);
 
