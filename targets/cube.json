@@ -1,0 +1,97 @@
+{
+  "name": "cube",
+  "title": "CUBE (Wouter van Oortmerssen, 2005_08_29: C++ on SDL 1.2, SDL_image, SDL_mixer and OpenGL, ENet)",
+  "dir": "corpus/cube_2005_08_29",
+  "fetch": "cube_2005_08_29_src.zip from SourceForge (sourceforge.net/projects/cube), its cube_source/ unpacked as corpus/cube_2005_08_29; the data is cube_2005_08_29_unix.tar.gz's cube/ (~/games/cube/files/cube)",
+  "_units": "src/Makefile's CLIENT_OBJS, and the ENet library it links: enet/Makefile.am's libenet_a_SOURCES less win32.c, which is all inside #ifdef WIN32. include/ and lib/ are the Windows build's SDL and fmod: the Unix build takes SDL from sdl-config, so they are not on the include path.",
+  "units": {
+    "list": [
+      "src/client.cpp",
+      "src/clientextras.cpp",
+      "src/clientgame.cpp",
+      "src/clients2c.cpp",
+      "src/command.cpp",
+      "src/console.cpp",
+      "src/editing.cpp",
+      "src/entities.cpp",
+      "src/main.cpp",
+      "src/menus.cpp",
+      "src/monster.cpp",
+      "src/physics.cpp",
+      "src/rendercubes.cpp",
+      "src/renderextras.cpp",
+      "src/rendergl.cpp",
+      "src/rendermd2.cpp",
+      "src/renderparticles.cpp",
+      "src/rendertext.cpp",
+      "src/rndmap.cpp",
+      "src/savegamedemo.cpp",
+      "src/server.cpp",
+      "src/serverbrowser.cpp",
+      "src/serverms.cpp",
+      "src/serverutil.cpp",
+      "src/sound.cpp",
+      "src/tools.cpp",
+      "src/weapon.cpp",
+      "src/world.cpp",
+      "src/worldio.cpp",
+      "src/worldlight.cpp",
+      "src/worldocull.cpp",
+      "src/worldrender.cpp",
+      "enet/host.c",
+      "enet/list.c",
+      "enet/callbacks.c",
+      "enet/packet.c",
+      "enet/peer.c",
+      "enet/protocol.c",
+      "enet/unix.c"
+    ]
+  },
+  "generated": [
+    "corpus/zlib-1.1.3/adler32.c",
+    "corpus/zlib-1.1.3/compress.c",
+    "corpus/zlib-1.1.3/crc32.c",
+    "corpus/zlib-1.1.3/gzio.c",
+    "corpus/zlib-1.1.3/uncompr.c",
+    "corpus/zlib-1.1.3/deflate.c",
+    "corpus/zlib-1.1.3/trees.c",
+    "corpus/zlib-1.1.3/zutil.c",
+    "corpus/zlib-1.1.3/inflate.c",
+    "corpus/zlib-1.1.3/infblock.c",
+    "corpus/zlib-1.1.3/inftrees.c",
+    "corpus/zlib-1.1.3/infcodes.c",
+    "corpus/zlib-1.1.3/infutil.c",
+    "corpus/zlib-1.1.3/inffast.c"
+  ],
+  "_generated": "zlib, which the Makefile links as -lz, compiled from the zlib 1.1.3 tree MAME 0.37b5 already uses (its .cgz maps are gzip files read through gzread).",
+  "include": [
+    "src",
+    "enet/include",
+    "../zlib-1.1.3"
+  ],
+  "tree": [
+    "src",
+    "enet"
+  ],
+  "_defines": "What the Makefile's flags say: -fsigned-char (char is signed on i386 anyway), no NDEBUG.",
+  "defines": {
+    "__linux__": "1"
+  },
+  "env": [
+    "stdio",
+    "tz",
+    "environ",
+    "gl",
+    "glu",
+    "sdl12",
+    "getopt"
+  ],
+  "host": "sdl",
+  "compile": {
+    "cxx": {
+      "std": "gnu++98"
+    },
+    "memory": 256,
+    "collect": true
+  }
+}

@@ -82,6 +82,7 @@ const DEFAULT_MASKS = {
 };
 const CD_ERROR = -1;
 const SDL_SRCALPHA = 0x00010000, SDL_SRCCOLORKEY = 0x00001000;
+const SDL_MUTEX_TIMEDOUT = 1;
 
 /*
  * Scan code set 1 -> SDLKey, for a US keyboard. `extended` is the 0xE0 prefix: the arrows and the
@@ -116,6 +117,8 @@ export const sdl12KeySym = (scan, extended) => (extended ? SDLK.extended : SDLK.
 
 import { mixerApi, mixerBuiltins, MIXER_STATE, pumpMixer } from './sdlmixer.js';
 import { freeRunningClock } from './clock.js';
+import { pngToSurface } from './sdl2-image.js';
+import { isPng } from './png.js';
 
 export function installSDL12(M, { onPresent = null, onPalette = null, keyboard = null,
                                  clock = freeRunningClock() } = {}) {
@@ -236,6 +239,35 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     return s;
   };
 
+  /*
+   * An image file's surface. PNG as IMG_png.c makes it (pngToSurface: indexed stays indexed, RGB is
+   * 24-bit and RGBA 32-bit, bytes in the file's order). JPEG is not decoded here yet: the load fails
+   * and says so, as SDL_image does for a format it was built without.
+   */
+  const imageSurface = (bytes, what) => {
+    if (!bytes) { state.setError(`Couldn't read ${what}`); return 0; }
+    if (!isPng(bytes)) {
+      state.setError(bytes[0] === 0xff && bytes[1] === 0xd8 ? `${what}: JPEG is not decoded here` : `${what}: unsupported image format`);
+      return 0;
+    }
+    const img = pngToSurface(bytes);
+    const d = dv();
+    let s;
+    if (img.bytes === 1) {
+      s = makeSurface(img.width, img.height, 8);
+      const colors = d.getUint32(d.getUint32(surfaceFormat(s) + F_PALETTE, true) + P_COLORS, true);
+      for (let i = 0; i < img.palette.length / 3; i++) M.u8.set(img.palette.subarray(3 * i, 3 * i + 3), colors + COLOR_SIZE * i);
+    } else if (img.bytes === 2) s = makeSurface(img.width, img.height, 16, { masks: [0xf800, 0x07e0, 0x001f, 0] });
+    else if (img.bytes === 3) s = makeSurface(img.width, img.height, 24, { masks: [0x0000ff, 0x00ff00, 0xff0000, 0] });
+    else s = makeSurface(img.width, img.height, 32, { masks: [0x000000ff, 0x0000ff00, 0x00ff0000, 0xff000000] });
+    M.u8.set(img.pixels, surfacePixels(s));
+    if (img.colorKey !== null) {
+      d.setUint32(s, (d.getUint32(s, true) | SDL_SRCCOLORKEY) >>> 0, true);
+      d.setUint32(surfaceFormat(s) + F_COLORKEY, img.colorKey >>> 0, true);
+    }
+    return s;
+  };
+
   const surfacePixels = (s) => (s ? dv().getUint32(s + S_PIXELS, true) : 0);
   const surfaceFormat = (s) => (s ? dv().getUint32(s + S_FORMAT, true) : 0);
 
@@ -306,6 +338,15 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       return rw;
     },
 
+    // ---- SDL_image 1.2: the kind of surface IMG_png.c makes of a PNG (src/env/sdl2-image.js) ----
+    IMG_Load: (name) => {
+      const path = M.mod.cstr(name);
+      const key = M.files ? M.files.find(path, { guess: false }) : null;
+      if (key === null) { state.setError(`Couldn't open ${path}`); return 0; }
+      return imageSurface(M.files.store.get(key), path);
+    },
+    IMG_Load_RW: (rw, _freesrc) => imageSurface(readRW(rw), 'an RWops'),
+
     // ---- video -----------------------------------------------------------------------------
     SDL_SetVideoMode: (w, h, depth, flags) => {
       state.width = w | 0;
@@ -362,6 +403,10 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       return 0;
     },
     SDL_WM_IconifyWindow: () => 0,
+    // The dummy video driver the reference runs has no window manager to describe (SDL_GetWMInfo).
+    SDL_GetWMInfo: () => 0,
+    // ...nor gamma: SDL_SetGamma fails there, and here.
+    SDL_SetGamma: () => { state.setError('Gamma correction not supported'); return -1; },
     SDL_WM_SetCaption: () => 0,
     SDL_WM_SetIcon: () => 0,
     SDL_WM_ToggleFullScreen: () => 0,   // 0 = refused, which the program treats as "stay windowed"
@@ -589,6 +634,33 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
      * keep apart are not here. A mutex is a guest block, so it is non-NULL and its own; taking one
      * always succeeds.
      */
+    /*
+     * Threads are not emulated: SDL_CreateThread fails and says so (Cube's server browser starts
+     * resolver threads when its menu opens, and finds no server). Semaphores are counters, exact in
+     * one thread -- except a wait on zero, which would block forever and fails instead.
+     */
+    SDL_CreateThread: () => { state.setError('SDL_CreateThread: threads are not emulated here'); return 0; },
+    SDL_WaitThread: (_t, status) => { if (status) dv().setInt32(status, 0, true); },
+    SDL_KillThread: () => {},
+    SDL_ThreadID: () => 1,
+    SDL_CreateSemaphore: (initial) => { const s = M.rt.malloc(4); dv().setUint32(s, initial >>> 0, true); return s; },
+    SDL_DestroySemaphore: (s) => { if (s) M.rt.free(s); },
+    SDL_SemValue: (s) => (s ? dv().getUint32(s, true) : 0),
+    SDL_SemPost: (s) => { if (!s) return -1; dv().setUint32(s, (dv().getUint32(s, true) + 1) >>> 0, true); return 0; },
+    SDL_SemTryWait: (s) => {
+      if (!s) return -1;
+      const v = dv().getUint32(s, true);
+      if (!v) return SDL_MUTEX_TIMEDOUT;
+      dv().setUint32(s, v - 1, true);
+      return 0;
+    },
+    SDL_SemWait: (s) => {
+      if (!s) return -1;
+      const v = dv().getUint32(s, true);
+      if (!v) { state.setError('SDL_SemWait: would wait forever with no other thread'); return -1; }
+      dv().setUint32(s, v - 1, true);
+      return 0;
+    },
     SDL_CreateMutex: () => M.rt.malloc(4),
     SDL_DestroyMutex: (m) => { if (m) M.rt.free(m); },
     SDL_mutexP: () => 0,
@@ -684,7 +756,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
  * CALLER unemittable and points the blame at the wrong function.
  */
 export function sdl12Builtins(T) {
-  const V = T.VOID, I = T.INT, U = T.UINT, P = T.ptr(T.CHAR), S = T.SHORT, B = T.UCHAR;
+  const V = T.VOID, I = T.INT, U = T.UINT, P = T.ptr(T.CHAR), S = T.SHORT, B = T.UCHAR, F = T.FLOAT;
   const f = (ret, ...params) => ({ ret, params });
   return {
     SDL_Init: f(I, U),
@@ -693,7 +765,7 @@ export function sdl12Builtins(T) {
     SDL_GetError: f(P),
     SDL_Delay: f(V, U),
     SDL_GetTicks: f(U),
-    SDL_RWFromFile: f(P, P, P),
+    SDL_RWFromFile: f(P, P, P), IMG_Load: f(P, P), IMG_Load_RW: f(P, P, I),
 
     SDL_SetVideoMode: f(P, I, I, I, U),
     SDL_GetVideoSurface: f(P),
@@ -716,12 +788,14 @@ export function sdl12Builtins(T) {
     SDL_RWclose: f(I, P),
     SDL_WM_GrabInput: f(I, I),
     SDL_SetTimer: f(I, U, P), SDL_AddTimer: f(P, U, P, P), SDL_RemoveTimer: f(I, P),
-    SDL_SetAlpha: f(I, P, U, B), SDL_WM_IconifyWindow: f(I),
+    SDL_SetAlpha: f(I, P, U, B), SDL_WM_IconifyWindow: f(I), SDL_GetWMInfo: f(I, P), SDL_SetGamma: f(I, F, F, F),
     SDL_CDNumDrives: f(I), SDL_CDName: f(P, I), SDL_CDOpen: f(P, I), SDL_CDStatus: f(I, P),
     SDL_CDPlayTracks: f(I, P, I, I, I, I), SDL_CDPlay: f(I, P, I, I), SDL_CDPause: f(I, P), SDL_CDResume: f(I, P),
     SDL_CDStop: f(I, P), SDL_CDEject: f(I, P), SDL_CDClose: f(V, P),
     SDL_OpenAudio: f(I, P, P),
     SDL_CreateMutex: f(P), SDL_DestroyMutex: f(V, P), SDL_mutexP: f(I, P), SDL_mutexV: f(I, P),
+    SDL_CreateThread: f(P, P, P), SDL_WaitThread: f(V, P, P), SDL_KillThread: f(V, P), SDL_ThreadID: f(U),
+    SDL_CreateSemaphore: f(P, U), SDL_DestroySemaphore: f(V, P), SDL_SemValue: f(U, P), SDL_SemPost: f(I, P), SDL_SemTryWait: f(I, P), SDL_SemWait: f(I, P),
     SDL_JoystickName: f(P, I),
     SDL_SetColors: f(I, P, P, I, I),
     SDL_SetColorKey: f(I, P, U, U),

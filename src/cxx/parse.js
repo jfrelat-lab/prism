@@ -622,12 +622,21 @@ class CxxParser {
       const isFunc = d.derivs.length && d.derivs[d.derivs.length - 1].k === 'func';
       // A constructor's member initialisers, then a body.
       if (isFunc && (this.isP('{') || this.isP(':'))) {
+        // Hiding a type of its name, as a declaration does below -- before the body, which may call it.
+        if (member && specs.storage !== 'typedef' && d.name?.parts.length === 1 && d.name.parts[0].name !== cls) this.scope.set(d.name.parts[0].name, 'func');
         out.push(this.functionDefinition(specs, d, { loc, cLink, cls, member }));
         return out;
       }
       const item = { k: specs.storage === 'typedef' ? 'typedef' : 'decl', specs, decl: d, loc, cLink };
-      // A function hides a class of its name in its scope: `stat(path, &st)` is a call, not a cast.
-      if (isFunc && !member && specs.storage !== 'typedef' && d.name?.parts.length === 1) this.scope.set(d.name.parts[0].name, 'func');
+      // A function hides a class of its name in its scope: `stat(path, &st)` is a call, not a cast. A
+      // member function in its class too -- Cube's pool::string(s, l) beside `typedef char string[260]`
+      // -- but not a constructor, whose name is the class's.
+      if (isFunc && specs.storage !== 'typedef' && d.name?.parts.length === 1 && (!member || d.name.parts[0].name !== cls)) this.scope.set(d.name.parts[0].name, 'func');
+      // So does a variable, in its scope: after Cube's `mitem &mitem = ...;`, `mitem.text` is the variable's.
+      if (!isFunc && !member && specs.storage !== 'typedef' && d.name?.parts.length === 1) {
+        const k = this.scope.find(d.name.parts[0].name);
+        if (k === 'type' || k === 'template') this.scope.set(d.name.parts[0].name, 'var');
+      }
       if (specs.storage === 'typedef' && d.name) {
         const tname = d.name.parts[d.name.parts.length - 1].name;
         this.scope.set(tname, 'type');
@@ -1013,8 +1022,20 @@ class CxxParser {
     const loc = this.loc();
     this.eatP('::');
     this.next();
-    let type;
-    if (this.isP('(')) { this.next(); type = this.typeId(); this.expectP(')'); }
+    let type, place = null;
+    // `new (where) T(x)`, placement new: a parenthesised expression list followed by a type. Otherwise
+    // the parentheses hold the type itself, `new (T)`.
+    if (this.isP('(')) {
+      const save = this.i;
+      try {
+        this.next();
+        const where = this.exprList();
+        this.expectP(')');
+        const t = this.peek();
+        if (t.k === ID && !this.isP('(')) place = where; else this.i = save;
+      } catch { this.i = save; }
+    }
+    if (!place && this.isP('(')) { this.next(); type = this.typeId(); this.expectP(')'); }
     else {
       const specs = this.declSpecifiers({ allowNone: false, inExpr: true });
       const derivs = [];
@@ -1030,7 +1051,7 @@ class CxxParser {
       if (dims.length) type = { ...type, derivs: [...type.derivs, ...dims.reverse()] };
     }
     if (this.eatP('(')) { args = this.isP(')') ? [] : this.exprList(); this.expectP(')'); }
-    return { k: 'new', type, count, args, loc };
+    return { k: 'new', type, count, args, place, loc };
   }
   postfix(e) {
     for (;;) {

@@ -970,6 +970,62 @@ int main() {
 }
 `);
 
+// What Cube (2005) needed of the language, each as its tools.h and its game code write it: placement
+// new into a pool's memory and the explicit destructor calls that go with it -- a pseudo-destructor
+// when the element is an int; a member function hiding a typedef of its name (pool::string beside
+// `typedef char string[260]`); a variable named as its type (`mitem &mitem = ...`); an array of
+// structs from a flat list (brace elision); an assignment used as an lvalue through ?:, to a name
+// and to a reference a call returned.
+C('cube-shapes', `
+#include <stdio.h>
+#include <stdlib.h>
+#include <new>
+typedef char string[260];
+static int live = 0;
+struct Tracked { int v; Tracked(int x) : v(x) { live++; } Tracked(const Tracked &o) : v(o.v + 100) { live++; } ~Tracked() { live--; } };
+template <class T> struct vec {
+    T *buf; int len;
+    vec() : buf((T *)malloc(8 * sizeof(T))), len(0) {}
+    T &add(const T &x) { new (&buf[len]) T(x); return buf[len++]; }
+    void setsize(int i) { for (; len > i; len--) buf[len - 1].~T(); }
+    T &operator[](int i) { return buf[i]; }
+};
+struct pool {
+    char store[64];
+    char *string(const char *s, int l) { for (int i = 0; i < l; i++) store[i] = s[i]; store[l] = 0; return store; }
+    char *string(const char *s) { int l = 0; while (s[l]) l++; return string(s, l); }
+};
+struct mitem { const char *text; int n; };
+struct itemstat { int add, max, sound; } itemstats[] = { 10, 50, 1, 20, 100, 2, 5, 25, 3 };
+struct nested { int a; struct { int b, c; } in; int d[2]; } nests[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+int *slot() { static int *p = 0; static int v = 41; return p ? p : (p = &v); }
+vec<int *> ptrs;
+int *&at(int i) { return ptrs[i]; }
+int main() {
+    vec<Tracked> ts;
+    ts.add(Tracked(1)); ts.add(Tracked(2));
+    printf("%d %d %d\\n", ts[0].v, ts[1].v, live);
+    ts.setsize(0);
+    printf("%d\\n", live);
+    vec<int> is; is.add(5); is.add(6); is.setsize(1);
+    printf("%d %d\\n", is.len, is[0]);
+    pool pl; string s = "hidden";
+    printf("%s %d\\n", pl.string(s), (int)sizeof(string));
+    mitem items[1] = { { "x", 3 } };
+    mitem &mitem = items[0];
+    mitem.n += 1;
+    printf("%s %d\\n", mitem.text, mitem.n);
+    printf("%d %d %d %d\\n", (int)(sizeof(itemstats) / sizeof(itemstats[0])), itemstats[1].max, itemstats[2].sound, (int)(sizeof(nests) / sizeof(nests[0])));
+    printf("%d %d %d %d\\n", nests[0].in.c, nests[0].d[1], nests[1].a, nests[1].in.b);
+    printf("%d %d\\n", *slot(), slot() == slot());
+    static int w = 9;
+    ptrs.add(0);
+    int *got = at(0) ? at(0) : (at(0) = &w);
+    printf("%d %d\\n", *got, at(0) == &w);
+    return 0;
+}
+`);
+
 // A class whose objects point into themselves, as ScummVM 0.10.0's Common::String does with its
 // small-string storage, is never moved by copying its bytes: built where it will live, returned
 // through a hidden pointer, passed by value by invisible reference -- every copy g++ makes or elides

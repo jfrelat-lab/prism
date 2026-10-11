@@ -1520,6 +1520,14 @@ export function format(M, fmtPtr, args) {
         if (conv === 'G') body = body.toUpperCase();
         break;
       }
+      case 'a': case 'A': {
+        const v = src.f64();
+        const nf = nonFinite(v);
+        if (nf !== null) { body = nf; if (conv === 'A') body = body.toUpperCase(); break; }
+        body = hexFloat(v, prec === null ? null : +prec);
+        if (conv === 'A') body = body.toUpperCase();
+        break;
+      }
       default:
         out += '%' + flags + width + (prec !== null ? '.' + prec : '') + (conv ?? '');
         continue;
@@ -1540,7 +1548,7 @@ export function format(M, fmtPtr, args) {
      *   - `#` means a base prefix for o,x,X and a forced decimal point for e,E,f,F,g,G.
      */
     const isInt = 'diuxXo'.includes(conv);
-    const isFloat = 'eEfFgG'.includes(conv);
+    const isFloat = 'eEfFgGaA'.includes(conv);
     if (isInt || isFloat) {
       let neg = body.startsWith('-');
       if (neg) body = body.slice(1);
@@ -1549,7 +1557,7 @@ export function format(M, fmtPtr, args) {
        * produce them. Testing every conversion for a letter made `%04X` of 0x6C print "  6C": the
        * hex digits ARE letters, so every value with an a-f digit silently lost its zero fill.
        */
-      const special = isFloat && /[a-z]/i.test(body);
+      const special = isFloat && /^-?(inf|nan)$/i.test(body);
       if (isInt) {
         // Precision 0 with a value of 0 converts to NO characters at all (C99 7.19.6.1p8) -- which is
         // why the precision has to be distinguishable from absent, and why `%.u` of 0 is "".
@@ -1561,7 +1569,7 @@ export function format(M, fmtPtr, args) {
         if (flags.includes('#') && conv === 'o' && !body.startsWith('0')) body = '0' + body;
       } else if (flags.includes('#') && !special && !body.includes('.')) {
         // The point goes before the exponent, not at the end: `%#.0e` of 1 is "1.e+00".
-        const e = body.search(/[eE]/);
+        const e = body.search(/[eEpP]/);
         body = e < 0 ? body + '.' : body.slice(0, e) + '.' + body.slice(e);
       }
       if (neg) body = '-' + body;
@@ -1635,6 +1643,38 @@ function intArg(v, bits, signed) {
  * print "0.0" instead of "-0.0", since that is `%.14g` too.
  */
 const signOfZero = (v) => (Object.is(v, -0) ? '-' : '');
+
+/**
+ * `%a`, as glibc prints it: 0x1.6p-1 -- a leading 1 (0 for zero and for subnormals, which keep the
+ * exponent -1022), the fraction in hex without its trailing zeros, the exponent in decimal with its
+ * sign. With a precision, the fraction is rounded to that many digits, half to even, and a carry
+ * reaches the leading digit (`%.0a` of 1.5 is 0x2p+0).
+ */
+const hexFloat = (v, prec) => {
+  const dv = new DataView(new ArrayBuffer(8));
+  dv.setFloat64(0, v);
+  const hi = dv.getUint32(0), lo = dv.getUint32(4);
+  const sign = hi >>> 31 ? '-' : '';
+  const bexp = (hi >>> 20) & 0x7ff;
+  let mant = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo);
+  let lead = bexp === 0 ? 0n : 1n;
+  const exp = bexp === 0 ? (mant === 0n ? 0 : -1022) : bexp - 1023;
+  let digits;
+  if (prec === null) digits = mant.toString(16).padStart(13, '0').replace(/0+$/, '');
+  else {
+    if (prec < 13) {
+      const shift = BigInt(4 * (13 - prec)), half = 1n << (shift - 1n);
+      let q = mant >> shift;
+      const rem = mant & ((1n << shift) - 1n);
+      // Half to even, and with no fraction digit left the digit to make even is the leading one.
+      if (rem > half || (rem === half && ((prec ? q : lead) & 1n))) q++;
+      if (q >> BigInt(4 * prec)) { lead += 1n; q &= (1n << BigInt(4 * prec)) - 1n; }
+      mant = q;
+    } else mant <<= BigInt(4 * (prec - 13));
+    digits = prec ? mant.toString(16).padStart(prec, '0') : '';
+  }
+  return `${sign}0x${lead}${digits ? '.' + digits : ''}p${exp < 0 ? '-' : '+'}${Math.abs(exp)}`;
+};
 
 /**
  * What C prints for a value that is not a number: "nan", "inf", "-inf" -- and the uppercase

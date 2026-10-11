@@ -1031,6 +1031,13 @@ export const exprMethods = {
     return o;
   },
   memberExpr(n, cx) {
+    // `x.~T()` / `p->~T()` with T a scalar: a pseudo-destructor call, see callExpr.
+    if (this.lastName(n.name).startsWith('~')) {
+      let o = this.expr(n.obj, cx);
+      if (n.arrow) o = this.decay(o);
+      const t = n.arrow ? (o.t.k === 'ptr' ? o.t.to : null) : o.t;
+      if (t && t.k !== 'class') return { dtorCall: true, obj: { c: n.arrow ? `(*${o.c})` : o.c, t, lv: true }, t: T.VOID, c: '', lv: false };
+    }
     const obj = this.objectOf(n, cx);
     this.complete(obj.t.cls, n);
     const name = this.lastName(n.name);
@@ -1079,6 +1086,9 @@ export const exprMethods = {
     const adl = n.fn.k === 'id' && n.fn.name.parts.length === 1 && !n.fn.name.global && !this.lookupName(n.fn.name, cx.env) ? this.adlLookup(this.lastName(n.fn.name), args) : null;
     let fn = adl ?? (n.fn.k === 'id' && !this.lookupName(n.fn.name, cx.env) ? this.fail(`'${this.qualText(n.fn.name)}' is not declared`, n.fn) : this.expr(n.fn, cx));
     if (fn.dtorCall) {
+      // A pseudo-destructor, `x.~T()` with T a scalar (Cube's vector<int>::setsize): the object is
+      // evaluated and nothing is destroyed.
+      if (fn.obj.t.k !== 'class') return { c: `((void)(${fn.obj.c}))`, t: T.VOID, lv: false };
       const d = this.dtorOf(fn.obj.t.cls);
       if (!d) return { c: '((void)0)', t: T.VOID, lv: false };
       return this.callResult(d, this.addrOf(fn.obj, cx), [], cx, { direct: false });
@@ -1285,12 +1295,29 @@ export const exprMethods = {
     if (!a.lv) this.fail('assignment to something that is not an lvalue', n);
     if (a.t.c) this.fail('assignment to a const object', n);
     if (cx.constOnly) cx.dynamic = true;
-    if (n.op === '=') return { c: `(${a.c} = ${this.coerce(b, T.uncst(a.t), cx, n, 'assignment')})`, t: a.t, lv: true };
+    if (n.op === '=') return this.assigned(a, '=', this.coerce(b, T.uncst(a.t), cx, n, 'assignment'), cx);
     const r = this.builtinOperand(b, cx, n);
     if (a.t.k === 'ptr' ? !(T.isInteger(r.t) && (n.op === '+=' || n.op === '-=')) : !(T.isArith(a.t) && T.isArith(r.t))) {
       this.fail(`${n.op} between ${T.show(a.t)} and ${T.show(b.t)}`, n);
     }
-    return { c: `(${a.c} ${n.op} ${r.c})`, t: a.t, lv: true };
+    return this.assigned(a, n.op, r.c, cx);
+  },
+  /*
+   * An assignment is an lvalue in C++ and not in C, so its address cannot be `&(a = b)`. Where the
+   * left side has no side effects -- a name, a member reached from one, a pointer read through one --
+   * the address is the assignment's, then &a: Cube's `return p ? p : (p = new pool());`. Where it has
+   * an address of its own (a reference a call returned: `players[cn] = newdynent()`), that address
+   * is taken once into a temporary and the assignment goes through it.
+   */
+  assigned(a, op, v, cx) {
+    const simple = /^\(*\*?\(*[A-Za-z_$][\w$]*\)*((\.|->)[A-Za-z_$][\w$]*\)*)*$/.test(a.c);
+    if (simple || !a.addr || !cx.fn) {
+      const c = `(${a.c} ${op} ${v})`;
+      return simple ? { c, t: a.t, lv: true, addr: `(${c}, &${a.c})` } : { c, t: a.t, lv: true };
+    }
+    const p = this.temp(cx, T.ptr(a.t));
+    const c = `(*(${p} = ${a.addr}) ${op} ${v})`;
+    return { c, t: a.t, lv: true, addr: `(${c}, ${p})` };
   },
 
   /** An explicit conversion of e to `to` (a cast in any spelling). */
@@ -1395,6 +1422,7 @@ export const exprMethods = {
      * a row, made by the same helper as `new Area[n * MAX]` -- the count kept in front -- and handed
      * back as a pointer to the arrays. delete[] goes back through the helper (deleteExpr).
      */
+    if (n.place && n.count) this.fail('placement new of an array', n);
     const inner = t.k === 'array' ? this.isClassy(t) : null;
     if (inner && n.count && (this.defaultCtor(inner, n) || this.dtorOf(inner))) {
       const count = this.coerce(this.expr(n.count, cx), T.UINT, cx, n);
@@ -1408,7 +1436,12 @@ export const exprMethods = {
       return { c: `${this.arrayHelper(cls, 'new')}(${count})`, t: pt, lv: false };
     }
     const p = this.temp(cx, pt);
-    const alloc = `${p} = (${this.ct(pt)})malloc(sizeof(${this.ct(t)}))`;
+    // Placement new, `new (where) T(...)`: the object is built at that address, nothing allocated
+    // (the <new> operator new(size_t, void *) returns its argument).
+    if (n.place && n.place.length !== 1) this.fail('placement new with more than one argument', n);
+    const alloc = n.place
+      ? `${p} = (${this.ct(pt)})(${this.coerce(this.expr(n.place[0], cx), T.ptr(T.VOID), cx, n)})`
+      : `${p} = (${this.ct(pt)})malloc(sizeof(${this.ct(t)}))`;
     if (!cls) {
       if (n.args && n.args.length === 1) return { c: `(${alloc}, *${p} = ${this.coerce(this.expr(n.args[0], cx), t, cx, n)}, ${p})`, t: pt, lv: false };
       if (n.args) return { c: `(${alloc}, *${p} = 0, ${p})`, t: pt, lv: false };

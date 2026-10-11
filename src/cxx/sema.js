@@ -1086,7 +1086,7 @@ export class Sema {
       // reads the completed type from here on (Kyra's ARRAYSIZE(_soundFiles) was 0).
       if (ent.type.k === 'array' && ent.type.n == null) {
         let type = this.declType(it.specs, d.derivs, ot.cls.env, it);
-        if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, it.init.items.length);
+        if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, this.nestBraces(it.init, type).items.length);
         if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
         if (type.k === 'array' && type.n != null) ent.type = type;
       }
@@ -1094,7 +1094,7 @@ export class Sema {
       return ent;
     }
     let type = this.declType(it.specs, d.derivs, env, it);
-    if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, it.init.items.length);
+    if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, this.nestBraces(it.init, type).items.length);
     if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
     const cLink = !!it.cLink;
     const prior = env.scope.get(name);

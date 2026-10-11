@@ -81,6 +81,52 @@ void SDL_DestroySemaphore(SDL_sem *sem);
 int SDL_SemWait(SDL_sem *sem);
 int SDL_SemPost(SDL_sem *sem);
 Uint32 SDL_SemValue(SDL_sem *sem);
+int SDL_SemTryWait(SDL_sem *sem);
+#define SDL_MUTEX_TIMEDOUT 1
+#define SDL_MUTEX_MAXWAIT (~(Uint32)0)
+#endif
+`;
+
+/*
+ * SDL_syswm.h as SDL 1.2 builds it for X11, the platform these programs are built for. The
+ * reference runs SDL's dummy video driver, which has no window manager to describe: SDL_GetWMInfo
+ * answers 0 there, and here.
+ */
+const SDL_SYSWM_12 = `
+#ifndef _SDL_syswm_h
+#define _SDL_syswm_h
+#include "SDL.h"
+#include <X11/Xlib.h>
+typedef enum { SDL_SYSWM_X11 } SDL_SYSWM_TYPE;
+struct SDL_SysWMmsg { SDL_version version; SDL_SYSWM_TYPE subsystem; union { XEvent xevent; } event; };
+typedef struct SDL_SysWMinfo {
+    SDL_version version;
+    SDL_SYSWM_TYPE subsystem;
+    union {
+        struct {
+            Display *display;
+            Window window;
+            void (*lock_func)(void);
+            void (*unlock_func)(void);
+            Window fswindow;
+            Window wmwindow;
+            Display *gfxdisplay;
+        } x11;
+    } info;
+} SDL_SysWMinfo;
+int SDL_GetWMInfo(SDL_SysWMinfo *info);
+#endif
+`;
+
+/* SDL_image 1.2, the loading half its programs call: a file (or an RWops) in, a surface out. */
+const SDL_IMAGE_12 = `
+#ifndef _SDL_IMAGE_H
+#define _SDL_IMAGE_H
+#include "SDL.h"
+SDL_Surface *IMG_Load(const char *file);
+SDL_Surface *IMG_Load_RW(SDL_RWops *src, int freesrc);
+#define IMG_GetError SDL_GetError
+#define IMG_SetError SDL_SetError
 #endif
 `;
 
@@ -156,6 +202,8 @@ SDL_bool SDL_RemoveTimer(SDL_TimerID t);
 #define SDL_VERSIONNUM(X, Y, Z) ((X)*1000 + (Y)*100 + (Z))
 #define SDL_COMPILEDVERSION SDL_VERSIONNUM(SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL)
 #define SDL_VERSION_ATLEAST(X, Y, Z) (SDL_COMPILEDVERSION >= SDL_VERSIONNUM(X, Y, Z))
+typedef struct SDL_version { Uint8 major; Uint8 minor; Uint8 patch; } SDL_version;
+#define SDL_VERSION(X) { (X)->major = SDL_MAJOR_VERSION; (X)->minor = SDL_MINOR_VERSION; (X)->patch = SDL_PATCHLEVEL; }
 
 /* The CD-ROM: there is no drive here, so SDL_CDNumDrives is 0 and SDL_CDOpen fails. */
 #define SDL_MAX_TRACKS 99
@@ -287,6 +335,7 @@ Uint32 SDL_MapRGB(const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b);
 Uint32 SDL_MapRGBA(const SDL_PixelFormat *format, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
 int SDL_ShowCursor(int toggle);
 void SDL_WM_SetCaption(const char *title, const char *icon);
+int SDL_SetGamma(float red, float green, float blue);
 void SDL_WM_SetIcon(SDL_Surface *icon, Uint8 *mask);
 int SDL_WM_ToggleFullScreen(SDL_Surface *surface);
 /* There is no window manager to iconify to: 0, as SDL answers where it cannot. */
@@ -304,18 +353,28 @@ void *SDL_GL_GetProcAddress(const char *proc);
 
 /*
  * SDLKey is an ENUM, four bytes wide, and SDL2 renamed it SDL_Keycode -- which is what made a
- * program compiled against 1.2 fail to parse when it was handed SDL2's header. The values below are
- * the ones this corpus names, read from the real headers: the printable keys are their ASCII codes
- * and the rest are not, which is exactly the part that cannot be guessed.
+ * program compiled against 1.2 fail to parse when it was handed SDL2's header. The values are SDL
+ * 1.2's SDL_keysym.h: the printable keys are their ASCII codes and the rest are not, which is exactly
+ * the part that cannot be guessed.
  */
 typedef enum {
-    SDLK_UNKNOWN = 0,
-    SDLK_BACKSPACE = 8, SDLK_TAB = 9, SDLK_RETURN = 13,
+    SDLK_UNKNOWN = 0, SDLK_FIRST = 0,
+    SDLK_BACKSPACE = 8, SDLK_TAB = 9, SDLK_CLEAR = 12, SDLK_RETURN = 13, SDLK_PAUSE = 19,
     SDLK_ESCAPE = 27,
-    SDLK_SPACE = 32, SDLK_PLUS = 43, SDLK_COMMA = 44, SDLK_EQUALS = 61, SDLK_MINUS = 45, SDLK_PERIOD = 46, SDLK_SLASH = 47,
-    SDLK_0 = 48, SDLK_9 = 57, SDLK_z = 122, SDLK_DELETE = 127,
-    SDLK_1 = 49, SDLK_2 = 50, SDLK_3 = 51, SDLK_4 = 52,
-    SDLK_a = 97, SDLK_d = 100, SDLK_i = 105, SDLK_j = 106, SDLK_l = 108, SDLK_w = 119,
+    SDLK_SPACE = 32, SDLK_EXCLAIM = 33, SDLK_QUOTEDBL = 34, SDLK_HASH = 35, SDLK_DOLLAR = 36,
+    SDLK_AMPERSAND = 38, SDLK_QUOTE = 39, SDLK_LEFTPAREN = 40, SDLK_RIGHTPAREN = 41, SDLK_ASTERISK = 42,
+    SDLK_PLUS = 43, SDLK_COMMA = 44, SDLK_MINUS = 45, SDLK_PERIOD = 46, SDLK_SLASH = 47,
+    SDLK_0 = 48, SDLK_1 = 49, SDLK_2 = 50, SDLK_3 = 51, SDLK_4 = 52,
+    SDLK_5 = 53, SDLK_6 = 54, SDLK_7 = 55, SDLK_8 = 56, SDLK_9 = 57,
+    SDLK_COLON = 58, SDLK_SEMICOLON = 59, SDLK_LESS = 60, SDLK_EQUALS = 61, SDLK_GREATER = 62,
+    SDLK_QUESTION = 63, SDLK_AT = 64,
+    SDLK_LEFTBRACKET = 91, SDLK_BACKSLASH = 92, SDLK_RIGHTBRACKET = 93, SDLK_CARET = 94,
+    SDLK_UNDERSCORE = 95, SDLK_BACKQUOTE = 96,
+    SDLK_a = 97, SDLK_b = 98, SDLK_c = 99, SDLK_d = 100, SDLK_e = 101, SDLK_f = 102, SDLK_g = 103,
+    SDLK_h = 104, SDLK_i = 105, SDLK_j = 106, SDLK_k = 107, SDLK_l = 108, SDLK_m = 109, SDLK_n = 110,
+    SDLK_o = 111, SDLK_p = 112, SDLK_q = 113, SDLK_r = 114, SDLK_s = 115, SDLK_t = 116, SDLK_u = 117,
+    SDLK_v = 118, SDLK_w = 119, SDLK_x = 120, SDLK_y = 121, SDLK_z = 122,
+    SDLK_DELETE = 127,
     SDLK_KP0 = 256, SDLK_KP1 = 257, SDLK_KP2 = 258, SDLK_KP3 = 259, SDLK_KP4 = 260,
     SDLK_KP5 = 261, SDLK_KP6 = 262, SDLK_KP7 = 263, SDLK_KP8 = 264, SDLK_KP9 = 265,
     SDLK_KP_PERIOD = 266, SDLK_KP_DIVIDE = 267, SDLK_KP_MULTIPLY = 268, SDLK_KP_MINUS = 269,
@@ -328,7 +387,9 @@ typedef enum {
     SDLK_NUMLOCK = 300, SDLK_CAPSLOCK = 301, SDLK_SCROLLOCK = 302,
     SDLK_RSHIFT = 303, SDLK_LSHIFT = 304, SDLK_RCTRL = 305, SDLK_LCTRL = 306,
     SDLK_RALT = 307, SDLK_LALT = 308, SDLK_RMETA = 309, SDLK_LMETA = 310,
-    SDLK_EURO = 321,
+    SDLK_LSUPER = 311, SDLK_RSUPER = 312, SDLK_MODE = 313, SDLK_COMPOSE = 314,
+    SDLK_HELP = 315, SDLK_PRINT = 316, SDLK_SYSREQ = 317, SDLK_BREAK = 318, SDLK_MENU = 319,
+    SDLK_POWER = 320, SDLK_EURO = 321, SDLK_UNDO = 322,
     SDLK_LAST = 323
 } SDLKey;
 
@@ -483,4 +544,8 @@ export const SDL12_HEADERS = {
   'SDL_byteorder.h': '#include "SDL_endian.h"\n',
   'SDL_mutex.h': SDL_MUTEX_12,
   'SDL_thread.h': SDL_THREAD_12,
+  'SDL_syswm.h': SDL_SYSWM_12,
+  'SDL/SDL_syswm.h': SDL_SYSWM_12,
+  'SDL_image.h': SDL_IMAGE_12,
+  'SDL/SDL_image.h': SDL_IMAGE_12,
 };

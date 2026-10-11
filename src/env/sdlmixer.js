@@ -48,6 +48,8 @@ int Mix_Volume(int channel, int volume);
 int Mix_PlayChannelTimed(int channel, Mix_Chunk *chunk, int loops, int ticks);
 #define Mix_PlayChannel(channel, chunk, loops) Mix_PlayChannelTimed(channel, chunk, loops, -1)
 int Mix_HaltChannel(int channel);
+int Mix_AllocateChannels(int numchans);
+int Mix_SetPanning(int channel, Uint8 left, Uint8 right);
 int Mix_Playing(int channel);
 Mix_Music *Mix_LoadMUS(const char *file);
 void Mix_FreeMusic(Mix_Music *music);
@@ -224,7 +226,7 @@ export function mixerApi(M, state, { readRW = null } = {}) {
     if (state.setError) state.setError(text);
   };
   const channels = () => (state.channels ??= Array.from({ length: MIX_CHANNELS }, () => (
-    { chunk: 0, samples: 0, playing: 0, looping: 0, volume: MIX_MAX_VOLUME, paused: false })));
+    { chunk: 0, samples: 0, playing: 0, looping: 0, volume: MIX_MAX_VOLUME, paused: false, pan: null })));
   const frameBytes = () => ((state.format & 0xff) >> 3) * state.outChannels;
   const chunkVolume = (c) => M.u8[c + C_VOLUME];
 
@@ -246,6 +248,25 @@ export function mixerApi(M, state, { readRW = null } = {}) {
   };
 
   /*
+   * A channel's effects over the samples about to be mixed (Mix_DoEffects): the samples are copied
+   * and the copy changed. The one effect here is Mix_SetPanning's, effect_position.c's
+   * _Eff_position_s16lsb for a 16-bit stereo device: each sample times left_f (or right_f) times
+   * distance_f, in float, then cast to Sint16.
+   */
+  let effectBuf = 0, effectLen = 0;
+  const withEffects = (ch, src, len) => {
+    if (!ch.pan || state.outChannels !== 2 || (state.format & 0xff) !== 16) return src;
+    if (effectLen < len) { if (effectBuf) M.rt.free(effectBuf); effectBuf = M.rt.malloc(len); effectLen = len; }
+    const d = dv(), { left, right, distance } = ch.pan;
+    for (let i = 0; i + 4 <= len; i += 4) {
+      const l = d.getInt16(src + i, true), r = d.getInt16(src + i + 2, true);
+      d.setInt16(effectBuf + i, Math.trunc(Math.fround(Math.fround(l * left) * distance)), true);
+      d.setInt16(effectBuf + i + 2, Math.trunc(Math.fround(Math.fround(r * right) * distance)), true);
+    }
+    return effectBuf;
+  };
+
+  /*
    * One device buffer, as SDL_mixer's mix_channels fills it: silence, then every playing channel
    * added at chunk volume times channel volume, a looping chunk starting again where it ended so a
    * loop has no gap, then the program's own post-mix hook over the result.
@@ -259,13 +280,15 @@ export function mixerApi(M, state, { readRW = null } = {}) {
       while (ch.playing > 0 && index < len) {
         volume = Math.trunc((ch.volume * chunkVolume(ch.chunk)) / MIX_MAX_VOLUME);
         const mixable = Math.min(ch.playing, len - index);
-        mixInto(stream + index, ch.samples, mixable, volume);
+        mixInto(stream + index, withEffects(ch, ch.samples, mixable), mixable, volume);
         ch.samples += mixable; ch.playing -= mixable; index += mixable;
+        // Done playing: SDL_mixer removes the channel's effects (_Mix_channel_done_playing).
+        if (!ch.playing && !ch.looping) ch.pan = null;
       }
       const abuf = dv().getUint32(ch.chunk + C_ABUF, true), alen = dv().getUint32(ch.chunk + C_ALEN, true);
       while (ch.looping && index < len && alen > 0) {
         const remaining = Math.min(len - index, alen);
-        mixInto(stream + index, abuf, remaining, volume);
+        mixInto(stream + index, withEffects(ch, abuf, remaining), remaining, volume);
         ch.looping--;
         ch.samples = abuf + remaining; ch.playing = alen - remaining; index += remaining;
       }
@@ -295,6 +318,9 @@ export function mixerApi(M, state, { readRW = null } = {}) {
   state.pump = pump;
 
   const halt = (ch) => { ch.playing = 0; ch.looping = 0; };
+  // ...and halting one, or starting another chunk on it, is done playing too.
+  const done = (ch) => { halt(ch); ch.pan = null; };
+  const newChannel = () => ({ chunk: 0, samples: 0, playing: 0, looping: 0, volume: MIX_MAX_VOLUME, paused: false, pan: null });
   const active = (ch) => ch.playing > 0 || ch.looping > 0;
 
   return {
@@ -391,14 +417,41 @@ export function mixerApi(M, state, { readRW = null } = {}) {
         console.warn('sdlmixer: Mix_PlayChannelTimed with a time limit plays the whole chunk in this implementation');
       }
       const ch = all[which];
+      // A chunk started over a playing one ends that one first, effects and all.
+      if (active(ch)) done(ch);
       ch.chunk = chunk; ch.samples = d.getUint32(chunk + C_ABUF, true); ch.playing = whole;
       ch.looping = loops | 0; ch.paused = false;
       return which;
     },
     Mix_HaltChannel: (which) => {
       const all = channels();
-      if ((which | 0) === -1) all.forEach(halt); else if (all[which | 0]) halt(all[which | 0]);
+      if ((which | 0) === -1) all.forEach(done); else if (all[which | 0]) done(all[which | 0]);
       return 0;
+    },
+    /* As many channels as asked: the ones dropped are halted, the new ones as Mix_OpenAudio makes them. */
+    Mix_AllocateChannels: (n) => {
+      const all = channels();
+      n |= 0;
+      if (n < 0 || n === all.length) return all.length;
+      for (let i = n; i < all.length; i++) done(all[i]);
+      if (n < all.length) all.length = n;
+      else while (all.length < n) all.push(newChannel());
+      return n;
+    },
+    /*
+     * Stereo panning, effect_position.c: left and right volumes 0..255 kept as floats (x / 255.0f);
+     * 255 and 255 at full distance is no effect at all, and unregisters it. On a mono device it is
+     * a no-op that succeeds.
+     */
+    Mix_SetPanning: (which, left, right) => {
+      const all = channels();
+      which |= 0; left &= 0xff; right &= 0xff;
+      if (which < 0 || which >= all.length) { setError('Invalid channel number'); return 0; }
+      if (state.outChannels === 1) return 1;
+      const ch = all[which];
+      if (left === 255 && right === 255 && (!ch.pan || ch.pan.distanceU8 === 255)) { ch.pan = null; return 1; }
+      ch.pan = { left: Math.fround(left / 255), right: Math.fround(right / 255), distance: ch.pan?.distance ?? 1, distanceU8: ch.pan?.distanceU8 ?? 255 };
+      return 1;
     },
     Mix_Playing: (which) => {
       const all = channels();
@@ -438,7 +491,7 @@ export const MIXER_STATE = {
 };
 
 export function mixerBuiltins(T) {
-  const V = T.VOID, I = T.INT, P = T.ptr(T.CHAR);
+  const V = T.VOID, I = T.INT, P = T.ptr(T.CHAR), B = T.UCHAR;
   const f = (ret, ...params) => ({ ret, params });
   return {
     Mix_OpenAudio: f(I, I, T.USHORT, I, I),
@@ -451,7 +504,7 @@ export function mixerBuiltins(T) {
     Mix_VolumeChunk: f(I, P, I),
     Mix_Volume: f(I, I, I),
     Mix_PlayChannelTimed: f(I, I, P, I, I),
-    Mix_HaltChannel: f(I, I),
+    Mix_HaltChannel: f(I, I), Mix_AllocateChannels: f(I, I), Mix_SetPanning: f(I, I, B, B),
     Mix_Playing: f(I, I),
     Mix_LoadMUS: f(P, P),
     Mix_FreeMusic: f(V, P),

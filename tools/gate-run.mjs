@@ -609,6 +609,23 @@ int main(void)
 }
 `);
 
+// %a and %A, C99's hexadecimal floats, which gate-glu prints its results with: zero and -0, a
+// subnormal, precisions that round half to even and carry into the leading digit, inf and nan, and
+// the flags that pad and sign.
+C('printf-hexfloat', `
+#include <stdio.h>
+int main(void)
+{
+    double xs[] = { 1.0, -0.6875, 0.1, 0.0, -0.0, 1.5, 2.5, 1e300, 4.9406564584124654e-324, 2.2250738585072014e-308, 1.0 / 3.0 };
+    double inf = 1e308 * 10, nan = inf - inf;
+    int i;
+    for (i = 0; i < 11; i++)
+        printf("%a|%A|%.0a|%.1a|%.3a|%.20a|%+a|% a|%20a|%-20a|%#.0a\\n", xs[i], xs[i], xs[i], xs[i], xs[i], xs[i], xs[i], xs[i], xs[i], xs[i], xs[i]);
+    printf("%a %A %8a|%-8a|\\n", inf, -inf, inf, inf);
+    return 0;
+}
+`);
+
 // The parts of a stream that say NO. Every one of these was silently permissive, and each is what a
 // program checks when it wants to know whether something worked: gcc's suite never asks, and Lua's
 // files.lua asks about all of them.

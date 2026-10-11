@@ -1593,6 +1593,7 @@ Status XSetWMProtocols(Display *d, Window w, Atom *protocols, int count);
 int XConfigureWindow(Display *d, Window w, unsigned int mask, XWindowChanges *changes);
 int XUndefineCursor(Display *d, Window w);
 int XFree(void *data);
+char *XFetchBytes(Display *d, int *nbytes_return);
 /* Core fonts, in Xlib's layout. PRISM's server has none: XLoadQueryFont answers NULL for every
    pattern, as a server with an empty font path does (ET's linux_glimp.c then skips its debug font). */
 typedef unsigned long Font;
@@ -1861,6 +1862,15 @@ int setsockopt(int fd, int level, int name, const void *val, unsigned int len);
 int getsockopt(int fd, int level, int name, void *val, unsigned int *len);
 int getpeername(int fd, struct sockaddr *addr, unsigned int *len);
 int getsockname(int fd, struct sockaddr *addr, unsigned int *len);
+/* Scatter/gather sends, as glibc lays out struct msghdr on i386 (ENet's unix.c uses them). */
+#include <sys/uio.h>
+struct msghdr { void *msg_name; unsigned int msg_namelen; struct iovec *msg_iov; size_t msg_iovlen;
+                void *msg_control; size_t msg_controllen; int msg_flags; };
+ssize_t sendmsg(int fd, const struct msghdr *msg, int flags);
+ssize_t recvmsg(int fd, struct msghdr *msg, int flags);
+#define MSG_TRUNC 0x20
+#define MSG_NOSIGNAL 0x4000
+#define SOMAXCONN 4096
 #ifndef _PRISM_SOCKET_MORE
 #define _PRISM_SOCKET_MORE
 typedef unsigned int socklen_t;
@@ -2114,4 +2124,8 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'math.h': MATH,
   'limits.h': LIMITS,
   'assert.h': ASSERT,
+  // C++'s <new> (and the pre-standard <new.h>): placement new, `new (where) T`, is built into
+  // src/cxx, so all the header owes a program is size_t.
+  'new': STDDEF,
+  'new.h': STDDEF,
 };

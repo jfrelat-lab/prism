@@ -72,7 +72,59 @@ export function installGlu(M) {
   };
   const pow2 = (v) => { let p = 1; while (p * 2 <= v) p *= 2; return v - p > p * 2 - v && p * 2 <= 16384 ? p * 2 : p; };
 
+  /*
+   * gluUnProject as GLU 9 (Mesa's libGLU, project.c) computes it, operation for operation: the
+   * product of the two matrices, its inverse by cofactors, the window point mapped to [-1, 1] and
+   * multiplied through. Double arithmetic in the same order, so the bits are its bits.
+   */
+  const mat = (p) => Array.from({ length: 16 }, (_, k) => dv().getFloat64(p + 8 * k, true));
+  const multMatrices = (a, b) => {
+    const r = new Array(16);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+      r[i * 4 + j] = a[i * 4 + 0] * b[0 * 4 + j] + a[i * 4 + 1] * b[1 * 4 + j] + a[i * 4 + 2] * b[2 * 4 + j] + a[i * 4 + 3] * b[3 * 4 + j];
+    }
+    return r;
+  };
+  const invert = (m) => {
+    const inv = new Array(16);
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] + m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] - m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] + m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] - m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] - m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] + m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] - m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] + m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] + m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] - m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] + m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] - m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] - m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] + m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] - m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] + m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+    let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if (det === 0) return null;
+    det = 1.0 / det;
+    return inv.map((v) => v * det);
+  };
+  const multVec = (m, v) => [0, 1, 2, 3].map((i) => v[0] * m[0 * 4 + i] + v[1] * m[1 * 4 + i] + v[2] * m[2 * 4 + i] + v[3] * m[3 * 4 + i]);
+
   Object.assign(rt, {
+    gluUnProject: (winx, winy, winz, model, proj, viewport, objx, objy, objz) => {
+      const final = invert(multMatrices(mat(model), mat(proj)));
+      if (!final) return 0;
+      const vp = [0, 1, 2, 3].map((k) => dv().getInt32(viewport + 4 * k, true));
+      const v = [winx, winy, winz, 1.0];
+      v[0] = (v[0] - vp[0]) / vp[2];
+      v[1] = (v[1] - vp[1]) / vp[3];
+      v[0] = v[0] * 2 - 1; v[1] = v[1] * 2 - 1; v[2] = v[2] * 2 - 1;
+      const out = multVec(final, v);
+      if (out[3] === 0.0) return 0;
+      out[0] /= out[3]; out[1] /= out[3]; out[2] /= out[3];
+      dv().setFloat64(objx, out[0], true); dv().setFloat64(objy, out[1], true); dv().setFloat64(objz, out[2], true);
+      return 1;
+    },
     gluPerspective: (fovy, aspect, zNear, zFar) => {
       const f = 1 / Math.tan(fovy * Math.PI / 360);
       rt.glMultMatrixd(doubles([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (zFar + zNear) / (zNear - zFar), -1,
@@ -176,6 +228,7 @@ export function gluBuiltins(T) {
   const I = T.INT, U = T.UINT, V = T.VOID, P = T.ptr(T.CHAR), D = T.DOUBLE;
   const f = (ret, ...params) => ({ ret, params });
   return {
+    gluUnProject: f(I, D, D, D, P, P, P, P, P, P),
     gluPerspective: f(V, D, D, D, D), gluErrorString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
     gluQuadricDrawStyle: f(V, P, U), gluQuadricNormals: f(V, P, U), gluQuadricOrientation: f(V, P, U), gluQuadricTexture: f(V, P, I),
     gluSphere: f(V, P, D, I, I), gluScaleImage: f(I, U, I, I, U, P, I, I, U, P), gluBuild2DMipmaps: f(I, U, I, I, I, U, U, P),

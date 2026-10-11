@@ -336,7 +336,7 @@ export const stmtMethods = {
     if (it.decl.derivs.length && it.decl.derivs[it.decl.derivs.length - 1].k === 'func') { this.declareFunction(it, { ...cx.env, scope: cx.env.scope }); return ''; }
     const name = this.lastName(it.decl.name);
     let type = this.declType(it.specs, it.decl.derivs, cx.env, it);
-    if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, it.init.items.length);
+    if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, this.nestBraces(it.init, type).items.length);
     if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
     const isStatic = it.specs.storage === 'static';
     if (it.specs.storage === 'extern') {
@@ -542,7 +542,39 @@ export const stmtMethods = {
     return `${dest} = ${this.coerce(x, T.uncst(type), cx, node, 'initialisation')};`;
   },
   /** `{ ... }` for an aggregate: each element converted to its member's or element's type. */
+  /**
+   * Brace elision: `struct S { int a, b, c; } t[] = { 10, 50, 1, 20, 100, 2 };` is two elements.
+   * The list is regrouped into the braces it leaves out -- a sub-aggregate met by a value that is not
+   * in braces takes as many values as it has members, a char array a string -- so what follows sees
+   * every level braced. An array of unknown size counts the regrouped elements. (A value of the
+   * class itself given for a member without braces is not recognised: it fails, loudly.)
+   */
+  nestBraces(b, type) {
+    const items = b.items;
+    let i = 0;
+    const aggregate = (t) => t.k === 'array' || (t.k === 'class' && (() => {
+      const cls = this.complete(t.cls, b);
+      return !cls.ctors.length && !cls.bases.length && !cls.hasVptr;
+    })());
+    const level = (t, take) => {
+      const out = [];
+      if (t.k === 'array') { const n = t.n ?? Infinity; while (out.length < n && i < items.length) out.push(take(t.of)); return out; }
+      const cls = this.complete(t.cls, b);
+      for (const f of cls.key === 'union' ? cls.fields.slice(0, 1) : cls.fields) { if (i >= items.length) break; out.push(take(f.type)); }
+      return out;
+    };
+    const one = (t) => {
+      const x = items[i];
+      if (x.k === 'braces') { i++; return aggregate(t) ? this.nestBraces(x, t) : x; }
+      if (!aggregate(t) || (t.k === 'array' && x.k === 'str')) { i++; return x; }
+      return { k: 'braces', items: level(t, one), loc: x.loc };
+    };
+    const out = level(type, one);
+    if (i < items.length) this.fail('too many initialisers', b);
+    return { ...b, items: out };
+  },
   bracesInit(b, type, cx, path = []) {
+    if (type.k === 'array' || (type.k === 'class' && !this.complete(type.cls, b).ctors.length)) b = this.nestBraces(b, type);
     if (type.k === 'array') {
       return `{ ${b.items.map((x, i) => this.initElem(x, type.of, cx, [...path, `[${i}]`])).join(', ')} }`;
     }

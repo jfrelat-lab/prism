@@ -156,6 +156,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XAllocSizeHints: () => M.rt.calloc(1, 80),
     XAllocClassHint: () => M.rt.calloc(1, 8),
     XFree: (p) => { if (p) M.rt.free(p); return 1; },
+    // The cut buffer: empty, as on a display nobody has copied anything to.
+    XFetchBytes: (_d, n) => { if (n) dv().setInt32(n, 0, true); return 0; },
     XLoadQueryFont: () => 0,   // no core fonts on this server (see <X11/Xlib.h>)
     XFreeFont: () => 1,
     /*

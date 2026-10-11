@@ -891,6 +891,8 @@ export function installStdio(M, {
     bind: () => -1,
     sendto: () => -1,
     recvfrom: () => -1,
+    sendmsg: () => -1,
+    recvmsg: () => -1,
     setsockopt: () => 0,
     gethostbyname: () => 0,
     htons: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,

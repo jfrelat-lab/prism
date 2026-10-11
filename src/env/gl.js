@@ -642,6 +642,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexCoord2d: (u, v) => { s.tex = [u, v]; },
     glTexCoord2dv: (v) => { s.tex = [v[0], v[1]]; },
     glColor3dv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
+    // The double and integer spellings, converted to float on the way in as Mesa's entry points do.
+    glColor3d: (r, g, b) => { s.colour = [Math.fround(r), Math.fround(g), Math.fround(b), 1]; },
+    glColor3ub: (r, g, b) => { s.colour = [(r & 0xff) / 255, (g & 0xff) / 255, (b & 0xff) / 255, 1]; },
+    glVertex2i: (x, y) => vertex(x, y, 0),
+    glVertex3d: (x, y, z) => vertex(Math.fround(x), Math.fround(y), Math.fround(z)),
+    glTranslated: (x, y, z) => exec.glTranslatef(Math.fround(x), Math.fround(y), Math.fround(z)),
+    glRotated: (a, x, y, z) => exec.glRotatef(Math.fround(a), Math.fround(x), Math.fround(y), Math.fround(z)),
     glColor4dv: (v) => { s.colour = [v[0], v[1], v[2], v[3]]; },
     glVertex2dv: (v) => vertex(v[0], v[1], 0),
     glVertex3dv: (v) => vertex(v[0], v[1], v[2]),
@@ -834,6 +841,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (!m) throw new Error(`gl: glGetFloatv 0x${p.toString(16)}`);
       for (let k = 0; k < 16; k++) dv().setFloat32(out + 4 * k, m[k], true);
     },
+    // The same matrices as doubles: Mesa keeps them as floats and widens them.
+    glGetDoublev: (p, out) => {
+      const m = p === 0x0ba6 ? s.stacks[MODELVIEW].at(-1) : p === 0x0ba7 ? s.stacks[PROJECTION].at(-1) : null;
+      if (!m) throw new Error(`gl: glGetDoublev 0x${p.toString(16)}`);
+      for (let k = 0; k < 16; k++) dv().setFloat64(out + 8 * k, Math.fround(m[k]), true);
+    },
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
@@ -871,6 +884,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
     },
     // glDrawElements: the enabled arrays, element by element, as if each index were glArrayElement.
+    // The arrays' elements first..first+count-1, between a Begin and an End of the mode.
+    glDrawArrays: (mode, first, count) => {
+      if (s.recording) throw new Error('gl: glDrawArrays inside a display list is not implemented');
+      exec.glBegin(mode);
+      for (let i = 0; i < count; i++) exec.glArrayElement(first + i);
+      exec.glEnd();
+    },
     glDrawElements: (mode, count, type, ptr) => {
       if (s.recording) throw new Error('gl: glDrawElements inside a display list is not implemented');
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
@@ -1087,6 +1107,8 @@ export function glBuiltins(T) {
     glTexCoord2f: f(V, F, F), glTexCoord2fv: f(V, P),
     glMultMatrixf: f(V, P), glMultMatrixd: f(V, P), glLoadMatrixd: f(V, P), glTexCoord2d: f(V, D, D), glTexCoord2dv: f(V, P),
     glColor3dv: f(V, P), glColor4dv: f(V, P), glVertex2dv: f(V, P), glVertex3dv: f(V, P), glNormal3fv: f(V, P),
+    glColor3d: f(V, D, D, D), glColor3ub: f(V, T.UCHAR, T.UCHAR, T.UCHAR), glVertex2i: f(V, I, I), glVertex3d: f(V, D, D, D),
+    glTranslated: f(V, D, D, D), glRotated: f(V, D, D, D, D), glGetDoublev: f(V, U, P), glDrawArrays: f(V, U, I, I),
     glRectf: f(V, F, F, F, F), glRecti: f(V, I, I, I, I), glLightf: f(V, U, U, F), glMaterialf: f(V, U, U, F),
     glColorMaterial: f(V, U, U), glPixelStorei: f(V, U, I), glTexGeni: f(V, U, U, I), glTexGenfv: f(V, U, U, P), glNormalPointer: f(V, U, I, P),
     glGetBooleanv: f(V, U, P), glGetTexLevelParameteriv: f(V, U, I, U, P),
