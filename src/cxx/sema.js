@@ -1082,6 +1082,14 @@ export class Sema {
       if (ot.k === 'class') this.complete(ot.cls, it);       // an instance named first here is made now
       const ent = ot.cls.scope.get(name);
       if (!ent || !ent.staticMember) this.fail(`'${name}' is not a static member of ${ot.cls.name}`, it);
+      // `static const char *files[];` is completed by its definition, as an extern array is: sizeof
+      // reads the completed type from here on (Kyra's ARRAYSIZE(_soundFiles) was 0).
+      if (ent.type.k === 'array' && ent.type.n == null) {
+        let type = this.declType(it.specs, d.derivs, ot.cls.env, it);
+        if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, it.init.items.length);
+        if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
+        if (type.k === 'array' && type.n != null) ent.type = type;
+      }
       this.defineGlobal(ent, it, ot.cls.env);
       return ent;
     }

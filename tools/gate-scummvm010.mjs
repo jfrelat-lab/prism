@@ -8,8 +8,8 @@
 //      unresolved" said nothing while the list missed the backend, whose sdl.cpp has main, since
 //      nothing then called anything at all.
 //
-// For each game of tools/scummvmdiff.mjs's GAMES whose files are present -- and, for Beneath a Steel
-// Sky, sky.cpt, the engine data file 0.10.0 reads beside the game's (~/games/bass/engine-data):
+// For each game of tools/scummvmdiff.mjs's GAMES whose files are present -- and the engine data files
+// 0.10.0 reads beside some (sky.cpt for Beneath a Steel Sky, KYRA.DAT for Kyrandia):
 //
 //   3. THE REFERENCE, replayed: each of the first 3,000 presented frames is the picture a native g++
 //      build of 0.10.0 over the real SDL 1.2 presented (goldens/scummvm010-*.json, written by
@@ -94,7 +94,8 @@ for (const [key, g] of Object.entries(GAMES)) {
   let got;
   try { got = JSON.parse(run.stdout.trim().split('\n').at(-1)); } catch { got = { frames: [], error: (run.stderr || '').slice(-300) }; }
   const first = got.frames.findIndex((h, i) => h !== want[i]);
-  check(got.frames.length === FRAMES && first < 0, `${key}: all ${got.frames.length} frames are the native 0.10.0 build's, picture for picture (the last: ${got.frames.at(-1)})`,
+  const count = Math.min(FRAMES, g.ends ?? FRAMES);   // a game that quits presents fewer
+  check(got.frames.length === count && want.length === count && first < 0, `${key}: all ${got.frames.length} frames are the native 0.10.0 build's, picture for picture (the last: ${got.frames.at(-1)})`,
     got.error ?? (first >= 0 ? `first difference at frame ${first + 1}: PRISM ${got.frames[first]}, native ${want[first]}` : `${got.frames.length} frames`));
 }
 console.log(failed ? `gate-scummvm010: ${failed} FAILED` : `gate-scummvm010: ScummVM 0.10.0 builds whole, ${listed.length} units, ${b.functions} functions${ran.length ? `, and draws ${ran.join(', ')} as g++ and SDL do, 3,000 frames each` : ''}`);

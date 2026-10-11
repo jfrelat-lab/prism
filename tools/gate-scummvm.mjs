@@ -100,6 +100,7 @@ check(b.failures?.length === 0 && b.unresolved?.length === 0 && b.missingHeaders
 const { GAMES, gameData } = await import('./scummvmdiff.mjs');
 const ran = [];
 for (const [key, g] of Object.entries(GAMES)) {
+  if (g.only010) continue;
   if (!existsSync(gameData(g))) { console.log(`     (${g.title}: no ${gameData(g)}, set ${g.env}; not run)`); continue; }
   ran.push(key);
   const golden = JSON.parse(readFileSync(join(ROOT, g.golden), 'utf8')).frames.slice(0, FRAMES);

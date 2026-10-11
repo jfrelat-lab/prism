@@ -951,6 +951,25 @@ int main() {
 }
 `);
 
+// Kyra declares `static const char *_soundFiles[];` and counts it where it is defined:
+// `const int KyraEngine::_soundFilesCount = ARRAYSIZE(KyraEngine::_soundFiles);`. The definition
+// completes the array, as it does an extern one; its size read from the declaration was 0.
+C('static-member-array-size', `
+#include <stdio.h>
+#define ARRAYSIZE(x) ((int)(sizeof(x) / sizeof(x[0])))
+enum { LANGUAGES = 2 };
+struct K { static const char *files[]; static int ints[]; static const char text[]; static const char *names[LANGUAGES][2]; static const int count; };
+const char *K::files[] = { "INTRO", "KYRA1A", "KYRA1B" };
+int K::ints[] = { 1, 2, 3, 4, 5 };
+const char K::text[] = "kyrandia";
+const char *K::names[][2] = { { "a", "b" }, { "c", "d" } };
+const int K::count = ARRAYSIZE(K::files);
+int main() {
+    printf("%d %d %d %d %d %s\\n", K::count, (int)sizeof(K::ints), (int)sizeof(K::text), ARRAYSIZE(K::names), (int)sizeof(K::names), K::files[K::count - 1]);
+    return 0;
+}
+`);
+
 // A class whose objects point into themselves, as ScummVM 0.10.0's Common::String does with its
 // small-string storage, is never moved by copying its bytes: built where it will live, returned
 // through a hidden pointer, passed by value by invisible reference -- every copy g++ makes or elides

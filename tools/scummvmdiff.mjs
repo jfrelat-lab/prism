@@ -103,6 +103,27 @@ export const GAMES = {
     title: 'Sam & Max Hit the Road, demo (samnmax-dos-demo-en)' },
   queen: { env: 'PRISM_SCUMMVM_QUEEN', home: 'queen/FOTAQ_Floppy', folder: 'queen', name: 'queen', id010: 'queen', input: QUEEN_INPUT, golden: 'goldens/scummvm-queen.json',
     title: 'Flight of the Amazon Queen, floppy version (FOTAQ_Floppy, freeware)' },
+  // Engines 0.6.1 does not have: demos the ScummVM project distributes (~/games/scummvm-demos, a
+  // PROVENANCE.txt beside each), run by 0.10.0 only.
+  gob1: { env: 'PRISM_SCUMMVM_GOB1', home: 'scummvm-demos/gob1-dos-demo1-en/files', folder: 'gob1', id010: 'gob1', only010: true, input: [],
+    golden: 'goldens/scummvm-gob1.json', title: 'Gobliiins, demo (gob1-dos-demo1-en)' },
+  agidemo: { env: 'PRISM_SCUMMVM_AGIDEMO', home: 'scummvm-demos/agi-dos-pack1-demo-en/files', folder: 'agidemo', id010: 'agidemo', only010: true, input: [],
+    // The AGI engine sets its render mode only from render_mode or platform, neither of which a game
+    // named on the command line has: left unset, the native build drew CGA (whatever its heap held)
+    // and PRISM EGA from frame 7. The option is the release's own.
+    args010: ['--render-mode=ega'],
+    golden: 'goldens/scummvm-agidemo.json', title: 'Sierra AGI demo pack 1 (agi-dos-pack1-demo-en)' },
+  sword2: { env: 'PRISM_SCUMMVM_SWORD2', home: 'scummvm-demos/sword2-win-demo-en/files', folder: 'sword2', id010: 'sword2demo', only010: true, input: [],
+    golden: 'goldens/scummvm-sword2.json', title: 'Broken Sword 2, demo (sword2-win-demo-en)' },
+  kyra1: { env: 'PRISM_SCUMMVM_KYRA1', home: 'scummvm-demos/kyra1-dos-ni-demo-en/files', folder: 'kyra1', id010: 'kyra1', only010: true, input: [],
+    // The Kyra engine reads KYRA.DAT, the data file 0.10.0's release shipped (~/games/scummvm-demos/engine-data-0.10.0).
+    extra010: ['scummvm-demos/engine-data-0.10.0/KYRA.DAT'],
+    // The demo quits after its 872nd frame, natively as here.
+    ends: 872,
+    golden: 'goldens/scummvm-kyra1.json', title: 'The Legend of Kyrandia, non-interactive demo (kyra1-dos-ni-demo-en)' },
+  // Not here: the Simon the Sorcerer 1 floppy demo and the Nippon Safes Amiga demo the project
+  // distributes today are other builds than 0.10.0's tables name (GDEMO and ICON.DAT; disk0 and fr
+  // differ by MD5); 0.10.0 takes them on a partial match and waits on a black screen, natively too.
 };
 export const gameData = (g) => process.env[g.env] ?? join(homedir(), 'games', g.home);
 /*
@@ -126,7 +147,7 @@ export const VERSIONS = {
   },
 };
 const VERSION = VERSIONS[arg('version', '0.6.1')] ?? (console.error(`no version ${arg('version')}: ${Object.keys(VERSIONS).join(', ')}`), process.exit(2));
-export const gameArgs = (g, v = VERSION) => [`-p${g.folder}`, v.id(g)];
+export const gameArgs = (g, v = VERSION) => [...(v === VERSIONS['0.10.0'] ? g.args010 ?? [] : []), `-p${g.folder}`, v.id(g)];
 /** Files a release needs beside the game's own: absolute paths. */
 export const gameExtras = (g, v = VERSION) => (v === VERSIONS['0.10.0'] ? (g.extra010 ?? []) : []).map((f) => join(homedir(), 'games', f));
 /** Every file of a game's directory, by name. */
@@ -239,7 +260,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (let i = 0; i < n; i++) if (ours[i] !== theirs[i]) { first = i; break; }
   console.log(`PRISM ${ours.length} frames, ${process.argv.includes('--check') ? 'goldens' : 'native'} ${theirs.length}`);
   if (first >= 0) { console.log(`first difference at frame ${first + 1}: PRISM ${ours[first]}, reference ${theirs[first]}`); process.exit(1); }
-  if (ours.length !== theirs.length || n < FRAMES) { console.log('the runs presented different numbers of frames'); process.exit(1); }
+  // A game that quits (`ends`) presents that many frames on both sides.
+  if (ours.length !== theirs.length || n < Math.min(FRAMES, game.ends ?? FRAMES)) { console.log('the runs presented different numbers of frames'); process.exit(1); }
   console.log(`all ${n} frames agree; the last is ${ours[n - 1]}`);
   if (process.argv.includes('--write')) {
     mkdirSync(dirname(GOLDEN), { recursive: true });
