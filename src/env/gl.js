@@ -1176,17 +1176,32 @@ void main() {
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
   const FILT = { 0x2600: g.NEAREST, 0x2601: g.LINEAR, 0x2700: g.NEAREST_MIPMAP_NEAREST, 0x2701: g.LINEAR_MIPMAP_NEAREST, 0x2702: g.NEAREST_MIPMAP_LINEAR, 0x2703: g.LINEAR_MIPMAP_LINEAR };
   const WRAP = { 0x2901: g.REPEAT, 0x2900: g.CLAMP_TO_EDGE, 0x812f: g.CLAMP_TO_EDGE };
-  let zFlip = 0, stencilOn = '', view = [0, 0, w, h];
+  let zFlip = 0, view = [0, 0, w, h];
+  /*
+   * What WebGL was last told, piece by piece, so that a batch sends only what differs from the one
+   * before: Cube flushes some 900 batches a frame of 15 vertices each -- every change of texture
+   * ends one -- and sending all of the state with each was a fifth of its frame. Whatever else
+   * touches the same WebGL state (clear, upload, readDepth) forgets the pieces it changed.
+   */
+  let applied = {};
+  const texParams = new Map();                // texture id -> its min, mag and wraps as last set
+  const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
   function apply(st) {
     if (st.tex >= 0) {
-      g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex));
-      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, FILT[st.min]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, FILT[st.mag]);
-      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, WRAP[st.wrapS]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, WRAP[st.wrapT]);
+      put('tex', st.tex, () => g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex)));
+      const p = `${st.min},${st.mag},${st.wrapS},${st.wrapT}`;
+      if (texParams.get(st.tex) !== p) {
+        texParams.set(st.tex, p);
+        g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, FILT[st.min]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, FILT[st.mag]);
+        g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, WRAP[st.wrapS]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, WRAP[st.wrapT]);
+      }
     }
-    g.uniform1i(U.textured, st.tex >= 0 ? 1 : 0); g.uniform1i(U.base, BASES[st.base] ?? 0); g.uniform1i(U.env, ENVS[st.env] ?? 0);
-    if (st.blend) { const [sf, df] = st.blend.split(',').map(Number); g.enable(g.BLEND); g.blendFunc(sf, df); } else g.disable(g.BLEND);
-    if (st.alpha) { const [f, r] = st.alpha.split(','); g.uniform1i(U.alphaFn, f - 0x200); g.uniform1f(U.alphaRef, +r); } else g.uniform1i(U.alphaFn, -1);
-    if (st.depth) { const [f, m] = st.depth.split(','); g.enable(g.DEPTH_TEST); g.depthFunc(+f); g.depthMask(m === 'true'); } else g.disable(g.DEPTH_TEST);
+    put('textured', st.tex >= 0, () => g.uniform1i(U.textured, st.tex >= 0 ? 1 : 0));
+    put('base', st.base, () => g.uniform1i(U.base, BASES[st.base] ?? 0));
+    put('env', st.env, () => g.uniform1i(U.env, ENVS[st.env] ?? 0));
+    put('blend', st.blend, () => { if (st.blend) { const [sf, df] = st.blend.split(',').map(Number); g.enable(g.BLEND); g.blendFunc(sf, df); } else g.disable(g.BLEND); });
+    put('alpha', st.alpha, () => { if (st.alpha) { const [f, r] = st.alpha.split(','); g.uniform1i(U.alphaFn, f - 0x200); g.uniform1f(U.alphaRef, +r); } else g.uniform1i(U.alphaFn, -1); });
+    put('depth', st.depth, () => { if (st.depth) { const [f, m] = st.depth.split(','); g.enable(g.DEPTH_TEST); g.depthFunc(+f); g.depthMask(m === 'true'); } else g.disable(g.DEPTH_TEST); });
     /*
      * A REVERSED depth range. GL 1.1 lets near exceed far, and GLQuake's family lives on it: with
      * gl_ztrick (the default) it never clears the depth buffer, and instead draws even frames into
@@ -1195,24 +1210,28 @@ void main() {
      * its depth test: Hexen II flickered. Window z is linear in clip z, so the reversed range is the
      * ordinary one with z negated -- which the vertex shader does.
      */
-    const [dn, df] = st.range.split(',').map(Number), flip = dn > df ? 1 : 0;
-    g.depthRange(flip ? df : dn, flip ? dn : df);
-    if (flip !== zFlip) { zFlip = flip; g.uniform1i(U.zFlip, flip); }
-    if (st.scissor) { const [x, y, sw, sh] = st.scissor.split(',').map(Number); g.enable(g.SCISSOR_TEST); g.scissor(x, y, sw, sh); } else g.disable(g.SCISSOR_TEST);
-    if (st.fog) {
-      const [m, d, s0, e0, r, gg, b, a] = st.fog.split(',').map(Number);
-      g.uniform1i(U.fogMode, m === 0x2601 ? 1 : m === 0x0800 ? 2 : 3); g.uniform1f(U.fogDensity, d); g.uniform1f(U.fogStart, s0); g.uniform1f(U.fogEnd, e0); g.uniform4f(U.fogColour, r, gg, b, a);
-    } else g.uniform1i(U.fogMode, 0);
-    const cm = st.mask.split(',').map((v) => v === 'true'); g.colorMask(cm[0], cm[1], cm[2], cm[3]);
-    // Only a program that uses the stencil test sends WebGL stencil calls.
-    if (st.stencil !== stencilOn) {
-      stencilOn = st.stencil;
+    put('range', st.range, () => {
+      const [dn, df] = st.range.split(',').map(Number), flip = dn > df ? 1 : 0;
+      g.depthRange(flip ? df : dn, flip ? dn : df);
+      if (flip !== zFlip) { zFlip = flip; g.uniform1i(U.zFlip, flip); }
+    });
+    put('scissor', st.scissor, () => { if (st.scissor) { const [x, y, sw, sh] = st.scissor.split(',').map(Number); g.enable(g.SCISSOR_TEST); g.scissor(x, y, sw, sh); } else g.disable(g.SCISSOR_TEST); });
+    put('fog', st.fog, () => {
+      if (st.fog) {
+        const [m, d, s0, e0, r, gg, b, a] = st.fog.split(',').map(Number);
+        g.uniform1i(U.fogMode, m === 0x2601 ? 1 : m === 0x0800 ? 2 : 3); g.uniform1f(U.fogDensity, d); g.uniform1f(U.fogStart, s0); g.uniform1f(U.fogEnd, e0); g.uniform4f(U.fogColour, r, gg, b, a);
+      } else g.uniform1i(U.fogMode, 0);
+    });
+    put('mask', st.mask, () => { const cm = st.mask.split(',').map((v) => v === 'true'); g.colorMask(cm[0], cm[1], cm[2], cm[3]); });
+    // Only a program that uses the stencil test sends WebGL stencil calls (WebGL's initial state is off).
+    if (st.stencil !== (applied.stencil ?? '')) {
+      applied.stencil = st.stencil;
       if (st.stencil) {
         const [fn, ref, mask, f0, f1, f2, wm] = st.stencil.split(',').map(Number);
         g.enable(g.STENCIL_TEST); g.stencilFunc(fn, ref, mask); g.stencilOp(f0, f1, f2); g.stencilMask(wm);
       } else g.disable(g.STENCIL_TEST);
     }
-    if (st.offset) { const [f, u] = st.offset.split(',').map(Number); g.enable(g.POLYGON_OFFSET_FILL); g.polygonOffset(f, u); } else g.disable(g.POLYGON_OFFSET_FILL);
+    put('offset', st.offset, () => { if (st.offset) { const [f, u] = st.offset.split(',').map(Number); g.enable(g.POLYGON_OFFSET_FILL); g.polygonOffset(f, u); } else g.disable(g.POLYGON_OFFSET_FILL); });
   }
   const flush = () => {
     if (!n) return;
@@ -1233,6 +1252,7 @@ void main() {
       let tx = gpuTex.get(id);
       if (!tx) { tx = g.createTexture(); gpuTex.set(id, tx); }
       g.bindTexture(g.TEXTURE_2D, tx);
+      delete applied.tex;
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
       t.levels.forEach((L, lv) => { if (L) g.texImage2D(g.TEXTURE_2D, lv, g.RGBA, L.w, L.h, 0, g.RGBA, g.UNSIGNED_BYTE, L.data); });
       g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAX_LEVEL, t.levels.length - 1);
@@ -1246,7 +1266,8 @@ void main() {
       if (scissor) { g.enable(g.SCISSOR_TEST); g.scissor(...scissor); } else g.disable(g.SCISSOR_TEST);
       g.clearColor(colour[0], colour[1], colour[2], colour[3]); g.clearDepth(depth);
       g.colorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]); g.depthMask(depthMask);
-      if (stencil && (mask & 0x400)) { g.clearStencil(stencil[0]); g.stencilMask(stencil[1]); stencilOn = null; }
+      delete applied.scissor; delete applied.mask; delete applied.depth;
+      if (stencil && (mask & 0x400)) { g.clearStencil(stencil[0]); g.stencilMask(stencil[1]); applied.stencil = 'unknown'; }
       g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0) | (stencil && (mask & 0x400) ? g.STENCIL_BUFFER_BIT : 0));
       key = null;
     },
@@ -1278,7 +1299,7 @@ void main() {
       g.useProgram(prog);
       g.bindFramebuffer(g.FRAMEBUFFER, target);
       g.viewport(...view);
-      key = null; stencilOn = null;
+      key = null; applied = {};
       const out = new Float32Array(rw * rh);
       for (let i = 0; i < rw * rh; i++) out[i] = (px[4 * i] | (px[4 * i + 1] << 8) | (px[4 * i + 2] << 16)) / 16777215;
       return out;

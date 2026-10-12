@@ -12,6 +12,12 @@
 // the program makes, dropped, which must change the stream (state-only calls, the kind a stale state
 // cache would lose).
 //
+// Beside the stream, the EFFECTIVE STATE at every draw: the calls are replayed through a model of the
+// WebGL state that matters to a draw or a clear -- capabilities, test, blend and mask functions,
+// viewport and scissor, framebuffer, program and its uniforms, the bound textures with their
+// parameters and contents, the vertex data -- and each draw and clear hashes it. Sending less (a
+// state the batch already has) changes the stream and must not change this; the controls change both.
+//
 //   node tools/gate-webgl-stream.mjs [--capture]
 //   PRISM_QUAKE3_DATA=<dir with baseq3/> ...   also Quake III in q3dm1 (the reason this gate exists)
 import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs';
@@ -25,6 +31,35 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'webgl-stream.json');
 const CAPTURE = process.argv.includes('--capture');
 const Q3 = process.env.PRISM_QUAKE3_DATA;
+
+/** The WebGL state a draw or a clear depends on, as the recorded calls leave it. */
+const model = () => ({ caps: new Set(), set: {}, program: '', fb: '', vao: '', unit: 0, units: {}, params: {}, contents: {}, uniforms: {}, buffer: '', store: {} });
+const STATE_SETTERS = new Set(['blendFunc', 'depthFunc', 'depthMask', 'depthRange', 'scissor', 'colorMask', 'polygonOffset', 'stencilFunc',
+  'stencilOp', 'stencilMask', 'viewport', 'clearColor', 'clearDepth', 'clearStencil', 'frontFace', 'cullFace']);
+function track(m, p, a, id, bytes) {
+  if (p === 'enable') m.caps.add(a[0]);
+  else if (p === 'disable') m.caps.delete(a[0]);
+  else if (STATE_SETTERS.has(p)) m.set[p] = a.map(String).join(',');
+  else if (p === 'useProgram') m.program = id(a[0]);
+  else if (p === 'bindFramebuffer') m.fb = id(a[1]);
+  else if (p === 'bindVertexArray') m.vao = id(a[0]);
+  else if (p === 'activeTexture') m.unit = a[0];
+  else if (p === 'bindTexture') m.units[m.unit] = id(a[1]);
+  else if (p === 'texParameteri') { const t = m.units[m.unit]; (m.params[t] ??= {})[a[1]] = a[2]; }
+  else if (p === 'pixelStorei') m.store[a[0]] = a[1];
+  else if (p === 'texImage2D' || p === 'texSubImage2D') {
+    const t = m.units[m.unit];
+    m.contents[t] = createHash('sha256').update(`${m.contents[t] ?? ''}${p}(${a.filter((v) => !ArrayBuffer.isView(v)).map(String)})${JSON.stringify(m.store)}`).update(bytes).digest('hex');
+  } else if (/^uniform/.test(p)) m.uniforms[id(a[0])] = a.slice(1).map(String).join(',');
+  else if (p === 'bufferData') m.buffer = createHash('sha256').update(bytes).digest('hex');
+  else return false;
+  return true;
+}
+const snapshot = (m, p, a) => JSON.stringify({
+  call: `${p}(${a.map(String)})`, caps: [...m.caps].sort(), set: m.set, program: m.program, fb: m.fb, vao: m.vao, buffer: m.buffer,
+  textures: Object.entries(m.units).sort().map(([u, t]) => [u, t, m.params[t] ?? {}, m.contents[t] ?? '']),
+  uniforms: Object.entries(m.uniforms).sort(),
+});
 
 // A WebGL2 context that does nothing but remember. Constants are numbers derived from their names,
 // so the stream does not depend on the order gl.js first reads them.
@@ -46,6 +81,11 @@ const context = new Proxy({}, {
         return String(v);
       });
       rec.h.update(`${p}(${args.join(',')})\n`);
+      const view = a.find((v) => v && typeof v === 'object' && ArrayBuffer.isView(v));
+      const bytes = view ? new Uint8Array(view.buffer, view.byteOffset, view.byteLength) : new Uint8Array(0);
+      const id = (o) => (o ? `#${rec.ids.get(o)}` : 'null');
+      if (p === 'drawArrays' || p === 'clear') rec.d.update(snapshot(rec.m, p, a));
+      else track(rec.m, p, a, id, bytes);
       // What the reversed-depth-range check below reads: the ranges asked of WebGL, and the shader's
       // z-flip switch.
       if (p === 'depthRange') rec.ranges.push([a[0], a[1]]);
@@ -53,7 +93,7 @@ const context = new Proxy({}, {
       if (p === 'getShaderParameter' || p === 'getProgramParameter') return true;
       if (/^(create|getUniformLocation)/.test(p)) {
         const o = {};
-        rec.ids.set(o, rec.ids.size + 1);
+        rec.ids.set(o, ++rec.objects);   // (a WeakMap has no size: every object was #NaN, one texture as good as another)
         if (p === 'getUniformLocation' && a[1] === 'zFlip') rec.zFlip = o;
         return o;
       }
@@ -116,9 +156,9 @@ const CASES = [
 if (Q3) CASES.push({ name: 'quake3 q3dm1', run: quake3(300), control: ['glDepthMask dropped', drop('glDepthMask')] });
 
 const stream = (c, control = null) => {
-  rec = { h: createHash('sha256'), calls: 0, draws: 0, ids: new WeakMap(), ranges: [], flips: [], zFlip: null };
+  rec = { h: createHash('sha256'), d: createHash('sha256'), m: model(), calls: 0, draws: 0, ids: new WeakMap(), objects: 0, ranges: [], flips: [], zFlip: null };
   c.run(control);
-  return { calls: rec.calls, draws: rec.draws, sha: rec.h.digest('hex'), ranges: rec.ranges, flips: rec.flips };
+  return { calls: rec.calls, draws: rec.draws, sha: rec.h.digest('hex'), state: rec.d.digest('hex'), ranges: rec.ranges, flips: rec.flips };
 };
 
 if (CAPTURE) {
@@ -136,9 +176,10 @@ let bad = 0;
 const report = (ok, what, detail = '') => { if (!ok) bad++; console.log(`${ok ? '  ok ' : ' BAD '} ${what.padEnd(58)} ${detail}`); };
 for (const c of CASES) {
   const g = golden[c.name], got = stream(c);
+  report(got.state === g.state, `${c.name}: the blessed state at every draw and clear`, `${got.draws} draws`);
   report(got.sha === g.sha, `${c.name}: the blessed stream`, `${got.calls} calls, ${got.draws} draws (blessed: ${g.calls}, ${g.draws})`);
   const [what, control] = c.control, m = stream(c, control);
-  report(m.sha !== g.sha, `${c.name}: control: ${what} changes it`, `${m.calls} calls, ${m.draws} draws`);
+  report(m.sha !== g.sha && m.state !== g.state, `${c.name}: control: ${what} changes both`, `${m.calls} calls, ${m.draws} draws`);
 }
 /*
  * A REVERSED DEPTH RANGE never reaches WebGL reversed. GL 1.1 lets near exceed far, and GLQuake's
