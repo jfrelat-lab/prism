@@ -1006,6 +1006,10 @@ typedef struct GLUquadric GLUquadricObj;
 #define GLU_INVALID_VALUE 100901
 #define GLU_OUT_OF_MEMORY 100902
 void gluPerspective(GLdouble fovy, GLdouble aspect, GLdouble zNear, GLdouble zFar);
+void gluLookAt(GLdouble eyeX, GLdouble eyeY, GLdouble eyeZ, GLdouble centerX, GLdouble centerY, GLdouble centerZ, GLdouble upX, GLdouble upY, GLdouble upZ);
+void gluOrtho2D(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top);
+void gluPickMatrix(GLdouble x, GLdouble y, GLdouble delX, GLdouble delY, GLint *viewport);
+GLint gluProject(GLdouble objX, GLdouble objY, GLdouble objZ, const GLdouble *model, const GLdouble *proj, const GLint *view, GLdouble *winX, GLdouble *winY, GLdouble *winZ);
 GLint gluUnProject(GLdouble winX, GLdouble winY, GLdouble winZ, const GLdouble *model, const GLdouble *proj, const GLint *view, GLdouble *objX, GLdouble *objY, GLdouble *objZ);
 const GLubyte *gluErrorString(GLenum error);
 GLUquadric *gluNewQuadric(void);

@@ -5,7 +5,8 @@
 // goes through glBegin/glNormal/glVertex and is lit, clipped and rasterised like anything else, and a
 // mipmap chain is a series of glTexImage2D.
 //
-//   gluPerspective        the projection matrix of the specification, multiplied onto the current one
+//   gluPerspective, gluLookAt, gluOrtho2D, gluPickMatrix, gluProject
+//                         GLU 9's project.c: the same GL calls with the same arguments (gate-glu)
 //   gluSphere, gluCylinder, gluDisk, gluPartialDisk
 //                         GLU 9's quad.c, every draw style, normals and orientation: the same calls
 //                         with the same float arguments as Debian's i386 libGLU (tools/gate-glu.mjs)
@@ -38,6 +39,12 @@ export function installGlu(M) {
     if (!scratch) scratch = rt.malloc(16 * 8);
     vals.forEach((v, k) => dv().setFloat64(scratch + 8 * k, v, true));
     return scratch;
+  };
+  let scratchF = 0;
+  const floats = (vals) => {
+    if (!scratchF) scratchF = rt.malloc(16 * 4);
+    vals.forEach((v, k) => dv().setFloat32(scratchF + 4 * k, v, true));
+    return scratchF;
   };
   /*
    * Mipmaps and scaling as GLU 9 (Mesa's libGLU, libutil/mipmap.c) does them for GL_UNSIGNED_BYTE,
@@ -290,10 +297,55 @@ export function installGlu(M) {
       dv().setFloat64(objx, out[0], true); dv().setFloat64(objy, out[1], true); dv().setFloat64(objz, out[2], true);
       return 1;
     },
+    /*
+     * The matrix functions as GLU 9 writes them (libutil/project.c): gluPerspective in doubles,
+     * gluLookAt in floats (its vectors are float[3], normalised and crossed as floats), gluPickMatrix
+     * through glTranslatef/glScalef -- the same GL calls with the same arguments.
+     */
     gluPerspective: (fovy, aspect, zNear, zFar) => {
-      const f = 1 / Math.tan(fovy * Math.PI / 360);
-      rt.glMultMatrixd(doubles([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (zFar + zNear) / (zNear - zFar), -1,
-        0, 0, 2 * zFar * zNear / (zNear - zFar), 0]));
+      const radians = fovy / 2 * PI / 180, deltaZ = zFar - zNear, sine = Math.sin(radians);
+      if (deltaZ === 0 || sine === 0 || aspect === 0) return;
+      const cotangent = Math.cos(radians) / sine;
+      rt.glMultMatrixd(doubles([cotangent / aspect, 0, 0, 0, 0, cotangent, 0, 0, 0, 0, -(zFar + zNear) / deltaZ, -1,
+        0, 0, -2 * zNear * zFar / deltaZ, 0]));
+    },
+    gluLookAt: (eyex, eyey, eyez, centerx, centery, centerz, upx, upy, upz) => {
+      // Debian's i386 libGLU (disassembled) rounds forward and up to float as project.c stores them,
+      // then keeps normalize and cross inlined on the x87: nothing else is rounded to float until the
+      // matrix is written. Double stands in for the x87's 64-bit precision here.
+      const normalize = (v) => {
+        const r = Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (r === 0) return;
+        v[0] /= r; v[1] /= r; v[2] /= r;
+      };
+      const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      const forward = [fr(centerx - eyex), fr(centery - eyey), fr(centerz - eyez)];
+      let up = [fr(upx), fr(upy), fr(upz)];
+      normalize(forward);
+      const side = cross(forward, up);
+      normalize(side);
+      up = cross(side, forward);
+      rt.glMultMatrixf(floats([side[0], up[0], -forward[0], 0, side[1], up[1], -forward[1], 0, side[2], up[2], -forward[2], 0, 0, 0, 0, 1]));
+      rt.glTranslated(-eyex, -eyey, -eyez);
+    },
+    gluOrtho2D: (left, right, bottom, top) => rt.glOrtho(left, right, bottom, top, -1, 1),
+    gluPickMatrix: (x, y, deltax, deltay, viewport) => {
+      if (deltax <= 0 || deltay <= 0) return;
+      const vp = [0, 1, 2, 3].map((k) => dv().getInt32(viewport + 4 * k, true));
+      rt.glTranslatef(fr((vp[2] - 2 * (x - vp[0])) / deltax), fr((vp[3] - 2 * (y - vp[1])) / deltay), 0);
+      rt.glScalef(fr(vp[2] / deltax), fr(vp[3] / deltay), 1);
+    },
+    gluProject: (objx, objy, objz, model, proj, viewport, winx, winy, winz) => {
+      const out = multVec(mat(model), [objx, objy, objz, 1.0]);
+      const v = multVec(mat(proj), out);
+      if (v[3] === 0.0) return 0;
+      v[0] /= v[3]; v[1] /= v[3]; v[2] /= v[3];
+      v[0] = v[0] * 0.5 + 0.5; v[1] = v[1] * 0.5 + 0.5; v[2] = v[2] * 0.5 + 0.5;
+      const vp = [0, 1, 2, 3].map((k) => dv().getInt32(viewport + 4 * k, true));
+      v[0] = v[0] * vp[2] + vp[0];
+      v[1] = v[1] * vp[3] + vp[1];
+      dv().setFloat64(winx, v[0], true); dv().setFloat64(winy, v[1], true); dv().setFloat64(winz, v[2], true);
+      return 1;
     },
     gluErrorString: (code) => {
       const text = ERRORS[code];
@@ -745,7 +797,8 @@ export function gluBuiltins(T) {
   const f = (ret, ...params) => ({ ret, params });
   return {
     gluUnProject: f(I, D, D, D, P, P, P, P, P, P),
-    gluPerspective: f(V, D, D, D, D), gluErrorString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
+    gluPerspective: f(V, D, D, D, D), gluLookAt: f(V, D, D, D, D, D, D, D, D, D), gluOrtho2D: f(V, D, D, D, D),
+    gluPickMatrix: f(V, D, D, D, D, P), gluProject: f(I, D, D, D, P, P, P, P, P, P), gluErrorString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
     gluQuadricDrawStyle: f(V, P, U), gluQuadricNormals: f(V, P, U), gluQuadricOrientation: f(V, P, U), gluQuadricTexture: f(V, P, I),
     gluSphere: f(V, P, D, I, I), gluCylinder: f(V, P, D, D, D, I, I), gluDisk: f(V, P, D, D, I, I), gluPartialDisk: f(V, P, D, D, I, I, D, D), gluScaleImage: f(I, U, I, I, U, P, I, I, U, P), gluBuild2DMipmaps: f(I, U, I, I, I, U, U, P),
   };

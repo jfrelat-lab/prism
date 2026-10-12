@@ -3,12 +3,14 @@
  * and glTexImage2D exported by the executable (-rdynamic) so that libGLU's calls land here first:
  * each level is hashed as it arrives -- its rows as GL_UNPACK_ALIGNMENT lays them out at that moment,
  * w * components bytes each -- then handed to Mesa. The immediate-mode calls a quadric is made of are
- * exported the same way and only traced (tests/glu/quadric.c): each argument as its float's bits.
+ * exported the same way and only traced (tests/glu/quadric.c): each argument as its float's bits;
+ * so are the matrix calls GLU's matrix functions make (tests/glu/matrix.c), doubles as theirs.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GL/gl.h>
@@ -50,3 +52,13 @@ void glEnd(void) { printf("e\n"); }
 void glNormal3f(GLfloat x, GLfloat y, GLfloat z) { printf("n %08x %08x %08x\n", bits(x), bits(y), bits(z)); }
 void glTexCoord2f(GLfloat s, GLfloat t) { printf("t %08x %08x\n", bits(s), bits(t)); }
 void glVertex3f(GLfloat x, GLfloat y, GLfloat z) { printf("v %08x %08x %08x\n", bits(x), bits(y), bits(z)); }
+static unsigned long long dbits(GLdouble d) { unsigned long long u; memcpy(&u, &d, 8); return u; }
+void glMultMatrixd(const GLdouble *m) { int k; printf("md"); for (k = 0; k < 16; k++) printf(" %016llx", dbits(m[k])); printf("\n"); }
+void glMultMatrixf(const GLfloat *m) { int k; printf("mf"); for (k = 0; k < 16; k++) printf(" %08x", bits(m[k])); printf("\n"); }
+void glTranslated(GLdouble x, GLdouble y, GLdouble z) { printf("td %016llx %016llx %016llx\n", dbits(x), dbits(y), dbits(z)); }
+void glTranslatef(GLfloat x, GLfloat y, GLfloat z) { printf("tf %08x %08x %08x\n", bits(x), bits(y), bits(z)); }
+void glScalef(GLfloat x, GLfloat y, GLfloat z) { printf("sf %08x %08x %08x\n", bits(x), bits(y), bits(z)); }
+void glOrtho(GLdouble l, GLdouble r, GLdouble b, GLdouble t, GLdouble n, GLdouble f)
+{
+    printf("o %016llx %016llx %016llx %016llx %016llx %016llx\n", dbits(l), dbits(r), dbits(b), dbits(t), dbits(n), dbits(f));
+}

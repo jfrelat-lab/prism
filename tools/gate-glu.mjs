@@ -25,6 +25,15 @@
 //   ulps) -- the vertices must move and the normals must not (a disk's texture coordinates, radius
 //   over radius, may round the other way).
 //
+//   Matrices: tests/glu/matrix.c, gluPerspective, gluLookAt, gluOrtho2D and gluPickMatrix (degenerate
+//   cases among them) traced as the GL calls they make, arguments as bits (native-gl.c natively, hooks
+//   on M.rt here), and gluProject on 40 pseudo-random matrix pairs. What libGLU computes in floats --
+//   gluLookAt's matrix, gluPickMatrix's translation and scale -- and gluOrtho2D's call: to the bit.
+//   What it computes in doubles -- gluPerspective's matrix, gluProject's window coordinates -- to 1e-12
+//   relative, as gluUnProject, its x87 intermediates moving the last bits. CONTROL, red: every
+//   argument 2^-20 larger (gluLookAt's eye 2^-10 along x instead, as scaling all its points leaves
+//   its directions alone) moves every call made and every point projected beyond that.
+//
 //   node tools/gate-glu.mjs
 import { mkdirSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -156,5 +165,61 @@ const zero = quadTheirs.filter((l) => l === 'v 00000000 00000000 00000000').leng
 check(grown.length === quadTheirs.length && moved('v ') >= (verts - zero) * 0.9 && moved('n ') === 0,
   `control: radii 2^-20 larger move ${moved('v ')} of ${verts} vertices (${zero} are the origin), ${moved('n ')} normals, ${moved('t ')} texture coordinates`);
 
-console.log(failed ? `gate-glu: ${failed} FAILED` : `gate-glu: gluUnProject answers what libGLU answers, to ${TOL}; mipmaps, scaling and quadrics to the bit`);
+// Matrices.
+for (const f of ['matrix.c', 'native-gl.c']) copyFileSync(join(ROOT, 'tests/glu', f), join(work, f));
+const matRef = sh('cd /work/glu && gcc -O0 -rdynamic -o matrix matrix.c native-gl.c -lGLU -lOpenGL -lEGL -ldl -lm && ./matrix');
+if (matRef.code !== 0) throw new Error(`reference build: ${matRef.stderr || matRef.stdout}`);
+const matTarget = { name: 'glu-matrix', dir: 'tests/glu', units: { list: ['matrix.c'] }, inline: { 'context.c': 'void make_context(void) {}\n' },
+  compile: { memory: 16, collect: true }, env: ['stdio', 'gl', 'glu'] };
+/** matrix.c's output on PRISM, the GL calls traced as native-gl.c traces them; `grow` makes every argument 2^-20 larger, and gluLookAt's eye 2^-10 further along x. */
+const matRun = (grow) => {
+  const { program: p } = buildTarget(matTarget, { root: ROOT });
+  const M = p.M, rt = M.rt, mdv = () => M.mod.dv;
+  const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer), f64 = new Float64Array(1), u64 = new BigUint64Array(f64.buffer);
+  const fb = (v) => { f32[0] = v; return u32[0].toString(16).padStart(8, '0'); };
+  const db = (v) => { f64[0] = v; return u64[0].toString(16).padStart(16, '0'); };
+  rt.glMultMatrixd = (m) => M.write(`md ${Array.from({ length: 16 }, (_, k) => db(mdv().getFloat64(m + 8 * k, true))).join(' ')}\n`);
+  rt.glMultMatrixf = (m) => M.write(`mf ${Array.from({ length: 16 }, (_, k) => fb(mdv().getFloat32(m + 4 * k, true))).join(' ')}\n`);
+  rt.glTranslated = (x, y, z) => M.write(`td ${db(x)} ${db(y)} ${db(z)}\n`);
+  rt.glTranslatef = (x, y, z) => M.write(`tf ${fb(x)} ${fb(y)} ${fb(z)}\n`);
+  rt.glScalef = (x, y, z) => M.write(`sf ${fb(x)} ${fb(y)} ${fb(z)}\n`);
+  rt.glOrtho = (...a) => M.write(`o ${a.map(db).join(' ')}\n`);
+  if (grow) {
+    const k = 1 + 2 ** -20;
+    for (const name of ['gluPerspective', 'gluOrtho2D', 'gluPickMatrix', 'gluProject']) {
+      const real = rt[name], n = { gluPerspective: 4, gluOrtho2D: 4, gluPickMatrix: 4, gluProject: 3 }[name];
+      rt[name] = (...a) => real(...a.map((v, i) => (i < n ? v * k : v)));
+    }
+    // Scaling all of gluLookAt's points alike would leave its directions alone: the eye moves instead.
+    const lookAt = rt.gluLookAt;
+    rt.gluLookAt = (ex, ...a) => lookAt(ex + 2 ** -10, ...a);
+  }
+  return p.run(['matrix']).stdout.trim().split('\n');
+};
+/** A double's value from its 16 hex digits. */
+const dval = (h) => { const b = new DataView(new ArrayBuffer(8)); b.setBigUint64(0, BigInt(`0x${h}`)); return b.getFloat64(0); };
+/** Whether two lines of matrix.c's output agree: the same text, or doubles within TOL where libGLU computes in doubles. */
+const matSame = (a, b) => {
+  if (a === b) return 'bit';
+  const x = a.split(' '), y = (b ?? '').split(' ');
+  if (x.length !== y.length || x[0] !== y[0]) return false;
+  const from = { md: 1, td: 1, project: 4 }[x[0]];
+  if (!from || x.slice(0, from).join(' ') !== y.slice(0, from).join(' ')) return false;
+  return x.slice(from).every((h, k) => { const u = dval(h), v = dval(y[from + k]); return Math.abs(u - v) <= TOL * Math.max(1, Math.abs(u)); }) && 'tol';
+};
+const matTheirs = matRef.stdout.trim().split('\n'), matOurs = matRun(false);
+const verdicts = matTheirs.map((l, i) => matSame(l, matOurs[i]));
+const matBad = verdicts.indexOf(false);
+const calls = matTheirs.filter((l) => /^(md|mf|td|tf|sf|o) /.test(l)).length, points = matTheirs.filter((l) => l.startsWith('project ')).length;
+const floatsBit = matTheirs.every((l, i) => !/^(mf|tf|sf|o) /.test(l) || verdicts[i] === 'bit');
+check(matBad < 0 && matOurs.length === matTheirs.length && floatsBit && calls > 15 && points === 120,
+  `matrices: ${calls} GL calls and ${points} projected points are libGLU's (floats to the bit, doubles to ${TOL})`,
+  matBad >= 0 ? `line ${matBad + 1}: PRISM "${matOurs[matBad]}", libGLU "${matTheirs[matBad]}"` : `${matOurs.length} lines, libGLU ${matTheirs.length}`);
+console.log(`     (${verdicts.filter((v) => v === 'bit').length} of ${matTheirs.length} lines to the bit)`);
+const matGrown = matRun(true);
+const tracked = matTheirs.filter((l) => /^(md|mf|td|tf|sf|o) /.test(l) || / 1 [0-9a-f]{16}/.test(l));
+const movedM = matTheirs.filter((l, i) => tracked.includes(l) && !matSame(l, matGrown[i])).length;
+check(movedM === tracked.length, `control: every argument 2^-20 larger (gluLookAt's eye moved) moves ${movedM} of ${tracked.length} calls and projected points beyond the tolerance`);
+
+console.log(failed ? `gate-glu: ${failed} FAILED` : `gate-glu: gluUnProject answers what libGLU answers, to ${TOL}; mipmaps, scaling and quadrics to the bit; the matrices to the bit in floats and ${TOL} in doubles`);
 process.exit(failed ? 1 : 0);
