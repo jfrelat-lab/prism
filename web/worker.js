@@ -203,6 +203,47 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
   const park = makeParker(ctrl);
   const setState = (s) => Atomics.store(ctrl, SLOT.STATE, s);
 
+  /*
+   * A GL HOST'S FRAME, at every swap -- GLUT, GLX, WGL, fxMesa and SDL's OpenGL all publish it the
+   * same way, and say their frame rate every five seconds. On WebGL the frame goes to the page as
+   * an ImageBitmap the page draws as it is: read back from the GPU and copied twice (to B,G,R,A in
+   * guest memory here, to R,G,B,A in the page) it was a fifth of Cube's frame. The software
+   * rasteriser's frame is in memory anyway, and takes the old route: B,G,R,A into a buffer in guest
+   * memory, top row first.
+   */
+  const glPublisher = (name, prog) => {
+    let out = 0, outW = 0, outH = 0, mode = 0, since = performance.now(), count = 0;
+    return (gl) => {
+      count++;
+      const now = performance.now();
+      if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
+      const { width: w, height: h } = gl.state, bitmap = gl.backend === 'webgl';
+      // Again whenever the size changes: ET's vid_restart recreates its window at 1024x768, and a buffer
+      // kept at the first window's size was overrun every frame while the page showed the old one.
+      if (w !== outW || h !== outH || mode !== (bitmap ? 2 : 32)) {
+        if (out) { prog.M.rt.free(out); out = 0; }
+        if (!bitmap) out = prog.M.rt.malloc(w * h * 4);
+        outW = w; outH = h; mode = bitmap ? 2 : 32;
+        Atomics.store(ctrl, SLOT.WIDTH, w);
+        Atomics.store(ctrl, SLOT.HEIGHT, h);
+        Atomics.store(ctrl, SLOT.PIXELS, out);
+        Atomics.store(ctrl, SLOT.PIXFMT, mode);
+        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
+        log(`${name} display ${w}x${h}, ${bitmap ? 'WebGL2' : 'software rasteriser'}`);
+      }
+      if (bitmap) {
+        const frame = gl.present();
+        self.postMessage({ type: 'frame', bitmap: frame }, [frame]);
+        return;
+      }
+      const px = gl.readPixels(), u8 = prog.M.u8;
+      for (let i = 0; i < w * h; i++) {
+        u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
+        u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
+      }
+    };
+  };
+
   // --- 1. the sources.
   //
   // The compiler resolves #include synchronously, so every header must be in hand before compiling
@@ -640,31 +681,10 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     installSvgalib(prog.M, { keyboard: { next: () => keyboard.nextEvent() }, mouse });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     installGL(prog.M, { backend });
-    let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
+    const publish = glPublisher('fxMesa', prog);
     installFxMesa(prog.M, {
       onSwap: (_n, gl) => {
-        count++;
-        const now = performance.now();
-        if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
-        const { width: w, height: h } = gl.state;
-        // Again whenever the size changes: ET's vid_restart recreates its window at 1024x768, and a buffer
-        // kept at the first window's size was overrun every frame while the page showed the old one.
-        if (!out || w !== outW || h !== outH) {
-          if (out) prog.M.rt.free(out);
-          out = prog.M.rt.malloc(w * h * 4);
-          outW = w; outH = h;
-          Atomics.store(ctrl, SLOT.WIDTH, w);
-          Atomics.store(ctrl, SLOT.HEIGHT, h);
-          Atomics.store(ctrl, SLOT.PIXELS, out);
-          Atomics.store(ctrl, SLOT.PIXFMT, 32);
-          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-          log(`fxMesa display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
-        }
-        const px = gl.readPixels(), u8 = prog.M.u8;
-        for (let i = 0; i < w * h; i++) {
-          u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
-          u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
-        }
+        publish(gl);
         reader.endFrame();
         pace();
       },
@@ -688,32 +708,10 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     installGL(prog.M, { backend });
-    let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
+    const publish = glPublisher('GLX', prog);
     installGlx(prog.M, {
       onSwap: (_n, gl) => {
-        // The frame rate, said every five seconds: GLX has no other place a person could read it.
-        count++;
-        const now = performance.now();
-        if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
-        const { width: w, height: h } = gl.state;
-        // Again whenever the size changes: ET's vid_restart recreates its window at 1024x768, and a buffer
-        // kept at the first window's size was overrun every frame while the page showed the old one.
-        if (!out || w !== outW || h !== outH) {
-          if (out) prog.M.rt.free(out);
-          out = prog.M.rt.malloc(w * h * 4);
-          outW = w; outH = h;
-          Atomics.store(ctrl, SLOT.WIDTH, w);
-          Atomics.store(ctrl, SLOT.HEIGHT, h);
-          Atomics.store(ctrl, SLOT.PIXELS, out);
-          Atomics.store(ctrl, SLOT.PIXFMT, 32);
-          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-          log(`GLX display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
-        }
-        const px = gl.readPixels(), u8 = prog.M.u8;
-        for (let i = 0; i < w * h; i++) {
-          u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
-          u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
-        }
+        publish(gl);
         reader.endFrame();
         pace();
       },
@@ -1003,27 +1001,10 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       }
       pumpWindow();
     };
-    let out = 0, outW = 0, outH = 0, since = performance.now(), count = 0;
+    const publish = glPublisher('WGL', prog);
     installWgl(prog.M, {
       onSwap: (_n, gl) => {
-        count++;
-        const now = performance.now();
-        if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
-        const { width: w, height: h } = gl.state;
-        if (w !== outW || h !== outH) {                 // a mode change resizes the window, and the picture
-          out = prog.M.rt.malloc(w * h * 4); outW = w; outH = h;
-          Atomics.store(ctrl, SLOT.WIDTH, w);
-          Atomics.store(ctrl, SLOT.HEIGHT, h);
-          Atomics.store(ctrl, SLOT.PIXELS, out);
-          Atomics.store(ctrl, SLOT.PIXFMT, 32);
-          Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-          log(`WGL display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
-        }
-        const px = gl.readPixels(), u8 = prog.M.u8;
-        for (let i = 0; i < w * h; i++) {
-          u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
-          u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
-        }
+        publish(gl);
         pumpInput();
         reader.endFrame();
         pace();
@@ -1623,13 +1604,12 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
 
   } else if (platform === 'glut') {
     /*
-     * A GLUT PROGRAM ON PRISM'S GL (src/env/gl.js, glut.js). The picture is gl.js's framebuffer --
-     * the software rasteriser gate-gears holds to Mesa -- copied at every glutSwapBuffers into a
-     * buffer in guest memory, top row first and B,G,R,A, which is the layout the page already reads
-     * for SDL 2. GLUT_ELAPSED_TIME is real time here, so the program animates at its own speed.
+     * A GLUT PROGRAM ON PRISM'S GL (src/env/gl.js, glut.js). The picture is gl.js's framebuffer,
+     * published at every glutSwapBuffers by glPublisher. GLUT_ELAPSED_TIME is real time here, so the
+     * program animates at its own speed.
      */
     const t0 = performance.now();
-    let out = 0, outW = 0, outH = 0, glutSince = performance.now(), glutCount = 0;
+    const publishGlut = glPublisher('GL', prog);
     /*
      * INPUT, as GLUT callbacks. The page's keyboard queue carries PC set-1 scan codes: the arrows,
      * function keys and the navigation block become GLUT_KEY_* (glutSpecialFunc), everything else
@@ -1675,27 +1655,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
         stop: () => Atomics.load(ctrl, SLOT.STOP) !== 0,
         events: glutEvents,
         onSwap: (_n, gl) => {
-          // The frame rate, said every five seconds, as the GLX host says it.
-          glutCount++;
-          const tNow = performance.now();
-          if (tNow - glutSince >= 5000) { log(`${glutCount} frames in ${((tNow - glutSince) / 1000).toFixed(1)} s = ${(glutCount * 1000 / (tNow - glutSince)).toFixed(1)} fps (${gl.backend})`); glutSince = tNow; glutCount = 0; }
-          const { width: w, height: h } = gl.state;
-          if (!out || w !== outW || h !== outH) {
-            if (out) prog.M.rt.free(out);
-            out = prog.M.rt.malloc(w * h * 4);
-            outW = w; outH = h;
-            Atomics.store(ctrl, SLOT.WIDTH, w);
-            Atomics.store(ctrl, SLOT.HEIGHT, h);
-            Atomics.store(ctrl, SLOT.PIXELS, out);
-            Atomics.store(ctrl, SLOT.PIXFMT, 32);
-            Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-            log(`GL display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
-          }
-          const px = gl.readPixels(), u8 = prog.M.u8;
-          for (let i = 0; i < w * h; i++) {
-            u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
-            u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
-          }
+          publishGlut(gl);
           reader.endFrame();
           pace();
         },
@@ -1792,31 +1752,11 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     };
 
     /*
-     * AN OPENGL DISPLAY: the frame gl.js drew, copied at every SDL_GL_SwapBuffers into a buffer in
-     * guest memory, top row first and B,G,R,A -- what the GLUT host publishes, by the same route.
+     * AN OPENGL DISPLAY: the frame gl.js drew, published at every SDL_GL_SwapBuffers by glPublisher.
      */
-    let out = 0, outW = 0, outH = 0, glSince = performance.now(), glCount = 0;
+    const publishGL = glPublisher('SDL 1.2 OpenGL', prog);
     sdl.state.onSwap = (gl) => {
-      glCount++;
-      const tNow = performance.now();
-      if (tNow - glSince >= 5000) { log(`${glCount} frames in ${((tNow - glSince) / 1000).toFixed(1)} s = ${(glCount * 1000 / (tNow - glSince)).toFixed(1)} fps (${gl.backend})`); glSince = tNow; glCount = 0; }
-      const { width: w, height: h } = gl.state;
-      if (!out || w !== outW || h !== outH) {
-        if (out) prog.M.rt.free(out);
-        out = prog.M.rt.malloc(w * h * 4);
-        outW = w; outH = h;
-        Atomics.store(ctrl, SLOT.WIDTH, w);
-        Atomics.store(ctrl, SLOT.HEIGHT, h);
-        Atomics.store(ctrl, SLOT.PIXELS, out);
-        Atomics.store(ctrl, SLOT.PIXFMT, 32);
-        Atomics.store(ctrl, SLOT.TEXTMODE, 0);
-        log(`SDL 1.2 OpenGL display ${w}x${h}, ${gl.backend === 'webgl' ? 'WebGL2' : 'software rasteriser'}`);
-      }
-      const px = gl.readPixels(), u8 = prog.M.u8;
-      for (let i = 0; i < w * h; i++) {
-        u8[out + 4 * i] = px[4 * i + 2]; u8[out + 4 * i + 1] = px[4 * i + 1];
-        u8[out + 4 * i + 2] = px[4 * i]; u8[out + 4 * i + 3] = 255;
-      }
+      publishGL(gl);
       reader.endFrame();
       pace();
     };

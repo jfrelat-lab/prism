@@ -97,8 +97,11 @@ export const SLOT = {
    *
    * It is a format, not a depth, because the page has to know the BYTE ORDER: GDI writes blue first
    * and a canvas wants red first, so the two cannot share a copy loop.
+   *
+   * 2 is NOT in guest memory at all: a WebGL frame, sent to the page as an ImageBitmap (the 'frame'
+   * message) rather than read back from the GPU and copied twice -- see glPublisher in worker.js.
    */
-  PIXFMT: 34,      // guest → host: 0 = 8-bit indexed (default), 32 = BGRA
+  PIXFMT: 34,      // guest → host: 0 = 8-bit indexed (default), 32 = BGRA, 2 = an ImageBitmap message
 
   /*
    * THE MOUSE, and it is an ACCUMULATOR rather than a position.

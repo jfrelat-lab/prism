@@ -28,6 +28,7 @@ let worker = null, views = null, guest = null;
 let soundWorker = null;
 let audioCtx = null, audioNode = null;
 let imageData = null, lut = null, palGen = -1;
+let glFrame = null;                        // the latest WebGL frame, an ImageBitmap (PIXFMT 2)
 let statTimer = 0, lastStatAt = 0, lastFrame = 0;
 
 // ---------------------------------------------------------------- the text surface
@@ -1148,6 +1149,7 @@ async function startRun(typedAs = null) {
   const argv = [typedAs || entry().file, ...tokenise($('args').value)];
   publishQuery();
 
+  glFrame?.close(); glFrame = null;
   worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
   worker.onmessage = (e) => {
     const m = e.data;
@@ -1165,6 +1167,8 @@ async function startRun(typedAs = null) {
       log(`guest memory: ${(guest.length / 1048576).toFixed(0)} MB shared with the page`);
     }
     else if (m.type === 'failed') log(`build failed: ${m.message}`, 'error');
+    // A WebGL frame (PIXFMT 2): the latest one is kept for paint(); one it never drew is let go.
+    else if (m.type === 'frame') { glFrame?.close(); glFrame = m.bitmap; }
     else if (m.type === 'diag' && m.glframe !== undefined) ((window.PRISM_DIAG ??= {}).glframes ??= {})[m.glframe] = m;
     else if (m.type === 'diag') window.PRISM_DIAG = m;
   };
@@ -1337,6 +1341,17 @@ function paint() {
   const { ctrl, pal } = views;
   const pixels = Atomics.load(ctrl, SLOT.PIXELS);
   const w = Atomics.load(ctrl, SLOT.WIDTH), h = Atomics.load(ctrl, SLOT.HEIGHT);
+
+  /*
+   * A WEBGL FRAME is not in guest memory: the worker sends each one as an ImageBitmap, drawn as it
+   * is. Until the first arrives the canvas keeps what it had.
+   */
+  if (Atomics.load(ctrl, SLOT.PIXFMT) === 2 && w > 0 && h > 0 && !Atomics.load(ctrl, SLOT.TEXTMODE)) {
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    imageData = null; textImage = null;
+    if (glFrame) cx.drawImage(glFrame, 0, 0);
+    return;
+  }
 
   // One surface, two modes, exactly as the program sees it: text until it creates a display, its
   // framebuffer while it has one, and back to text if it closes it.

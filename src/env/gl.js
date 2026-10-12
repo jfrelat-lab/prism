@@ -1052,6 +1052,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     onFrame,
     get backend() { return webgl ? 'webgl' : 'soft'; },
+    /** The WebGL frame as an ImageBitmap (makeWebGL's present); null on the software rasteriser. */
+    present() { return webgl ? webgl.present() : null; },
     /** Stencil bits for the next resize: the window system's visual (glut.js on GLUT_STENCIL). */
     set stencilBits(n) { s.stencilBits = n; },
   };
@@ -1070,7 +1072,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
  */
 function makeWebGL(w, h, stencilBuffer = false) {
   const canvas = new OffscreenCanvas(w, h);
-  const g = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
+  // No alpha: the canvas is what present() hands the page, and a GL window is opaque -- with one, the
+  // alpha the program's fragments left (gears' lit faces are below 1) showed the page through them.
+  const g = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: false, preserveDrawingBuffer: true });
   if (!g) throw new Error('gl: this browser has no WebGL2 for an OffscreenCanvas');
   /*
    * The program draws into a framebuffer of its own, not the canvas's: WebGL2 cannot read a depth
@@ -1303,6 +1307,20 @@ void main() {
       const out = new Float32Array(rw * rh);
       for (let i = 0; i < rw * rh; i++) out[i] = (px[4 * i] | (px[4 * i + 1] << 8) | (px[4 * i + 2] << 16)) / 16777215;
       return out;
+    },
+    /**
+     * The frame as an ImageBitmap, for a page to draw: the program's framebuffer blitted to the
+     * canvas's own and taken from it, with nothing read back. The scissor would clip the blit, so it
+     * is off for it and forgotten.
+     */
+    present() {
+      flush();
+      g.disable(g.SCISSOR_TEST); delete applied.scissor;
+      g.bindFramebuffer(g.DRAW_FRAMEBUFFER, null);
+      g.blitFramebuffer(0, 0, w, h, 0, 0, w, h, g.COLOR_BUFFER_BIT, g.NEAREST);
+      g.bindFramebuffer(g.FRAMEBUFFER, target);
+      key = null;
+      return canvas.transferToImageBitmap();
     },
     /** The framebuffer, bottom row first, as GL's own is. */
     read() { flush(); const px = new Uint8Array(w * h * 4); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, px); return px; },
