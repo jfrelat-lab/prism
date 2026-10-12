@@ -34,10 +34,10 @@ const MODELVIEW = 0x1700, PROJECTION = 0x1701;
 const CAP = {
   CULL_FACE: 0x0b44, LIGHTING: 0x0b50, DEPTH_TEST: 0x0b71, NORMALIZE: 0x0ba1, LIGHT0: 0x4000,
   TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60, SCISSOR_TEST: 0x0c11,
-  POLYGON_OFFSET_FILL: 0x8037, CLIP_PLANE0: 0x3000,
+  POLYGON_OFFSET_FILL: 0x8037, CLIP_PLANE0: 0x3000, STENCIL_TEST: 0x0b90,
 };
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
-const KNOWN_CAPS = new Set([0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57]);
+const KNOWN_CAPS = new Set([0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57]);
 const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
@@ -153,6 +153,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // glTexGen: per coordinate (s, t) its mode and object plane; the caps TEXTURE_GEN_S/T turn it on.
     texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
     unpackAlign: 4, packAlign: 4,
+    // The stencil buffer exists only when the window asked for one (glut.js: GLUT_STENCIL); with no
+    // stencil bits the test passes and nothing is written (GL 1.1 4.1.4).
+    stencilBits: 0, stencil: null,
+    stencilFunc: [0x207, 0, 0xffffffff], stencilOp: [0x1e00, 0x1e00, 0x1e00], stencilWriteMask: 0xffffffff, clearStencil: 0,
     colourMaterial: { face: 0x0408, mode: 0x1602 },    // GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE
     unknownCaps: new Set(),
     scissor: [0, 0, 0, 0], pointSize: 1, lineWidth: 1,
@@ -170,19 +174,30 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   function resize(w, h) {
     s.width = w; s.height = h;
     s.color = new Uint8Array(w * h * 4); s.depth = new Float32Array(w * h).fill(1);
+    s.stencil = s.stencilBits ? new Uint8Array(w * h) : null;
     s.viewport = [0, 0, w, h];
     gpuCache = null;
-    if (backend === 'webgl') { webgl = makeWebGL(w, h); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) t.dirty = true; }
+    if (backend === 'webgl') { webgl = makeWebGL(w, h, s.stencilBits > 0); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) t.dirty = true; }
   }
 
   // --- per-vertex work
-  function litColour(m, eyeNormal) {
+  function litColour(m, eyeNormal, eye) {
     const out = [0, 0, 0, m.diffuse[3]];
     for (let k = 0; k < 3; k++) out[k] = m.emission[k] + s.sceneAmbient[k] * m.ambient[k];
     for (let li = 0; li < 8; li++) {
       const L = s.lights[li];
       if (!s.caps.has(CAP.LIGHT0 + li)) continue;
-      const dir = norm3(L.position);
+      // GL 1.1 2.13.1: a directional light's direction is its position; a positional one's is the
+      // vector from the vertex to it, and it falls off as 1 / (kc + kl d + kq d^2) -- all of the
+      // light's contribution, ambient included.
+      let dir, att = 1;
+      if (L.position[3] === 0) dir = norm3(L.position);
+      else {
+        const v = [L.position[0] - eye[0] / eye[3], L.position[1] - eye[1] / eye[3], L.position[2] - eye[2] / eye[3]];
+        const d = Math.hypot(v[0], v[1], v[2]), [kc, kl, kq] = L.attenuation ?? [1, 0, 0];
+        dir = d ? [v[0] / d, v[1] / d, v[2] / d] : [0, 0, 0];
+        att = 1 / (kc + kl * d + kq * d * d);
+      }
       const ndl = Math.max(0, eyeNormal[0] * dir[0] + eyeNormal[1] * dir[1] + eyeNormal[2] * dir[2]);
       let spec = 0;
       if (ndl > 0 && (m.specular[0] || m.specular[1] || m.specular[2])) {
@@ -190,7 +205,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         const ndh = Math.max(0, eyeNormal[0] * hv[0] + eyeNormal[1] * hv[1] + eyeNormal[2] * hv[2]);
         spec = m.shininess ? ndh ** m.shininess : (ndh > 0 ? 1 : 0);
       }
-      for (let k = 0; k < 3; k++) out[k] += L.ambient[k] * m.ambient[k] + ndl * L.diffuse[k] * m.diffuse[k] + spec * L.specular[k] * m.specular[k];
+      for (let k = 0; k < 3; k++) out[k] += att * (L.ambient[k] * m.ambient[k] + ndl * L.diffuse[k] * m.diffuse[k] + spec * L.specular[k] * m.specular[k]);
     }
     return out.map(clamp01);
   }
@@ -218,10 +233,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const nm = normalMatrix(mv), n = s.normal;
       let en = [nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]];
       if (s.caps.has(CAP.NORMALIZE)) en = norm3(en);
-      colour = litColour(s.material, en);
+      colour = litColour(s.material, en, eye);
       // Two-sided: the colour a back face shows, lit with the back material and the normal reversed.
       // Which of the two a triangle gets is known only once its window-space winding is (triangle()).
-      if (s.twoSide) back = litColour(s.backMaterial, [-en[0], -en[1], -en[2]]);
+      if (s.twoSide) back = litColour(s.backMaterial, [-en[0], -en[1], -en[2]], eye);
     } else colour = s.colour.map(clamp01);
     // A generated coordinate replaces the current one: the object plane dotted with the vertex as given.
     let tu = s.tex[0], tv = s.tex[1];
@@ -425,10 +440,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       c0 = f * c0 + (1 - f) * F.colour[0]; c1 = f * c1 + (1 - f) * F.colour[1]; c2 = f * c2 + (1 - f) * F.colour[2];
     }
     if (s.caps.has(CAP.ALPHA_TEST) && !compare(s.alphaFunc, c3, s.alphaRef)) return;
+    const stencil = s.stencil && s.caps.has(CAP.STENCIL_TEST);
+    if (stencil) {
+      const [fn, ref, mask] = s.stencilFunc, m = mask & 0xff;
+      if (!compare(fn, (ref < 0 ? 0 : ref > 255 ? 255 : ref) & m, s.stencil[i] & m)) { stencilUpdate(i, s.stencilOp[0]); return; }
+    }
     if (s.caps.has(CAP.DEPTH_TEST)) {
-      if (!compare(s.depthFunc, z, s.depth[i])) return;
+      if (!compare(s.depthFunc, z, s.depth[i])) { if (stencil) stencilUpdate(i, s.stencilOp[1]); return; }
       if (s.depthMask) s.depth[i] = z;
     }
+    if (stencil) stencilUpdate(i, s.stencilOp[2]);
     const o = i * 4;
     let o0 = clamp01(c0), o1 = clamp01(c1), o2 = clamp01(c2), o3 = clamp01(c3);
     if (s.caps.has(CAP.BLEND)) {
@@ -444,6 +465,22 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     if (m[2]) s.color[o + 2] = Math.round(o2 * 255);
     if (m[3]) s.color[o + 3] = Math.round(o3 * 255);
     s.stats.fragments++;
+  }
+  /** A stencil operation (GL 1.1 4.1.4) on one pixel, through the write mask. */
+  function stencilUpdate(i, op) {
+    const old = s.stencil[i];
+    let v;
+    switch (op) {
+      case 0x1e00: return;                                                     // KEEP
+      case 0: v = 0; break;                                                    // ZERO
+      case 0x1e01: { const r = s.stencilFunc[1]; v = r < 0 ? 0 : r > 255 ? 255 : r; break; }   // REPLACE
+      case 0x1e02: v = old === 255 ? 255 : old + 1; break;                     // INCR, saturating
+      case 0x1e03: v = old === 0 ? 0 : old - 1; break;                         // DECR, saturating
+      case 0x150a: v = ~old & 0xff; break;                                     // INVERT
+      default: throw new Error(`gl: stencil operation 0x${op.toString(16)}`);
+    }
+    const wm = s.stencilWriteMask & 0xff;
+    s.stencil[i] = (old & ~wm) | (v & wm);
   }
   /** A perspective-correct attribute from its value at the three vertices: attribute/w over 1/w. */
   const persp = (l0, l1, l2, iw, P, Q, R, aP, aQ, aR) => (l0 * aP * P.iw + l1 * aQ * Q.iw + l2 * aR * R.iw) / iw;
@@ -602,6 +639,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       range: `${s.depthRange[0]},${s.depthRange[1]}`,
       scissor: s.caps.has(CAP.SCISSOR_TEST) ? s.scissor.join(',') : '',
       mask: s.colorMask.join(','),
+      stencil: s.stencil && s.caps.has(CAP.STENCIL_TEST) ? `${s.stencilFunc.join(',')},${s.stencilOp.join(',')},${s.stencilWriteMask}` : '',
       offset: s.caps.has(CAP.POLYGON_OFFSET_FILL) ? s.polygonOffset.join(',') : '',
       fog: s.caps.has(CAP.FOG) ? `${s.fog.mode},${s.fog.density},${s.fog.start},${s.fog.end},${s.fog.colour.join(',')}` : '',
     };
@@ -628,7 +666,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const exec = {
     glClear: (mask) => {
       const sc = s.caps.has(CAP.SCISSOR_TEST) ? s.scissor : null;
-      if (webgl) { webgl.clear(mask, s.clear, s.clearDepth, sc, s.colorMask, s.depthMask); return; }
+      if (webgl) { webgl.clear(mask, s.clear, s.clearDepth, sc, s.colorMask, s.depthMask, s.stencil ? [s.clearStencil, s.stencilWriteMask] : null); return; }
       const x0 = sc ? Math.max(0, sc[0]) : 0, y0 = sc ? Math.max(0, sc[1]) : 0;
       const x1 = sc ? Math.min(s.width, sc[0] + sc[2]) : s.width, y1 = sc ? Math.min(s.height, sc[1] + sc[3]) : s.height;
       const c = s.clear.map((x) => Math.round(clamp01(x) * 255));
@@ -636,6 +674,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         const i = y * s.width + x;
         if (mask & 0x4000) for (let k = 0; k < 4; k++) if (s.colorMask[k]) s.color[i * 4 + k] = c[k];
         if ((mask & 0x100) && s.depthMask) s.depth[i] = s.clearDepth;
+        if ((mask & 0x400) && s.stencil) { const wm = s.stencilWriteMask & 0xff; s.stencil[i] = (s.stencil[i] & ~wm) | (s.clearStencil & wm); }
       }
     },
     glClearColor: (r, g, b, a) => { s.clear = [r, g, b, a].map(clamp01); },
@@ -745,15 +784,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const L = s.lights[li - CAP.LIGHT0];
       if (!L) throw new Error(`gl: light 0x${li.toString(16)}`);
       if (pname === PNAME.POSITION) {
-        if (v[3] !== 0) throw new Error('gl: positional lights (w != 0) are not implemented');
         const e = xform(s.stacks[MODELVIEW].at(-1), v[0], v[1], v[2], v[3]);
-        L.position = [e[0], e[1], e[2], 0];
+        L.position = e[3] === 0 ? [e[0], e[1], e[2], 0] : [e[0] / e[3], e[1] / e[3], e[2] / e[3], 1];
       } else if (pname === PNAME.AMBIENT) L.ambient = v;
       else if (pname === PNAME.DIFFUSE) L.diffuse = v;
       else if (pname === PNAME.SPECULAR) L.specular = v;
       // A spotlight's cone and a light's attenuation. A program may set them to their defaults -- Tux
-      // Racer sets every parameter of every light -- and only a cone narrower than 180 degrees or a
-      // falling-off positional light would change the picture; those are refused, not approximated.
+      // Racer sets every parameter of every light -- and only a cone narrower than 180 degrees would
+      // change the picture beyond what is implemented; that is refused, not approximated.
       else if (pname === 0x1204) L.spotDirection = v;
       else if (pname === 0x1205) L.spotExponent = v[0];
       else if (pname === 0x1206) { if (v[0] !== 180) throw new Error('gl: spotlights (GL_SPOT_CUTOFF other than 180) are not implemented'); }
@@ -840,11 +878,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.clipPlanes[i] = [0, 1, 2, 3].map((c) => eq[0] * inv[c * 4] + eq[1] * inv[c * 4 + 1] + eq[2] * inv[c * 4 + 2] + eq[3] * inv[c * 4 + 3]);
     },
     glLineWidth: (w) => { s.lineWidth = w; },
-    /*
-     * Stencil, on a framebuffer with NO stencil bits (the visual and pixel format say 0): the test
-     * always passes and nothing is written (GL 1.1 4.1.4), so these change no pixel.
-     */
-    glStencilFunc: () => {}, glStencilOp: () => {}, glStencilMask: () => {}, glClearStencil: () => {},
+    // The stencil state is kept whether or not there are stencil bits; without them it changes no pixel.
+    glStencilFunc: (fn, ref, mask) => { s.stencilFunc = [fn, ref, mask >>> 0]; },
+    glStencilOp: (fail, zfail, zpass) => { s.stencilOp = [fail, zfail, zpass]; },
+    glStencilMask: (m) => { s.stencilWriteMask = m >>> 0; },
+    glClearStencil: (v) => { s.clearStencil = v; },
     glTexParameterfv: (target, p, v) => {
       if (p === 0x1004) { texture().border = v; return; }   // GL_TEXTURE_BORDER_COLOR, kept with the texture
       exec.glTexParameterf(target, p, v[0]);
@@ -955,7 +993,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      * alike. Any other name is refused, naming itself.
      */
     glGetIntegerv: (p, out) => {
-      const vals = p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : null;
+      const vals = p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
     },
@@ -1014,6 +1052,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     onFrame,
     get backend() { return webgl ? 'webgl' : 'soft'; },
+    /** Stencil bits for the next resize: the window system's visual (glut.js on GLUT_STENCIL). */
+    set stencilBits(n) { s.stencilBits = n; },
   };
   M.gl = gl;
   return gl;
@@ -1028,9 +1068,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
  * fragment pipeline in the specification's order; the state it needs travels with each batch, and a
  * batch is flushed whenever that state changes, on a clear or viewport change, and on read-back.
  */
-function makeWebGL(w, h) {
+function makeWebGL(w, h, stencilBuffer = false) {
   const canvas = new OffscreenCanvas(w, h);
-  const g = canvas.getContext('webgl2', { antialias: false, depth: true, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
+  const g = canvas.getContext('webgl2', { antialias: false, depth: true, stencil: stencilBuffer, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
   if (!g) throw new Error('gl: this browser has no WebGL2 for an OffscreenCanvas');
   const shader = (type, src) => {
     const sh = g.createShader(type);
@@ -1094,7 +1134,7 @@ void main() {
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
   const FILT = { 0x2600: g.NEAREST, 0x2601: g.LINEAR, 0x2700: g.NEAREST_MIPMAP_NEAREST, 0x2701: g.LINEAR_MIPMAP_NEAREST, 0x2702: g.NEAREST_MIPMAP_LINEAR, 0x2703: g.LINEAR_MIPMAP_LINEAR };
   const WRAP = { 0x2901: g.REPEAT, 0x2900: g.CLAMP_TO_EDGE, 0x812f: g.CLAMP_TO_EDGE };
-  let zFlip = 0;
+  let zFlip = 0, stencilOn = '';
   function apply(st) {
     if (st.tex >= 0) {
       g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex));
@@ -1122,6 +1162,14 @@ void main() {
       g.uniform1i(U.fogMode, m === 0x2601 ? 1 : m === 0x0800 ? 2 : 3); g.uniform1f(U.fogDensity, d); g.uniform1f(U.fogStart, s0); g.uniform1f(U.fogEnd, e0); g.uniform4f(U.fogColour, r, gg, b, a);
     } else g.uniform1i(U.fogMode, 0);
     const cm = st.mask.split(',').map((v) => v === 'true'); g.colorMask(cm[0], cm[1], cm[2], cm[3]);
+    // Only a program that uses the stencil test sends WebGL stencil calls.
+    if (st.stencil !== stencilOn) {
+      stencilOn = st.stencil;
+      if (st.stencil) {
+        const [fn, ref, mask, f0, f1, f2, wm] = st.stencil.split(',').map(Number);
+        g.enable(g.STENCIL_TEST); g.stencilFunc(fn, ref, mask); g.stencilOp(f0, f1, f2); g.stencilMask(wm);
+      } else g.disable(g.STENCIL_TEST);
+    }
     if (st.offset) { const [f, u] = st.offset.split(',').map(Number); g.enable(g.POLYGON_OFFSET_FILL); g.polygonOffset(f, u); } else g.disable(g.POLYGON_OFFSET_FILL);
   }
   const flush = () => {
@@ -1151,12 +1199,13 @@ void main() {
     tri(a, b, c, flat, st) { begin(st, g.TRIANGLES, 3); push(a, flat); push(b, flat); push(c, flat); },
     line(a, b, st) { begin(st, g.LINES, 2); push(a); push(b); },
     viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); },
-    clear(mask, colour, depth, scissor, colorMask = [true, true, true, true], depthMask = true) {
+    clear(mask, colour, depth, scissor, colorMask = [true, true, true, true], depthMask = true, stencil = null) {
       flush();
       if (scissor) { g.enable(g.SCISSOR_TEST); g.scissor(...scissor); } else g.disable(g.SCISSOR_TEST);
       g.clearColor(colour[0], colour[1], colour[2], colour[3]); g.clearDepth(depth);
       g.colorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]); g.depthMask(depthMask);
-      g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0));
+      if (stencil && (mask & 0x400)) { g.clearStencil(stencil[0]); g.stencilMask(stencil[1]); stencilOn = null; }
+      g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0) | (stencil && (mask & 0x400) ? g.STENCIL_BUFFER_BIT : 0));
       key = null;
     },
     /** The framebuffer, bottom row first, as GL's own is. */

@@ -12,7 +12,7 @@
 // time in ms instead of the fixed step -- the page passes real time, so the gears turn at 70 degrees
 // a second whatever the frame rate.
 
-const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1;
+const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1, GLUT_STENCIL = 0x20;
 
 export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, stop = () => false, onSwap = null, now = null, events = null } = {}) {
   const gl = M.gl;
@@ -22,11 +22,15 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
   const s = { w: 300, h: 300, swaps: 0, redisplay: false, cb: {}, pointer: [0, 0] };
   const call = (p, args = []) => { if (p) M.icall(p, args); };
   Object.assign(M.rt, {
-    glutInit: () => {}, glutInitDisplayMode: () => {},
+    glutInit: () => {},
+    // Of the display mode, only the stencil buffer changes what gl.js allocates: 8 bits, as Mesa's.
+    glutInitDisplayMode: (mode) => { gl.stencilBits = mode & GLUT_STENCIL ? 8 : 0; },
     glutInitWindowSize: (w, h) => { s.w = w; s.h = h; },
     glutInitWindowPosition: () => {},
     glutCreateWindow: () => { gl.resize(s.w, s.h); return 1; },
     glutDestroyWindow: () => {},
+    // One window, number 1: the one glutCreateWindow made. Its title is nowhere to be shown.
+    glutGetWindow: () => 1, glutSetWindow: () => {}, glutSetWindowTitle: () => {},
     glutDisplayFunc: (p) => { s.cb.display = p; },
     glutReshapeFunc: (p) => { s.cb.reshape = p; },
     glutIdleFunc: (p) => { s.cb.idle = p; },
@@ -83,6 +87,7 @@ export function glutBuiltins(T) {
   return {
     glutInit: f(V, P, P), glutInitDisplayMode: f(V, U), glutInitWindowSize: f(V, I, I),
     glutInitWindowPosition: f(V, I, I), glutCreateWindow: f(I, P), glutDestroyWindow: f(V, I),
+    glutGetWindow: f(I), glutSetWindow: f(V, I), glutSetWindowTitle: f(V, P),
     glutDisplayFunc: f(V, P), glutReshapeFunc: f(V, P), glutIdleFunc: f(V, P), glutVisibilityFunc: f(V, P),
     glutKeyboardFunc: f(V, P), glutSpecialFunc: f(V, P), glutPostRedisplay: f(V), glutGet: f(I, I),
     glutKeyboardUpFunc: f(V, P), glutSpecialUpFunc: f(V, P), glutMouseFunc: f(V, P), glutMotionFunc: f(V, P),

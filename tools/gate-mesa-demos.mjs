@@ -11,10 +11,14 @@
 //             path by glGetString(GL_VERSION): "1.1" or "1.2" means texture OBJECTS, anything else
 //             means each texture compiled into a DISPLAY LIST around glTexImage2D. Both paths are
 //             run, the version set on each side (MESA_GL_VERSION_OVERRIDE, and gl.js's `version`).
+//   reflect   a table reflecting two spinning objects through the STENCIL buffer (drawn with
+//             GL_REPLACE, colour masked off, then the mirrored scene where it equals 1), blended
+//             over with its mipmapped tile texture. The GLU program of the set: gluCylinder,
+//             gluLookAt and gluBuild2DMipmaps, linked against libGLU natively, glu.js here.
 //
 // Each carries controls -- a defect of a GL implementation this program shows -- that must be red.
 //
-//   node tools/gate-mesa-demos.mjs [--png=<dir>]   # per case: PRISM | Mesa | differences
+//   node tools/gate-mesa-demos.mjs [--png=<dir>] [--case=<target>]   # png per case: PRISM | Mesa | differences
 import { readFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +30,7 @@ import { skip } from './gate-skip.mjs';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TOL = 8, MAX_OFF = 0.001, MAX_EDGE = 0.001;
 const pngDir = process.argv.find((a) => a.startsWith('--png='))?.slice(6);
+const only = process.argv.find((a) => a.startsWith('--case='))?.slice(7);   // one case by its target name
 
 const recordingOff = (M, name) => {   // the call runs at once even while a list is being compiled
   const orig = M.rt[name];
@@ -51,6 +56,15 @@ const CASES = [
     ],
   },
   {
+    // The objects spin by elapsed time; the reflection is drawn while the eye is above the table.
+    name: 'reflect', target: 'reflect', sources: ['reflect.c', 'readtex.c', 'readtex.h', 'showbuffer.c', 'showbuffer.h'],
+    files: ['tile.rgb'], glu: true, frames: [1, 30, 75],
+    controls: [
+      ['the stencil test ignored', (M) => { const en = M.rt.glEnable; M.rt.glEnable = (c) => (c === 0x0b90 ? undefined : en(c)); }],
+      ['GL_REPLACE read as GL_KEEP', (M) => { const op = M.rt.glStencilOp; M.rt.glStencilOp = (a, b, c) => op(...[a, b, c].map((v) => (v === 0x1e01 ? 0x1e00 : v))); }],
+    ],
+  },
+  {
     name: 'texobj (display lists)', target: 'texobj', frames: [0, 25, 50], version: '2.1',
     controls: [
       ['glTexImage2D executed instead of compiled', (M) => recordingOff(M, 'glTexImage2D')],
@@ -69,11 +83,13 @@ function mesa(c) {
   mkdirSync(join(work, 'GL'), { recursive: true });
   const src = join(ROOT, 'corpus', 'mesademos', `${c.target}.c`);
   if (!existsSync(src)) skip(`corpus/mesademos/${c.target}.c`, `run targets/${c.target}.json's fetch`);
-  copyFileSync(src, join(work, `${c.target}.c`));
+  for (const f of c.sources ?? [`${c.target}.c`]) copyFileSync(join(ROOT, 'corpus', 'mesademos', f), join(work, f));
+  for (const f of c.files ?? []) copyFileSync(join(ROOT, 'corpus', 'mesademos', f), join(work, f));
+  const units = (c.sources ?? [`${c.target}.c`]).filter((f) => f.endsWith('.c')).join(' ');
   copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(work, 'glut-egl.c'));
   copyFileSync(join(ROOT, 'tools', 'oracle', 'GL', 'glut.h'), join(work, 'GL', 'glut.h'));
   const env = c.version ? `MESA_GL_VERSION_OVERRIDE=${c.version} ` : '';
-  const r = sh(`cd /work/mesademos/${dir} && rm -f frame-*.ppm prog && gcc -O0 -I. -o prog ${c.target}.c glut-egl.c -lEGL -lOpenGL -lm && ${env}PRISM_GLUT_FRAMES=${c.frames.join(',')} ./prog`);
+  const r = sh(`cd /work/mesademos/${dir} && rm -f frame-*.ppm prog && gcc -O0 -I. -o prog ${units} glut-egl.c ${c.glu ? '-lGLU ' : ''}-lEGL -lOpenGL -lm && ${env}PRISM_GLUT_FRAMES=${c.frames.join(',')} ./prog`);
   if (r.code !== 0) throw new Error(`${c.name}: reference: ${r.stderr || r.stdout}`);
   return Object.fromEntries(c.frames.map((n) => [n, readPpm(join(work, `frame-${n}.ppm`))]));
 }
@@ -82,8 +98,9 @@ function mesa(c) {
 function prism(c, mutate = null) {
   const out = {};
   const gl = c.version ? { version: `${c.version} PRISM` } : {};
+  const files = Object.fromEntries((c.files ?? []).map((f) => [f, new Uint8Array(readFileSync(join(ROOT, 'corpus', 'mesademos', f)))]));
   const { program } = buildTarget(loadTarget(join(ROOT, 'targets', `${c.target}.json`)), { root: ROOT,
-    envExtra: { gl, glut: { frames: c.frames, onFrame: (n, rgba, w, h) => { out[n] = { w, h, rgba }; } } } });
+    envExtra: { gl, stdio: { files }, glut: { frames: c.frames, onFrame: (n, rgba, w, h) => { out[n] = { w, h, rgba }; } } } });
   program.M.write = () => {};
   if (mutate) {
     const before = { ...program.M.rt };
@@ -117,6 +134,7 @@ let bad = 0;
 const report = (ok, what, detail = '') => { if (!ok) bad++; console.log(`${ok ? '  ok ' : ' BAD '} ${what.padEnd(64)} ${detail}`); };
 const pct = (x) => `${(100 * x).toFixed(2)}%`;
 for (const c of CASES) {
+  if (only && c.target !== only) continue;
   console.log(`${c.name}:`);
   const ref = mesa(c), mine = prism(c);
   for (const n of c.frames) {
@@ -147,5 +165,5 @@ for (const c of CASES) {
     console.log(`  wrote ${file}`);
   }
 }
-console.log(bad ? `\n${bad} WRONG` : '\nmorph3d and texobj (both paths) draw on PRISM what they draw on Mesa.');
+console.log(bad ? `\n${bad} WRONG` : '\nmorph3d, texobj (both paths) and reflect draw on PRISM what they draw on Mesa.');
 process.exit(bad ? 1 : 0);

@@ -24,6 +24,7 @@
 #include "GL/glut.h"
 
 static int winW = 300, winH = 300, swaps = 0, redisplay = 0, stepMs = 40, lastFrame = 0;
+static unsigned int displayMode = 0;
 static int want[64], nwant = 0;
 static void (*displayCb)(void), (*reshapeCb)(int, int), (*idleCb)(void), (*visibilityCb)(int);
 
@@ -38,7 +39,7 @@ void glutInit(int *argc, char **argv) {
     if (*p == ',') p++;
   }
 }
-void glutInitDisplayMode(unsigned int mode) { (void)mode; }
+void glutInitDisplayMode(unsigned int mode) { displayMode = mode; }
 void glutInitWindowSize(int w, int h) { winW = w; winH = h; }
 void glutInitWindowPosition(int x, int y) { (void)x; (void)y; }
 
@@ -58,12 +59,17 @@ int glutCreateWindow(const char *title) {
   glGenRenderbuffers(2, rb);
   glBindRenderbuffer(GL_RENDERBUFFER, rb[0]); glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, winW, winH);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb[0]);
-  glBindRenderbuffer(GL_RENDERBUFFER, rb[1]); glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, winW, winH);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[1]);
+  /* GLUT_STENCIL asks for a stencil buffer too: 8 bits, packed with the depth as Mesa's visuals are. */
+  int stencil = (displayMode & GLUT_STENCIL) != 0;
+  glBindRenderbuffer(GL_RENDERBUFFER, rb[1]); glRenderbufferStorage(GL_RENDERBUFFER, stencil ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24, winW, winH);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, stencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[1]);
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { fprintf(stderr, "glut-egl: incomplete framebuffer\n"); exit(2); }
   return 1;
 }
 void glutDestroyWindow(int win) { (void)win; }
+int glutGetWindow(void) { return 1; }
+void glutSetWindow(int win) { (void)win; }
+void glutSetWindowTitle(const char *title) { (void)title; }
 void glutDisplayFunc(void (*f)(void)) { displayCb = f; }
 void glutReshapeFunc(void (*f)(int, int)) { reshapeCb = f; }
 void glutIdleFunc(void (*f)(void)) { idleCb = f; }

@@ -1,0 +1,25 @@
+{
+  "name": "reflect",
+  "title": "reflect (Brian Paul, 1995; Mesa demos)",
+  "dir": "corpus/mesademos",
+  "fetch": "mkdir -p corpus/mesademos && for f in demos/reflect.c util/readtex.c util/readtex.h util/showbuffer.c util/showbuffer.h images/tile.rgb; do curl -sfL -o corpus/mesademos/$(basename $f) https://gitlab.freedesktop.org/mesa/demos/-/raw/mesa-demos-8.0.1/src/$f; done",
+  "_version": "mesa-demos 8.0.1 (2010-07-13), as morph3d and texobj.",
+  "_doc": "A textured table reflecting two spinning objects: the table drawn into the STENCIL buffer first (colour masked off, GL_REPLACE), the scene mirrored through it where the stencil is 1 (GL_EQUAL), then the table blended over it and the scene drawn normally. GLU builds its objects (gluCylinder, a cone among them), places the eye (gluLookAt) and mipmaps the SGI .rgb tile readtex.c loads (gluBuild2DMipmaps). It asks GLUT for a stencil buffer (GLUT_STENCIL), which is what gives gl.js one. readtex.c opens ../images/tile.rgb and, failing that, tile.rgb in the current directory, which is where the gate puts it.",
+  "units": {
+    "list": [
+      "reflect.c",
+      "readtex.c",
+      "showbuffer.c"
+    ]
+  },
+  "compile": {
+    "memory": 16,
+    "collect": true
+  },
+  "env": [
+    "stdio",
+    "gl",
+    "glu",
+    "glut"
+  ]
+}

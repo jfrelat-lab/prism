@@ -1103,6 +1103,7 @@ export const GLUT_H = `#ifndef _PRISM_GLUT_H
 #define GLUT_KEY_F10 10
 #define GLUT_KEY_F11 11
 #define GLUT_KEY_F12 12
+#define GLUT_ALPHA 8
 #define GLUT_STENCIL 32
 #define GLUT_LEFT_BUTTON 0
 #define GLUT_MIDDLE_BUTTON 1
@@ -1117,6 +1118,9 @@ void glutInitWindowSize(int w, int h);
 void glutInitWindowPosition(int x, int y);
 int glutCreateWindow(const char *title);
 void glutDestroyWindow(int win);
+int glutGetWindow(void);
+void glutSetWindow(int win);
+void glutSetWindowTitle(const char *title);
 void glutDisplayFunc(void (*f)(void));
 void glutReshapeFunc(void (*f)(int, int));
 void glutIdleFunc(void (*f)(void));
