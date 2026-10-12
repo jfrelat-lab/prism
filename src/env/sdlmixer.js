@@ -273,6 +273,9 @@ export function mixerApi(M, state, { readRW = null } = {}) {
    */
   const mixBuffer = () => {
     const stream = state.mixBuf, len = state.mixBytes, u8 = M.u8;
+    // SDL_mixer's mix_channels asks SDL_GetTicks for the time at every buffer (for its channels'
+    // expiry and fades): a reading of the clock, which moves it, on a device Mix_OpenAudio opened.
+    if (state.mixerDevice && state.clock) state.clock.now();
     u8.fill((state.format & 0xff) === 8 ? 0x80 : 0, stream, stream + len);
     for (const ch of channels()) {
       if (ch.paused || !ch.chunk) continue;
@@ -340,6 +343,7 @@ export function mixerApi(M, state, { readRW = null } = {}) {
       state.buffersMixed = 0;
       state.channels = null;
       state.audioOpen = true;
+      state.mixerDevice = true;
       if (state.onAudioOpen) state.onAudioOpen(state);
       return 0;
     },
@@ -417,6 +421,8 @@ export function mixerApi(M, state, { readRW = null } = {}) {
         console.warn('sdlmixer: Mix_PlayChannelTimed with a time limit plays the whole chunk in this implementation');
       }
       const ch = all[which];
+      // SDL_mixer takes the start time with SDL_GetTicks -- the shim's, which pumps and reads the clock.
+      if (state.mixerDevice && state.clock) { pump(); state.clock.now(); }
       // A chunk started over a playing one ends that one first, effects and all.
       if (active(ch)) done(ch);
       ch.chunk = chunk; ch.samples = d.getUint32(chunk + C_ABUF, true); ch.playing = whole;

@@ -17,7 +17,8 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { toolchainCompile } from './toolchain.js';
 import { join, basename, dirname, resolve as resolvePath } from 'node:path';
-import { compileProgram, bindLateBuiltins, loadSnapshot } from './compile.js';
+import { compileProgram, bindLateBuiltins, loadSnapshot, snapshotProgram } from './compile.js';
+import { cacheEnabled, buildKey, recordingResolver, loadCached, storeCached } from './build-cache.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
@@ -407,16 +408,11 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
       return new Uint8Array(readFileSync(resolvePath(dir, found)));
     }),
   ];
-  const program = compileProgram(units, {
-    externData,
-    exports: moduleExports,
+  // The environments' own headers, which override the global table for the names they claim --
+  // and which refuse rather than resolve when two of them claim one name differently.
+  const resolve = makeResolver(dir, target, missing, dosPaths, envHeaders(target.env), casePaths);
+  const options = {
     defines: target.defines ?? {},
-    // The environments' own headers, which override the global table for the names they claim --
-    // and which refuse rather than resolve when two of them claim one name differently.
-    resolve: makeResolver(dir, target, missing, dosPaths, envHeaders(target.env), casePaths),
-    // ...and the signatures from the same environments, for the same reason: a call's result type
-    // belongs to the library the program was compiled against, not to a table everyone shares.
-    extraBuiltins: envBuiltins(target.env),
     memory: (c.memory ?? 64) * 1024 * 1024,
     pack: c.pack ?? null,
     // The language the program was written in, which is a compiler option and not a source change:
@@ -452,7 +448,39 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // ...and a DEVICE WINDOW for the EGA (env `ega`): every integer access tests for A000h (emit.js).
     window: c.window ?? (target.env ?? []).includes('ega'),
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
+  };
+  const compileWith = (res) => compileProgram(units, {
+    externData,
+    exports: moduleExports,
+    ...options,
+    resolve: res,
+    // ...and the signatures from the same environments, for the same reason: a call's result type
+    // belongs to the library the program was compiled against, not to a table everyone shares.
+    extraBuiltins: envBuiltins(target.env),
   });
+  /*
+   * THE BUILD CACHE (src/build-cache.js): what compileProgram made, kept under a key of PRISM's own
+   * source, the target, its units and these options, and used again while every header the compile
+   * read still reads the same. Builds that link anything a snapshot does not carry compile as before.
+   */
+  const cacheable = cacheEnabled() && !onProgram && !tasm.length && !externData.length && !options.paged
+    && !target.asmTranslate?.length && !Object.keys(target.modules ?? {}).some((k) => !k.startsWith('_'));
+  let program;
+  if (cacheable) {
+    const key = buildKey(target, units, options);
+    const hit = loadCached(root, key, resolve);
+    if (hit) {
+      program = loadSnapshot({ meta: hit.meta, image: hit.image, src: hit.src });
+      Object.assign(program, hit.reports, { bundled: false, cached: true });
+    } else {
+      const rec = recordingResolver(resolve);
+      program = compileWith(rec);
+      const plain = (list) => (list ?? []).map((x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v))));
+      let snap = null;
+      try { snap = snapshotProgram(program); } catch { /* a build a snapshot does not record: not kept */ }
+      if (snap) storeCached(root, key, snap, { failures: plain(program.failures), duplicates: plain(program.duplicates), undefined: plain(program.undefined), undefinedVars: plain(program.undefinedVars) }, rec.seen);
+    }
+  } else program = compileWith(resolve);
   // The one moment a static bundle can be taken: linked, and nothing installed or run yet.
   onProgram?.(program);
   /*

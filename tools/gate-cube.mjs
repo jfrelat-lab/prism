@@ -12,6 +12,15 @@
 //   With the data (~/games/cube/files/cube, or PRISM_CUBE_DATA), it RUNS: 30 frames presented with
 //   the default map loaded. CONTROL, red: without its textures (packages/ withheld) it stops before the map.
 //
+//   THE REFERENCE (tools/cubediff.mjs): Cube built natively by g++ over the real SDL 1.2, SDL_mixer and
+//   SDL_image, drawn by Mesa, the same scripted player on both sides (walk, turn, fire, strafe):
+//   frames 100, 200 and 300 within the tolerance -- at most 0.5% of the pixels off by more than 8
+//   (measured: 0.24%, at the HUD icons' edges and mipmaps; both sides at 320x240, Cube's -w and -h)
+//   -- and EVERY audio buffer the native
+//   build's, sample for sample, SDL_mixer's panning included. CONTROLS, red, on the native side: the
+//   run without the player is outside the tolerance at frame 300 (it sees another viewpoint), and a
+//   run at another sound volume (soundvol 128) differs in its sound.
+//
 //   node tools/gate-cube.mjs
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -43,7 +52,7 @@ if (process.argv[2] === '--run') {
   M.spBudget = 200000;
   M.sp_ = () => { M.spBudget = 200000; };
   let error = null;
-  try { b.program.run(['cube_client']); } catch (e) { if (!/__done/.test(e.message)) error = e.message.split('\n')[0]; }
+  try { b.program.run(['cube_client', '-w320', '-h240']); } catch (e) { if (!/__done/.test(e.message)) error = e.message.split('\n')[0]; }
   process.stdout.write(JSON.stringify({ frames: n, output: String(M.output?.() ?? ''), error }) + '\n', () => process.exit(0));
   await new Promise(() => {});
 }
@@ -97,6 +106,24 @@ else {
   const w = run('30', 'no-packages');
   check(w.frames < 30 && !/read map/.test(w.output), `control: with its textures withheld it stops, after ${w.frames} of 30 frames and no map`, w.output.slice(-300));
   ran = true;
+
+  const { nativeFrames, prismFrames: cubePrism, comparePictures } = await import('./cubediff.mjs');
+  const AT = [100, 200, 300], LIMIT = 0.005, TOL = 8;
+  const nat = await nativeFrames(300, AT);
+  const mine = await cubePrism(300, AT);
+  for (const n of AT) {
+    const c = nat.pictures[n] && mine.pictures[n] ? comparePictures(mine.pictures[n], nat.pictures[n], TOL) : null;
+    check(c && c.off / c.total <= LIMIT, `frame ${n}: within the tolerance of Mesa's, ${c ? `${c.off} of ${c.total} pixels off by more than ${TOL} (max ${c.max})` : 'missing'}`,
+      c ? '' : `PRISM ${mine.frames} frames${mine.error ? ` (${mine.error})` : ''}, native ${nat.hashes.length}`);
+  }
+  const firstA = mine.audio.findIndex((h, i) => h !== nat.audio[i]), kinds = new Set(nat.audio).size;
+  check(mine.audio.length === nat.audio.length && firstA < 0 && kinds > 1, `audio: all ${mine.audio.length} buffers are the native build's, sample for sample (${kinds} of them different)`,
+    `PRISM ${mine.audio.length} buffers, native ${nat.audio.length}, first difference at ${firstA + 1}`);
+  const still = await nativeFrames(300, [300], []);
+  const cs = still.pictures[300] && nat.pictures[300] ? comparePictures(still.pictures[300], nat.pictures[300], TOL) : null;
+  check(cs && cs.off / cs.total > LIMIT, `control: the native run without the player is outside the tolerance at frame 300 (${cs ? (100 * cs.off / cs.total).toFixed(2) : '?'}% off)`);
+  const quiet = await nativeFrames(300, [], undefined, 'soundvol 128\n');
+  check(quiet.audio.some((h, i) => h !== nat.audio[i]), 'control: the native run at another sound volume (soundvol 128) differs in its sound');
 }
-console.log(failed ? `gate-cube: ${failed} FAILED` : `gate-cube: Cube builds whole, ${b.functions} functions${ran ? ', and runs its default map' : ''}`);
+console.log(failed ? `gate-cube: ${failed} FAILED` : `gate-cube: Cube builds whole, ${b.functions} functions${ran ? ', and runs its default map as g++, SDL and Mesa do' : ''}`);
 process.exit(failed ? 1 : 0);

@@ -1925,7 +1925,28 @@ struct hostent *gethostbyname(const char *name);
 struct hostent *gethostbyaddr(const void *addr, unsigned int len, int type);
 struct servent { char *s_name; char **s_aliases; int s_port; char *s_proto; };
 struct servent *getservbyname(const char *name, const char *proto);
+/* The reentrant lookups, as glibc declares them (ENet's configure finds them on Linux). */
+#include <stddef.h>
+int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen, struct hostent **result, int *h_errnop);
+int gethostbyaddr_r(const void *addr, unsigned int len, int type, struct hostent *ret, char *buf, size_t buflen, struct hostent **result, int *h_errnop);
+#define HOST_NOT_FOUND 1
 `,
+  /* poll(2), glibc's i386 layout. Like the sockets it watches, it answers that nothing can be. */
+  'sys/poll.h': `
+#ifndef _PRISM_SYS_POLL_H
+#define _PRISM_SYS_POLL_H
+struct pollfd { int fd; short events; short revents; };
+typedef unsigned long nfds_t;
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+#define POLLIN 0x001
+#define POLLPRI 0x002
+#define POLLOUT 0x004
+#define POLLERR 0x008
+#define POLLHUP 0x010
+#define POLLNVAL 0x020
+#endif
+`,
+  'poll.h': '#include <sys/poll.h>\n',
   /*
    * OSS, the sound interface a Linux program of this era writes to. The numbers were all 0 while it
    * was a stub, which meant every ioctl looked like every other one; they are distinct now because

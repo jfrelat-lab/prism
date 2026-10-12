@@ -36,23 +36,32 @@ if (!id1) skip("Quake's data: a directory containing id1/", 'set PRISM_QUAKE_DAT
 const WORLD = 40, TOL = 8, MAX_OFF = 0.002;
 const ARGS = ['-nosound', '-nocdaudio', '+host_framerate', '0.05', '+con_notifytime', '0'];
 
-// --- Mesa
-up();
-const work = join(SCRATCH, 'glquake');
-mkdirSync(join(work, 'inc', 'X11', 'extensions'), { recursive: true });
-cpSync(join(ROOT, 'corpus', 'Quake', 'WinQuake'), join(work, 'src'), { recursive: true });
-copyFileSync(join(ROOT, 'tools', 'oracle', 'glx-egl.c'), join(work, 'glx-egl.c'));
-for (const h of ['xf86dga.h', 'xf86vmode.h']) writeFileSync(join(work, 'inc', 'X11', 'extensions', h), GLX_HEADERS[`X11/extensions/${h}`]);
-if (!existsSync(join(work, 'id1'))) cpSync(id1, join(work, 'id1'), { recursive: true });
+// --- Mesa: built and run in the oracle container -- or, while none of what it is made from has
+// changed (the sources, glx-egl.c, the headers given, the data, the commands), its picture from
+// tools/ref-cache.mjs.
 const target = loadTarget(join(ROOT, 'targets', 'quake.json'), 'glx');
 const winTarget = loadTarget(join(ROOT, 'targets', 'quake.json'), 'wgl');
 const units = target.units.list.map((u) => `src/${u}`).join(' ');
-const build = sh(`cd /work/glquake && gcc -w -O0 -fcommon -DGLQUAKE -U__i386__ -Ui386 -Iinc -Isrc -o glquake ${units} glx-egl.c `
-  + '-Wl,--wrap=R_RenderView -Wl,--wrap=Sys_FloatTime -Wl,--wrap=glDrawBuffer -Wl,--wrap=glReadBuffer -lEGL -lOpenGL -lm', { timeout: 600000 });
-if (build.code !== 0) throw new Error(`reference build: ${build.stderr || build.stdout}`);
-const run = sh(`cd /work/glquake && rm -f frame.ppm && MESA_EXTENSION_MAX_YEAR=1990 PRISM_GLX_WORLD=${WORLD} ./glquake -basedir . ${ARGS.join(' ')} > run.log 2>&1`, { timeout: 600000 });
-if (run.code !== 0 || !existsSync(join(work, 'frame.ppm'))) throw new Error(`reference run: exit ${run.code}, see .oracle/glquake/run.log`);
-const ppm = readFileSync(join(work, 'frame.ppm')), m = ppm.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);
+const BUILD = `cd /work/glquake && gcc -w -O0 -fcommon -DGLQUAKE -U__i386__ -Ui386 -Iinc -Isrc -o glquake ${units} glx-egl.c `
+  + '-Wl,--wrap=R_RenderView -Wl,--wrap=Sys_FloatTime -Wl,--wrap=glDrawBuffer -Wl,--wrap=glReadBuffer -lEGL -lOpenGL -lm';
+const RUN = `cd /work/glquake && rm -f frame.ppm && MESA_EXTENSION_MAX_YEAR=1990 PRISM_GLX_WORLD=${WORLD} ./glquake -basedir . ${ARGS.join(' ')} > run.log 2>&1`;
+const { refCached, treeHash } = await import('./ref-cache.mjs');
+const ref = await refCached(['glquake', treeHash(join(ROOT, 'corpus', 'Quake', 'WinQuake')), readFileSync(join(ROOT, 'tools', 'oracle', 'glx-egl.c')),
+  GLX_HEADERS['X11/extensions/xf86dga.h'], GLX_HEADERS['X11/extensions/xf86vmode.h'], treeHash(id1), BUILD, RUN], () => {
+  up();
+  const work = join(SCRATCH, 'glquake');
+  mkdirSync(join(work, 'inc', 'X11', 'extensions'), { recursive: true });
+  cpSync(join(ROOT, 'corpus', 'Quake', 'WinQuake'), join(work, 'src'), { recursive: true });
+  copyFileSync(join(ROOT, 'tools', 'oracle', 'glx-egl.c'), join(work, 'glx-egl.c'));
+  for (const h of ['xf86dga.h', 'xf86vmode.h']) writeFileSync(join(work, 'inc', 'X11', 'extensions', h), GLX_HEADERS[`X11/extensions/${h}`]);
+  if (!existsSync(join(work, 'id1'))) cpSync(id1, join(work, 'id1'), { recursive: true });
+  const build = sh(BUILD, { timeout: 600000 });
+  if (build.code !== 0) throw new Error(`reference build: ${build.stderr || build.stdout}`);
+  const run = sh(RUN, { timeout: 600000 });
+  if (run.code !== 0 || !existsSync(join(work, 'frame.ppm'))) throw new Error(`reference run: exit ${run.code}, see .oracle/glquake/run.log`);
+  return { ppm: new Uint8Array(readFileSync(join(work, 'frame.ppm'))) };
+});
+const ppm = Buffer.from(ref.ppm), m = ppm.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);
 const mesa = { w: +m[1], h: +m[2], rgb: ppm.subarray(m[0].length) };
 
 // --- PRISM

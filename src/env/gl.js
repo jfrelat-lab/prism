@@ -313,21 +313,46 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const [x, y, z, w] = v.clip, [vx, vy, vw, vh] = s.viewport, [n, f] = s.depthRange;
     return { x: (x / w + 1) * vw / 2 + vx, y: (y / w + 1) * vh / 2 + vy, z: n + (f - n) * (z / w + 1) / 2, iw: 1 / w, v };
   }
-  /** One texel of level `lv` at integer (i, j), after wrapping; RGBA 0..1. */
-  function texel(t, lv, i, j) {
-    const L = t.levels[lv];
-    i = t.wrapS === TEX.REPEAT ? ((i % L.w) + L.w) % L.w : Math.min(L.w - 1, Math.max(0, i));
-    j = t.wrapT === TEX.REPEAT ? ((j % L.h) + L.h) % L.h : Math.min(L.h - 1, Math.max(0, j));
-    const o = (j * L.w + i) * 4;
-    return [L.data[o] / 255, L.data[o + 1] / 255, L.data[o + 2] / 255, L.data[o + 3] / 255];
+  /*
+   * GL_CLAMP is not CLAMP_TO_EDGE (GL 1.1, 3.8.1): the coordinate is clamped to [0, 1], and a linear
+   * filter that reaches past the image there takes the BORDER colour (transparent black unless
+   * GL_TEXTURE_BORDER_COLOR says otherwise) -- the darker rim Mesa draws round Cube's HUD icons.
+   *
+   * The sampling path allocates nothing: a texel is an offset into its level (-1 for the border),
+   * and a filter writes its four components into the array it is handed. The arithmetic is the
+   * expressions it always was, so a picture is the same to the bit.
+   */
+  const BORDER = [0, 0, 0, 0];
+  /** Where texel (i, j) of level L is after wrapping, or -1 for the border (a linear filter past GL_CLAMP's edge). */
+  function texelAt(t, L, i, j, border) {
+    if (border && ((t.wrapS === TEX.CLAMP && (i < 0 || i >= L.w)) || (t.wrapT === TEX.CLAMP && (j < 0 || j >= L.h)))) return -1;
+    // REPEAT on a power-of-two size is a mask: the same residue as ((i % w) + w) % w for any int i.
+    if (t.wrapS === TEX.REPEAT) i = (L.w & (L.w - 1)) === 0 ? i & (L.w - 1) : ((i % L.w) + L.w) % L.w;
+    else i = Math.min(L.w - 1, Math.max(0, i));
+    if (t.wrapT === TEX.REPEAT) j = (L.h & (L.h - 1)) === 0 ? j & (L.h - 1) : ((j % L.h) + L.h) % L.h;
+    else j = Math.min(L.h - 1, Math.max(0, j));
+    return (j * L.w + i) * 4;
   }
-  function filter(t, lv, u, v, linear) {
-    const L = t.levels[lv], x = u * L.w, y = v * L.h;
-    if (!linear) return texel(t, lv, Math.floor(x), Math.floor(y));
+  function filter(t, lv, u, v, linear, out) {
+    if (t.wrapS === TEX.CLAMP) u = clamp01(u);
+    if (t.wrapT === TEX.CLAMP) v = clamp01(v);
+    const L = t.levels[lv], x = u * L.w, y = v * L.h, D = L.data;
+    if (!linear) {
+      const o = texelAt(t, L, Math.floor(x), Math.floor(y), false);
+      out[0] = D[o] / 255; out[1] = D[o + 1] / 255; out[2] = D[o + 2] / 255; out[3] = D[o + 3] / 255;
+      return out;
+    }
     const x0 = Math.floor(x - 0.5), y0 = Math.floor(y - 0.5), a = x - 0.5 - x0, b = y - 0.5 - y0;
-    const c00 = texel(t, lv, x0, y0), c10 = texel(t, lv, x0 + 1, y0), c01 = texel(t, lv, x0, y0 + 1), c11 = texel(t, lv, x0 + 1, y0 + 1);
-    return [0, 1, 2, 3].map((k) => (1 - a) * (1 - b) * c00[k] + a * (1 - b) * c10[k] + (1 - a) * b * c01[k] + a * b * c11[k]);
+    const o00 = texelAt(t, L, x0, y0, true), o10 = texelAt(t, L, x0 + 1, y0, true), o01 = texelAt(t, L, x0, y0 + 1, true), o11 = texelAt(t, L, x0 + 1, y0 + 1, true);
+    const Bc = t.border ?? BORDER;
+    for (let k = 0; k < 4; k++) {
+      const c00 = o00 < 0 ? Bc[k] : D[o00 + k] / 255, c10 = o10 < 0 ? Bc[k] : D[o10 + k] / 255;
+      const c01 = o01 < 0 ? Bc[k] : D[o01 + k] / 255, c11 = o11 < 0 ? Bc[k] : D[o11 + k] / 255;
+      out[k] = (1 - a) * (1 - b) * c00 + a * (1 - b) * c10 + (1 - a) * b * c01 + a * b * c11;
+    }
+    return out;
   }
+  const FILTER_A = [0, 0, 0, 0], FILTER_B = [0, 0, 0, 0];
   const mipmapped = (f) => f === TEX.NN || f === TEX.LN || f === TEX.NL || f === TEX.LL;
   function complete(t) {
     if (!t.levels[0]) return false;
@@ -339,21 +364,23 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); lv++;
     }
   }
-  /** The texture colour at (u, v) with scale factor rho (texels of level 0 per pixel), by the spec's rules. */
+  /** The texture colour at (u, v) with scale factor rho (texels of level 0 per pixel), by the spec's rules -- in an array
+   *  that the next call reuses: envApply reads it at once. */
   function sample(t, u, v, rho) {
     const lambda = Math.log2(rho);
     const c = t.mag === TEX.LINEAR && (t.min === TEX.NN || t.min === TEX.NL) ? 0.5 : 0;
-    if (lambda <= c) return filter(t, 0, u, v, t.mag === TEX.LINEAR);
-    if (!mipmapped(t.min)) return filter(t, 0, u, v, t.min === TEX.LINEAR);
+    if (lambda <= c) return filter(t, 0, u, v, t.mag === TEX.LINEAR, FILTER_A);
+    if (!mipmapped(t.min)) return filter(t, 0, u, v, t.min === TEX.LINEAR, FILTER_A);
     const q = t.levels.length - 1, linear = t.min === TEX.LN || t.min === TEX.LL;
     if (t.min === TEX.NN || t.min === TEX.LN) {
       const d = lambda <= 0.5 ? 0 : Math.min(q, Math.ceil(lambda + 0.5) - 1);
-      return filter(t, d, u, v, linear);
+      return filter(t, d, u, v, linear, FILTER_A);
     }
-    if (lambda >= q) return filter(t, q, u, v, linear);
+    if (lambda >= q) return filter(t, q, u, v, linear, FILTER_A);
     const d1 = Math.floor(lambda), fr = lambda - d1;
-    const a = filter(t, d1, u, v, linear), b = filter(t, d1 + 1, u, v, linear);
-    return [0, 1, 2, 3].map((k) => (1 - fr) * a[k] + fr * b[k]);
+    const a = filter(t, d1, u, v, linear, FILTER_A), b = filter(t, d1 + 1, u, v, linear, FILTER_B);
+    for (let k = 0; k < 4; k++) a[k] = (1 - fr) * a[k] + fr * b[k];
+    return a;
   }
   function envApply(cf, ct, base) {
     const m = s.envMode;
@@ -383,86 +410,122 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       default: throw new Error(`gl: blend factor 0x${f.toString(16)}`);
     }
   };
+  /*
+   * One fragment: fog, the alpha and depth tests, blending, the write. Scalars where it was arrays,
+   * and the same expressions: the per-pixel arrays were most of the garbage the rasteriser made.
+   */
   function fragment(i, z, col, eyeZ) {
+    let c0 = col[0], c1 = col[1], c2 = col[2];
+    const c3 = col[3];
     if (s.caps.has(CAP.FOG)) {
       const F = s.fog;
       let f = F.mode === FOG.LINEAR ? (F.end - eyeZ) / (F.end - F.start)
         : F.mode === FOG.EXP ? Math.exp(-F.density * eyeZ) : Math.exp(-((F.density * eyeZ) ** 2));
       f = clamp01(f);
-      col = [0, 1, 2].map((k) => f * col[k] + (1 - f) * F.colour[k]).concat(col[3]);
+      c0 = f * c0 + (1 - f) * F.colour[0]; c1 = f * c1 + (1 - f) * F.colour[1]; c2 = f * c2 + (1 - f) * F.colour[2];
     }
-    if (s.caps.has(CAP.ALPHA_TEST) && !compare(s.alphaFunc, col[3], s.alphaRef)) return;
+    if (s.caps.has(CAP.ALPHA_TEST) && !compare(s.alphaFunc, c3, s.alphaRef)) return;
     if (s.caps.has(CAP.DEPTH_TEST)) {
       if (!compare(s.depthFunc, z, s.depth[i])) return;
       if (s.depthMask) s.depth[i] = z;
     }
     const o = i * 4;
-    let out = col.map(clamp01);
+    let o0 = clamp01(c0), o1 = clamp01(c1), o2 = clamp01(c2), o3 = clamp01(c3);
     if (s.caps.has(CAP.BLEND)) {
+      const out = [o0, o1, o2, o3];
       const dst = [s.color[o] / 255, s.color[o + 1] / 255, s.color[o + 2] / 255, s.color[o + 3] / 255];
       const sf = BLEND(s.blend[0], out, dst, out[3], dst[3]), df = BLEND(s.blend[1], out, dst, out[3], dst[3]);
-      out = [0, 1, 2, 3].map((k) => clamp01(out[k] * sf[k] + dst[k] * df[k]));
+      o0 = clamp01(out[0] * sf[0] + dst[0] * df[0]); o1 = clamp01(out[1] * sf[1] + dst[1] * df[1]);
+      o2 = clamp01(out[2] * sf[2] + dst[2] * df[2]); o3 = clamp01(out[3] * sf[3] + dst[3] * df[3]);
     }
-    for (let k = 0; k < 4; k++) if (s.colorMask[k]) s.color[o + k] = Math.round(out[k] * 255);
+    const m = s.colorMask;
+    if (m[0]) s.color[o] = Math.round(o0 * 255);
+    if (m[1]) s.color[o + 1] = Math.round(o1 * 255);
+    if (m[2]) s.color[o + 2] = Math.round(o2 * 255);
+    if (m[3]) s.color[o + 3] = Math.round(o3 * 255);
     s.stats.fragments++;
   }
+  /** A perspective-correct attribute from its value at the three vertices: attribute/w over 1/w. */
+  const persp = (l0, l1, l2, iw, P, Q, R, aP, aQ, aR) => (l0 * aP * P.iw + l1 * aQ * Q.iw + l2 * aR * R.iw) / iw;
   function rasterTriangle(A, B, C, flatColour) {
     const area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
     if (area === 0) return;
     const [P, Q, R] = area > 0 ? [A, B, C] : [A, C, B];
     const ar = Math.abs(area);
-    const W = s.width, H = s.height;
+    const W = s.width;
     // The view volume's x and y planes, clipped here as the viewport rectangle they map to: GLQuake's
     // 3-D view is 432 lines over a 480-line window, and a floor that ran past it painted over the
     // status bar below.
     const [bx0, by0, bx1, by1] = drawBox();
     const x0 = Math.max(bx0, Math.floor(Math.min(P.x, Q.x, R.x))), x1 = Math.min(bx1, Math.ceil(Math.max(P.x, Q.x, R.x)));
     const y0 = Math.max(by0, Math.floor(Math.min(P.y, Q.y, R.y))), y1 = Math.min(by1, Math.ceil(Math.max(P.y, Q.y, R.y)));
+    if (x1 < x0 || y1 < y0) return;                     // wholly outside the viewport: no pixel
     // Top-left rule, in GL's bottom-up window space: an edge owns its pixels if it goes down
     // (a left edge of a CCW triangle) or is horizontal going left (a top edge).
     const owns = (u, v) => { const dy = v.y - u.y, dx = v.x - u.x; return dy < 0 || (dy === 0 && dx < 0); };
     const eQR = owns(Q, R), eRP = owns(R, P), ePQ = owns(P, Q);
-    const edge = (u, v, px, py) => (v.x - u.x) * (py - u.y) - (v.y - u.y) * (px - u.x);
+    // The edge functions (v.x - u.x) * (py - u.y) - (v.y - u.y) * (px - u.x), their constant
+    // differences taken once: the same subtractions, so the same doubles.
+    const qrX = R.x - Q.x, qrY = R.y - Q.y, rpX = P.x - R.x, rpY = P.y - R.y, pqX = Q.x - P.x, pqY = Q.y - P.y;
+    const eQ = (cx, cy) => qrX * (cy - Q.y) - qrY * (cx - Q.x);
+    const eR = (cx, cy) => rpX * (cy - R.y) - rpY * (cx - R.x);
+    const eP = (cx, cy) => pqX * (cy - P.y) - pqY * (cx - P.x);
     const t = s.caps.has(CAP.TEXTURE_2D) ? texture() : null;
     const textured = t && complete(t);
+    const fog = s.caps.has(CAP.FOG);
     let zoff = 0;
     if (s.caps.has(CAP.POLYGON_OFFSET_FILL) && (s.polygonOffset[0] || s.polygonOffset[1])) {
       const dzdx = ((B.z - A.z) * (C.y - A.y) - (C.z - A.z) * (B.y - A.y)) / area;
       const dzdy = ((C.z - A.z) * (B.x - A.x) - (B.z - A.z) * (C.x - A.x)) / area;
       zoff = s.polygonOffset[0] * Math.max(Math.abs(dzdx), Math.abs(dzdy)) + s.polygonOffset[1] / 16777215;
     }
-    // Perspective-correct attributes at a window point: weights, then attribute/w over 1/w.
-    const at = (cx, cy) => {
-      const l0 = edge(Q, R, cx, cy) / ar, l1 = edge(R, P, cx, cy) / ar, l2 = edge(P, Q, cx, cy) / ar;
+    const Pv = P.v, Qv = Q.v, Rv = R.v;
+    /*
+     * The level of detail, per 2x2 quad of pixels from its top-left pixel, the way a GPU (and llvmpipe)
+     * takes it: all four pixels of a quad share it, so it is computed once a quad and kept by quad
+     * column for the row pair.
+     */
+    const L0 = textured ? t.levels[0] : null, qc0 = x0 >> 1, quads = (x1 >> 1) - qc0 + 1;
+    const rhoOf = textured ? new Float64Array(quads) : null, rhoRow = textured ? new Int32Array(quads).fill(-1) : null;
+    const texAt = (cx, cy, k) => {
+      const l0 = eQ(cx, cy) / ar, l1 = eR(cx, cy) / ar, l2 = eP(cx, cy) / ar;
       const iw = l0 * P.iw + l1 * Q.iw + l2 * R.iw;
-      const pc = (get) => (l0 * get(P.v) * P.iw + l1 * get(Q.v) * Q.iw + l2 * get(R.v) * R.iw) / iw;
-      return { l0, l1, l2, pc };
+      return persp(l0, l1, l2, iw, P, Q, R, Pv.tex[k], Qv.tex[k], Rv.tex[k]);
+    };
+    const quadRho = (px, py) => {
+      const qx = (px & ~1) + 0.5, qy = (py & ~1) + 0.5;
+      const u0 = texAt(qx, qy, 0), v0 = texAt(qx, qy, 1);
+      const dudx = (texAt(qx + 1, qy, 0) - u0) * L0.w, dvdx = (texAt(qx + 1, qy, 1) - v0) * L0.h;
+      const dudy = (texAt(qx, qy + 1, 0) - u0) * L0.w, dvdy = (texAt(qx, qy + 1, 1) - v0) * L0.h;
+      return Math.max(Math.hypot(dudx, dvdx), Math.hypot(dudy, dvdy));
     };
     for (let py = y0; py <= y1; py++) {
-      const cy = py + 0.5;
+      const cy = py + 0.5, row = py >> 1;
       for (let px = x0; px <= x1; px++) {
         const cx = px + 0.5;
-        const w0 = edge(Q, R, cx, cy), w1 = edge(R, P, cx, cy), w2 = edge(P, Q, cx, cy);
+        const w0 = eQ(cx, cy), w1 = eR(cx, cy), w2 = eP(cx, cy);
         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
         if ((w0 === 0 && !eQR) || (w1 === 0 && !eRP) || (w2 === 0 && !ePQ)) continue;
-        const { l0, l1, l2, pc } = at(cx, cy);
+        const l0 = w0 / ar, l1 = w1 / ar, l2 = w2 / ar;
+        const iw = l0 * P.iw + l1 * Q.iw + l2 * R.iw;
         // Rounded to the depth buffer's own precision BEFORE the test: comparing a double with the
         // float32 an earlier pass stored made LEQUAL fail wherever the rounding went down, and a second
         // pass over the same polygon (Quake's lightmaps) vanished on alternate rows.
         const z = Math.fround(zoff ? clamp01(l0 * P.z + l1 * Q.z + l2 * R.z + zoff) : l0 * P.z + l1 * Q.z + l2 * R.z);
-        let col = flatColour ?? [0, 1, 2, 3].map((k) => pc((v) => v.colour[k]));
+        let col = flatColour ?? [
+          persp(l0, l1, l2, iw, P, Q, R, Pv.colour[0], Qv.colour[0], Rv.colour[0]),
+          persp(l0, l1, l2, iw, P, Q, R, Pv.colour[1], Qv.colour[1], Rv.colour[1]),
+          persp(l0, l1, l2, iw, P, Q, R, Pv.colour[2], Qv.colour[2], Rv.colour[2]),
+          persp(l0, l1, l2, iw, P, Q, R, Pv.colour[3], Qv.colour[3], Rv.colour[3]),
+        ];
         if (textured) {
-          const u = pc((v) => v.tex[0]), v = pc((v) => v.tex[1]);
-          // Derivatives per 2x2 quad of pixels, from its top-left pixel, the way a GPU (and llvmpipe)
-          // takes them: all four pixels of a quad share one level of detail.
-          const qx = (px & ~1) + 0.5, qy = (py & ~1) + 0.5, r0 = at(qx, qy), r1 = at(qx + 1, qy), r2 = at(qx, qy + 1), L0 = t.levels[0];
-          const u0 = r0.pc((q) => q.tex[0]), v0 = r0.pc((q) => q.tex[1]);
-          const dudx = (r1.pc((q) => q.tex[0]) - u0) * L0.w, dvdx = (r1.pc((q) => q.tex[1]) - v0) * L0.h;
-          const dudy = (r2.pc((q) => q.tex[0]) - u0) * L0.w, dvdy = (r2.pc((q) => q.tex[1]) - v0) * L0.h;
-          const rho = Math.max(Math.hypot(dudx, dvdx), Math.hypot(dudy, dvdy));
-          col = envApply(col, sample(t, u, v, rho), t.base);
+          const u = persp(l0, l1, l2, iw, P, Q, R, Pv.tex[0], Qv.tex[0], Rv.tex[0]);
+          const v = persp(l0, l1, l2, iw, P, Q, R, Pv.tex[1], Qv.tex[1], Rv.tex[1]);
+          const qc = (px >> 1) - qc0;
+          if (rhoRow[qc] !== row) { rhoRow[qc] = row; rhoOf[qc] = quadRho(px, py); }
+          col = envApply(col, sample(t, u, v, rhoOf[qc]), t.base);
         }
-        fragment(py * W + px, z, col, s.caps.has(CAP.FOG) ? pc((v) => v.eyeZ) : 0);
+        fragment(py * W + px, z, col, fog ? persp(l0, l1, l2, iw, P, Q, R, Pv.eyeZ, Qv.eyeZ, Rv.eyeZ) : 0);
       }
     }
   }

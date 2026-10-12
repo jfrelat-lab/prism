@@ -48,6 +48,14 @@ try { times = JSON.parse(readFileSync(TIMES, 'utf8')); } catch { /* first run: n
 const jobsArg = args.find((a) => a.startsWith('--jobs='));
 const JOBS = Math.max(1, jobsArg ? +jobsArg.slice(7) : Math.min(6, Math.floor(cpus().length / 2)));
 const HEAVY = (g) => /^gate-mame/.test(g);
+/*
+ * PROGRESS (--progress, and always with --jobs=1): each gate announces itself with how long it took
+ * last time and how much is left, and its own `ok` / `FAIL` lines are shown as they come rather than
+ * after it ends -- a long run that can be watched, and stopped knowing where it was.
+ */
+const PROGRESS = args.includes('--progress') || JOBS === 1;
+let started = 0, leftSecs = gates.reduce((t, g) => t + (times[g] ?? 60), 0);
+const mmss = (secs) => `${Math.floor(secs / 60)}:${String(Math.round(secs % 60)).padStart(2, '0')}`;
 const queue = [...gates].sort((x, y) => (times[y] ?? 0) - (times[x] ?? 0));
 const rows = [];
 const t0 = Date.now();
@@ -62,8 +70,21 @@ await new Promise((resolve) => {
       running++; if (HEAVY(g)) heavyRunning++;
       const t = Date.now();
       let out = '';
+      if (PROGRESS) {
+        started++;
+        console.log(`> [${started}/${gates.length}] ${g}  (last ${times[g] ? mmss(times[g]) : '?'}, about ${mmss(leftSecs)} left)`);
+        leftSecs -= times[g] ?? 60;
+      }
       const child = spawn('node', [join(ROOT, 'tools', g)], { cwd: ROOT });
-      child.stdout.on('data', (d) => { out += d; });
+      let pending = '';
+      const show = (d) => {
+        if (!PROGRESS) return;
+        pending += d;
+        const lines = pending.split('\n');
+        pending = lines.pop();
+        for (const l of lines) if (/^(ok|FAIL)\b/.test(l.trim()) || /^ {5,}\S/.test(l)) console.log(`    ${l.trim().slice(0, 140)}`);
+      };
+      child.stdout.on('data', (d) => { out += d; show(d); });
       child.stderr.on('data', (d) => { out += d; });
       child.on('close', (status) => {
         running--; if (HEAVY(g)) heavyRunning--;

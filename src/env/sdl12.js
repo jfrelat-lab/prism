@@ -412,7 +412,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     // The dummy video driver the reference runs has no window manager to describe (SDL_GetWMInfo).
     SDL_GetWMInfo: () => 0,
     // ...nor gamma: SDL_SetGamma fails there, and here.
-    SDL_SetGamma: () => { state.setError('Gamma correction not supported'); return -1; },
+    SDL_SetGamma: () => { state.setError('Gamma ramp manipulation not supported'); return -1; },
     SDL_WM_SetCaption: () => 0,
     SDL_WM_SetIcon: () => 0,
     SDL_WM_ToggleFullScreen: () => 0,   // 0 = refused, which the program treats as "stay windowed"
@@ -687,6 +687,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       state.mixBytes = frames * nch * (format === AUDIO_U8 ? 1 : 2);
       state.mixBuf = M.rt.malloc(state.mixBytes);
       state.postMix = d.getUint32(desired + A_CALLBACK, true);
+      state.mixerDevice = false;           // the program's own callback: no SDL_mixer between
       state.postMixArg = d.getUint32(desired + A_USERDATA, true);
       state.channels = null;
       state.audioOpen = false;

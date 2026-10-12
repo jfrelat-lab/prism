@@ -895,6 +895,10 @@ export function installStdio(M, {
     recvmsg: () => -1,
     setsockopt: () => 0,
     gethostbyname: () => 0,
+    // The reentrant lookups find nothing either: no result, HOST_NOT_FOUND.
+    gethostbyname_r: (_n, _r, _b, _l, result, herr) => { if (result) M.mod.dv.setUint32(result, 0, true); if (herr) M.mod.dv.setInt32(herr, 1, true); return 0; },
+    gethostbyaddr_r: (_a, _len, _t, _r, _b, _l, result, herr) => { if (result) M.mod.dv.setUint32(result, 0, true); if (herr) M.mod.dv.setInt32(herr, 1, true); return 0; },
+    poll: () => -1,
     htons: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,
     ntohs: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,
     htonl: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) | 0,

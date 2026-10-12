@@ -13,6 +13,16 @@ the run. This is the index of the ones that carry an external authority; the sma
 own sections. The rule that shapes the list: **no gate answers its own question.** Each column names
 something outside PRISM that could contradict it.
 
+**Faster runs, the same verdicts** (2026-10-12). `node tools/gates.mjs --jobs=1 <names...>` runs gates
+one at a time and shows each one's progress -- `[3/9]`, how long it took last time, how much is left,
+and its own `ok` / `FAIL` lines as they come (`--progress` does the same at any `--jobs`). Two caches
+under .oracle/ keep a run from redoing what has not changed: the BUILD cache (src/build-cache.js) gives
+back a compiled program while PRISM's src/, the target, its units, its options and every header it read
+are the same (`gate-build-cache`); the REFERENCE cache (tools/ref-cache.mjs) gives back a native
+reference's output -- Cube on Mesa, GLQuake and Quake II on Mesa -- while its binary or sources, data,
+configuration, commands and the container's package list are the same. PRISM_BUILD_CACHE=0 and
+PRISM_REF_CACHE=0 turn them off.
+
 | gate | external authority | asserts |
 |---|---|---|
 | `gate-cpp.mjs` | `gcc -E` | token-identical preprocessing, 42 hand + 250 generated cases x 7 seeds |
@@ -53,8 +63,9 @@ something outside PRISM that could contradict it.
 | WebGL in the page (browser check, no CLI gate) | **Mesa's frames** from `gate-gears`, fetched by the page from `.oracle/gears/` | `?machine=linux&program=gears&glcheck=0,25,50&run=1` posts frames 0, 25 and 50 to `window.PRISM_DIAG.glframes`; 1-4 of 90,000 pixels differ, by at most one level (frame 25 against Mesa's frame 0: 9,028) |
 | `gate-glquake.mjs` | **the same GLQuake source built against Mesa 22** in the oracle, on a GLX-over-EGL harness (tools/oracle/glx-egl.c); the Win32 build (quake:wgl, gl_vidnt.c on src/env/opengl32.c, run with its own -gamma 1 because only it calls Check_Gamma) against the same frame | world frame 40 of the demo: at most 0.2% of pixels off by more than 8 (1 of 307,200 is, for either build) |
 | `gate-quake2-gl.mjs` | **Quake II 3.19 built as linux/Makefile.i386 builds its GL client** (quake2, ref_gl.so, gamei386.so) against Mesa 22, on tools/oracle/q2-fxmesa-egl.c; the Win32 build (quake2:win32gl, ref_gl.dll on src/env/opengl32.c) against the same frame, every clock read stepped on both | swap 120 of demo1: at most 0.2% of pixels off by more than 8 (3 of 307,200 are, for either build) |
+| `gate-build-cache.mjs` | a toy target built again and again in .oracle | the build cache gives a build back only while nothing it was made of changed: a second build is a hit and runs the same; a header edited, a unit edited, a new header that shadows the old one on the include path are misses and the program follows them; other compile options are another entry; PRISM_BUILD_CACHE=0 compiles. Measured red: with the header replay disabled, the edited and the shadowed header hand back the old program |
 | `gate-glu.mjs` | **the container's libGLU** (Mesa's GLU 9), tests/glu/unproject.c built against it | gluUnProject on 40 pseudo-random model/projection pairs (an identity and a singular one among them): the same success flags and values to 1e-12 relative -- not to the bit, libGLU computing on the x87 (measured: the same arithmetic compiled for the x87 agrees to the bit on 2 of 40). Control red: the projection transposed falls outside the tolerance on every case it applies to |
-| `gate-cube.mjs` | Cube's own Makefile (src/Makefile's CLIENT_OBJS, enet/Makefile.am's sources) | targets/cube.json lists exactly those units; all of them, zlib 1.1.3 and libjpeg 6b (its jconfig.h and objects as its own configure writes them) lower and compile: every function emitted, nothing unresolved (functions and variables), a main; with the data, it runs 30 frames with its default map loaded. Control red: with the textures withheld it stops before the map |
+| `gate-cube.mjs` | Cube's own Makefile (src/Makefile's CLIENT_OBJS, enet/Makefile.am's sources) | targets/cube.json lists exactly those units; all of them, zlib 1.1.3 and libjpeg 6b (its jconfig.h and objects as its own configure writes them) lower and compile: every function emitted, nothing unresolved (functions and variables), a main; with the data, it runs 30 frames with its default map loaded (control red: with the textures withheld it stops before the map); and **against Cube built natively** over the real SDL 1.2, SDL_mixer, SDL_image and Mesa (`tools/cubediff.mjs`), a scripted player on both sides at 320x240: frames 100, 200, 300 within 0.5% of pixels off by more than 8 (measured 0.24%), every audio buffer the same. Controls red, native: without the player frame 300 is 52.71% off; at soundvol 128 the sound differs |
 | `gate-gl-scenes.mjs` | **Mesa 22**, sixteen scenes of tests/gl/scenes.c | textures and the mipmap filters, lightmap blending, alpha test, blending, fog, near-plane clipping, depth range, and what Tux Racer added -- GL_OBJECT_LINEAR and GL_SPHERE_MAP texture generation, a lit mesh from vertex and normal arrays, GL_COLOR_MATERIAL with per-vertex alpha (20,036 pixels off without it), glMultMatrixd with glRect and padded texel rows: at most 0.5% of pixels off by more than 8 |
 | `gate-gl-abi.mjs` | **Mesa's `<GL/gl.h>`** | every constant and type PRISM's `<GL/gl.h>` declares |
 | `gate-watcom-clock.mjs` | **Open Watcom's DOS libc**, run under DOSBox-X | `CLOCKS_PER_SEC` and the BIOS-tick steps of `clock()` under the Watcom toolchain |

@@ -45,17 +45,9 @@ const ARGS = ['+set', 'vid_ref', 'gl', '+map', 'demo1'];
 const target = loadTarget(join(ROOT, 'targets', 'quake2.json'), 'gl');
 const winTarget = loadTarget(join(ROOT, 'targets', 'quake2.json'), 'win32gl');
 
-// --- Mesa
-up();
-const work = join(SCRATCH, 'q2gl');
-mkdirSync(work, { recursive: true });
-cpSync(join(ROOT, 'corpus', 'Quake2'), join(work, 'src'), { recursive: true, filter: (p) => !p.includes('/.git') });
-copyFileSync(join(ROOT, 'tools', 'oracle', 'q2-fxmesa-egl.c'), join(work, 'q2-fxmesa-egl.c'));
-for (const [k, v] of Object.entries({ ...Object.fromEntries(['vga.h', 'vgakeyboard.h', 'vgamouse.h', 'asm/io.h'].map((h) => [h, SVGALIB_HEADERS[h]])), 'GL/fxmesa.h': FXMESA_H })) {
-  mkdirSync(dirname(join(work, 'inc', k)), { recursive: true });
-  writeFileSync(join(work, 'inc', k), v);
-}
-if (!existsSync(join(work, 'baseq2', 'pak0.pak'))) { mkdirSync(join(work, 'baseq2'), { recursive: true }); copyFileSync(join(DATA, 'baseq2', 'pak0.pak'), join(work, 'baseq2', 'pak0.pak')); }
+// --- Mesa: built and run in the oracle container -- or, while none of what it is made from has
+// changed (the sources, q2-fxmesa-egl.c, the headers given, pak0.pak, the commands), its picture
+// from tools/ref-cache.mjs.
 const S = (l) => l.map((u) => `src/${u}`).join(' ');
 const CF = '-w -O0 -fcommon -DC_ONLY -U__linux__ -Iinc -Isrc';
 const steps = [
@@ -64,14 +56,30 @@ const steps = [
   `gcc ${CF} -fPIC -shared -o ref_gl.so ${S([...target.modules.ref_gl.units, 'game/q_shared.c', 'linux/q_shlinux.c', 'linux/glob.c'])} -lOpenGL -lm`,
   `gcc ${CF} -rdynamic -o quake2 ${S(target.units.list)} q2-fxmesa-egl.c -Wl,--wrap=Sys_Milliseconds -ldl -lEGL -lOpenGL -lm`,
 ];
-for (const c of steps) {
-  const r = sh(`cd /work/q2gl && ${c}`, { timeout: 600000 });
-  if (r.code !== 0) throw new Error(`reference build: ${c.slice(0, 50)}: ${(r.stderr || r.stdout).slice(-1500)}`);
-}
-const run = sh('cd /work/q2gl && mkdir -p /tmp/q2lib && cp ref_gl.so /tmp/q2lib/ && echo /tmp/q2lib > /etc/quake2.conf && cp gamei386.so baseq2/ && rm -f frame.ppm && '
-  + `MESA_EXTENSION_MAX_YEAR=1990 PRISM_Q2_SWAP=${SWAP} PRISM_Q2_STEP=${STEP} ./quake2 ${ARGS.join(' ')} > run.log 2>&1`, { timeout: 600000 });
-if (run.code !== 0 || !existsSync(join(work, 'frame.ppm'))) throw new Error(`reference run: exit ${run.code}, see .oracle/q2gl/run.log`);
-const ppm = readFileSync(join(work, 'frame.ppm')), m = ppm.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);
+const RUN = 'cd /work/q2gl && mkdir -p /tmp/q2lib && cp ref_gl.so /tmp/q2lib/ && echo /tmp/q2lib > /etc/quake2.conf && cp gamei386.so baseq2/ && rm -f frame.ppm && '
+  + `MESA_EXTENSION_MAX_YEAR=1990 PRISM_Q2_SWAP=${SWAP} PRISM_Q2_STEP=${STEP} ./quake2 ${ARGS.join(' ')} > run.log 2>&1`;
+const { refCached, treeHash } = await import('./ref-cache.mjs');
+const ref = await refCached(['quake2-gl', treeHash(join(ROOT, 'corpus', 'Quake2')), readFileSync(join(ROOT, 'tools', 'oracle', 'q2-fxmesa-egl.c')),
+  ...['vga.h', 'vgakeyboard.h', 'vgamouse.h', 'asm/io.h'].map((h) => SVGALIB_HEADERS[h]), FXMESA_H, readFileSync(join(DATA, 'baseq2', 'pak0.pak')), ...steps, RUN], () => {
+  up();
+  const work = join(SCRATCH, 'q2gl');
+  mkdirSync(work, { recursive: true });
+  cpSync(join(ROOT, 'corpus', 'Quake2'), join(work, 'src'), { recursive: true, filter: (p) => !p.includes('/.git') });
+  copyFileSync(join(ROOT, 'tools', 'oracle', 'q2-fxmesa-egl.c'), join(work, 'q2-fxmesa-egl.c'));
+  for (const [k, v] of Object.entries({ ...Object.fromEntries(['vga.h', 'vgakeyboard.h', 'vgamouse.h', 'asm/io.h'].map((h) => [h, SVGALIB_HEADERS[h]])), 'GL/fxmesa.h': FXMESA_H })) {
+    mkdirSync(dirname(join(work, 'inc', k)), { recursive: true });
+    writeFileSync(join(work, 'inc', k), v);
+  }
+  if (!existsSync(join(work, 'baseq2', 'pak0.pak'))) { mkdirSync(join(work, 'baseq2'), { recursive: true }); copyFileSync(join(DATA, 'baseq2', 'pak0.pak'), join(work, 'baseq2', 'pak0.pak')); }
+  for (const c of steps) {
+    const r = sh(`cd /work/q2gl && ${c}`, { timeout: 600000 });
+    if (r.code !== 0) throw new Error(`reference build: ${c.slice(0, 50)}: ${(r.stderr || r.stdout).slice(-1500)}`);
+  }
+  const run = sh(RUN, { timeout: 600000 });
+  if (run.code !== 0 || !existsSync(join(work, 'frame.ppm'))) throw new Error(`reference run: exit ${run.code}, see .oracle/q2gl/run.log`);
+  return { ppm: new Uint8Array(readFileSync(join(work, 'frame.ppm'))) };
+});
+const ppm = Buffer.from(ref.ppm), m = ppm.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);
 const mesa = { w: +m[1], h: +m[2], rgb: ppm.subarray(m[0].length) };
 
 // --- PRISM

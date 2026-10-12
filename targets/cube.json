@@ -102,9 +102,15 @@
     "src",
     "enet"
   ],
-  "_defines": "What the Makefile's flags say: -fsigned-char (char is signed on i386 anyway), no NDEBUG.",
+  "_defines": "What the Makefile's flags say (-fsigned-char: char is signed on i386 anyway; no NDEBUG), and what ENet's own configure finds on Linux, run in the oracle container (its Makefile's DEFS, less the package strings).",
   "defines": {
-    "__linux__": "1"
+    "__linux__": "1",
+    "HAS_GETHOSTBYADDR_R": "1",
+    "HAS_GETHOSTBYNAME_R": "1",
+    "HAS_POLL": "1",
+    "HAS_FCNTL": "1",
+    "HAS_MSGHDR_FLAGS": "1",
+    "HAS_SOCKLEN_T": "1"
   },
   "env": [
     "stdio",
