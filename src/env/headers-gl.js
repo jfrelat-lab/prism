@@ -1015,6 +1015,9 @@ void gluQuadricNormals(GLUquadric *quad, GLenum normal);
 void gluQuadricOrientation(GLUquadric *quad, GLenum orientation);
 void gluQuadricTexture(GLUquadric *quad, GLboolean texture);
 void gluSphere(GLUquadric *quad, GLdouble radius, GLint slices, GLint stacks);
+void gluCylinder(GLUquadric *quad, GLdouble base, GLdouble top, GLdouble height, GLint slices, GLint stacks);
+void gluDisk(GLUquadric *quad, GLdouble inner, GLdouble outer, GLint slices, GLint loops);
+void gluPartialDisk(GLUquadric *quad, GLdouble inner, GLdouble outer, GLint slices, GLint loops, GLdouble start, GLdouble sweep);
 GLint gluScaleImage(GLenum format, GLsizei wIn, GLsizei hIn, GLenum typeIn, const void *dataIn, GLsizei wOut, GLsizei hOut, GLenum typeOut, GLvoid *dataOut);
 GLint gluBuild2DMipmaps(GLenum target, GLint internalFormat, GLsizei width, GLsizei height, GLenum format, GLenum type, const void *data);
 #endif

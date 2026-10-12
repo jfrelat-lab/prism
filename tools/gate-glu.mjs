@@ -17,6 +17,14 @@
 //   its `float`s unrounded. CONTROL, red: the same run with the first byte of each source image flipped
 //   by 128 -- the hashes must see it, levels and scaled images alike.
 //
+//   Quadrics: tests/glu/quadric.c, gluSphere, gluCylinder (and a cone), gluDisk and gluPartialDisk
+//   (a negative sweep, a ring of no width among them) under every draw style, normals, orientation
+//   and texture setting: every glBegin/glEnd/glNormal3f/glTexCoord2f/glVertex3f GLU issues, traced
+//   where it lands (native-gl.c natively, hooks on M.rt here) with its arguments as float bits -- the
+//   same calls, to the bit. CONTROL, red: the same run with every radius made 2^-20 larger (8 float
+//   ulps) -- the vertices must move and the normals must not (a disk's texture coordinates, radius
+//   over radius, may round the other way).
+//
 //   node tools/gate-glu.mjs
 import { mkdirSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -110,5 +118,43 @@ const seenL = mipTheirs.filter((l, i) => l.startsWith('level ') && nudged[i] !==
 const seenS = mipTheirs.filter((l, i) => l.startsWith('scale ') && nudged[i] !== l).length;
 check(seenL > levels / 2 && seenS > scales / 2, `control: one source byte flipped by 128 moves ${seenL} of ${levels} levels and ${seenS} of ${scales} scaled images`);
 
-console.log(failed ? `gate-glu: ${failed} FAILED` : `gate-glu: gluUnProject answers what libGLU answers, to ${TOL}; mipmaps and scaling to the bit`);
+// Quadrics.
+for (const f of ['quadric.c', 'native-gl.c']) copyFileSync(join(ROOT, 'tests/glu', f), join(work, f));
+const quadRef = sh('cd /work/glu && gcc -O0 -rdynamic -o quadric quadric.c native-gl.c -lGLU -lOpenGL -lEGL -ldl -lm && ./quadric');
+if (quadRef.code !== 0) throw new Error(`reference build: ${quadRef.stderr || quadRef.stdout}`);
+const quadTarget = { name: 'glu-quadric', dir: 'tests/glu', units: { list: ['quadric.c'] }, inline: { 'context.c': 'void make_context(void) {}\n' },
+  compile: { memory: 16, collect: true }, env: ['stdio', 'gl', 'glu'] };
+/** quadric.c's trace on PRISM, as native-gl.c writes it; `grow` makes every radius 2^-20 larger. */
+const quadRun = (grow) => {
+  const { program: p } = buildTarget(quadTarget, { root: ROOT });
+  const M = p.M, rt = M.rt, f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+  const b = (v) => { f32[0] = v; return u32[0].toString(16).padStart(8, '0'); };
+  rt.glBegin = (m) => M.write(`b ${m.toString(16)}\n`);
+  rt.glEnd = () => M.write('e\n');
+  rt.glNormal3f = (x, y, z) => M.write(`n ${b(x)} ${b(y)} ${b(z)}\n`);
+  rt.glTexCoord2f = (s, t) => M.write(`t ${b(s)} ${b(t)}\n`);
+  rt.glVertex3f = (x, y, z) => M.write(`v ${b(x)} ${b(y)} ${b(z)}\n`);
+  if (grow) {
+    const k = 1 + 2 ** -20, sphere = rt.gluSphere, cyl = rt.gluCylinder, disk = rt.gluPartialDisk;
+    rt.gluSphere = (q, r, ...a) => sphere(q, r * k, ...a);
+    // The height grows with the radii, so that the cylinder's normals keep their direction.
+    rt.gluCylinder = (q, r0, r1, h, ...a) => cyl(q, r0 * k, r1 * k, h * k, ...a);
+    rt.gluPartialDisk = (q, r0, r1, ...a) => disk(q, r0 * k, r1 * k, ...a);
+  }
+  return p.run(['quadric']).stdout.trim().split('\n');
+};
+const quadTheirs = quadRef.stdout.trim().split('\n'), quadOurs = quadRun(false);
+const quadDiff = quadTheirs.findIndex((l, i) => l !== quadOurs[i]);
+const count = (tag) => quadTheirs.filter((l) => l.startsWith(tag)).length;
+const cases = count('shape '), verts = count('v '), norms = count('n '), texs = count('t ');
+check(quadDiff < 0 && quadOurs.length === quadTheirs.length && cases === 400 && verts > 10000 && norms > 5000 && texs > 5000,
+  `quadrics: ${cases} cases, ${verts} vertices, ${norms} normals and ${texs} texture coordinates are libGLU's calls, to the bit`,
+  quadDiff >= 0 ? `line ${quadDiff + 1}: PRISM "${quadOurs[quadDiff]}", libGLU "${quadTheirs[quadDiff]}"` : `${quadOurs.length} lines, libGLU ${quadTheirs.length}`);
+const grown = quadRun(true);
+const moved = (tag) => quadTheirs.filter((l, i) => l.startsWith(tag) && grown[i] !== l).length;
+const zero = quadTheirs.filter((l) => l === 'v 00000000 00000000 00000000').length;
+check(grown.length === quadTheirs.length && moved('v ') >= (verts - zero) * 0.9 && moved('n ') === 0,
+  `control: radii 2^-20 larger move ${moved('v ')} of ${verts} vertices (${zero} are the origin), ${moved('n ')} normals, ${moved('t ')} texture coordinates`);
+
+console.log(failed ? `gate-glu: ${failed} FAILED` : `gate-glu: gluUnProject answers what libGLU answers, to ${TOL}; mipmaps, scaling and quadrics to the bit`);
 process.exit(failed ? 1 : 0);

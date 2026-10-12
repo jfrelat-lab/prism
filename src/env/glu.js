@@ -6,15 +6,16 @@
 // mipmap chain is a series of glTexImage2D.
 //
 //   gluPerspective        the projection matrix of the specification, multiplied onto the current one
-//   gluSphere             SGI's tessellation (libutil/quad.c): a triangle fan at each pole and quad
-//                         strips between, or strips all the way when texture coordinates are wanted
+//   gluSphere, gluCylinder, gluDisk, gluPartialDisk
+//                         GLU 9's quad.c, every draw style, normals and orientation: the same calls
+//                         with the same float arguments as Debian's i386 libGLU (tools/gate-glu.mjs)
 //   gluBuild2DMipmaps     GLU 9's mipmap.c for GL_UNSIGNED_BYTE: a power-of-two image halved level
 //   gluScaleImage         by level, any other size box-filtered to the nearest powers of two first;
 //                         gluScaleImage through libGLU's 16-bit box filter. Bit-identical to Debian's
 //                         i386 libGLU (tools/gate-glu.mjs); other pixel types are refused by name.
 //
 // gluUnProject is held to libGLU to 1e-12 (its x87 intermediates move the last bits); gluPerspective
-// and gluSphere are not held to a reference yet.
+// is not held to a reference yet.
 
 const GLU_SMOOTH = 100000, GLU_FLAT = 100001, GLU_NONE = 100002;
 const GLU_POINT = 100010, GLU_LINE = 100011, GLU_FILL = 100012, GLU_SILHOUETTE = 100013;
@@ -223,6 +224,20 @@ export function installGlu(M) {
     }
   };
   /*
+   * What a quadric is drawn with: GLU's own immediate-mode calls, their arguments rounded to float as
+   * glNormal3f/glTexCoord2f/glVertex3f's parameters round them. The caches are quad.c's GLfloat arrays
+   * of CACHE_SIZE, zeroed: GLU reads some it never wrote (FLAT normals with GLU_POINT or
+   * GLU_SILHOUETTE), which in C is whatever the stack held.
+   */
+  const PI = 3.14159265358979323846, CACHE_SIZE = 240;
+  const B = (mode) => rt.glBegin(mode), E = () => rt.glEnd();
+  const N = (x, y, z) => rt.glNormal3f(fr(x), fr(y), fr(z));
+  const T = (s, t) => rt.glTexCoord2f(fr(s), fr(t));
+  const V = (x, y, z) => rt.glVertex3f(fr(x), fr(y), fr(z));
+  const caches = (n) => Array.from({ length: n }, () => new Float32Array(CACHE_SIZE));
+  const quadric = (q, fn) => { const Q = quadrics.get(q); if (!Q) throw new Error(`glu: ${fn} on something that is not a quadric`); return Q; };
+
+  /*
    * gluUnProject as GLU 9 (Mesa's libGLU, project.c) computes it, operation for operation: the
    * product of the two matrices, its inverse by cofactors, the window point mapped to [-1, 1] and
    * multiplied through. Double arithmetic in the same order, so the bits are its bits.
@@ -296,47 +311,360 @@ export function installGlu(M) {
     gluQuadricNormals: (q, v) => { quadrics.get(q).normals = v; },
     gluQuadricOrientation: (q, v) => { quadrics.get(q).orientation = v; },
     gluQuadricTexture: (q, v) => { quadrics.get(q).texture = !!v; },
-    gluSphere: (q, radius, slices, stacks) => {
-      const Q = quadrics.get(q);
-      if (!Q) throw new Error('glu: gluSphere on something that is not a quadric');
-      if (Q.style !== GLU_FILL) throw new Error('glu: only GLU_FILL spheres are implemented');
-      const nsign = Q.orientation === GLU_INSIDE ? -1 : 1;
-      const normals = Q.normals !== GLU_NONE;
-      const drho = Math.PI / stacks, dtheta = 2 * Math.PI / slices;
-      const point = (theta, rho) => [-Math.sin(theta) * Math.sin(rho), Math.cos(theta) * Math.sin(rho), nsign * Math.cos(rho)];
-      const emit = ([x, y, z]) => { if (normals) rt.glNormal3f(x * nsign, y * nsign, z * nsign); rt.glVertex3f(x * radius, y * radius, z * radius); };
-      if (!Q.texture) {
-        rt.glBegin(GL.TRIANGLE_FAN);
-        rt.glNormal3f(0, 0, 1);
-        rt.glVertex3f(0, 0, nsign * radius);
-        for (let j = 0; j <= slices; j++) emit(point(j === slices ? 0 : j * dtheta, drho));
-        rt.glEnd();
+    /*
+     * The quadrics as GLU 9 draws them (libutil/quad.c), transcribed function by function, every draw
+     * style. Its GLfloat variables and caches are rounded to float where it stores them (fr), the
+     * expressions between are evaluated wider, as libGLU's x87 code does; glNormal3f, glTexCoord2f and
+     * glVertex3f receive floats. Invalid arguments draw nothing (GLU's error callback is not implemented).
+     */
+    gluCylinder: (q, baseRadius, topRadius, height, slices, stacks) => {
+      const Q = quadric(q, 'gluCylinder');
+      if (slices >= CACHE_SIZE) slices = CACHE_SIZE - 1;
+      if (slices < 2 || stacks < 1 || baseRadius < 0 || topRadius < 0 || height < 0) return;
+      const deltaRadius = fr(baseRadius - topRadius);
+      const length = fr(Math.sqrt(deltaRadius * deltaRadius + height * height));
+      if (length === 0) return;
+      const smooth = Q.normals === GLU_SMOOTH, flat = Q.normals === GLU_FLAT, outside = Q.orientation === GLU_OUTSIDE;
+      const needCache2 = smooth || (flat && Q.style === GLU_LINE), needCache3 = flat && Q.style !== GLU_POINT;
+      const zNormal = fr(deltaRadius / length), xyNormalRatio = fr(height / length);
+      const [sinCache, cosCache, sinCache2, cosCache2, sinCache3, cosCache3] = caches(6);
+      const r = outside ? xyNormalRatio : -xyNormalRatio;
+      for (let i = 0; i < slices; i++) {
+        const angle = fr(2 * PI * i / slices);
+        if (needCache2) { sinCache2[i] = fr(r * Math.sin(angle)); cosCache2[i] = fr(r * Math.cos(angle)); }
+        sinCache[i] = fr(Math.sin(angle)); cosCache[i] = fr(Math.cos(angle));
       }
-      const ds = 1 / slices, dt = 1 / stacks;
-      let t = 1;
-      const imin = Q.texture ? 0 : 1, imax = Q.texture ? stacks : stacks - 1;
-      for (let i = imin; i < imax; i++) {
-        const rho = i * drho;
-        rt.glBegin(GL.QUAD_STRIP);
-        let s = 0;
-        for (let j = 0; j <= slices; j++) {
-          const theta = j === slices ? 0 : j * dtheta;
-          if (Q.texture) rt.glTexCoord2f(s, t);
-          emit(point(theta, rho));
-          if (Q.texture) rt.glTexCoord2f(s, t - dt);
-          s += ds;
-          emit(point(theta, rho + drho));
+      if (needCache3) {
+        for (let i = 0; i < slices; i++) {
+          const angle = fr(2 * PI * (i - 0.5) / slices);
+          sinCache3[i] = fr(r * Math.sin(angle)); cosCache3[i] = fr(r * Math.cos(angle));
         }
-        rt.glEnd();
-        t -= dt;
       }
-      if (!Q.texture) {
-        rt.glBegin(GL.TRIANGLE_FAN);
-        rt.glNormal3f(0, 0, -1);
-        rt.glVertex3f(0, 0, -radius * nsign);
-        const rho = Math.PI - drho;
-        for (let j = slices; j >= 0; j--) emit(point(j === slices ? 0 : j * dtheta, rho));
-        rt.glEnd();
+      sinCache[slices] = sinCache[0]; cosCache[slices] = cosCache[0];
+      if (needCache2) { sinCache2[slices] = sinCache2[0]; cosCache2[slices] = cosCache2[0]; }
+      if (needCache3) { sinCache3[slices] = sinCache3[0]; cosCache3[slices] = cosCache3[0]; }
+      const zAt = (j) => fr(j * height / stacks), radiusAt = (j) => fr(baseRadius - deltaRadius * (j / stacks));
+      const normal = (i) => {
+        if (Q.normals === GLU_FLAT) N(sinCache3[i], cosCache3[i], zNormal);
+        else if (Q.normals === GLU_SMOOTH) N(sinCache2[i], cosCache2[i], zNormal);
+      };
+      const tex = (i, j) => { if (Q.texture) T(1 - i / slices, j / stacks); };
+      switch (Q.style) {
+        case GLU_FILL:
+          for (let j = 0; j < stacks; j++) {
+            const zLow = zAt(j), zHigh = zAt(j + 1), radiusLow = radiusAt(j), radiusHigh = radiusAt(j + 1);
+            B(GL.QUAD_STRIP);
+            for (let i = 0; i <= slices; i++) {
+              normal(i);
+              if (outside) {
+                tex(i, j); V(radiusLow * sinCache[i], radiusLow * cosCache[i], zLow);
+                tex(i, j + 1); V(radiusHigh * sinCache[i], radiusHigh * cosCache[i], zHigh);
+              } else {
+                tex(i, j + 1); V(radiusHigh * sinCache[i], radiusHigh * cosCache[i], zHigh);
+                tex(i, j); V(radiusLow * sinCache[i], radiusLow * cosCache[i], zLow);
+              }
+            }
+            E();
+          }
+          break;
+        case GLU_POINT:
+          B(GL.POINTS);
+          for (let i = 0; i < slices; i++) {
+            if (Q.normals !== GLU_NONE) N(sinCache2[i], cosCache2[i], zNormal);
+            for (let j = 0; j <= stacks; j++) {
+              const zLow = zAt(j), radiusLow = radiusAt(j);
+              tex(i, j); V(radiusLow * sinCache[i], radiusLow * cosCache[i], zLow);
+            }
+          }
+          E();
+          break;
+        case GLU_LINE:
+        case GLU_SILHOUETTE:
+          if (Q.style === GLU_LINE) {
+            for (let j = 1; j < stacks; j++) {
+              const zLow = zAt(j), radiusLow = radiusAt(j);
+              B(GL.LINE_STRIP);
+              for (let i = 0; i <= slices; i++) { normal(i); tex(i, j); V(radiusLow * sinCache[i], radiusLow * cosCache[i], zLow); }
+              E();
+            }
+          }
+          for (let j = 0; j <= stacks; j += stacks) {
+            const zLow = zAt(j), radiusLow = radiusAt(j);
+            B(GL.LINE_STRIP);
+            for (let i = 0; i <= slices; i++) { normal(i); tex(i, j); V(radiusLow * sinCache[i], radiusLow * cosCache[i], zLow); }
+            E();
+          }
+          for (let i = 0; i < slices; i++) {
+            if (Q.normals !== GLU_NONE) N(sinCache2[i], cosCache2[i], 0);
+            B(GL.LINE_STRIP);
+            for (let j = 0; j <= stacks; j++) {
+              const zLow = zAt(j), radiusLow = radiusAt(j);
+              tex(i, j); V(radiusLow * sinCache[i], radiusLow * cosCache[i], zLow);
+            }
+            E();
+          }
+          break;
+      }
+    },
+    gluDisk: (q, innerRadius, outerRadius, slices, loops) => rt.gluPartialDisk(q, innerRadius, outerRadius, slices, loops, 0, 360),
+    gluPartialDisk: (q, innerRadius, outerRadius, slices, loops, startAngle, sweepAngle) => {
+      const Q = quadric(q, 'gluPartialDisk');
+      if (slices >= CACHE_SIZE) slices = CACHE_SIZE - 1;
+      if (slices < 2 || loops < 1 || outerRadius <= 0 || innerRadius < 0 || innerRadius > outerRadius) return;
+      if (sweepAngle < -360) sweepAngle = 360;
+      if (sweepAngle > 360) sweepAngle = 360;
+      if (sweepAngle < 0) { startAngle += sweepAngle; sweepAngle = -sweepAngle; }
+      const slices2 = sweepAngle === 360 ? slices : slices + 1;
+      const deltaRadius = fr(outerRadius - innerRadius);
+      const angleOffset = fr(startAngle / 180 * PI);
+      const [sinCache, cosCache] = caches(2);
+      for (let i = 0; i <= slices; i++) {
+        const angle = fr(angleOffset + ((PI * sweepAngle) / 180) * i / slices);
+        sinCache[i] = fr(Math.sin(angle)); cosCache[i] = fr(Math.cos(angle));
+      }
+      if (sweepAngle === 360) { sinCache[slices] = sinCache[0]; cosCache[slices] = cosCache[0]; }
+      if (Q.normals !== GLU_NONE) N(0, 0, Q.orientation === GLU_OUTSIDE ? 1 : -1);
+      const outside = Q.orientation === GLU_OUTSIDE;
+      const radiusAt = (j) => fr(outerRadius - deltaRadius * (j / loops));
+      const texOf = (radius) => fr(radius / outerRadius / 2);
+      const tex = (t, i) => { if (Q.texture) T(t * sinCache[i] + 0.5, t * cosCache[i] + 0.5); };
+      switch (Q.style) {
+        case GLU_FILL: {
+          let finish;
+          if (innerRadius === 0) {
+            finish = loops - 1;
+            B(GL.TRIANGLE_FAN);
+            if (Q.texture) T(0.5, 0.5);
+            V(0, 0, 0);
+            const radiusLow = radiusAt(loops - 1), texLow = Q.texture ? texOf(radiusLow) : 0;
+            if (outside) for (let i = slices; i >= 0; i--) { tex(texLow, i); V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0); }
+            else for (let i = 0; i <= slices; i++) { tex(texLow, i); V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0); }
+            E();
+          } else finish = loops;
+          for (let j = 0; j < finish; j++) {
+            const radiusLow = radiusAt(j), radiusHigh = radiusAt(j + 1);
+            const texLow = Q.texture ? texOf(radiusLow) : 0, texHigh = Q.texture ? texOf(radiusHigh) : 0;
+            B(GL.QUAD_STRIP);
+            for (let i = 0; i <= slices; i++) {
+              if (outside) {
+                tex(texLow, i); V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0);
+                tex(texHigh, i); V(radiusHigh * sinCache[i], radiusHigh * cosCache[i], 0);
+              } else {
+                tex(texHigh, i); V(radiusHigh * sinCache[i], radiusHigh * cosCache[i], 0);
+                tex(texLow, i); V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0);
+              }
+            }
+            E();
+          }
+          break;
+        }
+        case GLU_POINT:
+          B(GL.POINTS);
+          for (let i = 0; i < slices2; i++) {
+            for (let j = 0; j <= loops; j++) {
+              const radiusLow = radiusAt(j);
+              if (Q.texture) tex(texOf(radiusLow), i);
+              V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0);
+            }
+          }
+          E();
+          break;
+        case GLU_LINE:
+          if (innerRadius === outerRadius) {
+            B(GL.LINE_STRIP);
+            for (let i = 0; i <= slices; i++) {
+              if (Q.texture) T(sinCache[i] / 2 + 0.5, cosCache[i] / 2 + 0.5);
+              V(innerRadius * sinCache[i], innerRadius * cosCache[i], 0);
+            }
+            E();
+            break;
+          }
+          for (let j = 0; j <= loops; j++) {
+            const radiusLow = radiusAt(j), texLow = Q.texture ? texOf(radiusLow) : 0;
+            B(GL.LINE_STRIP);
+            for (let i = 0; i <= slices; i++) { tex(texLow, i); V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0); }
+            E();
+          }
+          for (let i = 0; i < slices2; i++) {
+            B(GL.LINE_STRIP);
+            for (let j = 0; j <= loops; j++) {
+              const radiusLow = radiusAt(j);
+              if (Q.texture) tex(texOf(radiusLow), i);
+              V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0);
+            }
+            E();
+          }
+          break;
+        case GLU_SILHOUETTE:
+          if (sweepAngle < 360) {
+            for (let i = 0; i <= slices; i += slices) {
+              B(GL.LINE_STRIP);
+              for (let j = 0; j <= loops; j++) {
+                const radiusLow = radiusAt(j);
+                if (Q.texture) tex(texOf(radiusLow), i);
+                V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0);
+              }
+              E();
+            }
+          }
+          for (let j = 0; j <= loops; j += loops) {
+            const radiusLow = radiusAt(j), texLow = Q.texture ? texOf(radiusLow) : 0;
+            B(GL.LINE_STRIP);
+            for (let i = 0; i <= slices; i++) { tex(texLow, i); V(radiusLow * sinCache[i], radiusLow * cosCache[i], 0); }
+            E();
+            if (innerRadius === outerRadius) break;
+          }
+          break;
+      }
+    },
+    gluSphere: (q, radius, slices, stacks) => {
+      const Q = quadric(q, 'gluSphere');
+      if (slices >= CACHE_SIZE) slices = CACHE_SIZE - 1;
+      if (stacks >= CACHE_SIZE) stacks = CACHE_SIZE - 1;
+      if (slices < 2 || stacks < 1 || radius < 0) return;
+      const outside = Q.orientation === GLU_OUTSIDE, flat = Q.normals === GLU_FLAT, smooth = Q.normals === GLU_SMOOTH;
+      const needCache2 = smooth || (flat && Q.style === GLU_LINE), needCache3 = flat && Q.style !== GLU_POINT;
+      const [sinCache1a, cosCache1a, sinCache2a, cosCache2a, sinCache3a, cosCache3a] = caches(6);
+      const [sinCache1b, cosCache1b, sinCache2b, cosCache2b, sinCache3b, cosCache3b] = caches(6);
+      for (let i = 0; i < slices; i++) {
+        const angle = fr(2 * PI * i / slices);
+        sinCache1a[i] = fr(Math.sin(angle)); cosCache1a[i] = fr(Math.cos(angle));
+        if (needCache2) { sinCache2a[i] = sinCache1a[i]; cosCache2a[i] = cosCache1a[i]; }
+      }
+      for (let j = 0; j <= stacks; j++) {
+        const angle = fr(PI * j / stacks);
+        if (needCache2) {
+          sinCache2b[j] = fr(outside ? Math.sin(angle) : -Math.sin(angle));
+          cosCache2b[j] = fr(outside ? Math.cos(angle) : -Math.cos(angle));
+        }
+        sinCache1b[j] = fr(radius * Math.sin(angle)); cosCache1b[j] = fr(radius * Math.cos(angle));
+      }
+      sinCache1b[0] = 0; sinCache1b[stacks] = 0;
+      if (needCache3) {
+        for (let i = 0; i < slices; i++) {
+          const angle = fr(2 * PI * (i - 0.5) / slices);
+          sinCache3a[i] = fr(Math.sin(angle)); cosCache3a[i] = fr(Math.cos(angle));
+        }
+        for (let j = 0; j <= stacks; j++) {
+          const angle = fr(PI * (j - 0.5) / stacks);
+          sinCache3b[j] = fr(outside ? Math.sin(angle) : -Math.sin(angle));
+          cosCache3b[j] = fr(outside ? Math.cos(angle) : -Math.cos(angle));
+        }
+      }
+      sinCache1a[slices] = sinCache1a[0]; cosCache1a[slices] = cosCache1a[0];
+      if (needCache2) { sinCache2a[slices] = sinCache2a[0]; cosCache2a[slices] = cosCache2a[0]; }
+      if (needCache3) { sinCache3a[slices] = sinCache3a[0]; cosCache3a[slices] = cosCache3a[0]; }
+      let sintemp1 = 0, sintemp2 = 0, sintemp3 = 0, sintemp4 = 0, costemp1 = 0, costemp2 = 0, costemp3 = 0, costemp4 = 0;
+      let zLow, zHigh, start, finish;
+      const tex = (i, j) => { if (Q.texture) T(1 - i / slices, 1 - j / stacks); };
+      switch (Q.style) {
+        case GLU_FILL:
+          if (!Q.texture) {
+            start = 1; finish = stacks - 1;
+            sintemp2 = sinCache1b[1]; zHigh = cosCache1b[1];
+            if (flat) { sintemp3 = sinCache3b[1]; costemp3 = cosCache3b[1]; } else if (smooth) {
+              sintemp3 = sinCache2b[1]; costemp3 = cosCache2b[1];
+              N(sinCache2a[0] * sinCache2b[0], cosCache2a[0] * sinCache2b[0], cosCache2b[0]);
+            }
+            B(GL.TRIANGLE_FAN);
+            V(0, 0, radius);
+            if (outside) {
+              for (let i = slices; i >= 0; i--) {
+                if (smooth) N(sinCache2a[i] * sintemp3, cosCache2a[i] * sintemp3, costemp3);
+                else if (flat && i !== slices) N(sinCache3a[i + 1] * sintemp3, cosCache3a[i + 1] * sintemp3, costemp3);
+                V(sintemp2 * sinCache1a[i], sintemp2 * cosCache1a[i], zHigh);
+              }
+            } else {
+              for (let i = 0; i <= slices; i++) {
+                if (smooth) N(sinCache2a[i] * sintemp3, cosCache2a[i] * sintemp3, costemp3);
+                else if (flat) N(sinCache3a[i] * sintemp3, cosCache3a[i] * sintemp3, costemp3);
+                V(sintemp2 * sinCache1a[i], sintemp2 * cosCache1a[i], zHigh);
+              }
+            }
+            E();
+            sintemp2 = sinCache1b[stacks - 1]; zHigh = cosCache1b[stacks - 1];
+            if (flat) { sintemp3 = sinCache3b[stacks]; costemp3 = cosCache3b[stacks]; } else if (smooth) {
+              sintemp3 = sinCache2b[stacks - 1]; costemp3 = cosCache2b[stacks - 1];
+              // sinCache2a[stacks], as GLU writes it: the slice cache indexed by the stack count.
+              N(sinCache2a[stacks] * sinCache2b[stacks], cosCache2a[stacks] * sinCache2b[stacks], cosCache2b[stacks]);
+            }
+            B(GL.TRIANGLE_FAN);
+            V(0, 0, -radius);
+            if (outside) {
+              for (let i = 0; i <= slices; i++) {
+                if (smooth) N(sinCache2a[i] * sintemp3, cosCache2a[i] * sintemp3, costemp3);
+                else if (flat) N(sinCache3a[i] * sintemp3, cosCache3a[i] * sintemp3, costemp3);
+                V(sintemp2 * sinCache1a[i], sintemp2 * cosCache1a[i], zHigh);
+              }
+            } else {
+              for (let i = slices; i >= 0; i--) {
+                if (smooth) N(sinCache2a[i] * sintemp3, cosCache2a[i] * sintemp3, costemp3);
+                else if (flat && i !== slices) N(sinCache3a[i + 1] * sintemp3, cosCache3a[i + 1] * sintemp3, costemp3);
+                V(sintemp2 * sinCache1a[i], sintemp2 * cosCache1a[i], zHigh);
+              }
+            }
+            E();
+          } else { start = 0; finish = stacks; }
+          for (let j = start; j < finish; j++) {
+            zLow = cosCache1b[j]; zHigh = cosCache1b[j + 1];
+            sintemp1 = sinCache1b[j]; sintemp2 = sinCache1b[j + 1];
+            if (flat) { sintemp4 = sinCache3b[j + 1]; costemp4 = cosCache3b[j + 1]; } else if (smooth) {
+              if (outside) { sintemp3 = sinCache2b[j + 1]; costemp3 = cosCache2b[j + 1]; sintemp4 = sinCache2b[j]; costemp4 = cosCache2b[j]; }
+              else { sintemp3 = sinCache2b[j]; costemp3 = cosCache2b[j]; sintemp4 = sinCache2b[j + 1]; costemp4 = cosCache2b[j + 1]; }
+            }
+            B(GL.QUAD_STRIP);
+            for (let i = 0; i <= slices; i++) {
+              if (smooth) N(sinCache2a[i] * sintemp3, cosCache2a[i] * sintemp3, costemp3);
+              if (outside) { tex(i, j + 1); V(sintemp2 * sinCache1a[i], sintemp2 * cosCache1a[i], zHigh); }
+              else { tex(i, j); V(sintemp1 * sinCache1a[i], sintemp1 * cosCache1a[i], zLow); }
+              if (smooth) N(sinCache2a[i] * sintemp4, cosCache2a[i] * sintemp4, costemp4);
+              else if (flat) N(sinCache3a[i] * sintemp4, cosCache3a[i] * sintemp4, costemp4);
+              if (outside) { tex(i, j); V(sintemp1 * sinCache1a[i], sintemp1 * cosCache1a[i], zLow); }
+              else { tex(i, j + 1); V(sintemp2 * sinCache1a[i], sintemp2 * cosCache1a[i], zHigh); }
+            }
+            E();
+          }
+          break;
+        case GLU_POINT:
+          B(GL.POINTS);
+          for (let j = 0; j <= stacks; j++) {
+            sintemp1 = sinCache1b[j]; costemp1 = cosCache1b[j];
+            if (Q.normals !== GLU_NONE) { sintemp2 = sinCache2b[j]; costemp2 = cosCache2b[j]; }
+            for (let i = 0; i < slices; i++) {
+              if (Q.normals !== GLU_NONE) N(sinCache2a[i] * sintemp2, cosCache2a[i] * sintemp2, costemp2);
+              tex(i, j);
+              V(sintemp1 * sinCache1a[i], sintemp1 * cosCache1a[i], costemp1);
+            }
+          }
+          E();
+          break;
+        case GLU_LINE:
+        case GLU_SILHOUETTE:
+          for (let j = 1; j < stacks; j++) {
+            sintemp1 = sinCache1b[j]; costemp1 = cosCache1b[j];
+            if (Q.normals !== GLU_NONE) { sintemp2 = sinCache2b[j]; costemp2 = cosCache2b[j]; }
+            B(GL.LINE_STRIP);
+            for (let i = 0; i <= slices; i++) {
+              if (flat) N(sinCache3a[i] * sintemp2, cosCache3a[i] * sintemp2, costemp2);
+              else if (smooth) N(sinCache2a[i] * sintemp2, cosCache2a[i] * sintemp2, costemp2);
+              tex(i, j);
+              V(sintemp1 * sinCache1a[i], sintemp1 * cosCache1a[i], costemp1);
+            }
+            E();
+          }
+          for (let i = 0; i < slices; i++) {
+            sintemp1 = sinCache1a[i]; costemp1 = cosCache1a[i];
+            if (Q.normals !== GLU_NONE) { sintemp2 = sinCache2a[i]; costemp2 = cosCache2a[i]; }
+            B(GL.LINE_STRIP);
+            for (let j = 0; j <= stacks; j++) {
+              if (flat) N(sintemp2 * sinCache3b[j], costemp2 * sinCache3b[j], cosCache3b[j]);
+              else if (smooth) N(sintemp2 * sinCache2b[j], costemp2 * sinCache2b[j], cosCache2b[j]);
+              tex(i, j);
+              V(sintemp1 * sinCache1b[j], costemp1 * sinCache1b[j], cosCache1b[j]);
+            }
+            E();
+          }
+          break;
       }
     },
     gluScaleImage: (format, widthin, heightin, typein, datain, widthout, heightout, typeout, dataout) => {
@@ -409,7 +737,6 @@ export function installGlu(M) {
       return 0;
     },
   });
-  void GLU_FLAT; void GLU_POINT; void GLU_LINE; void GLU_SILHOUETTE;
   return {};
 }
 
@@ -420,6 +747,6 @@ export function gluBuiltins(T) {
     gluUnProject: f(I, D, D, D, P, P, P, P, P, P),
     gluPerspective: f(V, D, D, D, D), gluErrorString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
     gluQuadricDrawStyle: f(V, P, U), gluQuadricNormals: f(V, P, U), gluQuadricOrientation: f(V, P, U), gluQuadricTexture: f(V, P, I),
-    gluSphere: f(V, P, D, I, I), gluScaleImage: f(I, U, I, I, U, P, I, I, U, P), gluBuild2DMipmaps: f(I, U, I, I, I, U, U, P),
+    gluSphere: f(V, P, D, I, I), gluCylinder: f(V, P, D, D, D, I, I), gluDisk: f(V, P, D, D, I, I), gluPartialDisk: f(V, P, D, D, I, I, D, D), gluScaleImage: f(I, U, I, I, U, P, I, I, U, P), gluBuild2DMipmaps: f(I, U, I, I, I, U, U, P),
   };
 }

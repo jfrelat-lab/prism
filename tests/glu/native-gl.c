@@ -2,7 +2,8 @@
  * The native side of tests/glu/mipmap.c: a GL context for libGLU to query (Mesa on surfaceless EGL),
  * and glTexImage2D exported by the executable (-rdynamic) so that libGLU's calls land here first:
  * each level is hashed as it arrives -- its rows as GL_UNPACK_ALIGNMENT lays them out at that moment,
- * w * components bytes each -- then handed to Mesa.
+ * w * components bytes each -- then handed to Mesa. The immediate-mode calls a quadric is made of are
+ * exported the same way and only traced (tests/glu/quadric.c): each argument as its float's bits.
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -42,3 +43,10 @@ void glTexImage2D(GLenum target, GLint level, GLint internal, GLsizei w, GLsizei
     }
     real(target, level, internal, w, h, border, format, type, pixels);
 }
+
+static unsigned int bits(GLfloat f) { union { GLfloat f; unsigned int u; } v; v.f = f; return v.u; }
+void glBegin(GLenum mode) { printf("b %x\n", mode); }
+void glEnd(void) { printf("e\n"); }
+void glNormal3f(GLfloat x, GLfloat y, GLfloat z) { printf("n %08x %08x %08x\n", bits(x), bits(y), bits(z)); }
+void glTexCoord2f(GLfloat s, GLfloat t) { printf("t %08x %08x\n", bits(s), bits(t)); }
+void glVertex3f(GLfloat x, GLfloat y, GLfloat z) { printf("v %08x %08x %08x\n", bits(x), bits(y), bits(z)); }
