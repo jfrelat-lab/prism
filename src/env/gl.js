@@ -963,8 +963,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // The depth buffer, as floats in [0, 1]: Cube reads the one under its crosshair every frame.
       if (format === 0x1902 && type === 0x1406) {
         readFramebuffer();                                   // whatever is pending is drawn first
-        if (webgl) throw new Error('gl: glReadPixels of the depth buffer on the WebGL backend is not implemented');
-        for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) dv().setFloat32(out + 4 * (j * w + i), s.depth[(y + j) * s.width + x + i], true);
+        const d = webgl ? webgl.readDepth(x, y, w, h) : null;
+        for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) dv().setFloat32(out + 4 * (j * w + i), d ? d[j * w + i] : s.depth[(y + j) * s.width + x + i], true);
         return;
       }
       const fb = readFramebuffer(), n = format === FMT.RGBA ? 4 : format === FMT.RGB ? 3 : 0;
@@ -1070,8 +1070,31 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
  */
 function makeWebGL(w, h, stencilBuffer = false) {
   const canvas = new OffscreenCanvas(w, h);
-  const g = canvas.getContext('webgl2', { antialias: false, depth: true, stencil: stencilBuffer, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
+  const g = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: true, premultipliedAlpha: false, preserveDrawingBuffer: true });
   if (!g) throw new Error('gl: this browser has no WebGL2 for an OffscreenCanvas');
+  /*
+   * The program draws into a framebuffer of its own, not the canvas's: WebGL2 cannot read a depth
+   * buffer back, and Cube reads the one under its crosshair every frame. So the depth (and stencil)
+   * is a texture, which readDepth() samples. Nothing shows the canvas itself -- every host takes the
+   * frame through read() -- so this costs the picture nothing.
+   */
+  const target = g.createFramebuffer();
+  g.bindFramebuffer(g.FRAMEBUFFER, target);
+  const colourBuffer = g.createRenderbuffer();
+  g.bindRenderbuffer(g.RENDERBUFFER, colourBuffer);
+  g.renderbufferStorage(g.RENDERBUFFER, g.RGBA8, w, h);
+  g.framebufferRenderbuffer(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.RENDERBUFFER, colourBuffer);
+  const depthTex = g.createTexture();
+  g.bindTexture(g.TEXTURE_2D, depthTex);
+  g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, g.NEAREST); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, g.NEAREST);
+  if (stencilBuffer) {
+    g.texImage2D(g.TEXTURE_2D, 0, g.DEPTH24_STENCIL8, w, h, 0, g.DEPTH_STENCIL, g.UNSIGNED_INT_24_8, null);
+    g.framebufferTexture2D(g.FRAMEBUFFER, g.DEPTH_STENCIL_ATTACHMENT, g.TEXTURE_2D, depthTex, 0);
+  } else {
+    g.texImage2D(g.TEXTURE_2D, 0, g.DEPTH_COMPONENT24, w, h, 0, g.DEPTH_COMPONENT, g.UNSIGNED_INT, null);
+    g.framebufferTexture2D(g.FRAMEBUFFER, g.DEPTH_ATTACHMENT, g.TEXTURE_2D, depthTex, 0);
+  }
+  g.bindTexture(g.TEXTURE_2D, null);
   const shader = (type, src) => {
     const sh = g.createShader(type);
     g.shaderSource(sh, src); g.compileShader(sh);
@@ -1116,6 +1139,25 @@ void main() {
   ['pos', 'col', 'tc', 'ez'].forEach((n, i) => g.bindAttribLocation(prog, i, n));
   g.linkProgram(prog);
   if (!g.getProgramParameter(prog, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(prog)}`);
+  /*
+   * The depth probe: a triangle over the probed rectangle that fetches each texel of the depth
+   * texture and writes its 24 bits as three bytes of an RGBA8 target -- the integer GL keeps, which
+   * GL_FLOAT then reads as k / (2^24 - 1), as Mesa does.
+   */
+  const probe = g.createProgram();
+  g.attachShader(probe, shader(g.VERTEX_SHADER, `#version 300 es
+void main() { vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0); gl_Position = vec4(p, 0.0, 1.0); }`));
+  g.attachShader(probe, shader(g.FRAGMENT_SHADER, `#version 300 es
+precision highp float; precision highp int;
+uniform highp sampler2D depth; uniform ivec2 origin; out vec4 o;
+void main() {
+  uint k = uint(round(texelFetch(depth, origin + ivec2(gl_FragCoord.xy), 0).r * 16777215.0));
+  o = vec4(float(k & 255u), float((k >> 8) & 255u), float((k >> 16) & 255u), 0.0) / 255.0;
+}`));
+  g.linkProgram(probe);
+  if (!g.getProgramParameter(probe, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(probe)}`);
+  const probeDepth = g.getUniformLocation(probe, 'depth'), probeOrigin = g.getUniformLocation(probe, 'origin');
+  let probeTarget = null, probeColour = null, probeVao = null, probeSize = '';
   g.useProgram(prog);
   const U = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
     .map((n) => [n, g.getUniformLocation(prog, n)]));
@@ -1134,7 +1176,7 @@ void main() {
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
   const FILT = { 0x2600: g.NEAREST, 0x2601: g.LINEAR, 0x2700: g.NEAREST_MIPMAP_NEAREST, 0x2701: g.LINEAR_MIPMAP_NEAREST, 0x2702: g.NEAREST_MIPMAP_LINEAR, 0x2703: g.LINEAR_MIPMAP_LINEAR };
   const WRAP = { 0x2901: g.REPEAT, 0x2900: g.CLAMP_TO_EDGE, 0x812f: g.CLAMP_TO_EDGE };
-  let zFlip = 0, stencilOn = '';
+  let zFlip = 0, stencilOn = '', view = [0, 0, w, h];
   function apply(st) {
     if (st.tex >= 0) {
       g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex));
@@ -1198,7 +1240,7 @@ void main() {
     },
     tri(a, b, c, flat, st) { begin(st, g.TRIANGLES, 3); push(a, flat); push(b, flat); push(c, flat); },
     line(a, b, st) { begin(st, g.LINES, 2); push(a); push(b); },
-    viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); },
+    viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); view = [x, y, vw, vh]; },
     clear(mask, colour, depth, scissor, colorMask = [true, true, true, true], depthMask = true, stencil = null) {
       flush();
       if (scissor) { g.enable(g.SCISSOR_TEST); g.scissor(...scissor); } else g.disable(g.SCISSOR_TEST);
@@ -1207,6 +1249,39 @@ void main() {
       if (stencil && (mask & 0x400)) { g.clearStencil(stencil[0]); g.stencilMask(stencil[1]); stencilOn = null; }
       g.clear(((mask & 0x4000) ? g.COLOR_BUFFER_BIT : 0) | ((mask & 0x100) ? g.DEPTH_BUFFER_BIT : 0) | (stencil && (mask & 0x400) ? g.STENCIL_BUFFER_BIT : 0));
       key = null;
+    },
+    /** The depth of a rectangle, bottom row first, as GL_FLOAT values in [0, 1]. */
+    readDepth(x, y, rw, rh) {
+      flush();
+      if (probeSize !== `${rw}x${rh}`) {
+        probeSize = `${rw}x${rh}`;
+        probeTarget ??= g.createFramebuffer(); probeColour ??= g.createRenderbuffer(); probeVao ??= g.createVertexArray();
+        g.bindRenderbuffer(g.RENDERBUFFER, probeColour);
+        g.renderbufferStorage(g.RENDERBUFFER, g.RGBA8, rw, rh);
+        g.bindFramebuffer(g.FRAMEBUFFER, probeTarget);
+        g.framebufferRenderbuffer(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.RENDERBUFFER, probeColour);
+      }
+      g.bindFramebuffer(g.FRAMEBUFFER, probeTarget);
+      g.disable(g.DEPTH_TEST); g.disable(g.BLEND); g.disable(g.SCISSOR_TEST); g.disable(g.STENCIL_TEST); g.disable(g.POLYGON_OFFSET_FILL);
+      g.colorMask(true, true, true, true);
+      g.viewport(0, 0, rw, rh);
+      g.useProgram(probe);
+      g.activeTexture(g.TEXTURE1); g.bindTexture(g.TEXTURE_2D, depthTex);
+      g.uniform1i(probeDepth, 1); g.uniform2i(probeOrigin, x, y);
+      g.bindVertexArray(probeVao);
+      g.drawArrays(g.TRIANGLES, 0, 3);
+      const px = new Uint8Array(rw * rh * 4);
+      g.readPixels(0, 0, rw, rh, g.RGBA, g.UNSIGNED_BYTE, px);
+      // Back to the program's framebuffer and state: the next batch sets all of it again.
+      g.bindVertexArray(null);
+      g.bindTexture(g.TEXTURE_2D, null); g.activeTexture(g.TEXTURE0);
+      g.useProgram(prog);
+      g.bindFramebuffer(g.FRAMEBUFFER, target);
+      g.viewport(...view);
+      key = null; stencilOn = null;
+      const out = new Float32Array(rw * rh);
+      for (let i = 0; i < rw * rh; i++) out[i] = (px[4 * i] | (px[4 * i + 1] << 8) | (px[4 * i + 2] << 16)) / 16777215;
+      return out;
     },
     /** The framebuffer, bottom row first, as GL's own is. */
     read() { flush(); const px = new Uint8Array(w * h * 4); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, px); return px; },

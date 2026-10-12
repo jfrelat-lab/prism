@@ -1090,6 +1090,11 @@ async function startRun(typedAs = null) {
          */
         const { under = '', exclude = [], also = [] } = program.needsData;
         dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, under);
+        /*
+         * `cwd`: the program runs IN `under` and opens its files relative to it -- Cube asks for
+         * data/ and packages/ beside itself -- so they are named without that prefix.
+         */
+        if (program.needsData.cwd) dataFiles = Object.fromEntries(Object.entries(dataFiles).map(([k, v]) => [k.slice(under.length), v]));
         if (exclude.length) dataFiles = Object.fromEntries(Object.entries(dataFiles).filter(([k]) => !exclude.includes(k.split('/').pop())));
         /*
          * `also`: single files of another root, put where the program looks for them -- ScummVM

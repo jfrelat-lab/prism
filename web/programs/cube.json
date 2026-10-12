@@ -1,0 +1,17 @@
+{
+  "title": "CUBE",
+  "subtitle": "Wouter van Oortmerssen, 2001-2005 · its last release, 2005_08_29 — C++ on SDL 1.2, OpenGL and SDL_mixer, ENet for its network",
+  "target": "cube",
+  "host": "sdl",
+  "fps": 60,
+  "needsData": {
+    "dir": "cube",
+    "under": "files/cube/",
+    "cwd": true,
+    "hint": "files/cube/ from cube_2005_08_29_unix.tar.gz (data/, packages/, autoexec.cfg)"
+  },
+  "controls": [["W A S D / arrows", "move"], ["mouse", "look"], ["left button", "fire"], ["Space", "jump"], ["Tab", "scores"], ["`", "console"], ["Esc", "menu"]],
+  "_why": "The first GL program here chosen for its C++: its own containers, templates and no STL, compiled by src/cxx. It is held to a native build drawn by Mesa (gate-cube: three frames within 0.2% of pixels, its sound sample for sample). In the page it draws through WebGL2, and it reads the depth under its crosshair every frame -- which is what made the WebGL path render into a framebuffer of its own.",
+  "_cwd": "Cube opens data/ and packages/ relative to the directory it is started in, which in its archive is files/cube/: the files are named relative to it.",
+  "_music": "Its music is Ogg Vorbis, which PRISM's SDL_mixer does not decode: Mix_LoadMUS fails and Cube plays on without it, as it does on a machine without the codec."
+}

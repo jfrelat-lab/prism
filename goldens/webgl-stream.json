@@ -1,8 +1,8 @@
 {
   "gears": {
-    "calls": 1118,
+    "calls": 1146,
     "draws": 51,
-    "sha": "73bb4d431835ba9bab004005747d1fcc23a81549b91e797f6dd70367457a683b",
+    "sha": "b0de9288dc6bea6a0b6b5bd21a6287d013ccd1d7ba29e405e3c7b369327f8501",
     "ranges": [
       [
         0,
@@ -212,9 +212,9 @@
     "flips": []
   },
   "morph3d": {
-    "calls": 4148,
+    "calls": 4176,
     "draws": 195,
-    "sha": "97f1f34a5c71ec4af0b691ae5b1ce1beaba3c7e4cbb690ecb88a38739f33e85d",
+    "sha": "dfbf6dd5e706ca9558fbc5d1a125faa0714017bbd0810cd5efa26801f996b04f",
     "ranges": [
       [
         0,
@@ -1000,9 +1000,9 @@
     "flips": []
   },
   "texobj (texture objects)": {
-    "calls": 2199,
+    "calls": 2227,
     "draws": 102,
-    "sha": "aaf3a73e471864f317707b8180a18642201d2f1d1b70e6d20e4ba0c284630bba",
+    "sha": "2ea5c1c1dffab302d2d2e97940adeecb576e18fc7c2eea992bd6f901bd3206b8",
     "ranges": [
       [
         0,
@@ -1416,9 +1416,9 @@
     "flips": []
   },
   "texobj (display lists)": {
-    "calls": 2598,
+    "calls": 2626,
     "draws": 102,
-    "sha": "6287d655a79304960e59e76976fa4b4e731cd8bc9c636cbd4a92896360a8b99b",
+    "sha": "928b24ceb7a891ef2915dfda4cecf22b603edb3ec05d630b0075c0d46fbdec45",
     "ranges": [
       [
         0,
@@ -1832,9 +1832,9 @@
     "flips": []
   },
   "quake3 q3dm1": {
-    "calls": 972834,
+    "calls": 972862,
     "draws": 44712,
-    "sha": "badb6443b3f55a1f9d19414e79e6cff867e73c584468e1401b7b4eb715254aec",
+    "sha": "c6c13834146bb870d082d86a73a919add6756920aceb3126feadc9e8e25d2a11",
     "ranges": [
       [
         0,
