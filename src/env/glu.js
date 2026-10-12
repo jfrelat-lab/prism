@@ -8,15 +8,18 @@
 //   gluPerspective        the projection matrix of the specification, multiplied onto the current one
 //   gluSphere             SGI's tessellation (libutil/quad.c): a triangle fan at each pole and quad
 //                         strips between, or strips all the way when texture coordinates are wanted
-//   gluBuild2DMipmaps     the image scaled to powers of two if it is not, then halved level by level
-//   gluScaleImage         box-filtered when shrinking, bilinear when enlarging
+//   gluBuild2DMipmaps     GLU 9's mipmap.c for GL_UNSIGNED_BYTE: a power-of-two image halved level
+//   gluScaleImage         by level, any other size box-filtered to the nearest powers of two first;
+//                         gluScaleImage through libGLU's 16-bit box filter. Bit-identical to Debian's
+//                         i386 libGLU (tools/gate-glu.mjs); other pixel types are refused by name.
 //
-// NOT bit-identical to SGI's or Mesa's GLU where filtering is concerned: gluScaleImage's exact
-// arithmetic is theirs. No gate holds it to a reference yet; when one does, this is where it bites.
+// gluUnProject is held to libGLU to 1e-12 (its x87 intermediates move the last bits); gluPerspective
+// and gluSphere are not held to a reference yet.
 
 const GLU_SMOOTH = 100000, GLU_FLAT = 100001, GLU_NONE = 100002;
 const GLU_POINT = 100010, GLU_LINE = 100011, GLU_FILL = 100012, GLU_SILHOUETTE = 100013;
 const GLU_OUTSIDE = 100020, GLU_INSIDE = 100021;
+const GLU_INVALID_ENUM = 100900, GLU_INVALID_VALUE = 100901;
 const GL = { TRIANGLE_FAN: 6, QUAD_STRIP: 8, LINE_LOOP: 2, LINE_STRIP: 3, POINTS: 0, UNPACK_ALIGNMENT: 0x0cf5, UNSIGNED_BYTE: 0x1401 };
 const COMPONENTS = { 0x1908: 4, 0x1907: 3, 0x1909: 1, 0x1906: 1, 0x190a: 2, 0x8049: 1 };
 const ERRORS = { 0: 'no error', 0x0500: 'invalid enumerant', 0x0501: 'invalid value', 0x0502: 'invalid operation',
@@ -35,43 +38,190 @@ export function installGlu(M) {
     vals.forEach((v, k) => dv().setFloat64(scratch + 8 * k, v, true));
     return scratch;
   };
-  /** A tightly packed copy of a client image (rows as GL_UNPACK_ALIGNMENT lays them out). */
-  const readImage = (w, h, n, ptr) => {
-    const align = M.gl.state.unpackAlign ?? 4, row = Math.ceil(w * n / align) * align;
-    const out = new Uint8Array(w * h * n);
-    for (let y = 0; y < h; y++) out.set(M.u8.subarray(ptr + y * row, ptr + y * row + w * n), y * w * n);
-    return out;
-  };
-  /** src (sw x sh, n components) resampled to dw x dh. */
-  const scale = (src, sw, sh, n, dw, dh) => {
-    const out = new Uint8Array(dw * dh * n);
-    const sx = sw / dw, sy = sh / dh;
-    for (let y = 0; y < dh; y++) {
-      for (let x = 0; x < dw; x++) {
-        for (let c = 0; c < n; c++) {
-          let v;
-          if (sx >= 1 && sy >= 1) {
-            // Shrinking: the mean of the source texels this one covers.
-            const x0 = Math.floor(x * sx), x1 = Math.max(x0 + 1, Math.floor((x + 1) * sx));
-            const y0 = Math.floor(y * sy), y1 = Math.max(y0 + 1, Math.floor((y + 1) * sy));
-            let sum = 0;
-            for (let yy = y0; yy < y1; yy++) for (let xx = x0; xx < x1; xx++) sum += src[(yy * sw + xx) * n + c];
-            v = sum / ((x1 - x0) * (y1 - y0));
-          } else {
-            const fx = Math.max(0, (x + 0.5) * sx - 0.5), fy = Math.max(0, (y + 0.5) * sy - 0.5);
-            const x0 = Math.min(sw - 1, Math.floor(fx)), y0 = Math.min(sh - 1, Math.floor(fy));
-            const x1 = Math.min(sw - 1, x0 + 1), y1 = Math.min(sh - 1, y0 + 1), ax = fx - x0, ay = fy - y0;
-            const at = (xx, yy) => src[(yy * sw + xx) * n + c];
-            v = (at(x0, y0) * (1 - ax) + at(x1, y0) * ax) * (1 - ay) + (at(x0, y1) * (1 - ax) + at(x1, y1) * ax) * ay;
-          }
-          out[(y * dw + x) * n + c] = Math.max(0, Math.min(255, Math.round(v)));
-        }
+  /*
+   * Mipmaps and scaling as GLU 9 (Mesa's libGLU, libutil/mipmap.c) does them for GL_UNSIGNED_BYTE,
+   * transcribed routine by routine: gluBuild2DMipmaps halves bytes directly (halveImage_ubyte) and
+   * box-filters a size that is not a power of two (scale_internal_ubyte); gluScaleImage widens to
+   * 16 bits (fill_image), filters with its own box (scale_internal) and narrows back (empty_image).
+   * `fr` is the float rounding of libGLU's `float` variables. Other pixel types are refused by name.
+   */
+  const fr = Math.fround;
+  const elementsPerGroup = (format) => (format === 0x1907 || format === 0x80e0 ? 3 : format === 0x190a ? 2 : format === 0x1908 || format === 0x80e1 ? 4 : 1);
+  const LEGAL_FORMAT = new Set([0x1900, 0x1901, 0x1902, 0x1903, 0x1904, 0x1905, 0x1906, 0x1907, 0x1908, 0x1909, 0x190a, 0x80e0, 0x80e1]);
+  const computeLog = (v) => { if (v === 0) return -1; for (let i = 0; ; i++, v >>>= 1) if (v & 1) return v !== 1 ? -1 : i; };
+  const nearestPower = (v) => { if (v === 0) return -1; for (let i = 1; ; i *= 2, v >>>= 1) { if (v === 1) return i; if (v === 3) return i * 4; } };
+  const rowBytes = (groups, groupSize, align) => { let r = groups * groupSize; const pad = r % align; if (pad) r += align - pad; return r; };
+  const unsupportedType = (fn, type) => { throw new Error(`glu: ${fn} with pixel type 0x${type.toString(16)} (only GL_UNSIGNED_BYTE is implemented)`); };
+
+  const halve1DimageUbyte = (components, width, height, src, si, dst, element_size, ysize, group_size) => {
+    let di = 0;
+    if (height === 1) {
+      for (let jj = 0; jj < (width >> 1); jj++) {
+        for (let kk = 0; kk < components; kk++) { dst[di++] = (src[si] + src[si + group_size]) >> 1; si += element_size; }
+        si += group_size;
+      }
+    } else {
+      const padBytes = ysize - width * group_size;
+      for (let jj = 0; jj < (height >> 1); jj++) {
+        for (let kk = 0; kk < components; kk++) { dst[di++] = (src[si] + src[si + ysize]) >> 1; si += element_size; }
+        si += padBytes; si += ysize;
       }
     }
-    return out;
   };
-  const pow2 = (v) => { let p = 1; while (p * 2 <= v) p *= 2; return v - p > p * 2 - v && p * 2 <= 16384 ? p * 2 : p; };
-
+  const halveImageUbyte = (components, width, height, src, si, dst, element_size, ysize, group_size) => {
+    if (width === 1 || height === 1) return halve1DimageUbyte(components, width, height, src, si, dst, element_size, ysize, group_size);
+    const newwidth = width >> 1, newheight = height >> 1, padBytes = ysize - width * group_size;
+    let di = 0;
+    for (let i = 0; i < newheight; i++) {
+      for (let j = 0; j < newwidth; j++) {
+        for (let k = 0; k < components; k++) {
+          dst[di++] = (src[si] + src[si + group_size] + src[si + ysize] + src[si + ysize + group_size] + 2) >> 2;
+          si += element_size;
+        }
+        si += group_size;
+      }
+      si += padBytes; si += ysize;
+    }
+  };
+  const scaleInternalUbyte = (components, widthin, heightin, src, si0, widthout, heightout, dst, element_size, ysize, group_size) => {
+    if (widthin === widthout * 2 && heightin === heightout * 2) return halveImageUbyte(components, widthin, heightin, src, si0, dst, element_size, ysize, group_size);
+    const convy = fr(heightin / heightout), convx = fr(widthin / widthout);
+    const convy_int = Math.floor(convy), convy_float = fr(convy - convy_int);
+    const convx_int = Math.floor(convx), convx_float = fr(convx - convx_int);
+    const area = fr(convx * convy);
+    const totals = [0, 0, 0, 0];
+    let lowy_int = 0, lowy_float = 0, highy_int = convy_int, highy_float = convy_float;
+    const add = (k, v) => { totals[k] = fr(totals[k] + v); };
+    for (let i = 0; i < heightout; i++) {
+      if (highy_int >= heightin) highy_int = heightin - 1;
+      let lowx_int = 0, lowx_float = 0, highx_int = convx_int, highx_float = convx_float;
+      for (let j = 0; j < widthout; j++) {
+        totals[0] = totals[1] = totals[2] = totals[3] = 0;
+        const xindex = lowx_int * group_size;
+        let temp, percent, y_percent, x_percent;
+        const row = (at, p) => { for (let k = 0; k < components; k++) add(k, fr(src[at + k * element_size] * p)); };
+        if (highy_int > lowy_int && highx_int > lowx_int) {
+          y_percent = fr(1 - lowy_float);
+          temp = si0 + xindex + lowy_int * ysize;
+          percent = fr(y_percent * fr(1 - lowx_float));
+          row(temp, percent);
+          let left = temp;
+          for (let l = lowx_int + 1; l < highx_int; l++) { temp += group_size; row(temp, y_percent); }
+          temp += group_size;
+          let right = temp;
+          percent = fr(y_percent * highx_float);
+          row(temp, percent);
+          y_percent = highy_float;
+          percent = fr(y_percent * fr(1 - lowx_float));
+          temp = si0 + xindex + highy_int * ysize;
+          row(temp, percent);
+          for (let l = lowx_int + 1; l < highx_int; l++) { temp += group_size; row(temp, y_percent); }
+          temp += group_size;
+          percent = fr(y_percent * highx_float);
+          row(temp, percent);
+          for (let m = lowy_int + 1; m < highy_int; m++) {
+            left += ysize; right += ysize;
+            for (let k = 0; k < components; k++, left += element_size, right += element_size) {
+              add(k, fr(fr(src[left] * fr(1 - lowx_float)) + fr(src[right] * highx_float)));
+            }
+          }
+        } else if (highy_int > lowy_int) {
+          x_percent = fr(highx_float - lowx_float);
+          percent = fr(fr(1 - lowy_float) * x_percent);
+          temp = si0 + xindex + lowy_int * ysize;
+          row(temp, percent);
+          for (let m = lowy_int + 1; m < highy_int; m++) { temp += ysize; row(temp, x_percent); }
+          percent = fr(x_percent * highy_float);
+          temp += ysize;
+          row(temp, percent);
+        } else if (highx_int > lowx_int) {
+          y_percent = fr(highy_float - lowy_float);
+          percent = fr(fr(1 - lowx_float) * y_percent);
+          temp = si0 + xindex + lowy_int * ysize;
+          row(temp, percent);
+          for (let l = lowx_int + 1; l < highx_int; l++) { temp += group_size; row(temp, y_percent); }
+          temp += group_size;
+          percent = fr(y_percent * highx_float);
+          row(temp, percent);
+        } else {
+          percent = fr(fr(highy_float - lowy_float) * fr(highx_float - lowx_float));
+          row(si0 + xindex + lowy_int * ysize, percent);
+        }
+        let temp0 = si0 + xindex + group_size + (lowy_int + 1) * ysize;
+        for (let m = lowy_int + 1; m < highy_int; m++) {
+          temp = temp0;
+          for (let l = lowx_int + 1; l < highx_int; l++) {
+            for (let k = 0; k < components; k++) add(k, src[temp + k * element_size]);
+            temp += group_size;
+          }
+          temp0 += ysize;
+        }
+        const outindex = (j + i * widthout) * components;
+        for (let k = 0; k < components; k++) dst[outindex + k] = Math.trunc(fr(totals[k] / area));
+        lowx_int = highx_int; lowx_float = highx_float;
+        highx_int += convx_int; highx_float = fr(highx_float + convx_float);
+        if (highx_float > 1) { highx_float = fr(highx_float - 1); highx_int++; }
+      }
+      lowy_int = highy_int; lowy_float = highy_float;
+      highy_int += convy_int; highy_float = fr(highy_float + convy_float);
+      if (highy_float > 1) { highy_float = fr(highy_float - 1); highy_int++; }
+    }
+  };
+  /*
+   * scale_internal: libGLU's 16-bit box filter, the one gluScaleImage uses. Its `float` variables are
+   * NOT all floats in the library as built (Debian's i386 libGLU, x87 code, disassembled): convy is
+   * kept at full precision -- only convx is rounded --, the coverage of each source texel (xpercent,
+   * ypercent, their product) and the running area never leave the FPU, and each product of a texel by
+   * its coverage is added to totals[k] before rounding; the coordinates (x, y, low, high) and totals[k]
+   * are rounded to float as they are stored. Reproduced here: the unrounded values are exact in double.
+   */
+  const scaleInternal = (components, widthin, heightin, datain, widthout, heightout, dataout) => {
+    if (widthin === widthout * 2 && heightin === heightout * 2) {
+      const delta = widthin * components;
+      let si = 0, di = 0;
+      for (let i = 0; i < (heightin >> 1); i++) {
+        for (let j = 0; j < (widthin >> 1); j++) {
+          for (let k = 0; k < components; k++, si++) dataout[di++] = (datain[si] + datain[si + components] + datain[si + delta] + datain[si + delta + components] + 2) >> 2;
+          si += components;
+        }
+        si += delta;
+      }
+      return;
+    }
+    const convy = heightin / heightout, convxExact = widthin / widthout, convx = fr(convxExact);
+    const halfconvx = fr(convxExact / 2), halfconvy = fr(convy / 2);
+    const totals = [0, 0, 0, 0];
+    for (let i = 0; i < heightout; i++) {
+      let y = fr((i + 0.5) * convy), highy, lowy;
+      if (heightin > heightout) { highy = fr(y + halfconvy); lowy = fr(y - halfconvy); } else { highy = fr(y + 0.5); lowy = fr(y - 0.5); }
+      for (let j = 0; j < widthout; j++) {
+        let x = fr((j + 0.5) * convx), highx, lowx;
+        if (widthin > widthout) { highx = fr(x + halfconvx); lowx = fr(x - halfconvx); } else { highx = fr(x + 0.5); lowx = fr(x - 0.5); }
+        totals[0] = totals[1] = totals[2] = totals[3] = 0;
+        let area = 0;
+        y = lowy;
+        let yint = Math.floor(y);
+        while (y < highy) {
+          const yindex = (yint + heightin) % heightin;
+          const ypercent = highy < yint + 1 ? highy - y : yint + 1 - y;
+          x = lowx;
+          let xint = Math.floor(x);
+          while (x < highx) {
+            const xindex = (xint + widthin) % widthin;
+            const xpercent = highx < xint + 1 ? highx - x : xint + 1 - x;
+            const percent = xpercent * ypercent;
+            area += percent;
+            const temp = (xindex + yindex * widthin) * components;
+            for (let k = 0; k < components; k++) totals[k] = fr(totals[k] + datain[temp + k] * percent);
+            xint++; x = xint;
+          }
+          yint++; y = yint;
+        }
+        const temp = (j + i * widthout) * components;
+        for (let k = 0; k < components; k++) dataout[temp + k] = Math.trunc((totals[k] + 0.5) / area) & 0xffff;
+      }
+    }
+  };
   /*
    * gluUnProject as GLU 9 (Mesa's libGLU, project.c) computes it, operation for operation: the
    * product of the two matrices, its inverse by cofactors, the window point mapped to [-1, 1] and
@@ -189,34 +339,73 @@ export function installGlu(M) {
         rt.glEnd();
       }
     },
-    gluScaleImage: (format, win, hin, typein, datain, wout, hout, typeout, dataout) => {
-      const n = COMPONENTS[format];
-      if (!n || typein !== GL.UNSIGNED_BYTE || typeout !== GL.UNSIGNED_BYTE) return 100900;
-      const out = scale(readImage(win, hin, n, datain), win, hin, n, wout, hout);
-      const align = M.gl.state.unpackAlign ?? 4, row = Math.ceil(wout * n / align) * align;
-      for (let y = 0; y < hout; y++) M.u8.set(out.subarray(y * wout * n, (y + 1) * wout * n), dataout + y * row);
+    gluScaleImage: (format, widthin, heightin, typein, datain, widthout, heightout, typeout, dataout) => {
+      if (widthin === 0 || heightin === 0 || widthout === 0 || heightout === 0) return 0;
+      if (widthin < 0 || heightin < 0 || widthout < 0 || heightout < 0) return GLU_INVALID_VALUE;
+      if (!LEGAL_FORMAT.has(format)) return GLU_INVALID_ENUM;
+      if (typein !== GL.UNSIGNED_BYTE) unsupportedType('gluScaleImage', typein);
+      if (typeout !== GL.UNSIGNED_BYTE) unsupportedType('gluScaleImage', typeout);
+      const index = format === 0x1900 || format === 0x1901;
+      const c = elementsPerGroup(format), S = M.gl.state;
+      const before = new Uint16Array(widthin * heightin * c), after = new Uint16Array(widthout * heightout * c);
+      // fill_image: rows as GL_UNPACK_ALIGNMENT lays them out, each byte widened to 16 bits (* 257).
+      const inRow = rowBytes(widthin, c, S.unpackAlign);
+      for (let i = 0, o = 0; i < heightin; i++) for (let j = 0; j < widthin * c; j++) { const v = M.u8[datain + i * inRow + j]; before[o++] = index ? v : v * 257; }
+      scaleInternal(c, widthin, heightin, before, widthout, heightout, after);
+      // empty_image: rows as GL_PACK_ALIGNMENT lays them out, each value narrowed (>> 8).
+      const outRow = rowBytes(widthout, c, S.packAlign);
+      for (let i = 0, o = 0; i < heightout; i++) for (let j = 0; j < widthout * c; j++) { const v = after[o++]; M.u8[dataout + i * outRow + j] = index ? v : v >> 8; }
       return 0;
     },
-    gluBuild2DMipmaps: (target, components, width, height, format, type, data) => {
-      const n = COMPONENTS[format];
-      if (!n || type !== GL.UNSIGNED_BYTE) return 100900;
-      if (width < 1 || height < 1) return 100901;
-      let img = readImage(width, height, n, data), w = pow2(width), h = pow2(height);
-      if (w !== width || h !== height) img = scale(img, width, height, n, w, h);
-      // Each level goes up tightly packed, whatever the program's unpack alignment is; restored after.
-      const saved = M.gl.state.unpackAlign ?? 4;
-      const buf = rt.malloc(w * h * n);
-      rt.glPixelStorei(GL.UNPACK_ALIGNMENT, 1);
-      try {
-        for (let level = 0; ; level++) {
-          M.u8.set(img, buf);
-          rt.glTexImage2D(target, level, components, w, h, 0, format, type, buf);
-          if (w === 1 && h === 1) break;
-          const nw = Math.max(1, w >> 1), nh = Math.max(1, h >> 1);
-          img = scale(img, w, h, n, nw, nh);
-          w = nw; h = nh;
+    gluBuild2DMipmaps: (target, internalFormat, width, height, format, type, data) => {
+      if (!LEGAL_FORMAT.has(format) || format === 0x1901) return GLU_INVALID_ENUM;
+      if (type !== GL.UNSIGNED_BYTE) unsupportedType('gluBuild2DMipmaps', type);
+      if (width < 1 || height < 1) return GLU_INVALID_VALUE;
+      // closestFit: Mesa answers the proxy texture for every power of two up to GL_MAX_TEXTURE_SIZE.
+      const max = 16384;
+      let newwidth = Math.min(nearestPower(width), max), newheight = Math.min(nearestPower(height), max);
+      const levels = Math.max(computeLog(newwidth), computeLog(newheight));
+      // gluBuild2DMipmapLevelsCore with userLevel 0, baseLevel 0, maxLevel `levels`.
+      const S = M.gl.state, align = S.unpackAlign;
+      const cmpts = elementsPerGroup(format), element_size = 1, group_size = cmpts;
+      let rowsize = rowBytes(width, group_size, align);
+      let srcImage, dstImage, level;
+      const upload = (lvl, w, h, bytes) => {
+        const buf = rt.malloc(Math.max(1, bytes.length));
+        M.u8.set(bytes, buf);
+        try { rt.glTexImage2D(target, lvl, internalFormat, w, h, 0, format, type, buf); } finally { rt.free(buf); }
+      };
+      if (width === newwidth && height === newheight) {
+        upload(0, width, height, M.u8.subarray(data, data + rowsize * height));
+        if (levels === 0) return 0;
+        dstImage = new Uint8Array(Math.max(1, newwidth >> 1) * Math.max(1, newheight >> 1) * cmpts);
+        halveImageUbyte(cmpts, width, height, M.u8, data, dstImage, element_size, rowsize, group_size);
+        newwidth = Math.max(1, width >> 1); newheight = Math.max(1, height >> 1);
+        rowsize = newwidth * group_size;
+        srcImage = dstImage;
+        level = 1;
+      } else {
+        srcImage = new Uint8Array(newwidth * newheight * cmpts);
+        scaleInternalUbyte(cmpts, width, height, M.u8, data, newwidth, newheight, srcImage, element_size, rowsize, group_size);
+        rowsize = newwidth * group_size;
+        level = 0;
+      }
+      // Tightly packed from here, but still sent under the caller's GL_UNPACK_ALIGNMENT, as libGLU does.
+      upload(level, newwidth, newheight, srcImage.subarray(0, Math.ceil(rowsize / align) * align * (newheight - 1) + rowsize));
+      for (level++; level <= levels; level++) {
+        dstImage = new Uint8Array(Math.max(1, newwidth >> 1) * Math.max(1, newheight >> 1) * cmpts);
+        halveImageUbyte(cmpts, newwidth, newheight, srcImage, 0, dstImage, element_size, rowsize, group_size);
+        srcImage = dstImage;
+        if (newwidth > 1) { newwidth >>= 1; rowsize = Math.trunc(rowsize / 2); }
+        if (newheight > 1) newheight >>= 1;
+        const rowPad = rowsize % align;
+        if (rowPad === 0) upload(level, newwidth, newheight, srcImage.subarray(0, rowsize * newheight));
+        else {
+          const newRowLength = rowsize + align - rowPad, padded = new Uint8Array(newRowLength * newheight);
+          for (let ii = 0; ii < newheight; ii++) padded.set(srcImage.subarray(ii * rowsize, ii * rowsize + rowsize), ii * newRowLength);
+          upload(level, newwidth, newheight, padded);
         }
-      } finally { rt.glPixelStorei(GL.UNPACK_ALIGNMENT, saved); rt.free(buf); }
+      }
       return 0;
     },
   });

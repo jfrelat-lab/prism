@@ -152,7 +152,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false }, normal: { on: false } },
     // glTexGen: per coordinate (s, t) its mode and object plane; the caps TEXTURE_GEN_S/T turn it on.
     texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
-    unpackAlign: 4,
+    unpackAlign: 4, packAlign: 4,
     colourMaterial: { face: 0x0408, mode: 0x1602 },    // GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE
     unknownCaps: new Set(),
     scissor: [0, 0, 0, 0], pointSize: 1, lineWidth: 1,
@@ -721,7 +721,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glRecti: (x1, y1, x2, y2) => exec.glRectf(x1, y1, x2, y2),
     glLightf: (li, pname, v) => exec.glLightfv(li, pname, [v]),
     glMaterialf: (face, pname, v) => exec.glMaterialfv(face, pname, [v]),
-    glPixelStorei: (p, v) => { if (p === 0x0cf5) s.unpackAlign = v; else if (p !== 0x0d05) throw new Error(`gl: glPixelStorei 0x${p.toString(16)}`); },
+    // The alignments are kept; the other modes (swap, LSB first, row length, skips -- 0x0cf0-0x0cf4,
+    // 0x0d00-0x0d04) are accepted at their defaults only, as GLU restores them, and refused otherwise.
+    glPixelStorei: (p, v) => {
+      if (p === 0x0cf5) s.unpackAlign = v;
+      else if (p === 0x0d05) s.packAlign = v;
+      else if (!(((p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04)) && v === 0)) throw new Error(`gl: glPixelStorei 0x${p.toString(16)} = ${v}`);
+    },
     // Texture coordinate generation: GL_OBJECT_LINEAR, the mode a terrain textured by position uses.
     glTexGeni: (coord, pname, v) => {
       const g = s.texGen[coord - 0x2000];
