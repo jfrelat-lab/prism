@@ -309,7 +309,10 @@ export function loadTarget(file, variant = null) {
 /** Read a target's translation units off disk, generated ones included. */
 export function targetUnits(target, root) {
   const dir = resolvePath(root, target.dir);
-  if (!existsSync(dir)) throw new Error(`target '${target.name}': source tree missing: ${dir}`);
+  if (!existsSync(dir)) {
+    // code PRISM_MISSING: the corpus is fetched, not shipped, so a gate reports this as SKIP.
+    throw Object.assign(new Error(`target '${target.name}': source tree missing: ${dir} (see the target's "fetch" line)`), { code: 'PRISM_MISSING' });
+  }
   const { names, asm } = unitNames(target, dir);
   // Zero units is a target-file mistake -- a glob pointing at the wrong directory, almost always --
   // and it used to surface as "Cannot read properties of undefined (reading 'globals')" from inside

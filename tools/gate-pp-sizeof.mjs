@@ -11,7 +11,7 @@
 //
 // and checks the preprocessor side: a stated type is answered (unsigned, as a size_t is), a type not
 // stated is refused by name, and with no table the old refusal stands.
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Preprocessor } from '../src/cpp/cpp.js';
@@ -56,6 +56,12 @@ for (const f of readdirSync(join(ROOT, 'targets')).filter((x) => x.endsWith('.js
   const dir = join(ROOT, t.dir);
   const probe = PROBES[t.name];
   if (!probe) { report(false, `${t.name}: states ppSizeof but this gate has no probe for it`); continue; }
+  if (!existsSync(dir)) {
+    // The corpus is fetched, not shipped: Borland's side below is still checked, PRISM's cannot be.
+    console.log(` --   ${t.name}: ${t.dir} not fetched, PRISM's layout not checked`);
+    for (const [name, n] of Object.entries(c.ppSizeof)) report(borland[name]?.size === n, `${t.name}: sizeof(${name}) stated ${n}, Borland measured`, `${borland[name]?.size}`);
+    continue;
+  }
   const pre = new Preprocessor({ defines: { ...(t.defines ?? {}), ...modelDefines(c.model, c.signedChar) },
     resolve: makeResolver(dir, t, new Set(), new Set(), envHeaders(t.env), new Set()) });
   const { scope } = parse(pre.run(probe, join(dir, 'probe.c')),

@@ -25,17 +25,25 @@ function docker(args, opts = {}) {
 
 let ready = false;
 
+/** Something this repository does not ship; tools/gate-preload.mjs turns it into a SKIP. */
+function missing(what) {
+  return Object.assign(new Error(`${what} -- build it with: npm run oracle:build`), { code: 'PRISM_MISSING' });
+}
+
 /** Start the oracle container if it is not already running. Idempotent and cheap to re-call. */
 export function up() {
   if (ready) return;
   mkdirSync(SCRATCH, { recursive: true });
-  const running = docker(['ps', '-q', '-f', `name=^${NAME}$`]).stdout.trim();
+  const ps = docker(['ps', '-q', '-f', `name=^${NAME}$`]);
+  if (ps.error || ps.status !== 0) throw missing(`no Docker here to run the oracle container (${ps.error?.code ?? ps.stderr.trim()})`);
+  const running = ps.stdout.trim();
   if (!running) {
     // A stopped container of the same name would make `run` fail with a name clash.
     docker(['rm', '-f', NAME], { stdio: 'ignore' });
     const r = docker(['run', '-d', '--name', NAME, '--platform', 'linux/386',
       '-v', `${SCRATCH}:/work`, IMAGE, 'sleep', 'infinity']);
     if (r.status !== 0) {
+      if (docker(['image', 'inspect', IMAGE], { stdio: 'ignore' }).status !== 0) throw missing(`the oracle image ${IMAGE} is not built`);
       throw new Error(`oracle container failed to start — build it first:\n` +
         `  docker build --platform linux/386 -t ${IMAGE} tools/oracle\n${r.stderr}`);
     }

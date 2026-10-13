@@ -13,6 +13,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Every gate, on a fresh clone: no corpus, no game data, no gcc container. The gates that need
-      # one of those say SKIP (exit 77) and do not fail the run; the others replay committed goldens.
+      # The i386 gcc container: native on an x86-64 runner, so the gates that compare with gcc run.
+      - run: npm run oracle:build
+      # Every gate, on a fresh clone: no corpus and no game data. The gates that need either say SKIP
+      # (exit 77, tools/gate-preload.mjs) and do not fail the run; the others run or replay goldens.
       - run: node tools/gates.mjs --jobs=2

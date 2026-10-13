@@ -14,7 +14,7 @@
 //   PRISM_QUAKE3_DATA=<dir with baseq3/> ...                  add Quake III to gate-webgl-stream
 import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn } from 'node:child_process';
 import { cpus } from 'node:os';
 import { SKIP_CODE } from './gate-skip.mjs';
@@ -24,7 +24,7 @@ const args = process.argv.slice(2);
 const filters = args.filter((a) => !a.startsWith('--'));
 const skips = args.filter((a) => a.startsWith('--skip=')).flatMap((a) => a.slice(7).split(',')).filter(Boolean);
 const gates = readdirSync(join(ROOT, 'tools'))
-  .filter((f) => /^gate-.*\.mjs$/.test(f) && f !== 'gate-skip.mjs')
+  .filter((f) => /^gate-.*\.mjs$/.test(f) && f !== 'gate-skip.mjs' && f !== 'gate-preload.mjs')
   .filter((f) => !filters.length || filters.some((s) => f.includes(s)))
   .filter((f) => !skips.some((s) => f.includes(s)))
   .sort();
@@ -75,7 +75,7 @@ await new Promise((resolve) => {
         console.log(`> [${started}/${gates.length}] ${g}  (last ${times[g] ? mmss(times[g]) : '?'}, about ${mmss(leftSecs)} left)`);
         leftSecs -= times[g] ?? 60;
       }
-      const child = spawn('node', [join(ROOT, 'tools', g)], { cwd: ROOT });
+      const child = spawn('node', ['--import', pathToFileURL(join(ROOT, 'tools/gate-preload.mjs')).href, join(ROOT, 'tools', g)], { cwd: ROOT });
       let pending = '';
       const show = (d) => {
         if (!PROGRESS) return;

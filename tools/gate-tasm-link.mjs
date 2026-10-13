@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildTarget } from '../src/target.js';
+import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CORPUS = join(ROOT, 'corpus', 'KeenDreams');
@@ -24,6 +25,7 @@ const GOLDEN = join(ROOT, 'goldens', 'tasm-link.json');
 const MODULES = ['id_us_a.asm', 'id_vw_a.asm'];
 const INCLUDED = ['id_vw_ae.asm', 'id_asm.equ', 'graphkdr.equ'];
 const keen = JSON.parse(readFileSync(join(ROOT, 'targets', 'keendreams.json'), 'utf8'));
+if (!existsSync(CORPUS) && !process.argv.includes('--capture')) skip('no corpus/KeenDreams', 'see the "fetch" line of targets/keendreams.json');
 
 if (process.argv.includes('--capture')) {
   const { bccRun, bccVersion } = await import('./oracle-borland.mjs');

@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import { layoutTasm } from '../src/asm/tasm16.js';
 import { assembleTasm } from '../src/asm/tasm.js';
 import { parseOperand, splitOperands } from '../src/asm/borland.js';
+import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // Each game's top-level modules, as its build assembles them (Keen's make.bat; Catacomb 3-D's
@@ -303,7 +304,13 @@ const report = (ok, what, detail = '') => {
   console.log(`${ok ? '  ok ' : ' BAD '} ${what.padEnd(56)} ${detail}`);
 };
 let G_NAME;
-for (const G of GAMES.filter((x) => !only || x.name === only)) {
+const capturing = process.argv.includes('--capture');
+const games = GAMES.filter((x) => !only || x.name === only);
+if (!capturing && !games.some((G) => existsSync(join(ROOT, 'corpus', G.corpus)))) {
+  skip(`no corpus/${games.map((G) => G.corpus).join(' or corpus/')}`, "see the \"fetch\" line of targets/keendreams.json and targets/catacomb3d.json");
+}
+for (const G of games) {
+if (!capturing && !existsSync(join(ROOT, 'corpus', G.corpus))) { console.log(`${G.title}: corpus/${G.corpus} not fetched, not checked`); continue; }
 GOLDEN = join(ROOT, 'goldens', G.golden);
 CORPUS = join(ROOT, 'corpus', G.corpus);
 FILES = G.files;
