@@ -37,7 +37,12 @@ async function start({ dir, pipeSab, control, files }) {
    * filtered by what the build actually contains, the same list tools/sndserv-worker.mjs uses.
    */
   const WANT = ['soundsrv.c', 'linux.c', 'wadread.c', 'sounds.c'];
-  const listing = await (await fetch(`/__ls?dir=${encodeURIComponent(dir)}`)).json();
+  /*
+   * The listing comes from serve.mjs. A static export has no /__ls, and ships sndserv/'s sources at
+   * their paths: then the names are the units above and the headers they include.
+   */
+  const listing = await fetch(`/__ls?dir=${encodeURIComponent(dir)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+    ?? { files: [...WANT, 'sounds.h', 'soundsrv.h', 'soundst.h', 'wadread.h'] };
   const present = new Set(listing.files.map(f => f.toLowerCase()));
 
   const tree = new Map();

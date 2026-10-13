@@ -1,0 +1,29 @@
+DOOM 1.9 shareware — doom19s.zip, id Software's own distribution of the first episode, as served by
+the idgames archive under idstuff/doom/ (sha256 cacf0142…b486e6).
+
+The DOOM 1.9 shareware archive carries no licence agreement. What it does carry is id's own
+instruction to pass it on. DOOMS_19.DAT, the text its installer DEICE.EXE shows before anything is
+unpacked:
+
+  DOOM
+  Version 1.9
+  Created by id Software
+  Copyright (C) 1993-1995
+  SHAREWARE VERSION
+  PLEASE DISTRIBUTE!!!
+
+and README.TXT, inside, asks only that the shareware levels not be modified:
+
+  id Software respectfully requests that you do not modify the
+  levels for the shareware version of DOOM.
+
+This showcase serves the archive exactly as published, installer included, free of charge, and
+joins the installer's pieces (DOOMS_19.1, DOOMS_19.2) in the browser as DEICE.EXE would. Nothing in
+it is modified.
+
+The program that plays it is not id's DOS executable but linuxdoom-1.10, the source id Software
+released under the GNU General Public License (its LICENSE.TXT is beside this file), compiled to
+JavaScript by PRISM. DOOM is a trademark of id Software; this site is not affiliated with id
+Software.
+
+(This reading is MIRAGE's, examples/licenses/doom.txt, for the same archive.)

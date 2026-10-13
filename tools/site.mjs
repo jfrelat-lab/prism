@@ -85,6 +85,12 @@ for (const e of entries) {
     targets.set(tname, { title: answer.title, units: answer.units.length, functions: b.functions });
   }
 
+  /*
+   * A SOUND SERVER (Doom's sndserv): a second program the page compiles in a worker of its own
+   * (web/sndworker.js), from its sources, which a static export ships at their paths.
+   */
+  if (desc.soundServer) for (const f of readdirSync(join(ROOT, desc.soundServer)).filter((x) => /\.(c|h)$/i.test(x))) total += copy(join(ROOT, desc.soundServer, f), `${desc.soundServer}/${f}`);
+
   // The data, as the page asks for it: the files of `dir` under `under`, minus `exclude`, plus `also`.
   const nd = desc.needsData;
   if (nd?.dir) {

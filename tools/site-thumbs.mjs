@@ -58,7 +58,9 @@ for (const e of programs.filter((p) => !p._skip && p.thumb && (!ONLY || ONLY.inc
     };
     try { b.program.run([desc.target]); } catch (err) { if (!/__thumb_done/.test(err.message)) { console.log(`${e.id}: ${err.message}`); continue; } }
   } else {
-    const data = desc.needsData?.dir ? [`--data=${join(GAMES, desc.needsData.dir)}`] : [];
+    // `thumb.data`: another root to draw from, when the program's own holds an archive the page unpacks.
+    const dataDir = e.thumb.data ?? desc.needsData?.dir;
+    const data = dataDir ? [`--data=${join(GAMES, dataDir)}`] : [];
     const args = e.thumb.args ?? e.args ?? desc.args;
     const r = spawnSync('node', [join(ROOT, 'tools/build.mjs'), `targets/${desc.target}.json`, '--run', ...data,
       ...(args ? [`--args=${args}`] : []), `--frames=${frame}`, `--png=${file}`],

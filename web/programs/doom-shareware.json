@@ -1,0 +1,51 @@
+{
+  "title": "DOOM (shareware)",
+  "subtitle": "id Software, 1993 · episode one from id's own 1.9 shareware archive, served as published and unpacked in the page; linuxdoom-1.10, the only source ever published",
+  "target": "doom",
+  "args": "",
+  "argsHint": "empty starts the game as it shipped: title screen, attract demos, and a key opens the menu. `-warp <episode> <map> -skill <1-5>` drops straight into a level; `-playdemo <name>` replays one. **`-grabmouse` is what turns the mouse on** -- id left `PointerMotionMask` commented out in i_video.c:802, so the window never asks X for motion; the XGrabPointer behind -grabmouse is what does.",
+  "fps": 35,
+  "host": "x11",
+  "needsData": {
+    "dir": "doom-shareware",
+    "archive": "doom19s.zip",
+    "pick": [
+      "DOOM1.WAD"
+    ],
+    "hint": "doom19s.zip as id published it (idgames, idstuff/doom/): DEICE.EXE and DOOMS_19.1, .2, joined and unpacked in the page"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Space",
+      "use"
+    ],
+    [
+      "Shift",
+      "run"
+    ],
+    [
+      "Alt",
+      "strafe"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "Tab",
+      "map"
+    ]
+  ],
+  "soundServer": "corpus/DOOM/sndserv",
+  "_soundServer": "Doom delegates sound to a separate PROCESS -- doomdef.h defines SNDSERV and i_sound.c popens './sndserver' -- so making it audible was never an audio problem. Naming the source here is enough: web/worker.js starts a second worker on it and connects the two with a byte pipe.",
+  "_mouse": "Two conditions, both id's own. -grabmouse selects the motion events (i_video.c:847). And i_video.c:257 posts the event only `if (x != X_width/2 && y != X_height/2)` -- an AND, so a purely HORIZONTAL movement is discarded by the game itself. Doom needs both axes to move before it turns.",
+  "_archive": "The shareware archive allows passing on the archive, not its files (README.TXT, DOOMS_19.DAT: PLEASE DISTRIBUTE!!!), so the archive is what the data root holds and the page unpacks it (web/unpack.js, needsData.archive)."
+}

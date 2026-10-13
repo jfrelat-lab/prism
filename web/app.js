@@ -19,6 +19,7 @@ import { makeControl, controlViews, makeKeyboard, makeMouse, wake, KEY_HOLD_FRAM
 import { scancodeForEvent, extendedForEvent } from '../src/env/scancodes.js';
 import { makePipe } from '../src/env/pipe.js';
 import { endpoints } from './endpoints.js';
+import { unpackArchive } from './unpack.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1140,6 +1141,16 @@ async function startRun(typedAs = null) {
          * data/ and packages/ beside itself -- so they are named without that prefix.
          */
         if (program.needsData.cwd) dataFiles = Object.fromEntries(Object.entries(dataFiles).map(([k, v]) => [k.slice(under.length), v]));
+        /*
+         * `archive`: the data is a shareware archive as published (its licence allows passing on the
+         * archive complete and unmodified, not the files inside), unpacked here as its installer would
+         * have -- web/unpack.js -- keeping the files named in `pick`.
+         */
+        if (program.needsData.archive) {
+          const zip = dataFiles[program.needsData.archive];
+          if (!zip) throw new Error(`no ${program.needsData.archive} in the data directory '${program.needsData.dir}'`);
+          dataFiles = await unpackArchive(zip, program.needsData.pick ?? null);
+        }
         if (exclude.length) dataFiles = Object.fromEntries(Object.entries(dataFiles).filter(([k]) => !exclude.includes(k.split('/').pop())));
         /*
          * `also`: single files of another root, put where the program looks for them -- ScummVM

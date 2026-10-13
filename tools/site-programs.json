@@ -1,5 +1,5 @@
 {
-  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams, Doom (shareware or proprietary data).",
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); Heretic's waits on a licence text for its source.",
   "programs": [
     {
       "id": "chromium-bsu", "thumb": { "frames": 120 }, "program": "chromium-bsu", "machine": "linux",
@@ -14,6 +14,18 @@
         { "name": "FreeType licence (FTL)", "path": "corpus/freetype-2.3.11/docs/FTL.TXT" },
         { "name": "FTGL licence", "path": "corpus/ftgl-2.1.3~rc5/COPYING" },
         { "name": "libjpeg (IJG) README", "path": "corpus/jpeg-6b/README" }
+      ]
+    },
+    {
+      "id": "doom", "thumb": { "frames": 300, "data": "doom1" }, "program": "doom-shareware", "machine": "linux",
+      "dataFiles": ["doom19s.zip"],
+      "title": "DOOM (shareware)", "author": "id Software", "year": 1993, "kind": "First-person shooter",
+      "blurb": "Episode one, Knee-Deep in the Dead, from id's 1.9 shareware archive, unpacked in the page; played by linuxdoom-1.10 with its sound server.",
+      "code": { "license": "GPL-2.0 (linuxdoom-1.10)", "source": "https://github.com/id-Software/DOOM" },
+      "data": { "license": "Shareware, \"PLEASE DISTRIBUTE!!!\": the archive as published, unmodified, free of charge" },
+      "licenseFiles": [
+        { "name": "Shareware terms", "path": "tools/site-licenses/doom-shareware.txt" },
+        { "name": "DOOM source licence (GPL-2.0)", "path": "corpus/DOOM/LICENSE.TXT" }
       ]
     },
     {
