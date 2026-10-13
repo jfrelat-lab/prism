@@ -26,27 +26,44 @@ function docker(args, opts = {}) {
 let ready = false;
 
 /** Something this repository does not ship; tools/gate-preload.mjs turns it into a SKIP. */
-function missing(what) {
-  return Object.assign(new Error(`${what} -- build it with: npm run oracle:build`), { code: 'PRISM_MISSING' });
+function missing(what, remedy = 'build it with: npm run oracle:build') {
+  return Object.assign(new Error(`${what} -- ${remedy}`), { code: 'PRISM_MISSING' });
 }
 
-/** Start the oracle container if it is not already running. Idempotent and cheap to re-call. */
+/**
+ * Start the oracle container if it is not already running. Idempotent and cheap to re-call.
+ *
+ * Under a lock (an atomic mkdir), because tools/gates.mjs runs gates in parallel: two gates that both
+ * find no container both `rm -f` and `run` it, and the loser fails on the name -- or removes the
+ * container the winner has just started. On a machine where it already runs, nobody ever saw this;
+ * on a fresh CI runner it failed four gates.
+ */
 export function up() {
   if (ready) return;
   mkdirSync(SCRATCH, { recursive: true });
-  const ps = docker(['ps', '-q', '-f', `name=^${NAME}$`]);
-  if (ps.error || ps.status !== 0) throw missing(`no Docker here to run the oracle container (${ps.error?.code ?? ps.stderr.trim()})`);
-  const running = ps.stdout.trim();
-  if (!running) {
-    // A stopped container of the same name would make `run` fail with a name clash.
-    docker(['rm', '-f', NAME], { stdio: 'ignore' });
-    const r = docker(['run', '-d', '--name', NAME, '--platform', 'linux/386',
-      '-v', `${SCRATCH}:/work`, IMAGE, 'sleep', 'infinity']);
-    if (r.status !== 0) {
-      if (docker(['image', 'inspect', IMAGE], { stdio: 'ignore' }).status !== 0) throw missing(`the oracle image ${IMAGE} is not built`);
-      throw new Error(`oracle container failed to start — build it first:\n` +
-        `  docker build --platform linux/386 -t ${IMAGE} tools/oracle\n${r.stderr}`);
+  const lock = join(SCRATCH, '.up.lock');
+  for (let waited = 0; ; waited += 100) {
+    try { mkdirSync(lock); break; } catch (e) { if (e.code !== 'EEXIST') throw e; }
+    // A lock older than a minute belongs to a process that died holding it.
+    if (waited > 60000) { rmSync(lock, { recursive: true, force: true }); waited = 0; }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+  }
+  try {
+    const ps = docker(['ps', '-q', '-f', `name=^${NAME}$`]);
+    if (ps.error || ps.status !== 0) throw missing(`no Docker here to run the oracle container (${ps.error?.code ?? ps.stderr.trim()})`);
+    if (!ps.stdout.trim()) {
+      // A stopped container of the same name would make `run` fail with a name clash.
+      docker(['rm', '-f', NAME], { stdio: 'ignore' });
+      const r = docker(['run', '-d', '--name', NAME, '--platform', 'linux/386',
+        '-v', `${SCRATCH}:/work`, IMAGE, 'sleep', 'infinity']);
+      if (r.status !== 0) {
+        if (docker(['image', 'inspect', IMAGE], { stdio: 'ignore' }).status !== 0) throw missing(`the oracle image ${IMAGE} is not built`);
+        throw new Error(`oracle container failed to start — build it first:\n` +
+          `  docker build --platform linux/386 -t ${IMAGE} tools/oracle\n${r.stderr}`);
+      }
     }
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
   }
   ready = true;
 }
@@ -115,6 +132,7 @@ export function watcomRun16(source, { model = 'ms', timeout = 30 } = {}) {
      */
     killSignal: 'SIGKILL',
   });
+  if (r.error?.code === 'ENOENT') throw missing('no dosbox-x on this host to run the 16-bit program', 'install DOSBox-X (it runs on the host, not in the container)');
   let stdout = '';
   try { stdout = readFileSync(join(dir, 'OUT.TXT'), 'latin1'); } catch { /* the program printed nothing */ }
   return { code: r.status, stdout };
