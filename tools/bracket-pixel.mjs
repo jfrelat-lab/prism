@@ -8,10 +8,11 @@
 // platforms; the first position where the two sequences part names the function that wrote
 // differently -- or the one that failed to write at all.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
-import { loadTarget, buildTarget } from '/Users/julienfrelat/Projects/prism/src/target.js';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadTarget, buildTarget } from '../src/target.js';
 
-const ROOT = '/Users/julienfrelat/Projects/prism';
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const opt = (n, d = null) => process.argv.find(a => a.startsWith(`--${n}=`))?.slice(n.length + 3) ?? d;
 const dataDir = opt('data');
 if (!dataDir) { console.error('need --data=<dir containing id1/>'); process.exit(2); }

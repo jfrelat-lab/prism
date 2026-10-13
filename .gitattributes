@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.bin binary
+goldens/*.json linguist-generated
+tools/*-baseline.json linguist-generated

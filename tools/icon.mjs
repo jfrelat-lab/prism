@@ -13,9 +13,11 @@
 //   node tools/icon.mjs <file.ico> [--out=/tmp/x.png] [--size=32]
 //   node tools/icon.mjs --corpus                 # every icon the corpus ships, listed
 import { readFileSync, existsSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { writeIndexedPng } from './png.mjs';
 
-const ROOT = '/Users/julienfrelat/Projects/prism';
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** Every icon the corpus ships, and which program owns it. */
 const CORPUS = [

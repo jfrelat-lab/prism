@@ -1,9 +1,9 @@
 {
   "name": "prism",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A C→JavaScript compiler that runs in the page, in pure JavaScript, running unmodified DOS-era game and emulator sources.",
+  "description": "A C and C++ compiler to JavaScript, written in plain JavaScript, that compiles the unmodified source of DOS-era and early-Linux games and emulators and runs them in the browser.",
   "scripts": {
     "oracle:build": "docker build --platform linux/386 -t prism-oracle tools/oracle",
     "oracle:version": "node -e \"import('./tools/oracle.mjs').then(o=>console.log(o.version()))\"",
@@ -24,5 +24,29 @@
     "mamediff": "node tools/mamediff.mjs",
     "z80diff": "node tools/z80diff.mjs",
     "gates": "node tools/gates.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "compiler",
+    "c",
+    "c++",
+    "javascript",
+    "dos",
+    "retrocomputing",
+    "webgl",
+    "emulation",
+    "games"
+  ],
+  "license": "MIT",
+  "author": "Julien Frelat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jfrelat-lab/prism.git"
+  },
+  "homepage": "https://github.com/jfrelat-lab/prism",
+  "bugs": {
+    "url": "https://github.com/jfrelat-lab/prism/issues"
   }
 }

@@ -8,9 +8,10 @@
 //
 //   node tools/survey16.mjs [dir ...]        # default: the 16-bit candidates in corpus/
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, extname, basename } from 'node:path';
+import { join, extname, basename, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = '/Users/julienfrelat/Projects/prism/corpus';
+const ROOT = join(dirname(dirname(fileURLToPath(import.meta.url))), 'corpus');
 const DIRS = process.argv.slice(2).length ? process.argv.slice(2)
   : ['Wolf3D', 'KeenDreams', 'Catacomb3D', 'Hovertank3D'].map((d) => join(ROOT, d));
 

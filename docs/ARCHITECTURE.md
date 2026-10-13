@@ -3,19 +3,11 @@
 PRISM is a **C→JavaScript compiler written in pure JavaScript, that runs in the page**. It compiles
 the *unmodified source* of DOS-era games and emulators and runs them in the browser or headless in Node.
 
-Sibling project: [MIRAGE](../../mirage) recompiles a program's **x86 binary**; PRISM compiles its
+Sibling project: [MIRAGE](https://github.com/jfrelat-lab/mirage-x86) recompiles a program's **x86 binary**; PRISM compiles its
 **C source**. The real difference is what each one needs: MIRAGE needs a binary and no source, PRISM
 needs published source and no binary. Doom qualifies for PRISM because id released the Linux tree;
 a program whose source was never published is MIRAGE's alone, and one that ships only source is
 PRISM's.
-
-> **This paragraph used to say "MIRAGE is real-mode only and says so — Doom, OMF, Jazz and Zone 66
-> (DOS/4GW, DPMI) are out of scope there." That was true once and is not true now**, and leaving it
-> here did real damage: it is where *this* project's later claim that MIRAGE could not be the oracle
-> for 32-bit flat DJGPP assembly came from — asserted to a peer as "measured" when it was only read
-> here. MIRAGE's own COMPAT.md says Quake **plays**, "a DJGPP program [driving] our DPMI host
-> directly", and its roadmap records CR0.PE, GDT/LDT/IDT, paging with #PF, IRETD and V86. A dated
-> line in a design document is indistinguishable from a current capability to whoever reads it next.
 
 > New here? Read this file, then [TESTING.md](TESTING.md) (the oracles — read before writing any
 > code that makes a claim about C), [ROADMAP.md](ROADMAP.md) (the task menu) and

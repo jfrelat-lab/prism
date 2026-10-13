@@ -29,7 +29,7 @@ export const GAME_OPTIONS = ['--disable-sdl2', '--disable-openal', '--disable-sd
   '--disable-nls', `--with-font-path=${FONT}`];
 
 for (const [k, d] of Object.entries(SRC)) {
-  if (!existsSync(join(ROOT, d))) { console.error(`no ${d} (${k}): see ~/games/_installers/PROVENANCE-chromium-bsu.txt`); process.exit(1); }
+  if (!existsSync(join(ROOT, d))) { console.error(`no ${d} (${k}): see the "fetch" line of targets/chromium-bsu.json`); process.exit(1); }
 }
 
 /** `make VAR`'s value in a configured tree: a Makefile that includes the real one and prints it. */

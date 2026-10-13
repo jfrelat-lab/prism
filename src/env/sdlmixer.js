@@ -1,5 +1,8 @@
 // sdlmixer.js — SDL_mixer, shared by the SDL 1.2 and SDL 2 environments.
 //
+// The audio conversion and SDL_MixAudio routines are transcribed from SDL 1.2.15 and are under the
+// LGPL-2.1, not MIT; the channel mixing follows SDL_mixer 1.2.12 (zlib licence). See THIRD-PARTY.md.
+//
 // SDL_mixer is its OWN library, not part of SDL, and across the two SDL majors it did not change
 // where these entry points are concerned. That is measured rather than assumed: the same
 // prototypes were compiled beside the genuine headers of BOTH libsdl-mixer1.2-dev and

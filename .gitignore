@@ -28,3 +28,6 @@ DATA/
 
 # Static bundles (tools/bundle.mjs): artefacts, emitted from sources that are not in this repository.
 /dist/
+
+# Local editor/agent configuration (paths of this machine).
+.claude/

@@ -1,5 +1,8 @@
 // glu.js — the part of GLU 1.2 that programs of the corpus call, written over GL as the library itself is.
 //
+// Parts transcribed from libGLU 9 (mipmap.c, project.c, quad.c): Copyright (C) 1991-2000 Silicon
+// Graphics, Inc., SGI Free Software License B 2.0 (http://oss.sgi.com/projects/FreeB/). See THIRD-PARTY.md.
+//
 // GLU is not part of OpenGL: it is a utility library that only ever calls gl* entry points, and that
 // is what this file does (through M.rt, the same functions a program's own calls reach). So a quadric
 // goes through glBegin/glNormal/glVertex and is lit, clipped and rasterised like anything else, and a

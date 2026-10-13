@@ -1,94 +1,148 @@
 # PRISM
 
-A **C→JavaScript compiler that runs in the page, written in pure JavaScript**, for running the
-unmodified source of DOS-era games and emulators — MAME, Quake, Doom, Keen Dreams — in the browser.
+**A C and C++ compiler that targets JavaScript and is itself written in plain JavaScript. It compiles
+the unmodified source of games and emulators from the DOS, Windows 95 and early Linux era — MAME,
+Quake, Doom, ScummVM, Keen Dreams — and runs them in a browser tab or in Node.**
 
-Sibling of [MIRAGE](../mirage), which recompiles a DOS program's **x86 binary**. The difference is
-what each one needs: MIRAGE needs a binary and no source, PRISM needs published source and no
-binary. A program whose source was never published is MIRAGE's alone; one that ships only source is
-PRISM's.
+No WebAssembly, no build step, no dependencies. The compiler runs in the page.
 
-The difference from Emscripten is the compatibility boundary. Emscripten requires **porting** the
-game — replacing its main loop, its video access, its DOS calls. PRISM moves that boundary from the
-game to the library: it supplies libc, the DJGPP layer, Allegro, Xlib, the Win32 SDK and the DOS
-interrupt surface in JavaScript, and the game compiles as it shipped.
+```
+ C / C++ / asm source ─▶ preprocessor ─▶ parser + sema ─▶ JavaScript source ─▶ the engine's own JIT ─▶ run
+                         (gcc -E exact)   (i386 or 16-bit       (readable, one function
+                                           DOS ABI, exact)        per C function)
+```
 
-- Target ABI: **i386 System V, flat 32-bit (DJGPP)**, and **16-bit real-mode DOS** (`dos16`,
-  `dos16m`, `dos16l`) with real segmentation, `far`/`_seg`/`huge` pointers and DGROUP.
-- Language: **C89/C99 + the GNU extensions real code uses**. No C++.
-- Assembly: a program's own is **translated, not emulated** — Borland inline `asm` and whole TASM
-  modules, from their source. PRISM has no CPU and wants none.
-- Backend: **JavaScript, no WASM** — readable emitted code is the primary debugging lever.
+The game is not ported. Its source compiles as it shipped, and the platform it was written for
+is supplied in JavaScript underneath it. That platform covers:
+- libc and POSIX;
+- DOS (DJGPP, Watcom, Borland C++ 2.0 with real 16-bit segmentation);
+- Allegro, X11, svgalib, SunOS, Win32 with Winsock;
+- SDL 1.2 and SDL 2, SDL_mixer, SDL_image;
+- OpenGL 1.x with GLU, GLUT, GLX and WGL, drawn through WebGL.
 
-## Status
+Nothing in a game's tree is edited. Build switches the tree already has are configuration, not
+modification.
 
-Seventeen targets build from unmodified sources, on six platform layers, and all but one run.
-Among them: **MAME 0.1–0.5** (Pac-Man playable in a browser at 60 fps, bit-identical to a native
-build), **Quake** on four platforms (DOS, X11, Win32, SunOS; its own timedemo reports 694 fps),
-**Doom** with sound, **Quake II** rendering its demo, **Lua 5.4** running its own test suite, **PuTTY**
-connecting over real sockets — and **Keen Dreams**, the first 16-bit target, which plays.
+PRISM has a sibling, [MIRAGE](https://github.com/jfrelat-lab/mirage-x86), which recompiles a
+program's x86 **binary**. MIRAGE needs a binary and no source; PRISM needs published source and no
+binary.
 
-Measured against external oracles, never against itself — **52 gates, all green** (`node tools/gates.mjs`; the ones that need data you supply say SKIP rather than fail):
+## What it compiles
 
-| Gate | Result |
+- **C89/C99 with the GNU extensions** that real code uses, for two ABIs:
+  - i386 System V, flat 32-bit;
+  - 16-bit real-mode DOS (small, medium and large models), with `far`, `_seg` and `huge` pointers.
+- **A C++98 subset**, enough for ScummVM, Enemy Territory, Chromium B.S.U. and Tux Racer. It is lowered to C. It covers:
+  - classes, virtual and multiple inheritance, templates;
+  - exceptions on setjmp/longjmp;
+  - the parts of the standard library those programs use.
+- **A program's own assembly is translated from its source, not emulated.** PRISM has no CPU. It
+  handles Borland inline `asm`, whole TASM modules, Watcom `#pragma aux` and NASM.
+
+## What runs today
+
+Per-program status, and what each one is checked against, is in
+[docs/COMPAT.md](docs/COMPAT.md). None of that software is in this repository; see
+[Third-party software](#third-party-software).
+
+| | Reaches |
 |---|---|
-| i386 ABI layout (`sizeof`/`offsetof`/bitfields) vs gcc | exact, 105k checks |
-| 16-bit DOS layout (small/medium/large) vs Open Watcom | exact |
-| Preprocessor vs `gcc -E` | token-identical, including 289 whole translation units |
-| Declarations + sema vs gcc | 8400+ checks |
-| c-testsuite | 213/219, **0 wrong answers** |
-| gcc.c-torture/execute | 1438/1556, **0 wrong answers** |
-| Random programs vs `gcc -O0`/`-O2` (csmith) | divergence-free |
-| MAME 0.1 vs a native gcc build | **bit-identical framebuffer over 200 frames** |
-| Quake at 320x200 on DOS, X11 and Win32 | **identical pixels** |
-| TASM front end vs **Turbo Assembler 2.5** | every byte, offset and instruction |
-| Translated TASM routines vs **TASM's own object code** under Unicorn | registers, flags, 1 MB of memory |
-| 16-bit programs vs **Borland C++ 2.0** running the same source | identical output |
-| Speed, tier-0 vs `clang -O2` native | 9.5× slower |
+| **MAME** 0.34 (DJGPP, Allegro, SEAL); 0.1 to 0.7 before it | 15 of 15 games bit-identical to a native gcc build over 1,500 frames |
+| **Quake**: DOS, X11, svgalib, SunOS, Win32; **GLQuake** | the same pixels on four platform layers; GLQuake within 1 pixel of 307,200 of Mesa |
+| **Quake II** (software and GL), **Quake III Arena**, **Enemy Territory** | play; Quake II GL within 3 pixels of Mesa |
+| **Doom**, **Heretic**, **Hexen**, **Hexen II** | play; Doom with its sound server as a second process |
+| **ScummVM** 0.6.1 and 0.10.0, thirteen engines | 3,000 of 3,000 frames and every audio buffer equal to a native g++ build, for each of 20 game demos |
+| **Keen Dreams** (16-bit Borland C++ and TASM) | plays; its screens are the shipped KDREAMS.EXE's under DOSBox-X |
+| **OpenDUNE**, **Jump 'n Bump**, **SDLPoP**, **OpenTyrian**, **Tux Racer**, **Cube**, **Chromium B.S.U.** | play; most are pinned to a reference build |
+| **Lua 5.4**, **PuTTY**, **SQLite**, Tcl 8.4 | their own test suites, or gcc's output |
 
-See [docs/COMPAT.md](docs/COMPAT.md) for what runs and [docs/ROADMAP.md](docs/ROADMAP.md) for what
-is next.
+**What does not work yet:**
+- Catacomb 3-D builds but does not run, because it generates code at run time.
+- Several programs have no picture reference yet (Quake III, Enemy Territory, Tux Racer, Hexen II).
+- Some sound paths are unmeasured.
+- There is no optimiser: the compiler emits one literal JavaScript translation of each function.
+  [docs/ROADMAP.md](docs/ROADMAP.md) lists what is open.
 
-## Running a program in the browser
+## How fast
 
-```bash
-node tools/serve.mjs --data=/path/to/your/roms
-```
+Tier-0 output is about **9.5× slower than `clang -O2` native** on the same benchmark. That is enough
+for the games above: Quake's own timedemo reports several hundred frames a second. In the browser,
+with the WebGL backend, Cube runs at about 145 fps and Enemy Territory at about 30 fps in a map.
 
-Then open the printed URL, pick a program, type its arguments, load its data files and press **Run**.
-The shell compiles the C in a worker and shows the program on one surface — a text screen until it
-creates a display, its framebuffer afterwards. `--data` is optional (the page has a file picker), and
-**no game data is ever fetched or stored by this repository** — it reads only a directory you name.
+## Quick start
 
-Seventeen programs ship as `web/programs/*.json` descriptors; each needs the data files you supply.
-The Mandelbrot is plain C89 with no platform layer and no data files, and exists so that "the shell
-is generic" is a claim something can falsify. Adding a program means adding a descriptor, not
-touching the page.
-
-The dev server exists because `SharedArrayBuffer` requires the COOP/COEP headers, and the shell loads
-`src/` as unbundled ES modules — the browser runs the same files the Node gates run, so there is no
-build step to drift.
-
-## Getting started
-
-Everything that makes a claim about C is checked against a **real compiler**, which on an arm64 Mac
-means a container for gcc and DOSBox-X for the period ones:
+Node 22. The upstream sources are not in the repository. Each `targets/*.json` has a `fetch` line
+saying where its source comes from and where to unpack it under `corpus/`, which git ignores.
 
 ```bash
-npm run oracle:build     # one-off: linux/386 gcc 12.2 + csmith 2.3
-npm run gate:abi         # struct layout vs gcc, exact
-node tools/build.mjs <target>          # build any targets/*.json
+git clone --depth 1 -b v5.4.7 https://github.com/lua/lua.git corpus/lua   # targets/lua.json's fetch line
+node tools/build.mjs targets/lua.json --run "--args=-e print(6*7)"         # compiles Lua, prints 42
+node tools/build.mjs --list                                                 # every target and variant
+node tools/serve.mjs --data=/path/to/your/game/files                        # the browser shell
 ```
 
-Three oracles need software this repository does not ship: the gcc container (built above), Open
-Watcom for the 16-bit layouts, and **Borland C++ 2.0 + Turbo Assembler 2.5** under DOSBox-X for the
-16-bit targets. Every gate that needs one replays from a committed golden, so a plain `node
-tools/gate-*.mjs` run needs none of them.
+Open the printed URL, pick a program, give it its data files and press **Run**. The shell compiles
+the program in a worker. It shows a text screen until the program opens a display, then the
+display. Each program is a descriptor in `web/programs/*.json`. The dev server exists because
+`SharedArrayBuffer` needs the COOP/COEP headers. The page loads `src/` as plain ES modules, so the
+browser runs the same files the Node gates run.
+
+**No game data is fetched or stored by this repository.** The page reads only the files you
+give it, or a directory you name with `--data`.
+
+## How it is tested
+
+PRISM is checked against other compilers and other machines, never against its own expectations.
+`node tools/gates.mjs` runs every gate and reports each as PASS, SKIP or FAIL. A gate that needs
+something the repository does not ship (a corpus, game data, the gcc container) reports SKIP, not
+FAIL.
+
+| Gate | Reference |
+|---|---|
+| Preprocessor | `gcc -E`, token for token, including 289 whole translation units |
+| i386 layout (`sizeof`, `offsetof`, bitfields) | gcc 12 i386, about 105,000 checks |
+| 16-bit layouts and execution | Open Watcom and Borland C++ 2.0, run under DOSBox-X |
+| c-testsuite, gcc.c-torture/execute | 0 wrong answers |
+| Random programs (csmith) | gcc `-O0` and `-O2` |
+| TASM front end; translated TASM routines | Turbo Assembler 2.5's object code; that object code run under Unicorn |
+| C++ features | g++, case by case |
+| Games | native builds of the same sources (MAME, ScummVM, Quake), Mesa (the GL programs), the shipped DOS binaries under DOSBox-X (Keen Dreams, Dune II, Jump 'n Bump) |
+| GLU, SDL_mixer, zlib | libGLU, SDL_mixer 1.2 and gcc-built zlib, to the bit |
+
+Every gate carries a control: a deliberate mutation that it must catch. A gate that cannot fail
+proves nothing. The references that need a C compiler run in a `linux/386` gcc container
+(`npm run oracle:build`). Gates that compare against one replay committed goldens, so most can run
+without it. [docs/TESTING.md](docs/TESTING.md) has the details.
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — the design and the six hard parts
-- [docs/TESTING.md](docs/TESTING.md) — the oracles, and every measured fact behind the ABI
-- [docs/ROADMAP.md](docs/ROADMAP.md) — the task menu, one line per task
-- [docs/LOG.md](docs/LOG.md) — the long form of every roadmap row: measurements, dead ends, defects found
-- [docs/COMPAT.md](docs/COMPAT.md) — what runs, and the verified state of the upstream sources
+Reference documents describe the present state:
+
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md): the design, the file map, the hard parts. Start here.
+- [COMPAT.md](docs/COMPAT.md): what runs, how far, and what holds it there.
+- [TESTING.md](docs/TESTING.md): the gates, the oracles, and the measured facts behind the ABIs.
+- [ROADMAP.md](docs/ROADMAP.md): what is open, one line per task.
+
+The record is [LOG.md](docs/LOG.md): the long form of every roadmap row up to 2026-09-27, with
+the measurements, dead ends and defects found. Later work is recorded in commit messages.
+
+## Third-party software
+
+This repository contains PRISM and the small test programs written for it (`tests/`). It contains no
+game, game data, emulator source or ROM. The tools that need them look in `corpus/` (sources) or in a
+directory you name (data). Both are ignored by git. Bring your own, and check that you are allowed
+to use what you bring.
+
+Some parts of PRISM's runtime reproduce a library's behaviour from that library's source. Those
+parts, and their licences, are listed in [THIRD-PARTY.md](THIRD-PARTY.md).
+
+## How it was built
+
+PRISM was written with [Claude Code](https://claude.com/claude-code), Anthropic's coding agent,
+directed by Julien Frelat; the commit messages say so. The method is the one above: every claim
+about C, about a library or about a picture is checked against an independent implementation.
+
+## License
+
+[MIT](LICENSE), except where [THIRD-PARTY.md](THIRD-PARTY.md) says otherwise. The licence covers PRISM
+itself, not the programs you compile with it.
