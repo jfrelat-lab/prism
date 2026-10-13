@@ -1,0 +1,20 @@
+Tux Racer 0.61 — tuxracer-data-0.61 (courses, textures, models, sounds, music, fonts), Jasmin F.
+Patry and Sunspire Studios, 2001.
+
+The data archive itself states no licence: its README only says where the game comes from. The
+licence is the one its author published it under. Tux Racer's SourceForge project,
+https://sourceforge.net/projects/tuxracer/, registered on 2000-02-24 and "Brought to you by: jfpatry"
+(Jasmin F. Patry), states "GNU General Public License version 2.0 (GPLv2)", and it is from that
+project that the author released tuxracer-data-0.61.tar.gz, on 2001-02-01
+(https://sourceforge.net/projects/tuxracer/files/tuxracer-data/0.61/). Debian reads the data of
+Extreme Tux Racer, which descends from these files, the same way: GPL-2+, "Jasmin F. Patry
+(Tuxracer)" first among the copyright holders
+(https://metadata.ftp-master.debian.org/changelogs/main/e/extremetuxracer/stable_copyright).
+Checked 2026-10-13.
+
+So this showcase distributes the data under the GNU General Public License, version 2 (the text is
+the game's COPYING, beside this file), with the source it goes with: Tux Racer 0.61's own, and how
+PRISM builds it (the card's "source" and "build" links).
+
+Tux Racer is Copyright (c) 1999-2001 by Jasmin F. Patry. "Tux Racer" is a trademark of Jasmin F.
+Patry; this site is not affiliated with him or with Sunspire Studios.

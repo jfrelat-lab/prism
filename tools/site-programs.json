@@ -1,5 +1,5 @@
 {
-  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Tux Racer's data states no licence; its author's SourceForge project publishes it under the GPL v2 (tools/site-licenses/tuxracer-data.txt). Left out for now: morph3d (no licence in its file), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
   "programs": [
     {
       "id": "chromium-bsu", "thumb": { "frames": 120 }, "program": "chromium-bsu", "machine": "linux",
@@ -38,6 +38,18 @@
       "licenseFiles": [
         { "name": "Shareware licence (LICENSE.DOC)", "path": "tools/site-licenses/heretic-shareware.txt" },
         { "name": "Heretic source licence (GPL-2.0)", "path": "tools/site-licenses/heretic-source-GPL-2.0.txt" }
+      ]
+    },
+    {
+      "id": "tuxracer", "thumb": { "frames": 400 }, "program": "tuxracer", "machine": "linux",
+      "title": "Tux Racer", "author": "Jasmin F. Patry, Sunspire Studios", "year": 2001, "kind": "Racing",
+      "blurb": "Tux down the mountain, herring by herring: 0.61, the last GPL release, its C++ terrain and its Tcl 8.4 courses compiled from their own sources.",
+      "code": { "license": "GPL-2.0 (Tux Racer); Tcl licence (Tcl 8.4)", "source": "https://sourceforge.net/projects/tuxracer/" },
+      "data": { "license": "GPL-2.0, as its author's SourceForge project publishes it (the archive states none)" },
+      "licenseFiles": [
+        { "name": "Data licence: how it was established", "path": "tools/site-licenses/tuxracer-data.txt" },
+        { "name": "Tux Racer licence (GPL-2.0)", "path": "corpus/tuxracer-0.61/COPYING" },
+        { "name": "Tcl licence", "path": "corpus/tcl8.4.20/license.terms" }
       ]
     },
     {
