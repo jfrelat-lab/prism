@@ -868,6 +868,7 @@ addEventListener('keydown', (e) => {
   if (!views) return;
   const sc = scancodeForEvent(e);
   if (!sc) return;
+  if (e.key === 'Escape') lastEscape = performance.now();
   views.keys[sc] = 1;
   views.latch[sc] = KEY_HOLD_FRAMES;   // so a brief tap survives long enough to be sampled
   if (keyboard) {
@@ -944,12 +945,30 @@ stage.addEventListener('click', () => {
   });
 });
 
+/*
+ * Esc RELEASES THE MOUSE -- and the browser keeps the key. While the pointer is locked, Chrome takes
+ * Esc to end the lock and the page never sees it pressed, so a game whose one key is Esc (Beneath a
+ * Steel Sky skips its introduction with it, ScummVM's games their cutscenes, Quake opens its menu)
+ * looked deaf to the keyboard the moment it had been clicked. Nothing here releases the lock itself,
+ * so a release while a program runs IS that Esc: it is passed on, unless the page did get the key
+ * (a browser that delivers it) -- then it has already gone through and is not sent twice.
+ */
+let lastEscape = -1e9;
+function tapEscape() {
+  if (!views || !keyboard) return;
+  views.keys[1] = 1;
+  views.latch[1] = KEY_HOLD_FRAMES;
+  keyboard.push(1, 27, 0);
+  wake(views.ctrl);
+  setTimeout(() => { if (!views || !keyboard) return; views.keys[1] = 0; keyboard.push(1 | 0x80, 0, 0); wake(views.ctrl); }, 80);
+}
 document.addEventListener('pointerlockchange', () => {
   const on = document.pointerLockElement === stage;
   capturing = on;
   stage.classList.toggle('captured', on);
   if (!on && mouse) mouse.buttons(0);      // a released capture holds no buttons down
-  log(on ? 'mouse captured — Esc to release' : 'mouse released');
+  log(on ? 'mouse captured — Esc releases it and reaches the program' : 'mouse released');
+  if (!on && worker) setTimeout(() => { if (performance.now() - lastEscape > 300) tapEscape(); }, 50);
 });
 
 addEventListener('mousemove', (e) => {
