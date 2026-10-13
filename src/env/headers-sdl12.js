@@ -40,6 +40,17 @@
 const SDL_STDINC_12 = `
 #ifndef _SDL_stdinc_h
 #define _SDL_stdinc_h
+/* SDL 1.2.15's SDL_stdinc.h, as its Linux SDL_config.h has it, brings in the C library: a program may
+   use stderr or memcpy with nothing but SDL.h (Chromium B.S.U.'s Image.cpp does). iconv.h is left out. */
+#include <sys/types.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stddef.h>
+#include <stdarg.h>
+#include <string.h>
+#include <strings.h>
+#include <inttypes.h>
+#include <ctype.h>
 typedef unsigned char Uint8;
 typedef signed char Sint8;
 typedef unsigned short Uint16;
@@ -244,6 +255,7 @@ int SDL_InitSubSystem(Uint32 flags);
 void SDL_Quit(void);
 char *SDL_GetError(void);
 void SDL_SetError(const char *fmt, ...);
+void SDL_ClearError(void);
 void SDL_Delay(Uint32 ms);
 Uint32 SDL_GetTicks(void);
 
@@ -308,6 +320,7 @@ typedef struct SDL_Surface {
 /* Per-surface alpha. Recorded; a blit that would blend with it is refused until that blend is held
    to SDL's own (ScummVM's on-screen messages are the one user, and only when shown). */
 int SDL_SetAlpha(SDL_Surface *surface, Uint32 flag, Uint8 alpha);
+SDL_Surface *SDL_ConvertSurface(SDL_Surface *src, SDL_PixelFormat *fmt, Uint32 flags);
 
 SDL_Surface *SDL_SetVideoMode(int width, int height, int bpp, Uint32 flags);
 SDL_Surface *SDL_GetVideoSurface(void);
@@ -349,6 +362,7 @@ typedef enum {
     SDL_GL_DOUBLEBUFFER, SDL_GL_DEPTH_SIZE, SDL_GL_STENCIL_SIZE
 } SDL_GLattr;
 int SDL_GL_SetAttribute(SDL_GLattr attr, int value);
+int SDL_GL_GetAttribute(SDL_GLattr attr, int *value);
 void SDL_GL_SwapBuffers(void);
 void *SDL_GL_GetProcAddress(const char *proc);
 
@@ -405,6 +419,7 @@ typedef enum {
 #define KMOD_ALT   (KMOD_LALT|KMOD_RALT)
 #define KMOD_META  (KMOD_LMETA|KMOD_RMETA)
 SDLMod SDL_GetModState(void);
+char *SDL_GetKeyName(SDLKey key);
 
 typedef struct SDL_keysym {
     Uint8 scancode;
@@ -416,17 +431,28 @@ typedef struct SDL_keysym {
 #define SDL_RELEASED 0
 #define SDL_PRESSED  1
 
+#define SDL_NOEVENT          0
+#define SDL_ACTIVEEVENT      1
 #define SDL_KEYDOWN          2
 #define SDL_KEYUP            3
 #define SDL_MOUSEMOTION      4
 #define SDL_MOUSEBUTTONDOWN  5
 #define SDL_MOUSEBUTTONUP    6
 #define SDL_JOYAXISMOTION    7
+#define SDL_JOYBALLMOTION    8
+#define SDL_JOYHATMOTION     9
 #define SDL_JOYBUTTONDOWN   10
 #define SDL_JOYBUTTONUP     11
 #define SDL_QUIT            12
+#define SDL_SYSWMEVENT      13
 #define SDL_VIDEORESIZE     16
 #define SDL_VIDEOEXPOSE     17
+#define SDL_USEREVENT       24
+
+/* SDL_ActiveEvent's state: which kind of focus was gained or lost. */
+#define SDL_APPMOUSEFOCUS 0x01
+#define SDL_APPINPUTFOCUS 0x02
+#define SDL_APPACTIVE     0x04
 
 #define SDL_QUERY   -1
 #define SDL_IGNORE   0
@@ -437,6 +463,12 @@ typedef struct SDL_keysym {
 #define SDL_DEFAULT_REPEAT_INTERVAL 30
 
 /* Every event begins with a Uint8 type -- a Uint32 in SDL2, which is the other silent difference. */
+typedef struct SDL_ActiveEvent {
+    Uint8 type;
+    Uint8 gain;
+    Uint8 state;
+} SDL_ActiveEvent;
+
 typedef struct SDL_KeyboardEvent {
     Uint8 type;
     Uint8 which;
@@ -491,6 +523,7 @@ typedef struct SDL_ResizeEvent {
 /* 20 bytes, which the keyboard member is what decides. */
 typedef union SDL_Event {
     Uint8 type;
+    SDL_ActiveEvent active;
     SDL_KeyboardEvent key;
     SDL_MouseMotionEvent motion;
     SDL_MouseButtonEvent button;

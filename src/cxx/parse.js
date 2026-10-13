@@ -39,7 +39,7 @@ const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'class', '
   'break', 'continue', 'goto', 'namespace', 'using', 'try', 'catch', 'throw', 'static_cast',
   'dynamic_cast', 'const_cast', 'reinterpret_cast', 'typeid', '__attribute__', '__extension__',
   '__asm__', 'asm', '__typeof__', 'typeof']);
-const REFUSED = new Set(['try', 'catch', 'throw', 'typeid']);
+const REFUSED = new Set(['typeid']);
 const NAMED_CASTS = new Set(['static_cast', 'const_cast', 'reinterpret_cast', 'dynamic_cast']);
 
 // Binary operators by precedence, loosest first (assignment, ?: and comma are handled apart).
@@ -573,6 +573,7 @@ class CxxParser {
       while (home.tparams && home.parent) home = home.parent;
       if (!specArgs || !home.inner.has(name)) home.inner.set(name, scope);
     }
+    this.declareMemberTypesAhead(scope);
     const saved = this.scope;
     this.scope = scope;
     const members = [];
@@ -592,6 +593,63 @@ class CxxParser {
     } finally { this.scope = saved; }
     this.expectP('}');
     return { k: 'class', key, name, bases, members, loc, cLinkage: this.cLinkage(this.ts[this.i - 1]), pack: this.pack ?? null, ...(owner ? { owner } : {}), ...(specArgs ? { specArgs } : {}) };
+  }
+
+  /**
+   * A member function's body sees the whole class (9.2/2), the types declared below it too: FTGL's
+   * FTList does `head = new Node;` in its constructor and declares `struct Node` at the end. The
+   * parser has to know such a name is a type when it reaches it, so the class body is looked over
+   * first, at its own level: the names of the classes, unions and enums it declares, and of its
+   * typedefs, are entered as types before any member is parsed.
+   */
+  declareMemberTypesAhead(scope) {
+    const ts = this.ts;
+    let depth = 0, i = this.i, stmt = [];
+    for (; i < ts.length; i++) {
+      const t = ts[i];
+      if (t.k === PUNCT && t.v === '{') { if (depth === 0 && stmt.length) this.typeNameIn(stmt, scope, true); depth++; continue; }
+      if (t.k === PUNCT && t.v === '}') { if (depth === 0) break; depth--; if (depth === 0) stmt = []; continue; }
+      if (depth > 0) continue;
+      if (t.k === PUNCT && t.v === ';') { this.typeNameIn(stmt, scope, false); stmt = []; continue; }
+      stmt.push(t);
+    }
+  }
+  /** The type a member declaration's leading tokens name, if it names one: `struct Node`, `typedef ... X`. */
+  typeNameIn(toks, scope, opening) {
+    const first = toks.findIndex((t) => t.k === ID && !['public', 'private', 'protected', 'friend', 'static', 'mutable', 'virtual', 'inline'].includes(t.v));
+    if (first < 0) return;
+    const t0 = toks[first];
+    if (['struct', 'class', 'union', 'enum'].includes(t0.v)) {
+      const n = toks[first + 1];
+      // A definition, a declaration on its own, or a base list: `struct Node {`, `class X;`, `struct Y : Z {`.
+      if (n?.k === ID && (opening || toks.length === first + 2 || (toks[first + 2]?.k === PUNCT && toks[first + 2].v === ':'))) {
+        if (!scope.names.has(n.v)) scope.set(n.v, 'type');
+      }
+      return;
+    }
+    if (t0.v === 'typedef' && !opening) {
+      // The declarator's name. A pointer to function or member: the last identifier of the first
+      // parenthesised group, `(*X)`, `(T::*X)`. A function type: the identifier before its '('.
+      // Otherwise the last identifier before any '[' -- never a parameter's name.
+      const open = toks.findIndex((t, k) => k > first && t.k === PUNCT && t.v === '(');
+      let n = null;
+      if (open >= 0) {
+        let depth = 0, close = open;
+        for (let k = open; k < toks.length; k++) {
+          if (toks[k].k === PUNCT && toks[k].v === '(') depth++;
+          else if (toks[k].k === PUNCT && toks[k].v === ')' && --depth === 0) { close = k; break; }
+        }
+        const group = toks.slice(open + 1, close);
+        // A declarator group starts with * or &, or names a class first (`T::*`); a parameter list does not.
+        const starts = group[0]?.k === PUNCT ? group[0].v === '*' || group[0].v === '&' : group[0]?.k === ID && group[1]?.v === '::';
+        if (starts) n = [...group].reverse().find((t) => t.k === ID) ?? null;
+        else if (toks[open - 1]?.k === ID) n = toks[open - 1];
+      } else {
+        const bracket = toks.findIndex((t, k) => k > first && t.k === PUNCT && t.v === '[');
+        n = [...toks.slice(first + 1, bracket >= 0 ? bracket : toks.length)].reverse().find((t) => t.k === ID) ?? null;
+      }
+      if (n && !scope.names.has(n.v)) scope.set(n.v, 'type');
+    }
   }
 
   // ---------------------------------------------------------------- declarations
@@ -888,6 +946,48 @@ class CxxParser {
         case 'return': { this.next(); const e = this.isP(';') ? null : this.expression(); this.expectP(';'); return { k: 'return', e, loc }; }
         case 'goto': { this.next(); const name = this.ident(); this.expectP(';'); return { k: 'goto', name, loc }; }
         case 'using': return { k: 'using', item: this.usingDecl(), loc };
+        // try { ... } catch (T x) { ... } catch (...) { ... }  -- lowered in sema-stmt.js.
+        case 'try': {
+          this.next();
+          const body = this.compound(), handlers = [];
+          while (this.eatKw('catch')) {
+            this.expectP('(');
+            let param = null;
+            if (!this.eatP('...')) { const specs = this.declSpecifiers({ allowNone: false }); param = { specs, decl: this.declarator({ abstract: true }) }; }
+            this.expectP(')');
+            handlers.push({ param, body: this.compound(), loc: this.loc() });
+          }
+          if (!handlers.length) this.fail('a try block with no handler');
+          return { k: 'try', body, handlers, loc };
+        }
+        // GNU inline assembly, `__asm__ volatile ("tmpl" : "=r"(x) : "r"(y) : "cc");` -- kept for the C
+        // front end, which reads it: the template and constraints as written, the operands as C++
+        // expressions to lower. FreeType's ftconfig.h has one in a static inline function.
+        case '__asm__': case '__asm': case 'asm': {
+          this.next();
+          const quals = [];
+          while (this.peek().k === ID && /^_*(volatile|inline|goto)_*$/.test(this.peek().v)) quals.push(this.next().v);
+          this.expectP('(');
+          const template = [];
+          while (this.peek().k === STR) template.push(this.next().v);
+          const sections = [];
+          while (this.eatP(':')) {
+            const ops = [];
+            sections.push(ops);
+            if (this.isP(':') || this.isP(')')) continue;
+            for (;;) {
+              if (sections.length >= 3 || (this.peek().k === STR && !this.isP('(', 1))) ops.push({ clobber: this.next().v });
+              else {
+                const constraint = this.peek().k === STR ? this.next().v : '""';
+                this.expectP('('); const e = this.expression(); this.expectP(')');
+                ops.push({ constraint, e });
+              }
+              if (!this.eatP(',')) break;
+            }
+          }
+          this.expectP(')'); this.expectP(';');
+          return { k: 'asm', quals, template, sections, loc };
+        }
         default:
           if (REFUSED.has(t.v)) this.fail(`C++ '${t.v}' is not supported`);
       }
@@ -938,6 +1038,13 @@ class CxxParser {
     return out;
   }
   assignment() {
+    // `throw e` and the bare `throw` that rethrows are assignment-expressions.
+    if (this.isKw('throw')) {
+      const loc = this.loc();
+      this.next();
+      const e = this.isP(';') || this.isP(')') || this.isP(',') || this.isP(':') || this.isP(']') ? null : this.assignment();
+      return { k: 'throw', e, loc };
+    }
     const a = this.conditional();
     const t = this.peek();
     if (t.k === PUNCT && ASSIGN.has(t.v)) { this.next(); return { k: 'assign', op: t.v, a, b: this.assignment(), loc: t.loc }; }

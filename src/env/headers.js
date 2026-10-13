@@ -116,6 +116,7 @@ const WCTYPE_H = `
 #define _PRISM_WCTYPE_H
 #include <stddef.h>
 int iswprint(wint_t c);
+int iswspace(wint_t c);
 #endif
 `;
 
@@ -201,6 +202,11 @@ int scanf(const char *fmt, ...);
 `;
 
 const STDLIB = `
+/* libstdc++ wraps <stdlib.h> and <math.h> in C++ (they include <cstdlib>, <cmath>), so std is declared: a
+   unit may say "using namespace std;" with nothing else (Chromium B.S.U.'s TextFTGL.cpp). */
+#ifdef __cplusplus
+namespace std {}
+#endif
 char *getenv(const char *name);
 
 double atof(const char *s);
@@ -238,12 +244,32 @@ char *itoa(int value, char *buffer, int radix);
 void qsort(void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 void *bsearch(const void *key, const void *base, size_t n, size_t size, int (*cmp)(const void *, const void *));
 int putenv(char *s);
+/* div and ldiv return a structure, which the runtime's calls cannot: here, in the header, as C99
+   defines them (the quotient truncated toward zero, the remainder taking the dividend's sign). */
+typedef struct { int quot, rem; } div_t;
+typedef struct { long quot, rem; } ldiv_t;
+static __inline__ div_t div(int n, int d) { div_t r; r.quot = n / d; r.rem = n % d; return r; }
+static __inline__ ldiv_t ldiv(long n, long d) { ldiv_t r; r.quot = n / d; r.rem = n % d; return r; }
+int setenv(const char *name, const char *value, int overwrite);
+int unsetenv(const char *name);
+/* src/env/wide.c, for a target that lists it: the C locale, one byte per character. */
+size_t mbstowcs(wchar_t *dst, const char *src, size_t n);
+size_t wcstombs(char *dst, const wchar_t *src, size_t n);
 long atol(const char *s);
 int abs(int v);
 long labs(long v);
 #define MB_CUR_MAX ((size_t)1)
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
+/* glibc's stdlib.h gives an XPG program the wait-status macros, for system()'s answer; sys/wait.h's encoding. */
+#if (defined _GNU_SOURCE || defined _XOPEN_SOURCE) && !defined WEXITSTATUS
+#define WEXITSTATUS(s) (((s) & 0xff00) >> 8)
+#define WTERMSIG(s) ((s) & 0x7f)
+#define WSTOPSIG(s) WEXITSTATUS(s)
+#define WIFEXITED(s) (WTERMSIG(s) == 0)
+#define WIFSIGNALED(s) (((signed char)(((s) & 0x7f) + 1) >> 1) > 0)
+#define WIFSTOPPED(s) (((s) & 0xff) == 0x7f)
+#endif
 #endif
 long strtol(const char *s, char **end, int base);
 unsigned long strtoul(const char *s, char **end, int base);
@@ -294,6 +320,11 @@ int strncasecmp(const char *a, const char *b, size_t n);
 `;
 
 const MATH = `
+/* libstdc++ wraps <stdlib.h> and <math.h> in C++ (they include <cstdlib>, <cmath>), so std is declared: a
+   unit may say "using namespace std;" with nothing else (Chromium B.S.U.'s TextFTGL.cpp). */
+#ifdef __cplusplus
+namespace std {}
+#endif
 #define INFINITY (1.0e308 * 10.0)
 #define NAN (INFINITY - INFINITY)
 #define HUGE_VAL INFINITY
@@ -566,7 +597,10 @@ char *__prism_va_next(va_list *ap, unsigned size);
 #endif
 `;
 
-const TIMEH = `
+const TIMEH = `#ifndef _PRISM_TIME_H_ALL
+#define _PRISM_TIME_H_ALL
+/* The whole header guarded: C let a second identical struct tm pass, C++ makes it a second type
+   (Chromium B.S.U. reaches <time.h> twice, through <ctime> in a header and in the unit). */
 /* size_t, for strftime: a unit may include <time.h> before anything else (MAME 0.37b5's ticker.c). */
 #include <stddef.h>
 struct tm {
@@ -614,6 +648,7 @@ time_t time(time_t *t);
 typedef unsigned long long uclock_t;
 #define UCLOCKS_PER_SEC 1193180
 uclock_t uclock(void);
+#endif
 #endif
 `;
 
@@ -1804,6 +1839,60 @@ const KEYSYMDEF = `
 #endif
 `;
 
+/** A C++ name for a C header: the header, and namespace std declared for `using namespace std;`. */
+const CXX_C = (h) => `#include <${h}>\n#ifdef __cplusplus\nnamespace std {}\n#endif\n`;
+/*
+ * The part of std::string the corpus uses -- Chromium B.S.U.'s Audio.cpp builds an amixer command
+ * with it: construction from a C string, copy, +=, c_str() and size(). Written in C++ for src/cxx,
+ * on malloc. Not the library: no embedded NULs, no iterators, no find, no operator+.
+ */
+const CXX_STRING = `#ifndef _PRISM_CXX_STRING
+#define _PRISM_CXX_STRING
+#include <stdlib.h>
+#include <string.h>
+namespace std {
+class string {
+  char *p_;
+  size_t n_;
+  void set(const char *s, size_t n) { p_ = (char *)malloc(n + 1); memcpy(p_, s, n); p_[n] = 0; n_ = n; }
+public:
+  string() { set("", 0); }
+  string(const char *s) { set(s, strlen(s)); }
+  string(const string &o) { set(o.p_, o.n_); }
+  ~string() { free(p_); }
+  string &operator=(const string &o) { if (this != &o) { free(p_); set(o.p_, o.n_); } return *this; }
+  string &operator+=(const char *s) {
+    size_t m = strlen(s);
+    char *q = (char *)malloc(n_ + m + 1);
+    memcpy(q, p_, n_); memcpy(q + n_, s, m + 1);
+    free(p_); p_ = q; n_ += m;
+    return *this;
+  }
+  string &operator+=(const string &o) { return *this += o.p_; }
+  const char *c_str() const { return p_; }
+  size_t size() const { return n_; }
+  size_t length() const { return n_; }
+};
+}
+#endif
+`;
+/* ...and of std::stringstream: ints and C strings written in, str() read out. */
+const CXX_SSTREAM = `#ifndef _PRISM_CXX_SSTREAM
+#define _PRISM_CXX_SSTREAM
+#include <string>
+#include <stdio.h>
+namespace std {
+class stringstream {
+  string s_;
+public:
+  stringstream &operator<<(int v) { char b[16]; sprintf(b, "%d", v); s_ += b; return *this; }
+  stringstream &operator<<(const char *v) { s_ += v; return *this; }
+  string str() const { return s_; }
+};
+}
+#endif
+`;
+
 export const HEADERS = {
   ...WIN32_HEADERS,
   'X11/Xlib.h': XLIB,
@@ -2149,4 +2238,23 @@ int getopt(int argc, char * const argv[], const char *optstring);
   // src/cxx, so all the header owes a program is size_t.
   'new': STDDEF,
   'new.h': STDDEF,
+  // C++'s names for the C library (<cstdio> for <stdio.h>, ...). The names stay global, as glibc's
+  // headers leave them; std is declared so that `using namespace std;` compiles. A program that
+  // writes std::printf would need the using-declarations, and none in the corpus does yet.
+  'cstdio': CXX_C('stdio.h'),
+  'cstdlib': CXX_C('stdlib.h'),
+  'cstring': CXX_C('string.h'),
+  'cmath': CXX_C('math.h'),
+  'ctime': CXX_C('time.h'),
+  'cerrno': CXX_C('errno.h'),
+  'cstdarg': CXX_C('stdarg.h'),
+  'cassert': CXX_C('assert.h'),
+  'climits': CXX_C('limits.h'),
+  'cctype': CXX_C('ctype.h'),
+  'cstddef': CXX_C('stddef.h'),
+  'cfloat': CXX_C('float.h'),
+  'csignal': CXX_C('signal.h'),
+  'csetjmp': CXX_C('setjmp.h'),
+  'string': CXX_STRING,
+  'sstream': CXX_SSTREAM,
 };

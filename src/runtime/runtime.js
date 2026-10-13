@@ -438,6 +438,34 @@ function makeLibc(M) {
 
   randSeed(1);                                // the unseeded default, as glibc's is
 
+  /*
+   * Does a handler of type `h` take an exception of type `e`? (15.3/3, by their mangled names:
+   * PRISM throws no class objects.) The same type; or both pointers, the handler's to the same type
+   * or to void, adding a const and never dropping one.
+   */
+  function ehMatches(h, e) {
+    if (h === e) return true;
+    const hp = /^P(K?)(.+)$/.exec(h), ep = /^P(K?)(.+)$/.exec(e);
+    if (!hp || !ep || (ep[1] && !hp[1])) return false;
+    return hp[2] === ep[2] || (hp[2] === 'v' && !ep[2].startsWith('F'));
+  }
+  function ehTerminate(message) {
+    if (M.rt.write) {
+      const p = M.rt.malloc(message.length + 1);
+      for (let i = 0; i < message.length; i++) M.u8[p + i] = message.charCodeAt(i);
+      M.rt.write(2, p, message.length);
+    } else console.error(message.trimEnd());
+    M.rt.abort();
+  }
+  function ehThrow(e) {
+    const stack = M.ehStack ?? [];
+    if (!stack.length) ehTerminate(`terminate called after throwing an instance of '${e.name}'\n`);
+    const buf = stack.pop();
+    (M.ehCaught ??= new Map()).set(buf, e);
+    M.ehCurrent = e;
+    M.rt.longjmp(buf, 1);
+  }
+
   const lib = {
     // --- stdio
     printf: (fmt, args) => { const s = format(M, fmt, args ?? []); M.write(s); return s.length; },
@@ -1192,6 +1220,27 @@ function makeLibc(M) {
       // C says longjmp(env, 0) makes setjmp return 1.
       throw { __prismJmp: fp, pc, sp, val: (val | 0) === 0 ? 1 : (val | 0) };
     },
+
+    /*
+     * C++ exceptions, on the setjmp/longjmp above. A try's jmp_buf is pushed while its block runs;
+     * a throw copies the object, takes the innermost buffer off and longjmps there, leaving the
+     * exception with it for the handlers to ask about. With no try left it is g++'s terminate: its
+     * message, then abort.
+     */
+    __prism_eh_push: (buf) => { (M.ehStack ??= []).push(buf); },
+    __prism_eh_pop: (buf) => { const s = M.ehStack; if (s?.length && s[s.length - 1] === buf) s.pop(); },
+    __prism_eh_obj: (buf) => M.ehCaught?.get(buf)?.obj ?? 0,
+    __prism_eh_is: (buf, keyPtr) => { const e = M.ehCaught?.get(buf); return e && ehMatches(M.mod.cstr(keyPtr), e.key) ? 1 : 0; },
+    __prism_cxx_throw: (keyPtr, namePtr, src, size) => {
+      const obj = M.rt.malloc(Math.max(1, size >>> 0));
+      M.u8.copyWithin(obj, src, src + (size >>> 0));
+      ehThrow({ key: M.mod.cstr(keyPtr), name: M.mod.cstr(namePtr), obj });
+    },
+    __prism_cxx_rethrow: () => {
+      if (!M.ehCurrent) ehTerminate('terminate called without an active exception\n');
+      ehThrow(M.ehCurrent);
+    },
+    __prism_cxx_rethrow_from: (buf) => ehThrow(M.ehCaught.get(buf)),
 
     // --- gcc builtins that are not library calls
     __builtin_expect: (v, _expected) => v,

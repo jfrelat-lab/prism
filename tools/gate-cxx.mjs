@@ -7,8 +7,8 @@
 // else. Constructors and destructors PRINT in several cases: the order and the count of those lines
 // is the lifetime rule under test.
 //
-// The subset is the one src/cxx/parse.js states: no exceptions, no typeid, no member templates, no
-// virtual bases. Seven cases were written for ScummVM 0.6.1 (namespaces, function templates and their
+// The subset is the one src/cxx/parse.js states: exceptions of scalar and pointer types only, no
+// typeid, no member templates, no virtual bases. Seven cases were written for ScummVM 0.6.1 (namespaces, function templates and their
 // value parameters, two polymorphic bases and dynamic_cast, pointers to member functions, conditions
 // that declare, file-scope aggregates that read variables, functions used before their definition),
 // each on the shape that program has.
@@ -967,6 +967,84 @@ const int K::count = ARRAYSIZE(K::files);
 int main() {
     printf("%d %d %d %d %d %s\\n", K::count, (int)sizeof(K::ints), (int)sizeof(K::text), ARRAYSIZE(K::names), (int)sizeof(K::names), K::files[K::count - 1]);
     return 0;
+}
+`);
+
+// Exceptions, as Chromium B.S.U. throws one (a string literal, when its font fails to load) and catches
+// it: by the C++98 rule a string literal is thrown as const char *, which catch (char *) does NOT take
+// -- the first block prints "caught by ..." under g++, and would print the other line under a matching
+// that ignored const. Then throws through calls, a return out of a try (its handler must come off the
+// stack before the next throw), a rethrow, and continue out of a handler.
+C('exceptions', `
+#include <cstdio>
+#include <cstdlib>
+
+static int depth3(int v) { if (v > 2) throw v * 10; return v; }
+static int depth2(int v) { return depth3(v) + 1; }
+
+static int early(int v) {
+  try {
+    if (v) return 7;          // leaves the try: its handler must come off the stack
+  } catch (int e) { return -1; }
+  return 8;
+}
+
+static void rethrower() {
+  try { throw 5; }
+  catch (int e) { printf("inner caught %d, rethrowing\\n", e); throw; }
+}
+
+int main() {
+  // A string literal is a const char *: catch (char *) does not take it, catch (...) does.
+  try { throw "literal"; }
+  catch (char *s) { printf("char*: %s\\n", s); }
+  catch (...) { printf("caught by ...\\n"); }
+
+  try { throw "literal"; }
+  catch (const char *s) { printf("const char*: %s\\n", s); }
+
+  try { throw 42; }
+  catch (long l) { printf("long %ld\\n", l); }
+  catch (int i) { printf("int %d\\n", i); }
+
+  for (int v = 0; v < 5; v++) {
+    try { printf("depth2(%d) = %d\\n", v, depth2(v)); }
+    catch (int e) { printf("depth3 threw %d\\n", e); }
+  }
+
+  printf("early: %d %d\\n", early(1), early(0));
+  try { throw 3.5; }
+  catch (double d) { printf("double %g after early returns\\n", d); }
+
+  try { rethrower(); }
+  catch (int e) { printf("outer caught %d\\n", e); }
+
+  int count = 0;
+  for (int i = 0; i < 4; i++) {
+    try { if (i % 2) throw i; count += 100; }
+    catch (int e) { count += e; continue; }
+    count += 1000;
+  }
+  printf("count %d\\n", count);
+  return 0;
+}
+`);
+
+// The part of <string> and <sstream> Chromium B.S.U.'s Audio.cpp uses to build an amixer command.
+C('string-sstream', `
+#include <cstdio>
+#include <cmath>
+#include <sstream>
+#include <string>
+using namespace std;
+int main() {
+  stringstream v; v << (int)floor(100 * 0.73); v << "x" << 42;
+  string c = "amixer set CD ";
+  c += v.str();
+  c += "% unmute";
+  string d = c; d += "!";
+  printf("%s|%s|%u\\n", c.c_str(), d.c_str(), (unsigned)d.size());
+  return 0;
 }
 `);
 

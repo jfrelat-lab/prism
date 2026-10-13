@@ -30,7 +30,7 @@
 
 import { GL_H } from './headers-gl.js';
 
-const MODELVIEW = 0x1700, PROJECTION = 0x1701;
+const MODELVIEW = 0x1700, PROJECTION = 0x1701, TEXTURE_MATRIX = 0x1702;
 const CAP = {
   CULL_FACE: 0x0b44, LIGHTING: 0x0b50, DEPTH_TEST: 0x0b71, NORMALIZE: 0x0ba1, LIGHT0: 0x4000,
   TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60, SCISSOR_TEST: 0x0c11,
@@ -134,7 +134,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const s = {
     width: 0, height: 0, color: null, depth: null,
     viewport: [0, 0, 0, 0], clear: [0, 0, 0, 0], clearDepth: 1,
-    mode: MODELVIEW, stacks: { [MODELVIEW]: [ident()], [PROJECTION]: [ident()] },
+    mode: MODELVIEW, stacks: { [MODELVIEW]: [ident()], [PROJECTION]: [ident()], [TEXTURE_MATRIX]: [ident()] },
     caps: new Set(), shade: 0x1d01, frontFace: CCW, cullFace: BACK,
     normal: [0, 0, 1], colour: [1, 1, 1, 1], tex: [0, 0],
     material: material(), backMaterial: material(),
@@ -254,6 +254,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     }
     if (genS && s.texGen[0].mode === 0x2401) { const p = s.texGen[0].object; tu = p[0] * x + p[1] * y + p[2] * z + p[3]; }
     if (genT && s.texGen[1].mode === 0x2401) { const p = s.texGen[1].object; tv = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    // The texture matrix (2.10.2), on (s, t, 0, 1) after any generation; q divided out, as a fragment
+    // would. Chromium B.S.U.'s title scrolls and turns its background through it.
+    const tm = s.stacks[TEXTURE_MATRIX].at(-1);
+    if (tm[0] !== 1 || tm[1] || tm[4] || tm[5] !== 1 || tm[12] || tm[13] || tm[3] || tm[7] || tm[15] !== 1) {
+      const q = tm[3] * tu + tm[7] * tv + tm[15];
+      const su = tm[0] * tu + tm[4] * tv + tm[12], sv = tm[1] * tu + tm[5] * tv + tm[13];
+      tu = q === 1 ? su : su / q; tv = q === 1 ? sv : sv / q;
+    }
     s.verts.push({ clip, colour, back, tex: [tu, tv], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye });
   }
 
@@ -699,13 +707,50 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glClearDepth: (d) => { s.clearDepth = clamp01(d); },
     glAlphaFunc: (f, ref) => { s.alphaFunc = f; s.alphaRef = clamp01(ref); },
     glBlendFunc: (sf, df) => { s.blend = [sf, df]; },
-    glMatrixMode: (m) => { s.mode = m; },
+    glMatrixMode: (m) => { if (!s.stacks[m]) throw new Error(`gl: glMatrixMode 0x${m.toString(16)}`); s.mode = m; },
     glLoadIdentity: () => setTop(ident()),
     glLoadMatrixf: (m) => setTop(Float64Array.from(m)),
     glMultMatrixf: (m) => setTop(mul(top(), Float64Array.from(m))),
     glMultMatrixd: (m) => setTop(mul(top(), Float64Array.from(m))),
     glLoadMatrixd: (m) => setTop(Float64Array.from(m)),
     glPushMatrix: () => { s.stacks[s.mode].push(Float64Array.from(top())); },
+    /*
+     * The attribute stacks, for the groups whose whole state is kept here: GL_ENABLE_BIT (every
+     * capability) and GL_COLOR_BUFFER_BIT (the alpha test, blending, the colour mask, the clear
+     * colour, and the enables of alpha test and blending) -- FTGL's buffer font brackets its drawing
+     * with those two. Any other group is refused by name, not saved in part.
+     */
+    glPushAttrib: (mask) => {
+      const other = mask & ~(0x2000 | 0x4000);
+      if (other) throw new Error(`gl: glPushAttrib of the groups 0x${other.toString(16)} is not implemented (GL_ENABLE_BIT and GL_COLOR_BUFFER_BIT are)`);
+      (s.attribStack ??= []).push({
+        mask, caps: mask & 0x2000 ? new Set(s.caps) : null,
+        colour: mask & 0x4000 ? { alphaFunc: s.alphaFunc, alphaRef: s.alphaRef, blend: [...s.blend], colorMask: [...s.colorMask], clear: [...s.clear],
+          alphaOn: s.caps.has(CAP.ALPHA_TEST), blendOn: s.caps.has(CAP.BLEND) } : null,
+      });
+    },
+    glPopAttrib: () => {
+      const a = s.attribStack?.pop();
+      if (!a) return;                                      // GL_STACK_UNDERFLOW: nothing changes
+      if (a.caps) s.caps = new Set(a.caps);
+      if (a.colour) {
+        const c = a.colour;
+        s.alphaFunc = c.alphaFunc; s.alphaRef = c.alphaRef; s.blend = c.blend; s.colorMask = c.colorMask; s.clear = c.clear;
+        for (const [cap, on] of [[CAP.ALPHA_TEST, c.alphaOn], [CAP.BLEND, c.blendOn]]) { if (on) s.caps.add(cap); else s.caps.delete(cap); }
+      }
+    },
+    // ...and the client's: the pixel store (both alignments) and the vertex arrays.
+    glPushClientAttrib: (mask) => {
+      const other = mask & ~(0x1 | 0x2);
+      if (other) throw new Error(`gl: glPushClientAttrib of the groups 0x${other.toString(16)} is not implemented`);
+      (s.clientAttribStack ??= []).push({ mask, unpackAlign: s.unpackAlign, packAlign: s.packAlign, arrays: mask & 0x2 ? JSON.parse(JSON.stringify(s.arrays)) : null });
+    },
+    glPopClientAttrib: () => {
+      const a = s.clientAttribStack?.pop();
+      if (!a) return;
+      if (a.mask & 0x1) { s.unpackAlign = a.unpackAlign; s.packAlign = a.packAlign; }
+      if (a.arrays) s.arrays = a.arrays;
+    },
     glPopMatrix: () => { if (s.stacks[s.mode].length > 1) s.stacks[s.mode].pop(); },
     glTranslatef: (x, y, z) => { const t = ident(); t[12] = x; t[13] = y; t[14] = z; setTop(mul(top(), t)); },
     glScalef: (x, y, z) => { const t = ident(); t[0] = x; t[5] = y; t[10] = z; setTop(mul(top(), t)); },
@@ -993,7 +1038,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      * alike. Any other name is refused, naming itself.
      */
     glGetIntegerv: (p, out) => {
-      const vals = p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : null;
+      // The pixel store: the two alignments kept, the other modes 0 (glPixelStorei accepts only that).
+      const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
+      const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
     },
@@ -1335,7 +1382,7 @@ export function glBuiltins(T) {
     glClear: f(V, U), glClearColor: f(V, F, F, F, F), glEnable: f(V, U), glDisable: f(V, U),
     glShadeModel: f(V, U), glCullFace: f(V, U), glFrontFace: f(V, U), glViewport: f(V, I, I, I, I),
     glDepthFunc: f(V, U), glDepthMask: f(V, U), glDepthRange: f(V, D, D), glClearDepth: f(V, D), glAlphaFunc: f(V, U, F), glBlendFunc: f(V, U, U),
-    glMatrixMode: f(V, U), glLoadIdentity: f(V), glLoadMatrixf: f(V, P), glPushMatrix: f(V), glPopMatrix: f(V),
+    glMatrixMode: f(V, U), glLoadIdentity: f(V), glLoadMatrixf: f(V, P), glPushMatrix: f(V), glPopMatrix: f(V), glPushAttrib: f(V, U), glPopAttrib: f(V), glPushClientAttrib: f(V, U), glPopClientAttrib: f(V),
     glTranslatef: f(V, F, F, F), glRotatef: f(V, F, F, F, F), glScalef: f(V, F, F, F),
     glFrustum: f(V, D, D, D, D, D, D), glOrtho: f(V, D, D, D, D, D, D), glGetFloatv: f(V, U, P),
     glColorMask: f(V, U, U, U, U), glPolygonOffset: f(V, F, F), glClipPlane: f(V, U, P), glLineWidth: f(V, F),

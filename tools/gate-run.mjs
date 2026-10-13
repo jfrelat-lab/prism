@@ -82,6 +82,24 @@ int main(void)
 }
 `);
 
+// stat() fills the caller's struct stat and nothing past it. PRISM's filled 56 bytes of a 52-byte
+// struct from the start; Chromium B.S.U.'s findFont lost its caller's `this` to the four extra.
+C('stat-stays-in-its-struct', `
+#include <stdio.h>
+#include <sys/stat.h>
+int main(void)
+{
+    struct { struct stat st; int canary; } x;
+    FILE *f = fopen("stat-probe.txt", "w");
+    fputs("twelve bytes", f);
+    fclose(f);
+    x.canary = 0x12345678;
+    int r = stat("stat-probe.txt", &x.st);
+    printf("%d size=%ld canary=%x\\n", r, (long)x.st.st_size, x.canary);
+    return 0;
+}
+`);
+
 C('enum-promotion', `
 #include <stdio.h>
 enum e { A, B };

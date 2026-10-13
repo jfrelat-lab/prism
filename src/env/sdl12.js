@@ -62,6 +62,7 @@ const E_TYPE = 0, E_KEY_STATE = 2, E_KEY_SCAN = 4, E_KEY_SYM = 8, E_KEY_MOD = 12
       E_BTN_BUTTON = 2, E_BTN_STATE = 3, E_BTN_X = 4, E_BTN_Y = 6,
       E_MOTION_STATE = 2, E_MOTION_X = 4, E_MOTION_Y = 6, E_MOTION_XREL = 8, E_MOTION_YREL = 10, E_SIZE = 20;
 
+const SDLK_LAST = 323;
 const SDL_KEYDOWN = 2, SDL_KEYUP = 3, SDL_MOUSEMOTION = 4, SDL_MOUSEBUTTONDOWN = 5, SDL_MOUSEBUTTONUP = 6;
 const SDL_PRESSED = 1, SDL_RELEASED = 0;
 /* The modifier each modifier key holds, by its symbol (SDL_keysym.h). */
@@ -328,6 +329,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_Quit: () => 0,
     SDL_GetError: () => state.error,
     SDL_SetError: (fmt, va) => { state.setError(format(M, fmt, va ?? [])); },
+    SDL_ClearError: () => { state.setError(''); },
     // A limiter built on sleeping SPINS when the sleep does nothing, so the host answers instead.
     SDL_Delay: (ms) => { state.clock.delay(ms | 0); state.pump(); return 0; },
     SDL_GetTicks: () => { state.pump(); return state.clock.now(); },
@@ -379,6 +381,8 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       return state.surface;
     },
     SDL_GL_SetAttribute: () => 0,
+    // The dummy driver the reference runs has no GL to ask: 0, and the error SDL 1.2 sets.
+    SDL_GL_GetAttribute: (_attr, value) => { if (value) dv().setInt32(value, 0, true); state.setError('GL_GetAttribute not supported'); return -1; },
     // No extension entry points: NULL is what SDL answers for a name the driver does not export.
     SDL_GL_GetProcAddress: () => 0,
     SDL_GL_SwapBuffers: () => { state.pump(); if (state.onSwap) state.onSwap(M.gl); },
@@ -400,6 +404,41 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     },
     // Per-surface alpha, recorded where SDL keeps it (flags, format->alpha); SDL_UpperBlit refuses to
     // blend with it rather than guess SDL's arithmetic.
+    /*
+     * SDL_ConvertSurface as SDL 1.2 does it: a surface of the format's depth and masks (its shifts
+     * are derived again, as SDL_CreateRGBSurface derives them), the source copied in with its own
+     * per-surface alpha off -- so a pixel's alpha is copied when both formats have one, and opaque
+     * when only the new one does (BlitNtoNCopyAlpha, BlitNtoN) -- and the source's SDL_SRCALPHA
+     * carried over to the result.
+     */
+    SDL_ConvertSurface: (src, fmt, _flags) => {
+      if (!src || !fmt) return 0;
+      const d = dv(), si = info(src);
+      const bits = M.u8[fmt + F_BITS];
+      if (bits === 8) throw new Error('SDL_ConvertSurface: a conversion TO a palette is not done here yet');
+      const masks = [0, 1, 2, 3].map((i) => d.getUint32(fmt + F_RMASK + 4 * i, true));
+      const out = makeSurface(si.w, si.h, bits, { masks });
+      const di = info(out);
+      for (let y = 0; y < si.h; y++) {
+        for (let x = 0; x < si.w; x++) {
+          const p = getPixel(si.pixels + y * si.pitch + x * si.bytes, si.bytes);
+          const [r, g, b] = toRGB(si, p);
+          const a = si.masks[3] ? (((p & si.masks[3]) >>> si.shifts[3]) << si.losses[3]) & 0xff : 255;
+          const q = (((r >> di.losses[0]) << di.shifts[0]) | ((g >> di.losses[1]) << di.shifts[1]) | ((b >> di.losses[2]) << di.shifts[2])
+            | (di.masks[3] ? (a >> di.losses[3]) << di.shifts[3] : 0)) >>> 0;
+          putPixel(di.pixels + y * di.pitch + x * di.bytes, di.bytes, q);
+        }
+      }
+      const flags = d.getUint32(src, true);
+      if (flags & SDL_SRCALPHA) api.SDL_SetAlpha(out, SDL_SRCALPHA, M.u8[si.fmt + 36]);
+      // The colour key goes over too, mapped into the new format (it was off for the copy, so the
+      // pixels themselves are opaque, as Map1toN makes them from a palette).
+      if (flags & SDL_SRCCOLORKEY) {
+        const [r, g, b] = toRGB(si, d.getUint32(si.fmt + 32, true));
+        api.SDL_SetColorKey(out, SDL_SRCCOLORKEY, (((r >> di.losses[0]) << di.shifts[0]) | ((g >> di.losses[1]) << di.shifts[1]) | ((b >> di.losses[2]) << di.shifts[2]) | di.masks[3]) >>> 0);
+      }
+      return out;
+    },
     SDL_SetAlpha: (surf, flag, alpha) => {
       if (!surf) return -1;
       const d = dv(), fmt = d.getUint32(surf + 4, true);
@@ -566,6 +605,24 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_EnableUNICODE: () => 0,
     SDL_EnableKeyRepeat: () => 0,
     SDL_GetModState: () => state.mods,
+    // SDL 1.2's key state array, one byte per SDLKey up to SDLK_LAST, kept as the events go by.
+    SDL_GetKeyState: (numkeys) => {
+      if (!state.keyArray) { state.keyArray = M.rt.malloc(SDLK_LAST); M.u8.fill(0, state.keyArray, state.keyArray + SDLK_LAST); }
+      if (numkeys) dv().setInt32(numkeys, SDLK_LAST, true);
+      return state.keyArray;
+    },
+    // SDL 1.2's key names (SDL_keyboard.c): a printable key is its character; the rest by name.
+    SDL_GetKeyName: (key) => {
+      key |= 0;
+      const named = { 8: 'backspace', 9: 'tab', 12: 'clear', 13: 'return', 19: 'pause', 27: 'escape', 32: 'space', 127: 'delete',
+        266: '[.]', 267: '[/]', 268: '[*]', 269: '[-]', 270: '[+]', 271: 'enter', 272: 'equals',
+        273: 'up', 274: 'down', 275: 'right', 276: 'left', 277: 'insert', 278: 'home', 279: 'end', 280: 'page up', 281: 'page down',
+        300: 'numlock', 301: 'caps lock', 302: 'scroll lock', 303: 'right shift', 304: 'left shift', 305: 'right ctrl', 306: 'left ctrl',
+        307: 'right alt', 308: 'left alt', 309: 'right meta', 310: 'left meta', 311: 'left super', 312: 'right super', 313: 'alt gr', 314: 'compose' };
+      const name = named[key] ?? (key > 32 && key < 127 ? String.fromCharCode(key) : key >= 256 && key <= 265 ? `[${key - 256}]`
+        : key >= 282 && key <= 296 ? `f${key - 281}` : 'unknown key');
+      return (state.keyNames ??= new Map()).get(name) ?? (state.keyNames.set(name, intern(name)), state.keyNames.get(name));
+    },
     SDL_GetMouseState: (xp, yp) => {
       if (xp) dv().setInt32(xp, pointer.x, true);
       if (yp) dv().setInt32(yp, pointer.y, true);
@@ -609,6 +666,7 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       // The modifiers as they stand AFTER this event, which is what SDL reports with it.
       const bit = KMOD_OF[sym] ?? 0;
       state.mods = e.down ? (state.mods | bit) : (state.mods & ~bit);
+      if (state.keyArray && sym > 0 && sym < SDLK_LAST) M.u8[state.keyArray + sym] = e.down ? 1 : 0;
       M.u8.fill(0, ev, ev + E_SIZE);
       d.setUint8(ev + E_TYPE, e.down ? SDL_KEYDOWN : SDL_KEYUP);
       d.setUint8(ev + E_KEY_STATE, e.down ? SDL_PRESSED : SDL_RELEASED);
@@ -769,7 +827,7 @@ export function sdl12Builtins(T) {
     SDL_Init: f(I, U),
     SDL_InitSubSystem: f(I, U),
     SDL_Quit: f(V),
-    SDL_GetError: f(P),
+    SDL_GetError: f(P), SDL_ClearError: f(V),
     SDL_Delay: f(V, U),
     SDL_GetTicks: f(U),
     SDL_SetError: { ret: V, params: [P], variadic: true },
@@ -781,7 +839,7 @@ export function sdl12Builtins(T) {
     SDL_FreeSurface: f(V, P),
     SDL_LockSurface: f(I, P),
     SDL_UnlockSurface: f(V, P),
-    SDL_GL_SetAttribute: f(I, I, I),
+    SDL_GL_SetAttribute: f(I, I, I), SDL_GL_GetAttribute: f(I, I, P), SDL_ConvertSurface: f(P, P, P, U), SDL_GetKeyName: f(P, I),
     SDL_GL_GetProcAddress: f(P, P),
     SDL_GL_SwapBuffers: f(V),
     SDL_Flip: f(I, P),
@@ -818,7 +876,7 @@ export function sdl12Builtins(T) {
     SDL_WaitEvent: f(I, P),
     SDL_EnableUNICODE: f(I, I),
     SDL_EnableKeyRepeat: f(I, I, I),
-    SDL_GetModState: f(I),
+    SDL_GetModState: f(I), SDL_GetKeyState: f(P, P),
     SDL_GetMouseState: f(B, P, P),
     SDL_WarpMouse: f(V, T.USHORT, T.USHORT),
 

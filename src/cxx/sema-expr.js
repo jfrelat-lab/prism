@@ -15,6 +15,15 @@
 
 import * as T from './types.js';
 
+/** A type as g++'s terminate message names it: `char const*`, `int`. */
+const throwName = (t) => {
+  const c = t.c ? ' const' : '';
+  if (t.k === 'ptr') return `${throwName(t.to)}*${c}`;
+  if (t.k === 'prim' || t.k === 'void') return `${t.k === 'void' ? 'void' : t.name}${c}`;
+  if (t.k === 'enum') return `${t.en.name ?? 'enum'}${c}`;
+  return T.show(t);
+};
+
 const EXACT = 0, QUAL = 0.01, PROMO = 1, CONV = 2, USER = 3, ELLIPSIS = 4;
 const CMP = new Set(['==', '!=', '<', '>', '<=', '>=']);
 
@@ -835,6 +844,22 @@ export const exprMethods = {
       // `false` is an integral constant 0, so a null pointer constant in C++98: `if (_fd == false)` (animation_he.cpp).
       case 'bool': return { c: n.v ? '1' : '0', t: T.BOOL, lv: false, zero: !n.v };
       case 'str': return { c: n.parts.join(' '), t: T.array(T.cst(T.CHAR), this.stringLength(n) + 1), lv: true, str: true };
+      /*
+       * throw: the exception object's type is the operand's, decayed and without its top-level const
+       * (15.1/3): a string literal is thrown as const char *. Copied by the runtime, which longjmps
+       * to the innermost try (sema-stmt.js); `throw;` rethrows the exception being handled.
+       */
+      case 'throw': {
+        if (!n.e) return { c: '__prism_cxx_rethrow()', t: T.VOID };
+        const x = this.expr(n.e, cx);
+        let t = x.t.k === 'ref' ? x.t.to : x.t;
+        if (t.k === 'array') t = T.ptr(t.of);
+        else if (t.k === 'func') t = T.ptr(t);
+        t = T.uncst(t);
+        if (t.k === 'class') this.fail('throwing a class object is not supported yet', n);
+        const c = `({ ${T.cDecl(t, '__prism_ex')} = ${x.c}; __prism_cxx_throw("${T.mangle(t)}", "${throwName(t)}", &__prism_ex, sizeof __prism_ex); })`;
+        return { c, t: T.VOID };
+      }
       case 'paren': { const e = this.expr(n.e, cx); return { ...e, c: `(${e.c})` }; }
       case 'this': { const o = this.thisObject(cx, n); return { c: 'this', t: T.ptr(o.t), lv: false }; }
       case 'id': return this.idExpr(n, cx);
@@ -995,6 +1020,14 @@ export const exprMethods = {
 
   idExpr(n, cx) {
     const r = this.lookupName(n.name, cx.env);
+    /*
+     * __func__ and gcc's __FUNCTION__: the function's name as the source spells it, unqualified, as
+     * g++ gives it -- the C backend would give the C name, which is mangled here.
+     */
+    if (!r && cx.fn?.f && n.name.parts?.length === 1 && /^(__func__|__FUNCTION__)$/.test(n.name.parts[0].name)) {
+      const name = cx.fn.f.name ?? cx.fn.f.cname;
+      return this.expr({ k: 'str', parts: [JSON.stringify(name)], loc: n.loc }, cx);
+    }
     if (!r) this.fail(`'${this.qualText(n.name)}' is not declared`, n);
     const { ent } = r;
     switch (ent.k) {

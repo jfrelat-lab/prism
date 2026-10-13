@@ -153,6 +153,8 @@ export const stmtMethods = {
     const stack = cx.fn.cleanups;
     for (let i = stack.length - 1; i >= 0; i--) {
       out.push(...this.destroy(stack[i].vars, cx));
+      // Leaving a try block early takes its handler off the stack (see 'try').
+      out.push(...(stack[i].pop ?? []));
       if (target === 'loop' && stack[i].kind === 'loop') break;
       if (target === 'switch' && (stack[i].kind === 'loop' || stack[i].kind === 'switch')) break;
     }
@@ -263,6 +265,46 @@ export const stmtMethods = {
       case 'break': return [...this.unwind(cx, 'switch'), 'break;'].join('\n');
       case 'continue': return [...this.unwind(cx, 'loop'), 'continue;'].join('\n');
       case 'goto': return `goto ${n.name};`;
+      /*
+       * C++ exceptions on setjmp/longjmp. The try's jmp_buf is a handler on the runtime's stack
+       * while its block runs (taken off at its end, and on a return, break or continue out of it);
+       * a throw copies its object, takes the innermost handler off and longjmps there, and the
+       * handlers are tried in order -- the type rule in the runtime, catch (...) taking anything --
+       * the last resort rethrowing to the next try out. Not done: destructors of the objects between
+       * the throw and the handler (longjmp passes them by), class objects thrown or caught, a handler
+       * by reference, a goto out of a try block.
+       */
+      case 'try': {
+        const buf = `__prism_eh${cx.fn.ntry = (cx.fn.ntry ?? 0) + 1}`;
+        cx.fn.cleanups.push({ vars: [], kind: 'try', pop: [`__prism_eh_pop(${buf});`] });
+        let body;
+        try { body = this.block(n.body, cx); } finally { cx.fn.cleanups.pop(); }
+        const handlers = n.handlers.map((h) => {
+          if (!h.param) return `if (1) ${this.block(h.body, cx)}`;
+          const t = T.uncst(this.declType(h.param.specs, h.param.decl.derivs, cx.env, h));
+          if (t.k === 'ref') this.fail('a handler that catches by reference is not supported yet', h);
+          if (t.k === 'class') this.fail('catching a class object is not supported yet', h);
+          const name = h.param.decl.name ? this.lastName(h.param.decl.name) : null;
+          const scope = new Scope(cx.env.scope);
+          const inner = { ...cx, env: { ...cx.env, scope } };
+          let decl = '';
+          if (name) {
+            scope.set(name, { k: 'var', name, type: t, cname: name, local: true });
+            decl = `${T.cDecl(t, name)} = *(${T.cDecl(T.ptr(t))})__prism_eh_obj(${buf});\n`;
+          }
+          return `if (__prism_eh_is(${buf}, "${T.mangle(t)}")) {\n${indent(decl + this.block(h.body, inner))}\n}`;
+        });
+        return `{\nint ${buf}[8];\n__prism_eh_push(${buf});\nif (setjmp(${buf}) == 0) {\n${indent(body)}\n__prism_eh_pop(${buf});\n} else ${handlers.join(' else ')} else __prism_cxx_rethrow_from(${buf});\n}`;
+      }
+      // GNU inline assembly, handed to the C front end with its operands lowered.
+      case 'asm': {
+        const sections = n.sections.map((ops) => ops.map((o) => {
+          if (o.clobber) return o.clobber;
+          const x = this.expr(o.e, cx);
+          return `${o.constraint}(${x.c})`;
+        }).join(', '));
+        return `__asm__ ${n.quals.join(' ')} (${n.template.join(' ')}${sections.map((s) => ` : ${s}`).join('')});`;
+      }
       // C wants a statement after a label where C++ allows a declaration: an empty one goes between.
       case 'label': return `${n.name}: ${n.s.k === 'decl' ? ';\n' : ''}${this.stmt(n.s, cx)}`;
       case 'return': return this.returnStmt(n, cx);
@@ -565,6 +607,8 @@ export const stmtMethods = {
     };
     const one = (t) => {
       const x = items[i];
+      // A char array's string may stand in braces of its own (8.5.2): `char s[8] = { "abc" }`.
+      if (x.k === 'braces' && t.k === 'array' && x.items.length === 1 && x.items[0].k === 'str') { i++; return x.items[0]; }
       if (x.k === 'braces') { i++; return aggregate(t) ? this.nestBraces(x, t) : x; }
       if (!aggregate(t) || (t.k === 'array' && x.k === 'str')) { i++; return x; }
       return { k: 'braces', items: level(t, one), loc: x.loc };
@@ -574,6 +618,7 @@ export const stmtMethods = {
     return { ...b, items: out };
   },
   bracesInit(b, type, cx, path = []) {
+    if (type.k === 'array' && b.items.length === 1 && b.items[0].k === 'str') return this.initElem(b.items[0], type, cx, path);
     if (type.k === 'array' || (type.k === 'class' && !this.complete(type.cls, b).ctors.length)) b = this.nestBraces(b, type);
     if (type.k === 'array') {
       return `{ ${b.items.map((x, i) => this.initElem(x, type.of, cx, [...path, `[${i}]`])).join(', ')} }`;
@@ -853,11 +898,21 @@ export const stmtMethods = {
   /**
    * The definition of a class template's static member for one instance. Every unit that uses the
    * instance makes it, as g++ makes a COMDAT one; a zero (or absent) initialiser leaves a tentative
-   * definition, which the C linker merges into one object. Any other value would be defined twice.
+   * definition, which the C linker merges into one object. Any other value would be defined twice --
+   * except for a CONSTANT object, which each unit may keep a copy of, local to it: nothing tells two
+   * copies of an object that cannot change apart but their addresses (FTGL's FTUnicodeStringItr<T>::
+   * utf8bytes, a table of 256 sequence lengths).
    */
   defineTemplateStatic(ent, it) {
     ent.definedHere = true;
     const zero = !it.init || (it.init.k === 'num' && /^0+[uUlL]*$/.test(it.init.v));
+    const constant = (t) => !!t.c || (t.k === 'array' && constant(t.of));
+    if (!zero && constant(ent.type) && ent.type.k !== 'class') {
+      const cx = { ...this.initContext(ent.ownerCls.env), node: it };
+      const init = it.init.k === 'braces' ? this.bracesInit(it.init, ent.type, cx) : this.initElem(it.init, ent.type, cx);
+      this.out.vars.push(`static ${this.ct(ent.type, ent.cname)} = ${init};`);
+      return;
+    }
     if (!zero) this.fail(`${ent.ownerCls.name}::${ent.name}: a class template's static member initialised to something other than 0`, it);
     this.out.vars.push(`${this.ct(ent.type.k === 'ref' ? T.ptr(ent.type.to) : ent.type, ent.cname)};`);
   },

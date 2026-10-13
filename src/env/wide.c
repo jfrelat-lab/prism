@@ -66,9 +66,42 @@ size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps)
     return 1;
 }
 
+/*
+ * The string forms, on the same one-byte encoding: each byte is its character. A NULL destination
+ * asks only for the length (Chromium B.S.U. sizes a message that way); a wide character no byte
+ * means stops wcstombs with (size_t)-1.
+ */
+size_t mbstowcs(wchar_t *dst, const char *src, size_t n)
+{
+    size_t i = 0;
+    if (!dst) { while (src[i]) i++; return i; }
+    for (; i < n; i++) {
+        dst[i] = (wchar_t)(unsigned char)src[i];
+        if (!src[i]) return i;
+    }
+    return i;
+}
+
+size_t wcstombs(char *dst, const wchar_t *src, size_t n)
+{
+    size_t i = 0;
+    for (; !dst || i < n; i++) {
+        if ((unsigned long)src[i] > 0xFFUL) return (size_t)-1;
+        if (dst) dst[i] = (char)src[i];
+        if (!src[i]) return i;
+    }
+    return i;
+}
+
 int iswprint(wint_t c)
 {
     return c >= 0x20 && c < 0x7F;
+}
+
+/* The C locale's white space: the space and \t \n \v \f \r. */
+int iswspace(wint_t c)
+{
+    return c == 0x20 || (c >= 0x09 && c <= 0x0D);
 }
 
 int wcsncmp(const wchar_t *a, const wchar_t *b, size_t n)

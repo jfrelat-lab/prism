@@ -34,6 +34,13 @@ const STD16 = { STDIN: 0x100, STDOUT: 0x102, STDERR: 0x104, FIRST: 5 };
 export function installStdio(M, {
   files = {}, readChar = () => -1, env = {},
   /*
+   * The files are a real filesystem's tree -- an installation laid out where its program looks, as
+   * Chromium B.S.U.'s /usr/local/share/chromium-bsu -- so a path is exactly itself: no basename
+   * guess. With the guess, stat() of a path that does not exist answered for a file of the same
+   * name elsewhere, and the program then failed to open what stat had promised.
+   */
+  exactPaths = false,
+  /*
    * Whether a byte is waiting on stdin, for `select`. A program that POLLS its input needs to ask
    * that question without consuming an answer -- Doom's sound server does exactly this, a
    * zero-timeout select on fd 0, and it is what makes its loop cooperative instead of blocking.
@@ -106,7 +113,7 @@ export function installStdio(M, {
    * exact match wins; a basename match is the fallback, so `pacman/pacman.6e` finds a file supplied
    * as `pacman.6e`.
    */
-  function find(name, { guess = true } = {}) {
+  function find(name, { guess = !exactPaths } = {}) {
     const want = norm(name);
     if (store.has(want)) return want;
     // A key that ends with the whole requested path: a store keyed one directory deeper still
@@ -752,9 +759,12 @@ export function installStdio(M, {
    */
   const O_CREAT_F = 0x40, O_TRUNC_F = 0x200, O_APPEND_F = 0x400, O_WRONLY_F = 1, O_RDWR_F = 2;
 
-  // struct stat, as declared in PRISM's own sys/stat.h: fourteen 4-byte fields. These offsets and
-  // that header are one thing in two places; changing either without the other is a silent bug.
-  const ST_MODE = 8, ST_SIZE = 28, ST_BLKSIZE = 32, ST_BLOCKS = 36, ST_SIZE_BYTES = 56;
+  // struct stat, as declared in PRISM's own sys/stat.h: thirteen 4-byte fields, 52 bytes. These
+  // offsets and that header are one thing in two places; changing either without the other is a
+  // silent bug -- and was one: the size said 56 from the start, so every stat() wrote four bytes past
+  // the caller's struct. Chromium B.S.U.'s TextFTGL::findFont has its struct at the top of its frame,
+  // and those four bytes were where its caller kept `this`.
+  const ST_MODE = 8, ST_SIZE = 28, ST_BLKSIZE = 32, ST_BLOCKS = 36, ST_SIZE_BYTES = 52;
   const S_IFREG = 0o100000, S_IFDIR = 0o040000;
 
   /*
@@ -1018,7 +1028,13 @@ export function installStdio(M, {
       }
       return interned.get(name);
     },
-    setenv: (namePtr, valPtr) => { environment[M.mod.cstr(namePtr)] = M.mod.cstr(valPtr); interned.delete(M.mod.cstr(namePtr)); return 0; },
+    // POSIX: a name already set is left alone unless `overwrite` is non-zero.
+    setenv: (namePtr, valPtr, overwrite) => {
+      const name = M.mod.cstr(namePtr);
+      if (Object.prototype.hasOwnProperty.call(environment, name) && !overwrite) return 0;
+      environment[name] = M.mod.cstr(valPtr); interned.delete(name); return 0;
+    },
+    unsetenv: (namePtr) => { const name = M.mod.cstr(namePtr); delete environment[name]; interned.delete(name); return 0; },
     /*
      * putenv takes ONE string, "NAME=value", and the POSIX version keeps the caller's storage rather
      * than copying it. Nothing here depends on that aliasing -- Quake II calls it once, on a buffer

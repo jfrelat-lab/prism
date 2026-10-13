@@ -22,6 +22,8 @@ export const MIXER_HEADERS = {
   'SDL_mixer.h': `
 #ifndef _SDL_mixer_h
 #define _SDL_mixer_h
+/* SDL_mixer.h includes the SDL headers it uses (SDL_types.h, SDL_audio.h, ...): a program may include it first. */
+#include <SDL.h>
 #define MIX_CHANNELS 8
 #define MIX_DEFAULT_FREQUENCY 22050
 #define MIX_DEFAULT_FORMAT 0x8010
@@ -49,6 +51,7 @@ int Mix_PlayChannelTimed(int channel, Mix_Chunk *chunk, int loops, int ticks);
 #define Mix_PlayChannel(channel, chunk, loops) Mix_PlayChannelTimed(channel, chunk, loops, -1)
 int Mix_HaltChannel(int channel);
 int Mix_AllocateChannels(int numchans);
+int Mix_ReserveChannels(int num);
 int Mix_SetPanning(int channel, Uint8 left, Uint8 right);
 int Mix_Playing(int channel);
 Mix_Music *Mix_LoadMUS(const char *file);
@@ -56,6 +59,8 @@ void Mix_FreeMusic(Mix_Music *music);
 int Mix_PlayMusic(Mix_Music *music, int loops);
 int Mix_VolumeMusic(int volume);
 int Mix_HaltMusic(void);
+void Mix_PauseMusic(void);
+void Mix_ResumeMusic(void);
 int Mix_FadeOutMusic(int ms);
 int Mix_PlayingMusic(void);
 int Mix_SetMusicCMD(const char *command);
@@ -412,7 +417,8 @@ export function mixerApi(M, state, { readRW = null } = {}) {
       if (!whole) { setError('Tried to play a chunk with a bad frame'); return -1; }
       which |= 0;
       if (which === -1) {
-        which = all.findIndex((ch) => ch.playing <= 0);
+        // The first free channel past the reserved ones (Mix_ReserveChannels), as mix_channels' loop.
+        which = all.findIndex((ch, i) => i >= (state.reserved ?? 0) && ch.playing <= 0);
         if (which < 0) { setError('No free channels available'); return -1; }
       }
       if (which < 0 || which >= all.length) return -1;
@@ -434,6 +440,8 @@ export function mixerApi(M, state, { readRW = null } = {}) {
       if ((which | 0) === -1) all.forEach(done); else if (all[which | 0]) done(all[which | 0]);
       return 0;
     },
+    /* The first `num` channels are left out of Mix_PlayChannel(-1)'s choice; more than exist is all of them. */
+    Mix_ReserveChannels: (num) => { num |= 0; const n = channels().length; state.reserved = num > n ? n : num; return state.reserved; },
     /* As many channels as asked: the ones dropped are halted, the new ones as Mix_OpenAudio makes them. */
     Mix_AllocateChannels: (n) => {
       const all = channels();
@@ -472,6 +480,8 @@ export function mixerApi(M, state, { readRW = null } = {}) {
     Mix_PlayMusic: () => { state.musicPlaying = true; return 0; },
     Mix_PlayingMusic: () => (state.musicPlaying ? 1 : 0),
     Mix_HaltMusic: () => { state.musicPlaying = false; return 0; },
+    // No music is ever playing here (Mix_LoadMUS fails), so there is nothing to pause or resume.
+    Mix_PauseMusic: () => {}, Mix_ResumeMusic: () => {},
     Mix_FadeOutMusic: () => { state.musicPlaying = false; return 1; },
     Mix_VolumeMusic: (v) => {
       const was = state.musicVolume;
@@ -510,13 +520,13 @@ export function mixerBuiltins(T) {
     Mix_VolumeChunk: f(I, P, I),
     Mix_Volume: f(I, I, I),
     Mix_PlayChannelTimed: f(I, I, P, I, I),
-    Mix_HaltChannel: f(I, I), Mix_AllocateChannels: f(I, I), Mix_SetPanning: f(I, I, B, B),
+    Mix_HaltChannel: f(I, I), Mix_AllocateChannels: f(I, I), Mix_ReserveChannels: f(I, I), Mix_SetPanning: f(I, I, B, B),
     Mix_Playing: f(I, I),
     Mix_LoadMUS: f(P, P),
     Mix_FreeMusic: f(V, P),
     Mix_PlayMusic: f(I, P, I),
     Mix_PlayingMusic: f(I),
-    Mix_HaltMusic: f(I),
+    Mix_HaltMusic: f(I), Mix_PauseMusic: f(V), Mix_ResumeMusic: f(V),
     Mix_FadeOutMusic: f(I, I),
     Mix_VolumeMusic: f(I, I),
     Mix_SetMusicCMD: f(I, P),
