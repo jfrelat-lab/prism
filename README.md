@@ -89,6 +89,11 @@ display. Each program is a descriptor in `web/programs/*.json`. The dev server e
 `SharedArrayBuffer` needs the COOP/COEP headers. The page loads `src/` as plain ES modules, so the
 browser runs the same files the Node gates run.
 
+**Live C** (`web/live/`) is the part that needs nothing else: type C or C++ and run it in the page,
+with the emitted JavaScript beside it. It works from any static host; on one that does not send the
+COOP/COEP headers (GitHub Pages), `web/live/coi-sw.js` adds them. The repository's `index.html` is
+the project page for GitHub Pages and links to it.
+
 **No game data is fetched or stored by this repository.** The page reads only the files you
 give it, or a directory you name with `--data`.
 

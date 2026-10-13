@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRISM — C and C++ to JavaScript, in the page</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A C and C++ compiler to JavaScript, written in plain JavaScript, that compiles the unmodified source of DOS-era and early-Linux games and emulators and runs them in the browser.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230e1116'/><path d='M8 2 L14 13 H2 Z' fill='none' stroke='%236cb6ff' stroke-width='1.6'/></svg>">
+<!--
+  The project page for GitHub Pages. It is a static page and runs nothing itself: the one thing that
+  runs on a static host is Live C (web/live/), which needs no corpus and no server endpoint, and gets
+  its cross-origin isolation from web/live/coi-sw.js. The program shelf (web/) needs tools/serve.mjs.
+  Under serve.mjs, `/` redirects to web/, so this page is only ever the Pages front door.
+-->
+<style>
+  :root {
+    --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594;
+    --head: #edf1f6; --accent: #6cb6ff; --accent-ink: #061524;
+    --spectrum: linear-gradient(90deg, #ff6b6b, #ffb35c, #ffe066, #7ee2a8, #6cb6ff, #9b8cff, #d38cff);
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  a:focus-visible, .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; }
+  b { color: var(--head); font-weight: 600; }
+
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 12px 24px;
+           background: var(--panel); border-bottom: 1px solid var(--line); position: relative; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--spectrum); opacity: .85; }
+  header .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; }
+  header .logo span { color: var(--accent); }
+  header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
+
+  main { max-width: 1080px; margin: 0 auto; padding: 0 24px 48px; }
+  .hero { padding: 52px 0 24px; }
+  .hero h1 { margin: 0 0 14px; font-size: clamp(27px, 4.2vw, 42px); line-height: 1.15; color: var(--head); text-wrap: balance; }
+  .hero p { max-width: 720px; margin: 0 0 12px; }
+  .pipeline { display: block; width: fit-content; max-width: 100%; overflow-x: auto; margin: 14px 0 22px;
+              padding: 9px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+              color: var(--dim); white-space: nowrap; border-left: 3px solid transparent;
+              border-image: var(--spectrum) 1; border-image-width: 0 0 0 3px; }
+  .pipeline b { color: var(--accent); font-weight: 500; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn { display: inline-block; padding: 10px 16px; border: 1px solid var(--accent); border-radius: 6px; color: var(--accent); font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); }
+  .btn:hover { text-decoration: none; filter: brightness(1.12); }
+
+  h2 { margin: 44px 0 6px; font-size: 21px; color: var(--head); text-wrap: balance; }
+  .lead { margin: 0 0 18px; color: var(--dim); max-width: 760px; }
+  .two { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
+  .box h3 { margin: 0 0 8px; font-size: 16px; color: var(--head); }
+  .box p, .box ul { margin: 0 0 8px; } .box ul { padding-left: 18px; } .box li { margin: 2px 0; }
+  .examples { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 6px 0 14px; }
+  .ex { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; background: var(--bg); }
+  .ex code { color: var(--accent); }
+  .ex p { margin: 4px 0 0; font-size: 13.5px; color: var(--dim); }
+  .table { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 7px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+  tr:first-child td { border-top: none; }
+  td:first-child { color: var(--head); min-width: 12em; }
+  .tag { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 4px; font-size: 11px;
+         letter-spacing: .06em; color: var(--dim); text-transform: uppercase; vertical-align: 1px; }
+  pre { margin: 8px 0 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+        overflow-x: auto; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+  footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
+  @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; }
+                              .hero { padding-top: 36px; } td:first-child { min-width: 8em; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo"><span>◢</span> PRISM</span>
+  <nav>
+    <a href="web/live/">Live C</a>
+    <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/COMPAT.md">What runs</a>
+    <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/TESTING.md">How it is tested</a>
+    <a href="https://github.com/jfrelat-lab/prism/tree/main/docs">Documentation</a>
+    <a href="https://github.com/jfrelat-lab/prism">Source</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <h1>C and C++ compiled to JavaScript, by a compiler that runs in the page.</h1>
+    <p>PRISM compiles the <b>unmodified source</b> of games and emulators from the DOS, Windows 95 and
+      early Linux years — MAME, Quake, Doom, ScummVM, Keen Dreams — and runs them in a browser tab.
+      It is written in plain JavaScript: no WebAssembly, no build step, no dependencies.</p>
+    <div class="pipeline mono">C / C++ / asm → preprocessor → parser + types (<b>i386</b> or <b>16-bit DOS</b> ABI) → JavaScript source → the browser's JIT</div>
+    <p>The game is not ported. Its source compiles as it shipped, and the platform it was written for
+      — DOS, X11, Win32, SDL, OpenGL — is supplied in JavaScript underneath it.</p>
+    <div class="cta">
+      <a class="btn primary" href="web/live/">Write C in Live C</a>
+      <a class="btn" href="https://github.com/jfrelat-lab/prism">Source on GitHub</a>
+      <a class="btn" href="https://github.com/jfrelat-lab/prism/blob/main/docs/ARCHITECTURE.md">How it works</a>
+    </div>
+  </section>
+
+  <section>
+    <h2>Live C</h2>
+    <p class="lead">Type C or C++, press Run. The whole chain happens in this tab: preprocess, parse,
+      lay out, emit JavaScript, link, run. The <b>Emitted JS</b> pane shows what your code became.
+      Each example is a place where a compiler that emits JavaScript has to do something that is not a
+      translation.</p>
+    <div class="examples">
+      <div class="ex"><code>layout.c</code><p>The i386 ABI: struct offsets, padding and bitfields, as gcc lays them out.</p></div>
+      <div class="ex"><code>floats.c</code><p>Type punning: a float's bits read as an integer, as Quake's renderer does.</p></div>
+      <div class="ex"><code>pointers.c</code><p>Function pointers as data, as in a MAME opcode table or a Doom thinker.</p></div>
+      <div class="ex"><code>stdin.c</code><p>A program blocked in <code>fgets</code> while the page keeps painting.</p></div>
+      <div class="ex"><code>shapes.cpp</code><p>C++ lowered to C: constructors, virtual calls, the old cfront idea.</p></div>
+    </div>
+    <a class="btn primary" href="web/live/">Open Live C</a>
+  </section>
+
+  <section>
+    <h2>What it compiles</h2>
+    <div class="two">
+      <div class="box">
+        <h3>Languages</h3>
+        <ul>
+          <li><b>C89/C99</b> with the GNU extensions real code uses.</li>
+          <li><b>A C++98 subset</b>: classes, virtual and multiple inheritance, templates, exceptions.
+            Enough for ScummVM, Enemy Territory and Tux Racer.</li>
+          <li><b>The program's own assembly</b>, translated from its source rather than emulated:
+            Borland inline <code>asm</code>, TASM modules, Watcom <code>#pragma aux</code>, NASM.</li>
+        </ul>
+      </div>
+      <div class="box">
+        <h3>Machines</h3>
+        <ul>
+          <li><b>i386</b> System V, flat 32-bit.</li>
+          <li><b>16-bit real-mode DOS</b>, small to large models, with <code>far</code> and
+            <code>huge</code> pointers and real segmentation.</li>
+          <li>Platform layers: libc and POSIX, DJGPP, Watcom, Borland, Allegro, X11, svgalib, Win32 and
+            Winsock, SDL 1.2 and 2, OpenGL 1.x with GLU and GLUT on WebGL.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What runs</h2>
+    <div class="box table">
+      <table>
+        <tr><td>MAME 0.34 <span class="tag">DJGPP</span></td><td>15 of 15 games bit-identical to a native gcc build over 1,500 frames.</td></tr>
+        <tr><td>Quake, GLQuake</td><td>The same pixels on DOS, X11, svgalib and Win32; GLQuake within 1 pixel of 307,200 of Mesa.</td></tr>
+        <tr><td>Quake II, Quake III, Enemy Territory</td><td>Play; Quake II's GL renderer within 3 pixels of Mesa.</td></tr>
+        <tr><td>Doom, Heretic, Hexen, Hexen II</td><td>Play; Doom with its sound server running as a second process.</td></tr>
+        <tr><td>ScummVM 0.6.1 and 0.10.0 <span class="tag">C++</span></td><td>Thirteen engines; 3,000 of 3,000 frames and every audio buffer equal to a native g++ build, for 20 game demos.</td></tr>
+        <tr><td>Keen Dreams <span class="tag">16-bit</span></td><td>Plays; its screens are those of the shipped KDREAMS.EXE under DOSBox-X.</td></tr>
+        <tr><td>And more</td><td>OpenDUNE, Jump 'n Bump, SDLPoP, OpenTyrian, Tux Racer, Cube, Chromium B.S.U., Lua 5.4, PuTTY, SQLite.</td></tr>
+        <tr><td>Not yet</td><td>An optimiser; Catacomb 3-D, which generates code at run time; picture references for some GL games.</td></tr>
+      </table>
+    </div>
+    <p class="lead" style="margin-top:12px">Tier-0 output runs about <b>9.5× slower than <code>clang -O2</code></b> native; in the
+      browser, Cube draws at about 145 frames a second through WebGL.
+      <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/COMPAT.md">The full list</a>, with what holds each result.</p>
+  </section>
+
+  <section>
+    <h2>Checked against other compilers</h2>
+    <p class="lead">No gate answers its own question. Each one compares PRISM with an independent
+      implementation, and carries a deliberate mutation it must catch.</p>
+    <div class="box table">
+      <table>
+        <tr><td>Preprocessor</td><td><code>gcc -E</code>, token for token, over 289 whole translation units.</td></tr>
+        <tr><td>Layouts</td><td>gcc 12 for i386 (about 105,000 checks); Open Watcom and Borland C++ 2.0 for 16-bit DOS.</td></tr>
+        <tr><td>Semantics</td><td>c-testsuite and gcc.c-torture with 0 wrong answers; csmith programs against <code>gcc -O0</code> and <code>-O2</code>.</td></tr>
+        <tr><td>Assembly</td><td>Turbo Assembler 2.5's own object code, executed under Unicorn.</td></tr>
+        <tr><td>Programs</td><td>Native builds of the same sources, Mesa, and the shipped DOS binaries under DOSBox-X.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Run the games yourself</h2>
+    <p class="lead">The game sources and data are not in this repository and are never fetched by it.
+      Each target names where its published source comes from; the data is yours to supply.</p>
+    <div class="box">
+<pre>git clone https://github.com/jfrelat-lab/prism && cd prism
+git clone --depth 1 -b v5.4.7 https://github.com/lua/lua.git corpus/lua
+node tools/build.mjs targets/lua.json --run "--args=-e print(6*7)"
+node tools/serve.mjs --data=/path/to/your/game/files</pre>
+      <p style="margin:10px 0 0">Node 22. The shelf in <code>web/</code> compiles each program in a
+        worker and shows it on a canvas; <code>tools/serve.mjs</code> exists for the COOP/COEP headers
+        SharedArrayBuffer needs. Sibling project: <a href="https://github.com/jfrelat-lab/mirage-x86">MIRAGE</a>,
+        which runs the x86 binary when there is no source.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  PRISM is free software under the <a href="https://github.com/jfrelat-lab/prism/blob/main/LICENSE">MIT licence</a>;
+  <a href="https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md">some parts</a> keep their upstream licence.
+  Written with <a href="https://claude.com/claude-code">Claude Code</a>.
+</footer>
+</body>
+</html>
