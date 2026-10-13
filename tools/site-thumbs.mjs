@@ -24,7 +24,8 @@ const OUT = join(ROOT, 'dist/site-thumbs');
 mkdirSync(OUT, { recursive: true });
 
 const { programs } = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'), 'utf8'));
-for (const e of programs.filter((p) => !p._skip && p.thumb && (!ONLY || ONLY.includes(p.id)))) {
+// `thumb.page`: a thumbnail taken in the page by hand, where no headless run reaches the picture.
+for (const e of programs.filter((p) => !p._skip && p.thumb?.frames && (!ONLY || ONLY.includes(p.id)))) {
   const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${e.program}.json`), 'utf8'));
   const file = join(OUT, `${e.id}.png`);
   const frame = e.thumb.frames;

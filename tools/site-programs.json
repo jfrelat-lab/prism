@@ -29,7 +29,7 @@
       ]
     },
     {
-      "id": "heretic", "thumb": { "frames": 300, "data": "heretic" }, "program": "heretic-shareware", "machine": "dos",
+      "id": "heretic", "thumb": { "page": "its title screen, about 8 s after Run in the page: taken by hand, as the headless run waits on the Watcom timer (tools/site-thumbs.mjs leaves it alone)" }, "program": "heretic-shareware", "machine": "dos",
       "dataFiles": ["htic_v12.zip"],
       "title": "Heretic (shareware)", "author": "Raven Software, published by id Software", "year": 1994, "kind": "First-person shooter",
       "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive unpacked in the page; Raven's own Watcom DOS source, compiled whole.",

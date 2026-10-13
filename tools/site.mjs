@@ -158,7 +158,10 @@ write('web/machines.json', JSON.stringify(machines, null, 1));
 // The thumbnails tools/site-thumbs.mjs took, when there are some.
 for (const s of shipped) {
   const t = join(ROOT, 'dist/site-thumbs', `${s.id}.png`);
-  if (existsSync(t)) { copy(t, `thumbs/${s.id}.png`); s.thumb = `thumbs/${s.id}.png`; }
+  // The manifest's `thumb` is how to TAKE one (site-thumbs.mjs); the page's is the image's path, or
+  // nothing. Passed through as it stood, a missing thumbnail reached the page as an object and drew
+  // <img src="[object Object]">.
+  s.thumb = existsSync(t) ? (copy(t, `thumbs/${s.id}.png`), `thumbs/${s.id}.png`) : null;
 }
 
 write('web/site.json', JSON.stringify({
