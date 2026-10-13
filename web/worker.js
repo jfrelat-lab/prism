@@ -1762,6 +1762,9 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     };
 
     let published = 0;
+    // The 16-bit display's B,G,R,A copy. Its own, not glPublisher's: when that one took its buffer
+    // into a closure these went with it, and every ScummVM present threw "out is not defined".
+    let out = 0, outW = 0, outH = 0;
     sdl.state.onPresent = () => {
       const { width: w, height: h, pixels } = sdl.state;
       if (!w || !h || !pixels) return;
