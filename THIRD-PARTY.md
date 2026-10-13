@@ -40,6 +40,11 @@ These files are built only with the program they serve, and never become part of
 `assets/vga-rom-8x16.bin` is the IBM VGA 8x16 text font. It was rebuilt from glyphs rendered by
 DOSBox, not copied from a ROM file (see `assets/README.md`).
 
+## GNU Lesser General Public License 2.1
+
+Applies to the routines of `src/env/sdlmixer.js` and `src/env/sdl12.js` listed above as LGPL-2.1. The
+full text is [LICENSES/LGPL-2.1.txt](LICENSES/LGPL-2.1.txt).
+
 ## SGI Free Software License B 2.0
 
 Applies to the parts of `src/env/glu.js` listed above.

@@ -7,13 +7,14 @@
 // A GLUT program is run here with glut.js's own frame hook (the schedule gate-gears uses). Anything
 // else goes through tools/build.mjs --run --frames --png, which knows each host's present call, on a
 // virtual clock, with a time limit: a program that never presents is a missing thumbnail, not a hang.
-import { readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { writeRgbPng } from './png.mjs';
+import { virtualClock } from '../src/env/clock.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
@@ -36,6 +37,26 @@ for (const e of programs.filter((p) => !p._skip && p.thumb && (!ONLY || ONLY.inc
     const bgrx = new Uint8Array(shot.w * shot.h * 4);
     for (let i = 0; i < shot.w * shot.h; i++) { bgrx[4 * i] = shot.rgba[4 * i + 2]; bgrx[4 * i + 1] = shot.rgba[4 * i + 1]; bgrx[4 * i + 2] = shot.rgba[4 * i]; }
     writeRgbPng(file, { bytes: bgrx, width: shot.w, height: shot.h });
+  } else if (desc.host === 'sdl' && JSON.parse(readFileSync(join(ROOT, 'targets', `${desc.target}.json`), 'utf8')).env?.includes('gl')) {
+    /*
+     * An SDL 1.2 OPENGL program (Chromium B.S.U.): frame N at its SDL_GL_SwapBuffers, on a virtual
+     * clock, with its data laid out as the page lays it (needsData.mount, exactPaths).
+     */
+    const nd = desc.needsData ?? {};
+    const files = {};
+    const walk = (d, pre) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p, `${pre}${f}/`); else if (f !== 'PROVENANCE.txt') files[pre + f] = new Uint8Array(readFileSync(p)); } };
+    if (nd.dir) walk(join(GAMES, nd.dir), nd.mount ?? '');
+    const b = buildTarget(loadTarget(join(ROOT, 'targets', `${desc.target}.json`)), { root: ROOT,
+      envExtra: { stdio: { files, exactPaths: !!nd.exactPaths }, sdl12: { clock: virtualClock() } } });
+    let n = 0;
+    b.program.M.sdl.state.onSwap = (gl) => {
+      if (++n < frame) return;
+      const W = gl.state.width, H = gl.state.height, px = gl.readPixels(), bgrx = new Uint8Array(W * H * 4);
+      for (let i = 0; i < W * H; i++) { bgrx[4 * i] = px[4 * i + 2]; bgrx[4 * i + 1] = px[4 * i + 1]; bgrx[4 * i + 2] = px[4 * i]; }
+      writeRgbPng(file, { bytes: bgrx, width: W, height: H });
+      throw new Error('__thumb_done');
+    };
+    try { b.program.run([desc.target]); } catch (err) { if (!/__thumb_done/.test(err.message)) { console.log(`${e.id}: ${err.message}`); continue; } }
   } else {
     const data = desc.needsData?.dir ? [`--data=${join(GAMES, desc.needsData.dir)}`] : [];
     const args = e.thumb.args ?? e.args ?? desc.args;

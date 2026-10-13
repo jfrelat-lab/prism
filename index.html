@@ -78,6 +78,7 @@
   .card .blurb { margin: 0; font-size: 14px; flex: 1; }
   .card .lic { font-size: 12.5px; color: var(--dim); display: grid; gap: 2px; }
   .card .lic b { color: var(--ink); font-weight: 500; }
+  .card .credits { margin: 0; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
   .card .actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 13px; flex-wrap: wrap; }
   .card .run { padding: 5px 14px; border-radius: 5px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
   .card .run:hover { text-decoration: none; filter: brightness(1.12); }
@@ -231,6 +232,9 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
    * The programs, when this page is a static export of the shelf (tools/site.mjs writes web/site.json
    * beside the shelf). On GitHub Pages there is no export and no file, and the page stays as it is.
    */
+  // The corresponding source of a build, as the GPL asks: the program's own (`source`) and how PRISM
+  // built it -- its target file, in the compiler's repository.
+  const build = (p) => `https://github.com/jfrelat-lab/prism/blob/main/targets/${String(p.target).split(':')[0]}.json`;
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   /*
    * The shelf (web/) works under tools/serve.mjs and in an export, not on GitHub Pages: its link is
@@ -253,7 +257,8 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''}</div>
           <p class="blurb">${esc(p.blurb)}</p>
           <div class="lic"><span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}</div>
-          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a>${lic ? `<span class="meta">${lic}</span>` : ''}</div>
+          ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
+          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a>${lic ? `<span class="meta">${lic}</span>` : ''}</div>
         </div></article>`;
     }).join('');
   }).catch(() => { /* not an export */ });

@@ -1,0 +1,16 @@
+{
+  "title": "CHROMIUM B.S.U.",
+  "subtitle": "Mark B. Allan, 2000; Paul Wise, 0.9.16.1 (2016) · C++ on SDL 1.2, OpenGL and GLU, its text through FTGL over FreeType",
+  "target": "chromium-bsu",
+  "host": "sdl",
+  "fps": 60,
+  "needsData": {
+    "dir": "chromium-bsu",
+    "mount": "/",
+    "exactPaths": true,
+    "hint": "the game's data as `make install` lays it out, from the root: usr/local/share/chromium-bsu/{png,wav} from chromium-bsu-0.9.16.1.tar.gz, and usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf (the font its configure named)"
+  },
+  "controls": [["mouse", "fly"], ["left button / space", "fire"], ["arrows", "fly, menus"], ["Enter", "choose"], ["p", "pause"], ["Esc", "menu"]],
+  "_why": "A whole C++ game with its libraries compiled from source beside it: FTGL (C++) and FreeType for its text, GLU 9's tessellator for FTGL's outlines, zlib and libjpeg. It opens its data at the absolute paths its configure wrote (PKGDATADIR, FONT_PATH), so the data root is mounted at / and stdio matches paths exactly (`mount`, `exactPaths`): a basename guess answered stat() for one file with another of the same name.",
+  "_controls": "From its manual page, misc/chromium-bsu.6."
+}

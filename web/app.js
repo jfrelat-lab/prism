@@ -726,7 +726,10 @@ async function loadData(root, say, under = '') {
   if (dataCache.has(key)) return dataCache.get(key);
   const r = await fetch(api.dataList(root));
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
-  const files = (await r.json()).files.filter((f) => f.startsWith(under));
+  const listing = await r.json();
+  const files = listing.files.filter((f) => f.startsWith(under));
+  // A static export ships a file over its host's size limit in parts (tools/site.mjs): joined here.
+  const chunks = listing.chunks ?? {};
   if (!files.length) throw new Error(`the data directory '${root}/${under}' is empty`);
   say?.(`loading ${files.length} data file${files.length === 1 ? '' : 's'} from ${root}/…`);
   const out = {};
@@ -734,6 +737,15 @@ async function loadData(root, say, under = '') {
     // The relative path IS the key. MAME asks for "pacman/pacman.6e", and flattening that to
     // "pacman.6e" leaves only a basename match to save it -- which also lets one game's file answer
     // for another's when two ROM sets share a filename.
+    if (chunks[f]) {
+      const parts = await Promise.all(Array.from({ length: chunks[f] }, async (_, i) =>
+        new Uint8Array(await (await fetch(api.dataFile(root, `${f}.part${i}`))).arrayBuffer())));
+      const whole = new Uint8Array(parts.reduce((t, p) => t + p.length, 0));
+      let at = 0;
+      for (const p of parts) { whole.set(p, at); at += p.length; }
+      out[f] = whole;
+      return;
+    }
     out[f] = new Uint8Array(await (await fetch(api.dataFile(root, f))).arrayBuffer());
   }));
   dataCache.set(key, out);

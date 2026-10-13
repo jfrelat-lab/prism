@@ -1,8 +1,32 @@
 {
-  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Beneath a Steel Sky (sky.dsk is 69 MiB, over a static host's 25 MiB), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams, Doom (shareware or proprietary data).",
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams, Doom (shareware or proprietary data).",
   "programs": [
     {
-      "id": "chromium-bsu-placeholder", "_skip": "needs a shelf descriptor first (web/programs/chromium-bsu.json)"
+      "id": "chromium-bsu", "thumb": { "frames": 120 }, "program": "chromium-bsu", "machine": "linux",
+      "title": "Chromium B.S.U.", "author": "Mark B. Allan; Paul Wise", "year": 2016, "kind": "Shoot 'em up",
+      "blurb": "The vertical shooter in C++ and OpenGL, built here with FTGL, FreeType and GLU's tessellator from their own sources.",
+      "code": { "license": "Clarified Artistic License", "source": "https://sourceforge.net/projects/chromium-bsu/" },
+      "data": { "license": "Images: Clarified Artistic; sounds: MIT; font: DejaVu (Bitstream Vera, notice in the font)" },
+      "credits": "Portions of this software are copyright © 2009 The FreeType Project (www.freetype.org). All rights reserved. This software is based in part on the work of the Independent JPEG Group.",
+      "licenseFiles": [
+        { "name": "Game licence (Clarified Artistic)", "path": "corpus/chromium-bsu-0.9.16.1/COPYING" },
+        { "name": "Sounds licence (MIT)", "path": "corpus/chromium-bsu-0.9.16.1/data/wav/license.txt" },
+        { "name": "FreeType licence (FTL)", "path": "corpus/freetype-2.3.11/docs/FTL.TXT" },
+        { "name": "FTGL licence", "path": "corpus/ftgl-2.1.3~rc5/COPYING" },
+        { "name": "libjpeg (IJG) README", "path": "corpus/jpeg-6b/README" }
+      ]
+    },
+    {
+      "id": "bass", "thumb": { "frames": 1500 }, "program": "scummvm", "machine": "linux",
+      "dataFiles": ["sky-cd/sky.dsk", "sky-cd/sky.dnr", "sky-cd/readme.txt"],
+      "title": "Beneath a Steel Sky", "author": "Revolution Software", "year": 1994, "kind": "Adventure",
+      "blurb": "The cyberpunk adventure, CD version with full speech, freeware since 2003, run by ScummVM 0.6.1 compiled from its C++ source.",
+      "code": { "license": "GPL-2.0 (ScummVM)", "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/" },
+      "data": { "license": "Freeware: free distribution, readme intact, no fee for the game" },
+      "licenseFiles": [
+        { "name": "Game readme and licence", "from": "data", "path": "bass/sky-cd/readme.txt" },
+        { "name": "ScummVM licence (GPL-2.0)", "path": "corpus/scummvm-0.6.1/COPYING" }
+      ]
     },
     {
       "id": "fotaq", "thumb": { "frames": 2400 }, "program": "scummvm-queen", "machine": "linux",

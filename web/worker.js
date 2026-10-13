@@ -330,6 +330,26 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     if (r.ok) tree.set(f.toLowerCase(), await r.text());
   }
   /*
+   * ...and the files BESIDE them, which a unit includes by a name relative to its own directory.
+   * Node reads them off the disk; this side fetched only the units, so a library built in its own
+   * tree -- FreeType's src/winfonts/winfnt.c includes "winfnt.h" -- lost them, and the parse failed
+   * where the stubbed header's macro was used. The directories holding outside units, once each.
+   */
+  const outsideDirs = [...new Set((program.outsideRoot ?? []).map((f) => f.replace(/\/[^/]*$/, '')))]
+    .filter((d) => d && d !== program.root && !d.startsWith(`${program.root}/`));
+  await pooled(outsideDirs, 8, async (d) => {
+    const out = await (await fetch(`/__ls?dir=${encodeURIComponent(d)}`)).json().catch(() => ({ files: [] }));
+    // This directory's own files, not its subdirectories': those are other units' directories. Every
+    // source extension, not headers only -- FreeType's ftbase.c #includes ftcalc.c and its neighbours,
+    // GLU's priorityq.c includes priorityq-heap.c.
+    await pooled((out.files ?? []).filter((f) => !f.includes('/') && SOURCE_EXT.test(f)), 24, async (f) => {
+      const key = `${d}/${f}`.toLowerCase();
+      if (tree.has(key)) return;
+      const r = await fetch(`/${d}/${f}`);
+      if (r.ok) tree.set(key, await r.text());
+    });
+  });
+  /*
    * The assembly to translate, read as LATIN-1 rather than as text. `Response.text()` decodes UTF-8
    * and replaces any byte that is not valid UTF-8 with U+FFFD, which would silently corrupt a
    * comment or a string in a file written in 1998 -- the Node build reads these with 'latin1' for
@@ -582,7 +602,13 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
   for (const [name, text] of Object.entries(program.installFiles || {})) {
     files[name] = enc.encode(`${text}\n`);
   }
-  for (const [name, bytes] of Object.entries(data || {})) files[name] = new Uint8Array(bytes);
+  /*
+   * `mount`: where the data root sits in the program's filesystem. A program that opens its data at
+   * absolute paths its configure wrote (Chromium B.S.U.: /usr/local/share/chromium-bsu/...) has its
+   * root mounted at `/`, and its files are named from there.
+   */
+  const mount = program.needsData?.mount ?? '';
+  for (const [name, bytes] of Object.entries(data || {})) files[mount + name] = new Uint8Array(bytes);
   const biggest = Object.entries(files).sort((a, b) => b[1].length - a[1].length)[0];
   log(`${Object.keys(files).length} data files visible to the program` +
     (biggest ? ` (largest: ${biggest[0]}, ${biggest[1].length.toLocaleString('en')} bytes)` : ''));
@@ -1687,7 +1713,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     // An SDL_OPENGL program draws through gl.js: WebGL2 when the worker has it, as for GLUT.
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     const env = buildEnv(prog.M, program.env ?? [], {
-      stdio: { files, readChar: () => keyboard.read() },
+      // exactPaths: no basename guess, for data laid out as a real filesystem (see src/env/stdio.js).
+      stdio: { files, readChar: () => keyboard.read(), exactPaths: !!program.needsData?.exactPaths },
       gl: { backend },
       sdl12: {
         onPalette: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
