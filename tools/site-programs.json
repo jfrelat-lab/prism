@@ -1,5 +1,5 @@
 {
-  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); Heretic's waits on a licence text for its source.",
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
   "programs": [
     {
       "id": "chromium-bsu", "thumb": { "frames": 120 }, "program": "chromium-bsu", "machine": "linux",
@@ -26,6 +26,18 @@
       "licenseFiles": [
         { "name": "Shareware terms", "path": "tools/site-licenses/doom-shareware.txt" },
         { "name": "DOOM source licence (GPL-2.0)", "path": "corpus/DOOM/LICENSE.TXT" }
+      ]
+    },
+    {
+      "id": "heretic", "thumb": { "frames": 300, "data": "heretic" }, "program": "heretic-shareware", "machine": "dos",
+      "dataFiles": ["htic_v12.zip"],
+      "title": "Heretic (shareware)", "author": "Raven Software, published by id Software", "year": 1994, "kind": "First-person shooter",
+      "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive unpacked in the page; Raven's own Watcom DOS source, compiled whole.",
+      "code": { "license": "GPL-2.0 (Raven, 2008)", "source": "https://sourceforge.net/projects/heretic/" },
+      "data": { "license": "Shareware: electronic distribution, royalty free, in compressed form (LICENSE.DOC §3)" },
+      "licenseFiles": [
+        { "name": "Shareware licence (LICENSE.DOC)", "path": "tools/site-licenses/heretic-shareware.txt" },
+        { "name": "Heretic source licence (GPL-2.0)", "path": "tools/site-licenses/heretic-source-GPL-2.0.txt" }
       ]
     },
     {

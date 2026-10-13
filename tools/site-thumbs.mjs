@@ -63,7 +63,9 @@ for (const e of programs.filter((p) => !p._skip && p.thumb && (!ONLY || ONLY.inc
     const data = dataDir ? [`--data=${join(GAMES, dataDir)}`] : [];
     const args = e.thumb.args ?? e.args ?? desc.args;
     const r = spawnSync('node', [join(ROOT, 'tools/build.mjs'), `targets/${desc.target}.json`, '--run', ...data,
-      ...(args ? [`--args=${args}`] : []), `--frames=${frame}`, `--png=${file}`],
+      ...(args ? [`--args=${args}`] : []), `--frames=${frame}`, `--png=${file}`,
+      // A program that waits on its own timer interrupt (Heretic's ticcount) moves only at safepoints.
+      ...(desc.safepoints ? ['--safepoints'] : [])],
     { cwd: ROOT, encoding: 'utf8', timeout: (e.thumb.seconds ?? 120) * 1000, killSignal: 'SIGKILL' });
     if (!existsSync(file)) { console.log(`${e.id}: no thumbnail (${r.error?.code ?? `exit ${r.status}`}) ${(r.stdout + r.stderr).trim().split('\n').slice(-2).join(' | ')}`); continue; }
   }

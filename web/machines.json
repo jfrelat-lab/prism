@@ -31,6 +31,7 @@
         { "program": "mame-0.34", "file": "MAME", "ext": "EXE", "date": "1998-12-31" },
         { "program": "quake", "variant": "dos", "file": "QUAKE", "ext": "EXE", "date": "1996-08-01" },
         { "program": "heretic", "file": "HERETIC", "ext": "EXE", "date": "1994-12-23" },
+        { "program": "heretic-shareware", "name": "Heretic (shareware)", "file": "HERETIC1", "ext": "EXE", "date": "1994-12-23" },
         { "program": "hexen", "file": "HEXEN", "ext": "EXE", "date": "1995-09-30" },
         { "program": "opendune", "file": "DUNE2", "ext": "EXE", "date": "1992-12-01" },
         { "program": "jumpnbump", "file": "JUMPBUMP", "ext": "EXE", "date": "1998-01-01" },
