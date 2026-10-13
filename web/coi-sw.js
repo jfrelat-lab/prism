@@ -1,4 +1,5 @@
 // coi-sw.js — the COOP/COEP headers a static host does not send, added by a service worker.
+// Registered by coi.js from web/index.html and web/live/index.html; its scope is web/, both pages.
 //
 // Live C needs SharedArrayBuffer (stdin: prog.run() never returns, so a keystroke must reach the
 // worker through shared memory), and SharedArrayBuffer needs a cross-origin-isolated page.

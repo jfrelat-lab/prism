@@ -9,7 +9,7 @@
 <!--
   The project page for GitHub Pages. It is a static page and runs nothing itself: the one thing that
   runs on a static host is Live C (web/live/), which needs no corpus and no server endpoint, and gets
-  its cross-origin isolation from web/live/coi-sw.js. The program shelf (web/) needs tools/serve.mjs.
+  its cross-origin isolation from web/coi-sw.js. The program shelf (web/) needs tools/serve.mjs.
   Under serve.mjs, `/` redirects to web/, so this page is only ever the Pages front door.
 -->
 <style>
@@ -66,6 +66,21 @@
          letter-spacing: .06em; color: var(--dim); text-transform: uppercase; vertical-align: 1px; }
   pre { margin: 8px 0 0; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
         overflow-x: auto; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
+  .card { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .card .shot { display: grid; place-items: center; aspect-ratio: 4 / 3; background: #000; color: var(--dim); font: 600 13px ui-monospace, Menlo, monospace; letter-spacing: .1em; }
+  .card .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+  .card .shot:hover { text-decoration: none; }
+  .card .body { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 14px; flex: 1; }
+  .card h3 { margin: 0; font-size: 16px; color: var(--head); }
+  .card .meta { color: var(--dim); font-size: 13px; }
+  .card .blurb { margin: 0; font-size: 14px; flex: 1; }
+  .card .lic { font-size: 12.5px; color: var(--dim); display: grid; gap: 2px; }
+  .card .lic b { color: var(--ink); font-weight: 500; }
+  .card .actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 13px; flex-wrap: wrap; }
+  .card .run { padding: 5px 14px; border-radius: 5px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .card .run:hover { text-decoration: none; filter: brightness(1.12); }
+  [hidden] { display: none !important; }
   footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
   @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; }
                               .hero { padding-top: 36px; } td:first-child { min-width: 8em; } }
@@ -93,10 +108,20 @@
     <p>The game is not ported. Its source compiles as it shipped, and the platform it was written for
       — DOS, X11, Win32, SDL, OpenGL — is supplied in JavaScript underneath it.</p>
     <div class="cta">
-      <a class="btn primary" href="web/live/">Write C in Live C</a>
+      <a class="btn primary" href="#play" data-site hidden>Play in the browser</a>
+      <a class="btn primary" href="web/live/" data-nosite>Write C in Live C</a>
+      <a class="btn" href="web/live/" data-site hidden>Write C in Live C</a>
       <a class="btn" href="https://github.com/jfrelat-lab/prism">Source on GitHub</a>
       <a class="btn" href="https://github.com/jfrelat-lab/prism/blob/main/docs/ARCHITECTURE.md">How it works</a>
     </div>
+  </section>
+
+  <section id="play" data-site hidden>
+    <h2>Play</h2>
+    <p class="lead">Each of these was compiled by PRISM from its unmodified source, and runs here from that
+      build: nothing is installed, and nothing is compiled while you wait. Only programs whose code
+      <b>and</b> data may be shared are here; each card links to both licences.</p>
+    <div class="grid" id="grid"></div>
   </section>
 
   <section>
@@ -197,5 +222,31 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
   <a href="https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md">some parts</a> keep their upstream licence.
   Written with <a href="https://claude.com/claude-code">Claude Code</a>.
 </footer>
+
+<script>
+  /*
+   * The programs, when this page is a static export of the shelf (tools/site.mjs writes web/site.json
+   * beside the shelf). On GitHub Pages there is no export and no file, and the page stays as it is.
+   */
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  fetch('web/site.json').then((r) => (r.ok ? r.json() : null)).then((site) => {
+    if (!site?.programs?.length) return;
+    for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
+    for (const el of document.querySelectorAll('[data-nosite]')) el.hidden = true;
+    document.getElementById('grid').innerHTML = site.programs.map((p) => {
+      const shot = p.thumb ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
+      const lic = (p.licences ?? []).map((l) => `<a href="${esc(l.href)}">${esc(l.name)}</a>`).join(' · ');
+      return `<article class="card">
+        <a class="shot" href="${esc(p.run)}" aria-label="Run ${esc(p.title)}">${shot}</a>
+        <div class="body">
+          <h3>${esc(p.title)} <span class="tag">${esc(p.kind)}</span></h3>
+          <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''}</div>
+          <p class="blurb">${esc(p.blurb)}</p>
+          <div class="lic"><span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}</div>
+          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a>${lic ? `<span class="meta">${lic}</span>` : ''}</div>
+        </div></article>`;
+    }).join('');
+  }).catch(() => { /* not an export */ });
+</script>
 </body>
 </html>

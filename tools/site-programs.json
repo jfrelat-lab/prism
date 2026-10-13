@@ -1,0 +1,49 @@
+{
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Left out for now: morph3d (no licence in its file), Tux Racer (no licence for its data), Tyrian 2.1 (its own file_id.diz forbids distribution), Beneath a Steel Sky (sky.dsk is 69 MiB, over a static host's 25 MiB), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams, Doom (shareware or proprietary data).",
+  "programs": [
+    {
+      "id": "chromium-bsu-placeholder", "_skip": "needs a shelf descriptor first (web/programs/chromium-bsu.json)"
+    },
+    {
+      "id": "fotaq", "thumb": { "frames": 2400 }, "program": "scummvm-queen", "machine": "linux",
+      "title": "Flight of the Amazon Queen", "author": "Interactive Binary Illusions", "year": 1995, "kind": "Adventure",
+      "blurb": "The point-and-click adventure, freeware since 2004, run by ScummVM 0.6.1 compiled from its C++ source.",
+      "code": { "license": "GPL-2.0 (ScummVM)", "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/" },
+      "data": { "license": "Freeware: free distribution, readme intact, no fee for the game" },
+      "licenseFiles": [
+        { "name": "Game readme and licence", "from": "data", "path": "queen/FOTAQ_Floppy/readme.txt" },
+        { "name": "ScummVM licence (GPL-2.0)", "path": "corpus/scummvm-0.6.1/COPYING" }
+      ]
+    },
+    {
+      "id": "jumpnbump", "thumb": { "frames": 300 }, "program": "jumpnbump-sdl", "machine": "linux", "dataFiles": ["jumpbump.dat"],
+      "title": "Jump 'n Bump", "author": "Brainchild Design", "year": 1998, "kind": "Arcade",
+      "blurb": "Bunnies stomping bunnies: the 1998 game through its SDL 1.2 port, keyboard players side by side.",
+      "code": { "license": "GPL-2.0+ (SDL port)", "source": "https://gitlab.com/LibreGames/jumpnbump" },
+      "data": { "license": "Freely distributable: \"You are also allowed to put this game on your homepage\"" },
+      "licenseFiles": [
+        { "name": "Original 1998 readme", "path": "corpus/jumpnbump/docs/original_readme.txt" },
+        { "name": "SDL port licence (GPL-2.0)", "path": "corpus/jumpnbump-sdl12/COPYING" }
+      ]
+    },
+    {
+      "id": "gears", "thumb": { "frames": 25 }, "program": "gears", "machine": "linux",
+      "title": "Gears", "author": "Brian Paul", "year": 1999, "kind": "OpenGL demo",
+      "blurb": "Mesa's classic: three lit gears turning, drawn through PRISM's OpenGL onto WebGL.",
+      "code": { "license": "Public domain", "source": "https://gitlab.freedesktop.org/mesa/demos" }
+    },
+    {
+      "id": "texobj", "thumb": { "frames": 25 }, "program": "texobj", "machine": "linux",
+      "title": "Texture objects", "author": "Brian Paul", "year": 1996, "kind": "OpenGL demo",
+      "blurb": "Two textured squares, each with its own texture object, spinning.",
+      "code": { "license": "Public domain", "source": "https://gitlab.freedesktop.org/mesa/demos" }
+    },
+    {
+      "id": "lua", "program": "lua", "machine": "linux", "args": "",
+      "title": "Lua 5.4", "author": "PUC-Rio", "year": 2024, "kind": "Interpreter",
+      "blurb": "The reference Lua interpreter, compiled from its own source: an interactive prompt in the page.",
+      "code": { "license": "MIT", "source": "https://github.com/lua/lua" },
+      "licenseFiles": [ { "name": "Lua licence (MIT, in lua.h)", "path": "corpus/lua/lua.h" } ]
+    }
+  ]
+}

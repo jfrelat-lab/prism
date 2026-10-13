@@ -652,9 +652,28 @@ if (mgl) {
    * for an 8-bit surface and wrote every pixel of it. The palette is the shim's own copy, kept in
    * the 0..255 form SDL_SetColors hands over rather than the DAC's six bits.
    */
-  const { width: w, height: h, pixels, palette } = program.M.sdl.state;
-  console.log(`\nframes ${frames} · display ${w}x${h} · SDL 1.2, 8-bit` + fpsNote());
-  if (pngPath && w > 0 && h > 0) {
+  const { width: w, height: h, pixels, palette, depth = 8 } = program.M.sdl.state;
+  console.log(`\nframes ${frames} · display ${w}x${h} · SDL 1.2, ${depth}-bit` + fpsNote());
+  if (pngPath && w > 0 && h > 0 && depth !== 8) {
+    /*
+     * A direct-colour display, in the masks the shim gives a depth the program names none for
+     * (src/env/sdl12.js DEFAULT_MASKS): 5-6-5 at 16 bits, 5-5-5 at 15, R,G,B,A bytes at 32. ScummVM
+     * asks for 16: read as 8-bit palette indices, its picture came out as noise.
+     */
+    const bytes = depth === 32 ? 4 : 2, bgrx = new Uint8Array(w * h * 4), u8 = program.M.u8;
+    for (let i = 0; i < w * h; i++) {
+      let r, g, b;
+      if (bytes === 4) { r = u8[pixels + 4 * i]; g = u8[pixels + 4 * i + 1]; b = u8[pixels + 4 * i + 2]; } else {
+        const v = u8[pixels + 2 * i] | (u8[pixels + 2 * i + 1] << 8);
+        if (depth === 15) { r = (v >> 10) & 31; g = (v >> 5) & 31; b = v & 31; r = (r << 3) | (r >> 2); g = (g << 3) | (g >> 2); }
+        else { r = v >> 11; g = (v >> 5) & 63; b = v & 31; r = (r << 3) | (r >> 2); g = (g << 2) | (g >> 4); }
+        b = (b << 3) | (b >> 2);
+      }
+      bgrx[4 * i] = b; bgrx[4 * i + 1] = g; bgrx[4 * i + 2] = r;
+    }
+    writeRgbPng(pngPath, { bytes: bgrx, width: w, height: h });
+    console.log(`  wrote ${pngPath}`);
+  } else if (pngPath && w > 0 && h > 0) {
     const px = new Uint8Array(program.M.u8.subarray(pixels, pixels + w * h));
     let nz = 0;
     for (const b of px) if (b) nz++;

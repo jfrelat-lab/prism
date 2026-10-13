@@ -91,8 +91,16 @@ browser runs the same files the Node gates run.
 
 **Live C** (`web/live/`) is the part that needs nothing else: type C or C++ and run it in the page,
 with the emitted JavaScript beside it. It works from any static host; on one that does not send the
-COOP/COEP headers (GitHub Pages), `web/live/coi-sw.js` adds them. The repository's `index.html` is
+COOP/COEP headers (GitHub Pages), `web/coi-sw.js` adds them. The repository's `index.html` is
 the project page for GitHub Pages and links to it.
+
+**A static showcase.** `node tools/site.mjs` writes `site/`, a copy of the shelf that needs no
+server. It holds only the programs in `tools/site-programs.json`: those whose code **and** data
+may be redistributed, each with both licences. Each one ships as a precompiled bundle
+(`tools/bundle.mjs`), with its data taken from `--games`. `tools/site-thumbs.mjs` draws the
+thumbnails. Any static host serves it (`python3 -m http.server --directory site`), and
+`index.html` turns into a gallery of those programs. `site/` holds game data and is never
+committed.
 
 **No game data is fetched or stored by this repository.** The page reads only the files you
 give it, or a directory you name with `--data`.

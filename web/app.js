@@ -18,6 +18,7 @@ import { makeControl, controlViews, makeKeyboard, makeMouse, wake, KEY_HOLD_FRAM
   KBD_EXTENDED, SLOT, STATE } from '../src/env/webhost.js';
 import { scancodeForEvent, extendedForEvent } from '../src/env/scancodes.js';
 import { makePipe } from '../src/env/pipe.js';
+import { endpoints } from './endpoints.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 
 const $ = (id) => document.getElementById(id);
@@ -199,7 +200,17 @@ let chosen = 0;           // which of its programs is selected
 let argsFor = null;       // the entry the argument field's contents belong to
 let lastArgsWritten = ''; // ...and exactly what was written, so typing is told apart from a refill
 
+/*
+ * Served by tools/serve.mjs, or a static export of it (tools/site.mjs)? Only an export writes
+ * web/site.json; its answers to the server's questions are files (see endpoints.js), and the worker
+ * is told so it asks the same way.
+ */
+let site = null;
+let api = endpoints(false);
+
 async function discover() {
+  try { const r = await fetch('./site.json'); if (r.ok) site = await r.json(); } catch { /* a server */ }
+  api = endpoints(!!site);
   const cfg = await (await fetch('./machines.json')).json();
   machines = cfg.machines.filter(m => !m.id.startsWith('_'));
 
@@ -207,7 +218,7 @@ async function discover() {
   // "it is not here" is a different fact from "it is not supported", and a build that dies fetching
   // an empty listing tells you neither.
   try {
-    const { targets } = await (await fetch('/__targets')).json();
+    const { targets } = await (await fetch(api.targets())).json();
     for (const t of targets) targetInfo[t.name] = t;
   } catch { /* an older server: everything is assumed present, as it was before this existed */ }
 
@@ -257,7 +268,7 @@ async function countUnits() {
   await Promise.all(machines.flatMap(m => m.programs).map(async (x) => {
     if (!x.target || !x.present) return;
     if (!seen.has(x.target)) {
-      seen.set(x.target, fetch(`/__target?name=${encodeURIComponent(x.target)}`)
+      seen.set(x.target, fetch(api.target(x.target))
         .then(r => (r.ok ? r.json() : null)).catch(() => null));
     }
     const t = await seen.get(x.target);
@@ -711,7 +722,7 @@ async function loadData(root, say, under = '') {
   // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
   const key = `${root}\0${under}`;
   if (dataCache.has(key)) return dataCache.get(key);
-  const r = await fetch(`/__data/?root=${encodeURIComponent(root)}`);
+  const r = await fetch(api.dataList(root));
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const files = (await r.json()).files.filter((f) => f.startsWith(under));
   if (!files.length) throw new Error(`the data directory '${root}/${under}' is empty`);
@@ -721,7 +732,7 @@ async function loadData(root, say, under = '') {
     // The relative path IS the key. MAME asks for "pacman/pacman.6e", and flattening that to
     // "pacman.6e" leaves only a basename match to save it -- which also lets one game's file answer
     // for another's when two ROM sets share a filename.
-    out[f] = new Uint8Array(await (await fetch(`/__data/${f}`)).arrayBuffer());
+    out[f] = new Uint8Array(await (await fetch(api.dataFile(root, f))).arrayBuffer());
   }));
   dataCache.set(key, out);
   return out;
@@ -734,7 +745,7 @@ async function loadData(root, say, under = '') {
  */
 let lazyNames = [];
 async function listData(root, under = '') {
-  const r = await fetch(`/__data/?root=${encodeURIComponent(root)}`);
+  const r = await fetch(api.dataList(root));
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const { files } = await r.json();
   const names = files.filter((f) => f.startsWith(under));
@@ -1191,7 +1202,7 @@ async function startRun(typedAs = null) {
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
   worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
-                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: pageOptions,
+                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: { ...pageOptions, site: !!site },
                        /* The machine's own screen, so the program's output continues under the
                           command line instead of starting on a blank page. */
                        screen: machine.kind === 'desktop' ? null

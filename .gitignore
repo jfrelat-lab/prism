@@ -31,3 +31,6 @@ DATA/
 
 # Local editor/agent configuration (paths of this machine).
 .claude/
+
+# A static export (tools/site.mjs): it holds game data, so it never enters the repository.
+/site/
