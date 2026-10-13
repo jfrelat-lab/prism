@@ -3380,6 +3380,16 @@ probe that fails, stays a FAIL: those mean the tree is broken.
 The positive control: a gate that exits 1 is reported `FAIL` and the runner exits 1; the six
 converted sites each print `SKIP:` and exit 77 when their resource is absent.
 
+**On a fresh clone** (CI, `.github/workflows/gates.yml`) most gates find out by throwing, not by
+checking. `tools/gates.mjs` starts each gate with `tools/gate-preload.mjs`, which turns exactly two
+errors into a SKIP: an error with code `PRISM_MISSING` (a target's source tree, from src/target.js;
+the oracle container not built or no Docker, from tools/oracle.mjs) and an `ENOENT` for a path under
+`corpus/`. Every other error stays a FAIL. The controls, run directly: a plain `throw` exits 7, and so
+does a missing file under `goldens/`; `PRISM_MISSING`, thrown or rejected, and a missing
+`corpus/` file exit 77. A fresh clone with no Docker: 33 pass, 54 skip, 0 fail. Gates that catch
+their own errors per case check for the corpus first: `gate-tasm-front`, `gate-tasm-link`, and
+`gate-pp-sizeof`, which still checks Borland's side without the corpus.
+
 ### The two reds, taken apart
 
 **`gate-pixels` was never failing.** It exited 2 for want of `--data`. Given Quake's data
