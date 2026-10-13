@@ -18,6 +18,7 @@ import { sh, SCRATCH, version } from './oracle.mjs';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { compile, compileProgram, builtinHeaderResolver } from '../src/compile.js';
+import { cxxForTarget } from '../src/cxx/index.js';
 
 const VERBOSE = process.argv.includes('--verbose');
 const FILTER = process.argv.slice(2).find((a) => !a.startsWith('--')) ?? null;
@@ -1638,6 +1639,10 @@ if (!FILTER) {
     ['std c++17 is refused by name', /^refused: .*c\+\+17.*C\+\+98/.test(out(CLASS, 'unit.cpp', { std: 'c++17' }))],
     ['a language that is neither c nor c++ is refused', /^refused: .*'c' or 'c\+\+'/.test(out(CLASS, 'unit.cpp', { language: { '*': 'objc' } }))],
     ['a key the option does not have is refused', /^refused: .*no 'standard'/.test(out(CLASS, 'unit.cpp', { standard: 'c++98' }))],
+    // gcc's .C is C++; a DOS tree's AM_MAP.C is C (cxxForTarget): it took every unit of Heretic and Hexen.
+    ['a .C unit is C++, as gcc decides, on a case-sensitive tree', out(CLASS, 'UNIT.C', cxxForTarget(undefined, false)) === '42'],
+    ['...and C on a case-insensitive (DOS) tree: `class` is an identifier', out(PLAIN, 'UNIT.C', cxxForTarget(undefined, true)) === '42'],
+    ['...where the target\'s own table still wins', out(CLASS, 'UNIT.C', cxxForTarget({ language: { 'UNIT.C': 'c++' } }, true)) === '42'],
   ];
   // What the lowering must never emit, the C front end refuses as gcc does ("array type has
   // incomplete element type") rather than giving the rows a stride of 0.

@@ -12,6 +12,7 @@ import { compileProgram, bindLateBuiltins, loadSnapshot } from '../src/compile.j
 import { toolchainCompile } from '../src/toolchain.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 import { endpoints } from './endpoints.js';
+import { cxxForTarget } from '../src/cxx/index.js';
 /*
  * The registry and the assembler, both pure JS. The planar branch below builds its devices from the
  * TARGET'S OWN env list through buildEnv rather than naming them one by one, which is the same rule
@@ -537,7 +538,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       enums: program.compile?.enums,
       ppSizeof: program.compile?.ppSizeof ?? null,
       lenientPaste: !!program.compile?.lenientPaste,
-      cxx: program.compile?.cxx,
+      cxx: cxxForTarget(program.compile?.cxx, program.caseInsensitive),
       window: program.compile?.window ?? (program.env ?? []).includes('ega'),
       externData,
       // The environments' builtin signatures, as src/target.js passes them -- so a program compiled

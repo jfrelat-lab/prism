@@ -1,0 +1,41 @@
+{
+  "title": "Heretic (shareware)",
+  "target": "heretic",
+  "platform": "watcom",
+  "fps": 35,
+  "subtitle": "Raven Software, 1994 · episode one from id's 1.2 shareware archive, served as published and unpacked in the page; Raven's source, GPL since 2008, built with its own MAKEFILE",
+  "needsData": {
+    "dir": "heretic-shareware",
+    "archive": "htic_v12.zip",
+    "pick": [
+      "HERETIC1.WAD"
+    ],
+    "hint": "htic_v12.zip as id published it (idgames, idstuff/heretic/): DEICE.EXE and HTIC_V12.1, .2, joined and unpacked in the page"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Space",
+      "use"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "Enter",
+      "select"
+    ]
+  ],
+  "safepoints": true,
+  "safepointsNote": "These games get their TIME from an interrupt and wait for it inside a loop of their own C -- Heretic's TryRunTics spins on `ticcount`, which only the ISR writes. A safepoint is the only place this runtime can reach into such a loop, so without them the game waits for ever and looks exactly like a hang.",
+  "ticHz": 35,
+  "_archive": "The shareware licence (LICENSE.DOC, section 3) allows electronic distribution of the archive, royalty free and compressed: the data root holds the archive and the page unpacks it (web/unpack.js)."
+}

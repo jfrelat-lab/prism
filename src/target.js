@@ -24,6 +24,7 @@ import { bindWin32Exports } from './env/dl.js';
 import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
 import { installAsm } from './asm/link.js';
 import { asmText } from './asm/gas.js';
+import { cxxForTarget } from './cxx/index.js';
 import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from './asm/tasm-link.js';
 
 /**
@@ -437,7 +438,7 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     ppSizeof: c.ppSizeof ?? null,
     // ...and whether it let an invalid token paste through, as gcc 2.x did (src/cpp/cpp.js).
     lenientPaste: !!c.lenientPaste,
-    cxx: c.cxx,
+    cxx: cxxForTarget(c.cxx, target.caseInsensitive),
     collect: c.collect ?? true,
     safepoints: !!c.safepoints,
     /*

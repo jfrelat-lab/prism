@@ -37,6 +37,18 @@ export function checkCxxOption(cxx) {
   }
 }
 
+/**
+ * The `cxx` option of a CASE-INSENSITIVE target (a DOS tree: src/target.js caseInsensitive). gcc's
+ * `.C` is C++ because a Unix name keeps its case; a DOS name has none, and Watcom and Borland compile
+ * HERETIC's AM_MAP.C as C. So on such a tree `*.c` is C whatever its case, unless the target's own
+ * table says otherwise. Without this, the C++ front end took every unit of Heretic and Hexen.
+ */
+export function cxxForTarget(cxx, caseInsensitive) {
+  if (!caseInsensitive || cxx === false) return cxx;
+  const base = cxx && typeof cxx === 'object' ? cxx : {};
+  return { ...base, language: { '*.c': 'c', ...(base.language ?? {}) } };
+}
+
 /** 'c' or 'c++' for one unit, under a `cxx` option. */
 export function unitLanguage(file, cxx) {
   if (cxx === false) return 'c';
