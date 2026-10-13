@@ -17,7 +17,7 @@
       ]
     },
     {
-      "id": "bass", "thumb": { "frames": 1500 }, "program": "scummvm", "machine": "linux",
+      "id": "bass", "thumb": { "frames": 3500 }, "program": "scummvm", "machine": "linux",
       "dataFiles": ["sky-cd/sky.dsk", "sky-cd/sky.dnr", "sky-cd/readme.txt"],
       "title": "Beneath a Steel Sky", "author": "Revolution Software", "year": 1994, "kind": "Adventure",
       "blurb": "The cyberpunk adventure, CD version with full speech, freeware since 2003, run by ScummVM 0.6.1 compiled from its C++ source.",
