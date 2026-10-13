@@ -231,10 +231,9 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    // A REDIRECT rather than a rewrite: serving web/index.html at `/` would make its own
-    // `./app.js` resolve to `/app.js`, which does not exist. The page's relative imports have to be
-    // relative to the directory it really lives in.
-    if (path === '/') { res.writeHead(302, { Location: '/web/' }).end(); return; }
+    // `/` is the project page, index.html at the root, which links to the shelf (web/). Not web/index.html
+    // rewritten to `/`: its `./app.js` would resolve to `/app.js`, which does not exist.
+    if (path === '/') { headers(res, TYPES['.html']); res.end(await readFile(join(ROOT, 'index.html'))); return; }
 
     const file = safeJoin(ROOT, path);
     if (!file) { res.writeHead(403).end('outside the repository'); return; }

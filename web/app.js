@@ -211,6 +211,8 @@ let api = endpoints(false);
 async function discover() {
   try { const r = await fetch('./site.json'); if (r.ok) site = await r.json(); } catch { /* a server */ }
   api = endpoints(!!site);
+  // What only a server has (the MAME catalogue reads the ROM directory) is not offered by an export.
+  for (const el of document.querySelectorAll('[data-server]')) el.hidden = !!site;
   const cfg = await (await fetch('./machines.json')).json();
   machines = cfg.machines.filter(m => !m.id.startsWith('_'));
 

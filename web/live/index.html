@@ -42,6 +42,12 @@
   header .name small { display: block; font-weight: 400; letter-spacing: 0;
                        color: var(--dim); font-size: 10px; }
   .sep { flex: 1; }
+  /* The bar every PRISM page shares (index.html, web/, web/live/): the name is the way home, and the
+     prism's spectrum under it. border-image rather than a pseudo-element, because the bar scrolls. */
+  header { border-bottom: 2px solid transparent; border-image: linear-gradient(90deg, #ff6b6b, #ffb35c, #ffe066, #7ee2a8, #6cb6ff, #9b8cff, #d38cff) 1; }
+  header a.name { border: none; padding: 0; border-radius: 0; color: var(--fg); text-decoration: none; }
+  header a.name:hover { color: var(--accent); }
+  header .name .mark { color: var(--accent); }
   a.back { color: var(--dim); text-decoration: none; border: 1px solid var(--edge);
            border-radius: 5px; padding: 5px 9px; }
   a.back:hover { color: var(--accent); border-color: var(--accent); }
@@ -112,7 +118,7 @@
 <body>
 
 <header>
-  <span class="name">PRISM<small>Live C</small></span>
+  <a class="name" href="../../" title="PRISM: the project page"><span class="mark">◢</span> PRISM<small>Live C</small></a>
   <button id="run">Run</button>
   <button id="stopBtn" disabled>Stop</button>
   <label>argv <input id="argv" type="text" spellcheck="false" value="prog"></label>
@@ -128,7 +134,7 @@
   </label>
   <button id="reset" title="throw away these files and start from the example">Reset</button>
   <span class="sep"></span>
-  <a class="back" href="../../">&larr; PRISM</a>
+  <a class="back" href="../" id="shelfLink" hidden>Programs &rarr;</a>
 </header>
 
 <main>
@@ -159,5 +165,11 @@
 </main>
 
 <script type="module" src="./live.js"></script>
+<script>
+  // The shelf exists beside Live C under serve.mjs and in a static export (web/site.json), not on
+  // GitHub Pages, where it would open on nothing: the link is offered only where it leads somewhere.
+  Promise.any([fetch('../site.json'), fetch('/__targets')].map((p) => p.then((r) => (r.ok ? r : Promise.reject()))))
+    .then(() => { document.getElementById('shelfLink').hidden = false; }).catch(() => {});
+</script>
 </body>
 </html>

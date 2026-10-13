@@ -7,10 +7,11 @@
 <meta name="description" content="A C and C++ compiler to JavaScript, written in plain JavaScript, that compiles the unmodified source of DOS-era and early-Linux games and emulators and runs them in the browser.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230e1116'/><path d='M8 2 L14 13 H2 Z' fill='none' stroke='%236cb6ff' stroke-width='1.6'/></svg>">
 <!--
-  The project page for GitHub Pages. It is a static page and runs nothing itself: the one thing that
-  runs on a static host is Live C (web/live/), which needs no corpus and no server endpoint, and gets
-  its cross-origin isolation from web/coi-sw.js. The program shelf (web/) needs tools/serve.mjs.
-  Under serve.mjs, `/` redirects to web/, so this page is only ever the Pages front door.
+  The project page, the front door of all three ways PRISM is served. On GitHub Pages it offers Live
+  C (web/live/), the one page that needs neither a corpus nor a server (isolated by web/coi-sw.js).
+  Under tools/serve.mjs, which serves it at `/`, it also links the program shelf (web/), found by
+  asking for /__targets. In a static export (tools/site.mjs) it shows the exported programs from
+  web/site.json. The three are told apart at run time, so there is one page to keep.
 -->
 <style>
   :root {
@@ -90,6 +91,7 @@
 <header>
   <span class="logo"><span>◢</span> PRISM</span>
   <nav>
+    <a href="web/" data-shelf hidden>Programs</a>
     <a href="web/live/">Live C</a>
     <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/COMPAT.md">What runs</a>
     <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/TESTING.md">How it is tested</a>
@@ -110,9 +112,10 @@
     <div class="cta">
       <a class="btn primary" href="#play" data-site hidden>Play in the browser</a>
       <a class="btn primary" href="web/live/" data-nosite>Write C in Live C</a>
+      <a class="btn" href="web/" data-shelf hidden>Open the program shelf</a>
       <a class="btn" href="web/live/" data-site hidden>Write C in Live C</a>
-      <a class="btn" href="https://github.com/jfrelat-lab/prism">Source on GitHub</a>
-      <a class="btn" href="https://github.com/jfrelat-lab/prism/blob/main/docs/ARCHITECTURE.md">How it works</a>
+      <a class="btn" href="https://github.com/jfrelat-lab/prism" data-nosite>Source on GitHub</a>
+      <a class="btn" href="https://github.com/jfrelat-lab/prism/blob/main/docs/ARCHITECTURE.md" data-nosite>How it works</a>
     </div>
   </section>
 
@@ -229,8 +232,15 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
    * beside the shelf). On GitHub Pages there is no export and no file, and the page stays as it is.
    */
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  /*
+   * The shelf (web/) works under tools/serve.mjs and in an export, not on GitHub Pages: its link is
+   * shown only where one of the two answers.
+   */
+  const showShelf = () => { for (const el of document.querySelectorAll('[data-shelf]')) el.hidden = false; };
+  fetch('__targets').then((r) => { if (r.ok) showShelf(); }).catch(() => {});
   fetch('web/site.json').then((r) => (r.ok ? r.json() : null)).then((site) => {
     if (!site?.programs?.length) return;
+    showShelf();
     for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
     for (const el of document.querySelectorAll('[data-nosite]')) el.hidden = true;
     document.getElementById('grid').innerHTML = site.programs.map((p) => {
