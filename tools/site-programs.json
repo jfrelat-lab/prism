@@ -87,6 +87,17 @@
       ]
     },
     {
+      "id": "jumpnbump-dos", "thumb": { "frames": 300 }, "program": "jumpnbump", "machine": "dos", "dataFiles": ["jumpbump.dat"],
+      "title": "Jump 'n Bump (DOS)", "author": "Brainchild Design", "year": 1998, "kind": "Arcade",
+      "blurb": "The 1998 DOS original: DJGPP C on a planar VGA, its blitter written in assembly and translated when it loads.",
+      "code": { "license": "\"Do whatever you like with it\" (the 1999 source release)", "source": "https://gitlab.com/LibreGames/jumpnbump" },
+      "data": { "license": "Freely distributable: \"You are also allowed to put this game on your homepage\"" },
+      "licenseFiles": [
+        { "name": "Source release note", "path": "corpus/jumpnbump-dos/source.txt" },
+        { "name": "Original 1998 readme", "path": "corpus/jumpnbump/docs/original_readme.txt" }
+      ]
+    },
+    {
       "id": "gears", "thumb": { "frames": 25 }, "program": "gears", "machine": "linux",
       "title": "Gears", "author": "Brian Paul", "year": 1999, "kind": "OpenGL demo",
       "blurb": "Mesa's classic: three lit gears turning, drawn through PRISM's OpenGL onto WebGL.",
