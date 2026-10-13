@@ -1,5 +1,7 @@
 # PRISM
 
+[![gates](https://github.com/jfrelat-lab/prism/actions/workflows/gates.yml/badge.svg)](https://github.com/jfrelat-lab/prism/actions/workflows/gates.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **A C and C++ compiler that targets JavaScript and is itself written in plain JavaScript. It compiles
 the unmodified source of games and emulators from the DOS, Windows 95 and early Linux era — MAME,
 Quake, Doom, ScummVM, Keen Dreams — and runs them in a browser tab or in Node.**
