@@ -13,7 +13,8 @@
     "exclude": [
       "MONSTER.SOU"
     ],
-    "hint": "dott-demo/ from dott-dos-ni-demo-en.zip, the demo the ScummVM project distributes"
+    "hint": "dott-demo/ from dott-dos-ni-demo-en.zip, the demo the ScummVM project distributes",
+    "marker": "DOTTDEMO.000"
   },
   "controls": [
     [

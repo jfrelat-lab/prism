@@ -8,7 +8,8 @@
   "fps": 60,
   "needsData": {
     "dir": "hexen2",
-    "hint": "data1/ from the retail CD patched to 1.11 (pak0.pak, pak1.pak, progs.dat, progs2.dat, strings.txt), plus infolist.txt from the GPL source release"
+    "hint": "data1/ from the retail CD patched to 1.11 (pak0.pak, pak1.pak, progs.dat, progs2.dat, strings.txt), plus infolist.txt from the GPL source release",
+    "marker": "data1/pak0.pak"
   },
   "controls": [
     [

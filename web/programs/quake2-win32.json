@@ -8,6 +8,7 @@
   "fps": 30,
   "needsData": {
     "dir": "quake2",
+    "marker": "baseq2/pak0.pak",
     "hint": "baseq2/ from the shareware or retail release — pak0.pak"
   },
   "controls": [

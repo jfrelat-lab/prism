@@ -5,7 +5,8 @@
   "subtitle": "id Software / Softdisk, 1991 · Borland C++ 2.0, MODEL MEDIUM, three TASM modules · 16-bit real mode, EGA",
   "needsData": {
     "hint": "the shareware 1.13 data (KDREAMS.EGA, KDREAMS.MAP, KDREAMS.AUD, ...) with the static/ headers tools/keen-static.mjs extracts from its own KDREAMS.EXE",
-    "dir": "keendreams"
+    "dir": "keendreams",
+    "marker": "KDREAMS.EGA"
   },
   "controls": [
     ["arrows", "move"],

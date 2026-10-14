@@ -10,7 +10,8 @@
   "needsData": {
     "dir": "scumm",
     "under": "samnmax-demo/",
-    "hint": "samnmax-demo/ from samnmax-dos-demo-en.zip, the demo the ScummVM project distributes"
+    "hint": "samnmax-demo/ from samnmax-dos-demo-en.zip, the demo the ScummVM project distributes",
+    "marker": "SNMDEMO.SM0"
   },
   "controls": [
     [

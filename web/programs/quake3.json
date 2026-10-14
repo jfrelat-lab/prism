@@ -9,7 +9,8 @@
   "_fps": "85 is the engine's own cap, com_maxfps's default in qcommon/common.c.",
   "needsData": {
     "dir": "quake3",
-    "hint": "baseq3/ of the full game: pak0.pk3 from the CD and pak1-8 from the 1.32 point release"
+    "hint": "baseq3/ of the full game: pak0.pk3 from the CD and pak1-8 from the 1.32 point release",
+    "marker": "baseq3/pak0.pk3"
   },
   "controls": [
     [

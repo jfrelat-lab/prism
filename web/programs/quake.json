@@ -9,7 +9,8 @@
   "memory": 536870912,
   "needsData": {
     "hint": "Quake's own data: id1/pak0.pak (the shareware pak is enough)",
-    "dir": "quake"
+    "dir": "quake",
+    "marker": "id1/pak0.pak"
   },
   "controls": [
     [

@@ -721,13 +721,13 @@ const dataCache = new Map();               // root + under -> { name: Uint8Array
  * One data root, fetched once. Progress goes to the machine's own screen, because that is where you
  * are looking: a 50 MB pak takes a moment and a page that simply sits there looks broken.
  */
-async function loadData(root, say, under = '', hint = '') {
+async function loadData(root, say, under = '', hint = '', marker = '') {
   // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
   const key = `${root}\0${under}`;
   if (dataCache.has(key)) return dataCache.get(key);
   const r = await fetch(api.dataList(root));
   // A static export ships some programs' builds without their data: the visitor brings it.
-  if (!r.ok && site) { const own = await pickData(root, under, hint, say); dataCache.set(key, own); return own; }
+  if (!r.ok && site) { const own = await pickData(root, under, hint, say, marker); dataCache.set(key, own); return own; }
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const listing = await r.json();
   const files = listing.files.filter((f) => f.startsWith(under));
@@ -757,42 +757,156 @@ async function loadData(root, say, under = '', hint = '') {
 
 /*
  * THE VISITOR'S OWN DATA, for a program a static export ships without it (its gallery: Quake, the
- * ScummVM demos...). The page asks for the folder, reads it in the browser and runs the program on it;
- * nothing is uploaded. The folder chosen is taken as the data ROOT the descriptor names (Quake's holds
- * id1/), and the top folder's own name is dropped -- a browser gives every path under it. If none of
- * the files is `under` the prefix the program wants, the visitor chose that directory itself (the
- * Monkey Island demo's folder rather than the one holding it), and the prefix is put back.
+ * ScummVM demos...). The page asks for a folder or an archive, chosen or dropped, reads it in the
+ * browser and runs the program on it; nothing is uploaded. Where the program's root sits in what was
+ * chosen is found by rootData. On request the files are kept on this device (kept.*), so a second
+ * visit does not ask again; "forget" removes them.
  */
-function pickData(root, under, hint, say) {
-  return new Promise((resolve, reject) => {
+function pickData(root, under, hint, say, marker) {
+  const key = `${root}\0${under}`;
+  return new Promise(async (resolve, reject) => {
     const box = document.createElement('div');
     box.className = 'byo';
+    const last = await kept.about(key);
     box.innerHTML = `<p><b>Your copy, read here.</b> This site ships the program, not its data.
-      Choose the folder that holds ${hint ? escapeHtml(hint) : `the program's files (${escapeHtml(root)})`}.
+      Choose or drop the folder, or a .zip of it, that holds ${hint ? escapeHtml(hint) : `the program's files (${escapeHtml(root)})`}.
       It is read by this page and never leaves your browser.</p>
+      ${last ? `<div class="byo-actions"><button type="button" class="byo-last">Use the files you gave last time (${last.count} files, ${mbOf(last.bytes)})</button>
+      <button type="button" class="byo-forget">Forget them</button></div>` : ''}
       <div class="byo-actions"><button type="button" class="byo-pick">Choose folder…</button>
-      <button type="button" class="byo-cancel">Cancel</button></div>`;
-    const input = document.createElement('input');
-    input.type = 'file'; input.webkitdirectory = true; input.multiple = true; input.hidden = true;
-    box.append(input);
+      <button type="button" class="byo-zip">Choose .zip…</button>
+      <button type="button" class="byo-cancel">Cancel</button></div>
+      <label class="byo-keep"><input type="checkbox"> Keep them on this device for next time</label>
+      <p class="byo-err" role="alert" hidden></p>`;
+    const dirInput = Object.assign(document.createElement('input'), { type: 'file', webkitdirectory: true, multiple: true, hidden: true });
+    const zipInput = Object.assign(document.createElement('input'), { type: 'file', accept: '.zip,.tar.gz,.tgz', multiple: true, hidden: true });
+    box.append(dirInput, zipInput);
     $('stage').append(box);
-    const done = () => box.remove();
-    box.querySelector('.byo-cancel').onclick = () => { done(); reject(new Error('no data chosen')); };
-    box.querySelector('.byo-pick').onclick = () => input.click();
-    input.onchange = async () => {
-      const list = [...input.files];
-      if (!list.length) return;
-      say?.(`reading ${list.length} file${list.length === 1 ? '' : 's'} from your folder…`);
-      let out = {};
-      await Promise.all(list.map(async (f) => {
-        const rel = (f.webkitRelativePath || f.name).split('/').slice(1).join('/') || f.name;
-        out[rel] = new Uint8Array(await f.arrayBuffer());
-      }));
-      if (under && !Object.keys(out).some((k) => k.startsWith(under))) out = Object.fromEntries(Object.entries(out).map(([k, v]) => [under + k, v]));
-      done();
-      resolve(Object.fromEntries(Object.entries(out).filter(([k]) => k.startsWith(under))));
+    const err = box.querySelector('.byo-err');
+    const fail = (e) => { err.textContent = e.message; err.hidden = false; };
+    box.querySelector('.byo-cancel').onclick = () => { box.remove(); reject(new Error('no data chosen')); };
+    box.querySelector('.byo-pick').onclick = () => dirInput.click();
+    box.querySelector('.byo-zip').onclick = () => zipInput.click();
+    box.querySelector('.byo-last')?.addEventListener('click', async () => {
+      try { const out = await kept.load(key); box.remove(); resolve(out); } catch (e) { fail(e); }
+    });
+    box.querySelector('.byo-forget')?.addEventListener('click', async (ev) => {
+      await kept.forget(key);
+      ev.target.closest('.byo-actions').remove();
+    });
+    const take = async (entries) => {
+      if (!entries.length) return;
+      err.hidden = true;
+      say?.(`reading ${entries.length} file${entries.length === 1 ? '' : 's'}…`);
+      try {
+        const out = rootData(await readChosen(entries), under, marker);
+        if (box.querySelector('.byo-keep input').checked) await kept.save(key, out).catch((e) => say?.(`not kept: ${e.message}`));
+        box.remove();
+        resolve(out);
+      } catch (e) { fail(e); }
     };
+    dirInput.onchange = () => take([...dirInput.files].map((f) => [f.webkitRelativePath || f.name, f]));
+    zipInput.onchange = () => take([...zipInput.files].map((f) => [f.name, f]));
+    box.addEventListener('dragover', (ev) => { ev.preventDefault(); box.classList.add('over'); });
+    box.addEventListener('dragleave', (ev) => { if (ev.target === box) box.classList.remove('over'); });
+    box.addEventListener('drop', async (ev) => {
+      ev.preventDefault(); box.classList.remove('over');
+      // A dropped folder arrives as an entry to walk; every desktop browser gives one.
+      const roots = [...ev.dataTransfer.items].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+      take((await Promise.all(roots.map(walkEntry))).flat());
+    });
   });
+}
+const mbOf = (n) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
+
+/*
+ * Files kept on this device, in the origin's private file system (OPFS): one file per data root, a
+ * JSON index of [path, length] behind a 4-byte length, then the bytes in that order. Nothing about
+ * them leaves the browser, and a browser without OPFS simply keeps nothing.
+ */
+const kept = {
+  async dir() { return (await navigator.storage.getDirectory()).getDirectoryHandle('prism-data', { create: true }); },
+  name: (key) => encodeURIComponent(key),
+  async about(key) {
+    try {
+      const f = await (await (await this.dir()).getFileHandle(this.name(key))).getFile();
+      const head = new DataView(await f.slice(0, 4).arrayBuffer()).getUint32(0, true);
+      const index = JSON.parse(await f.slice(4, 4 + head).text());
+      return { count: index.length, bytes: index.reduce((t, [, n]) => t + n, 0) };
+    } catch { return null; }
+  },
+  async load(key) {
+    const f = await (await (await this.dir()).getFileHandle(this.name(key))).getFile();
+    const all = new Uint8Array(await f.arrayBuffer());
+    const head = new DataView(all.buffer).getUint32(0, true);
+    const index = JSON.parse(new TextDecoder().decode(all.subarray(4, 4 + head)));
+    const out = {};
+    let at = 4 + head;
+    for (const [path, n] of index) { out[path] = all.subarray(at, at + n); at += n; }
+    return out;
+  },
+  async save(key, files) {
+    const index = Object.entries(files).map(([p, b]) => [p, b.length]);
+    const head = new TextEncoder().encode(JSON.stringify(index));
+    const w = await (await (await this.dir()).getFileHandle(this.name(key), { create: true })).createWritable();
+    const n = new Uint8Array(4);
+    new DataView(n.buffer).setUint32(0, head.length, true);
+    await w.write(n); await w.write(head);
+    for (const b of Object.values(files)) await w.write(b);
+    await w.close();
+  },
+  async forget(key) { try { await (await this.dir()).removeEntry(this.name(key)); } catch {} },
+};
+
+/** A dropped file system entry, as [path, File] pairs: a folder walked, its path kept. */
+async function walkEntry(entry) {
+  if (entry.isFile) return [[entry.fullPath.replace(/^\//, ''), await new Promise((ok, no) => entry.file(ok, no))]];
+  const reader = entry.createReader(), all = [];
+  // readEntries answers in batches (100 in Chrome) until it answers none.
+  for (let batch; (batch = await new Promise((ok, no) => reader.readEntries(ok, no))).length;) all.push(...batch);
+  return (await Promise.all(all.map(walkEntry))).flat();
+}
+
+/**
+ * What the visitor chose, as { path: bytes }. An archive chosen or dropped by itself is unpacked
+ * (web/unpack.js: zip, tar.gz); one found inside a folder is data like any other file -- Keen's
+ * folder holds kd113.zip, and MAME's ROMs are zips it opens itself.
+ */
+async function readChosen(entries) {
+  const out = {};
+  const loose = entries.length && entries.every(([p]) => !p.includes('/'));
+  for (const [path, file] of entries) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (loose && /\.(zip|tar\.gz|tgz)$/i.test(path)) Object.assign(out, await unpackArchive(bytes));
+    else out[path] = bytes;
+  }
+  return out;
+}
+
+/*
+ * Where the program's root is in what was chosen. A browser names every file from the folder picked,
+ * and a zip may or may not hold a top folder, so the root is found, not assumed: the descriptor's
+ * `needsData.marker` is a file the program opens (Quake's id1/pak0.pak), and the directory holding it
+ * is the root, whatever sits above. Without a marker the top folder is dropped, as before.
+ */
+function rootData(files, under, marker) {
+  const out = {};
+  if (marker) {
+    const m = marker.toLowerCase();
+    const hit = Object.keys(files).find((k) => { const l = k.toLowerCase(); return l === m || l.endsWith(`/${m}`); });
+    if (hit === undefined) throw new Error(`No ${marker} in what you chose: choose the folder (or the .zip) that holds it.`);
+    const prefix = hit.slice(0, hit.length - marker.length);
+    for (const [k, v] of Object.entries(files)) if (k.startsWith(prefix)) out[under + k.slice(prefix.length)] = v;
+    return out;
+  }
+  const tops = new Set(Object.keys(files).map((k) => (k.includes('/') ? k.split('/')[0] : '')));
+  const prefix = tops.size === 1 && !tops.has('') ? `${[...tops][0]}/` : '';
+  let named = Object.entries(files).filter(([k]) => k.startsWith(prefix)).map(([k, v]) => [k.slice(prefix.length), v]);
+  // The visitor chose the directory `under` names (the Monkey Island demo's own folder): put it back.
+  if (under && !named.some(([k]) => k.startsWith(under))) named = named.map(([k, v]) => [under + k, v]);
+  for (const [k, v] of named) if (k.startsWith(under)) out[k] = v;
+  if (!Object.keys(out).length) throw new Error('Nothing was read from what you chose.');
+  return out;
 }
 const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -1178,7 +1292,7 @@ async function startRun(typedAs = null) {
          * 0.6.1 asserts, native and here alike.
          */
         const { under = '', exclude = [], also = [] } = program.needsData;
-        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, under, program.needsData.hint);
+        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, under, program.needsData.hint, program.needsData.marker);
         /*
          * `cwd`: the program runs IN `under` and opens its files relative to it -- Cube asks for
          * data/ and packages/ beside itself -- so they are named without that prefix.

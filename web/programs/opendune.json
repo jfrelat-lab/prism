@@ -6,7 +6,8 @@
   "subtitle": "A reimplementation of Dune II, built with the project's own Makefile.wc — Watcom, DOS4GW",
   "needsData": {
     "hint": "Dune II v1.07's own DATA/ directory",
-    "dir": "dune2"
+    "dir": "dune2",
+    "marker": "data/DUNE.PAK"
   },
   "controls": [
     [

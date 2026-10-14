@@ -6,6 +6,7 @@
   "fps": 70,
   "needsData": {
     "dir": "tyrian",
+    "marker": "tyrian1.lvl",
     "hint": "Tyrian 2.1, released as FREEWARE by its author — tyrian21.zip from camanis.net/tyrian, 106 files. The files must sit DIRECTLY in this root, as jumpbump.dat does in its own: a data root is one directory deep, so an unzipped tyrian21/ folder inside it would reach the game as 'tyrian21/tyrian.hdt' and nothing would open."
   },
   "controls": [

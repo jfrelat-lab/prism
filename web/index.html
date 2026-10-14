@@ -64,7 +64,11 @@
   .byo-actions { display: flex; gap: 10px; justify-content: center; }
   .byo button { font: inherit; color: var(--fg); background: var(--panel-2); border: 1px solid var(--edge);
                 border-radius: 5px; padding: 6px 12px; cursor: pointer; }
-  .byo button.byo-pick { border-color: var(--accent); color: var(--accent); }
+  .byo button.byo-pick, .byo button.byo-zip { border-color: var(--accent); color: var(--accent); }
+  .byo.over { outline: 3px dashed var(--accent); outline-offset: -12px; }
+  .byo .byo-err { color: #ff8a80; }
+  .byo .byo-keep { font-size: 13px; color: var(--dim); display: flex; gap: 6px; justify-content: center; align-items: center; }
+  .byo .byo-keep { font-size: 13px; color: var(--dim, #9aa4b2); display: flex; gap: 6px; justify-content: center; align-items: center; }
   header a.name { border: none; padding: 0; border-radius: 0; color: var(--fg); text-decoration: none; }
   header a.name:hover { color: var(--accent); }
   header .name .mark { color: var(--accent); }

@@ -9,6 +9,7 @@
   "_fps": "85 is com_maxfps's default in qcommon/common.c.",
   "needsData": {
     "dir": "et",
+    "marker": "etmain/pak0.pk3",
     "hint": "etmain/ of the free 2.60b release: pak0.pk3, pak1.pk3, pak2.pk3"
   },
   "controls": [["arrows", "move"], ["Ctrl", "fire"], ["Esc", "menu"], ["~", "console"]],

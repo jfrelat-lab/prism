@@ -10,7 +10,8 @@
   "needsData": {
     "dir": "scumm",
     "under": "monkey1-ega-demo/",
-    "hint": "monkey1-ega-demo/ from monkey1-dos-ega-demo-en.zip, the demo the ScummVM project distributes"
+    "hint": "monkey1-ega-demo/ from monkey1-dos-ega-demo-en.zip, the demo the ScummVM project distributes",
+    "marker": "000.lfl"
   },
   "controls": [
     [

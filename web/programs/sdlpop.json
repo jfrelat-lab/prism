@@ -6,7 +6,8 @@
   "fps": 60,
   "needsData": {
     "dir": "sdlpop",
-    "hint": "data/ and SDLPoP.ini from the SDLPoP 1.23 source archive (github.com/NagyD/SDLPoP), side by side in this root"
+    "hint": "data/ and SDLPoP.ini from the SDLPoP 1.23 source archive (github.com/NagyD/SDLPoP), side by side in this root",
+    "marker": "data/GUARD1.DAT"
   },
   "controls": [
     [
