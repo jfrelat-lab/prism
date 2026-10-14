@@ -217,6 +217,8 @@ const want = new Set([...shipped, ...gallery.filter((g) => g.run)].map((s) => `$
 machines.machines = machines.machines.map((m) => ({ ...m, programs: m.programs.filter((p) => want.has(`${m.id}\0${p.program}\0${p.variant ?? ''}`)) }))
   .filter((m) => m.programs.length);
 write('web/machines.json', JSON.stringify(machines, null, 1));
+// A Windows program's icon is its own .ico, in its source tree, which an export does not ship whole.
+for (const p of machines.machines.flatMap((m) => m.programs)) if (p.icon) total += copy(join(ROOT, p.icon), p.icon);
 
 // The thumbnails tools/site-thumbs.mjs took, when there are some.
 for (const s of shipped) {
