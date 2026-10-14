@@ -23,7 +23,9 @@ const ONLY = arg('only')?.split(',');
 const OUT = join(ROOT, 'dist/site-thumbs');
 mkdirSync(OUT, { recursive: true });
 
-const { programs } = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'), 'utf8'));
+const manifest = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'), 'utf8'));
+// The programs the export ships, and the gallery of those it only shows: both get a thumbnail.
+const programs = [...manifest.programs, ...(manifest.gallery ?? [])];
 // `thumb.page`: a thumbnail taken in the page by hand, where no headless run reaches the picture.
 for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.args) && (!ONLY || ONLY.includes(p.id)))) {
   const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${e.program}.json`), 'utf8'));
@@ -86,10 +88,13 @@ for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.
     const dataDir = e.thumb.data ?? desc.needsData?.dir;
     const data = dataDir ? [`--data=${join(GAMES, dataDir)}`] : [];
     const args = e.thumb.args ?? e.args ?? desc.args;
-    const r = spawnSync('node', [join(ROOT, 'tools/build.mjs'), `targets/${desc.target}.json`, '--run', ...data,
+    // `thumb.target`: a variant the descriptor does not name (Quake's x11 build, for one).
+    const r = spawnSync('node', [join(ROOT, 'tools/build.mjs'), `targets/${e.thumb.target ?? `${desc.target}.json`}`, '--run', ...data,
       ...(args ? [`--args=${args}`] : []), `--frames=${frame}`, `--png=${file}`,
       // A program that waits on its own timer interrupt (Heretic's ticcount) moves only at safepoints.
-      ...(desc.safepoints ? ['--safepoints'] : [])],
+      ...(desc.safepoints ? ['--safepoints'] : []),
+      // `thumb.keys`: keys tapped first (build.mjs --keys), past a "press any key" screen.
+      ...(e.thumb.keys ? [`--keys=${e.thumb.keys}`, `--keyat=${e.thumb.keyat ?? 60}`] : [])],
     { cwd: ROOT, encoding: 'utf8', timeout: (e.thumb.seconds ?? 120) * 1000, killSignal: 'SIGKILL' });
     if (!existsSync(file)) { console.log(`${e.id}: no thumbnail (${r.error?.code ?? `exit ${r.status}`}) ${(r.stdout + r.stderr).trim().split('\n').slice(-2).join(' | ')}`); continue; }
   }

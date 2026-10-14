@@ -164,8 +164,24 @@ for (const s of shipped) {
   s.thumb = existsSync(t) ? (copy(t, `thumbs/${s.id}.png`), `thumbs/${s.id}.png`) : null;
 }
 
+/*
+ * THE GALLERY: programs PRISM compiles whose data may not be passed on. Neither their build nor their
+ * data is shipped; a thumbnail PRISM drew from the owner's copy, what a visitor needs, and the target
+ * the build comes from. A gallery entry without its thumbnail is left out rather than shown empty.
+ */
+const gallery = [];
+for (const g of manifest.gallery ?? []) {
+  const t = join(ROOT, 'dist/site-thumbs', `${g.id}.png`);
+  if (!existsSync(t)) { console.log(`  gallery ${g.id}: no thumbnail, left out`); continue; }
+  copy(t, `thumbs/${g.id}.png`);
+  const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${g.program}.json`), 'utf8'));
+  const { thumb, ...rest } = g;
+  gallery.push({ ...rest, thumb: `thumbs/${g.id}.png`, target: (thumb?.target ?? desc.target ?? '').replace(/\.json.*$/, '') });
+}
+
 write('web/site.json', JSON.stringify({
   generated: new Date().toISOString().slice(0, 10),
+  gallery,
   programs: shipped.map(({ licenseFiles, ...s }) => ({ ...s, units: targets.get(s.target)?.units ?? null,
     run: `web/?machine=${encodeURIComponent(s.machine)}&program=${encodeURIComponent(s.variant ? s.file ?? s.program : s.program)}${s.args !== undefined ? `&args=${encodeURIComponent(s.args)}` : ''}&run=1` })),
 }, null, 1));

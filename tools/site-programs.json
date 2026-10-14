@@ -2,131 +2,547 @@
   "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Tux Racer's data states no licence; its author's SourceForge project publishes it under the GPL v2 (tools/site-licenses/tuxracer-data.txt). Left out for now: morph3d (no licence in its file), Tyrian 2.1 (its own file_id.diz forbids distribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Cube's (its readme: \"you may freely distribute the cube archive unmodified on any media\"), a tar.gz unpacked in the page. So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
   "programs": [
     {
-      "id": "chromium-bsu", "thumb": { "frames": 120 }, "program": "chromium-bsu", "machine": "linux",
-      "title": "Chromium B.S.U.", "author": "Mark B. Allan; Paul Wise", "year": 2016, "kind": "Shoot 'em up",
+      "id": "chromium-bsu",
+      "thumb": {
+        "frames": 120
+      },
+      "program": "chromium-bsu",
+      "machine": "linux",
+      "title": "Chromium B.S.U.",
+      "author": "Mark B. Allan; Paul Wise",
+      "year": 2016,
+      "kind": "Shoot 'em up",
       "blurb": "The vertical shooter in C++ and OpenGL, built here with FTGL, FreeType and GLU's tessellator from their own sources.",
-      "code": { "license": "Clarified Artistic License", "source": "https://sourceforge.net/projects/chromium-bsu/" },
-      "data": { "license": "Images: Clarified Artistic; sounds: MIT; font: DejaVu (Bitstream Vera, notice in the font)" },
+      "code": {
+        "license": "Clarified Artistic License",
+        "source": "https://sourceforge.net/projects/chromium-bsu/"
+      },
+      "data": {
+        "license": "Images: Clarified Artistic; sounds: MIT; font: DejaVu (Bitstream Vera, notice in the font)"
+      },
       "credits": "Portions of this software are copyright © 2009 The FreeType Project (www.freetype.org). All rights reserved. This software is based in part on the work of the Independent JPEG Group.",
       "licenseFiles": [
-        { "name": "Game licence (Clarified Artistic)", "path": "corpus/chromium-bsu-0.9.16.1/COPYING" },
-        { "name": "Sounds licence (MIT)", "path": "corpus/chromium-bsu-0.9.16.1/data/wav/license.txt" },
-        { "name": "FreeType licence (FTL)", "path": "corpus/freetype-2.3.11/docs/FTL.TXT" },
-        { "name": "FTGL licence", "path": "corpus/ftgl-2.1.3~rc5/COPYING" },
-        { "name": "libjpeg (IJG) README", "path": "corpus/jpeg-6b/README" }
+        {
+          "name": "Game licence (Clarified Artistic)",
+          "path": "corpus/chromium-bsu-0.9.16.1/COPYING"
+        },
+        {
+          "name": "Sounds licence (MIT)",
+          "path": "corpus/chromium-bsu-0.9.16.1/data/wav/license.txt"
+        },
+        {
+          "name": "FreeType licence (FTL)",
+          "path": "corpus/freetype-2.3.11/docs/FTL.TXT"
+        },
+        {
+          "name": "FTGL licence",
+          "path": "corpus/ftgl-2.1.3~rc5/COPYING"
+        },
+        {
+          "name": "libjpeg (IJG) README",
+          "path": "corpus/jpeg-6b/README"
+        }
       ]
     },
     {
-      "id": "doom", "thumb": { "frames": 300, "data": "doom1" }, "program": "doom-shareware", "machine": "linux",
-      "dataFiles": ["doom19s.zip"],
-      "title": "DOOM (shareware)", "author": "id Software", "year": 1993, "kind": "First-person shooter",
+      "id": "doom",
+      "thumb": {
+        "frames": 300,
+        "data": "doom1"
+      },
+      "program": "doom-shareware",
+      "machine": "linux",
+      "dataFiles": [
+        "doom19s.zip"
+      ],
+      "title": "DOOM (shareware)",
+      "author": "id Software",
+      "year": 1993,
+      "kind": "First-person shooter",
       "blurb": "Episode one, Knee-Deep in the Dead, from id's 1.9 shareware archive, unpacked in the page; played by linuxdoom-1.10 with its sound server.",
-      "code": { "license": "GPL-2.0 (linuxdoom-1.10)", "source": "https://github.com/id-Software/DOOM" },
-      "data": { "license": "Shareware, \"PLEASE DISTRIBUTE!!!\": the archive as published, unmodified, free of charge" },
+      "code": {
+        "license": "GPL-2.0 (linuxdoom-1.10)",
+        "source": "https://github.com/id-Software/DOOM"
+      },
+      "data": {
+        "license": "Shareware, \"PLEASE DISTRIBUTE!!!\": the archive as published, unmodified, free of charge"
+      },
       "licenseFiles": [
-        { "name": "Shareware terms", "path": "tools/site-licenses/doom-shareware.txt" },
-        { "name": "DOOM source licence (GPL-2.0)", "path": "corpus/DOOM/LICENSE.TXT" }
+        {
+          "name": "Shareware terms",
+          "path": "tools/site-licenses/doom-shareware.txt"
+        },
+        {
+          "name": "DOOM source licence (GPL-2.0)",
+          "path": "corpus/DOOM/LICENSE.TXT"
+        }
       ]
     },
     {
-      "id": "heretic", "thumb": { "page": "its title screen, about 8 s after Run in the page: taken by hand, as the headless run waits on the Watcom timer (tools/site-thumbs.mjs leaves it alone)" }, "program": "heretic-shareware", "machine": "dos",
-      "dataFiles": ["htic_v12.zip"],
-      "title": "Heretic (shareware)", "author": "Raven Software, published by id Software", "year": 1994, "kind": "First-person shooter",
+      "id": "heretic",
+      "thumb": {
+        "page": "its title screen, about 8 s after Run in the page: taken by hand, as the headless run waits on the Watcom timer (tools/site-thumbs.mjs leaves it alone)"
+      },
+      "program": "heretic-shareware",
+      "machine": "dos",
+      "dataFiles": [
+        "htic_v12.zip"
+      ],
+      "title": "Heretic (shareware)",
+      "author": "Raven Software, published by id Software",
+      "year": 1994,
+      "kind": "First-person shooter",
       "blurb": "The first episode of Raven's fantasy DOOM, from the 1.2 shareware archive unpacked in the page; Raven's own Watcom DOS source, compiled whole.",
-      "code": { "license": "GPL-2.0 (Raven, 2008)", "source": "https://sourceforge.net/projects/heretic/" },
-      "data": { "license": "Shareware: electronic distribution, royalty free, in compressed form (LICENSE.DOC §3)" },
+      "code": {
+        "license": "GPL-2.0 (Raven, 2008)",
+        "source": "https://sourceforge.net/projects/heretic/"
+      },
+      "data": {
+        "license": "Shareware: electronic distribution, royalty free, in compressed form (LICENSE.DOC §3)"
+      },
       "licenseFiles": [
-        { "name": "Shareware licence (LICENSE.DOC)", "path": "tools/site-licenses/heretic-shareware.txt" },
-        { "name": "Heretic source licence (GPL-2.0)", "path": "tools/site-licenses/heretic-source-GPL-2.0.txt" }
+        {
+          "name": "Shareware licence (LICENSE.DOC)",
+          "path": "tools/site-licenses/heretic-shareware.txt"
+        },
+        {
+          "name": "Heretic source licence (GPL-2.0)",
+          "path": "tools/site-licenses/heretic-source-GPL-2.0.txt"
+        }
       ]
     },
     {
-      "id": "tuxracer", "thumb": { "frames": 400 }, "program": "tuxracer", "machine": "linux",
-      "title": "Tux Racer", "author": "Jasmin F. Patry, Sunspire Studios", "year": 2001, "kind": "Racing",
+      "id": "tuxracer",
+      "thumb": {
+        "frames": 400
+      },
+      "program": "tuxracer",
+      "machine": "linux",
+      "title": "Tux Racer",
+      "author": "Jasmin F. Patry, Sunspire Studios",
+      "year": 2001,
+      "kind": "Racing",
       "blurb": "Tux down the mountain, herring by herring: 0.61, the last GPL release, its C++ terrain and its Tcl 8.4 courses compiled from their own sources.",
-      "code": { "license": "GPL-2.0 (Tux Racer); Tcl licence (Tcl 8.4)", "source": "https://sourceforge.net/projects/tuxracer/" },
-      "data": { "license": "GPL-2.0, as its author's SourceForge project publishes it (the archive states none)" },
+      "code": {
+        "license": "GPL-2.0 (Tux Racer); Tcl licence (Tcl 8.4)",
+        "source": "https://sourceforge.net/projects/tuxracer/"
+      },
+      "data": {
+        "license": "GPL-2.0, as its author's SourceForge project publishes it (the archive states none)"
+      },
       "licenseFiles": [
-        { "name": "Data licence: how it was established", "path": "tools/site-licenses/tuxracer-data.txt" },
-        { "name": "Tux Racer licence (GPL-2.0)", "path": "corpus/tuxracer-0.61/COPYING" },
-        { "name": "Tcl licence", "path": "corpus/tcl8.4.20/license.terms" }
+        {
+          "name": "Data licence: how it was established",
+          "path": "tools/site-licenses/tuxracer-data.txt"
+        },
+        {
+          "name": "Tux Racer licence (GPL-2.0)",
+          "path": "corpus/tuxracer-0.61/COPYING"
+        },
+        {
+          "name": "Tcl licence",
+          "path": "corpus/tcl8.4.20/license.terms"
+        }
       ]
     },
     {
-      "id": "cube", "thumb": { "frames": 900, "data": "cube/files/cube" }, "program": "cube", "machine": "linux",
-      "dataFiles": ["zip/cube_2005_08_29_unix.tar.gz"],
-      "title": "Cube", "author": "Wouter van Oortmerssen", "year": 2005, "kind": "First-person shooter",
+      "id": "cube",
+      "thumb": {
+        "frames": 900,
+        "data": "cube/files/cube"
+      },
+      "program": "cube",
+      "machine": "linux",
+      "dataFiles": [
+        "zip/cube_2005_08_29_unix.tar.gz"
+      ],
+      "title": "Cube",
+      "author": "Wouter van Oortmerssen",
+      "year": 2005,
+      "kind": "First-person shooter",
       "blurb": "The tiny engine behind Sauerbraten: its C++, its OpenGL and its ENet compiled from the 2005 release, the archive unpacked in the page.",
-      "code": { "license": "zlib (relicensed 2022)", "source": "https://sourceforge.net/projects/cube/" },
-      "data": { "license": "Freeware: \"you may freely distribute the cube archive unmodified on any media\"" },
+      "code": {
+        "license": "zlib (relicensed 2022)",
+        "source": "https://sourceforge.net/projects/cube/"
+      },
+      "data": {
+        "license": "Freeware: \"you may freely distribute the cube archive unmodified on any media\""
+      },
       "licenseFiles": [
-        { "name": "How the archive may be shared", "path": "tools/site-licenses/cube.txt" },
-        { "name": "Source licence (readme.txt)", "path": "corpus/cube_2005_08_29/readme.txt" }
+        {
+          "name": "How the archive may be shared",
+          "path": "tools/site-licenses/cube.txt"
+        },
+        {
+          "name": "Source licence (readme.txt)",
+          "path": "corpus/cube_2005_08_29/readme.txt"
+        }
       ]
     },
     {
-      "id": "bass", "thumb": { "frames": 3500 }, "program": "scummvm", "machine": "linux",
-      "dataFiles": ["sky-cd/sky.dsk", "sky-cd/sky.dnr", "sky-cd/readme.txt"],
-      "title": "Beneath a Steel Sky", "author": "Revolution Software", "year": 1994, "kind": "Adventure",
+      "id": "bass",
+      "thumb": {
+        "frames": 3500
+      },
+      "program": "scummvm",
+      "machine": "linux",
+      "dataFiles": [
+        "sky-cd/sky.dsk",
+        "sky-cd/sky.dnr",
+        "sky-cd/readme.txt"
+      ],
+      "title": "Beneath a Steel Sky",
+      "author": "Revolution Software",
+      "year": 1994,
+      "kind": "Adventure",
       "blurb": "The cyberpunk adventure, CD version with full speech, freeware since 2003, run by ScummVM 0.6.1 compiled from its C++ source.",
-      "code": { "license": "GPL-2.0 (ScummVM)", "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/" },
-      "data": { "license": "Freeware: free distribution, readme intact, no fee for the game" },
+      "code": {
+        "license": "GPL-2.0 (ScummVM)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+      },
+      "data": {
+        "license": "Freeware: free distribution, readme intact, no fee for the game"
+      },
       "licenseFiles": [
-        { "name": "Game readme and licence", "from": "data", "path": "bass/sky-cd/readme.txt" },
-        { "name": "ScummVM licence (GPL-2.0)", "path": "corpus/scummvm-0.6.1/COPYING" }
+        {
+          "name": "Game readme and licence",
+          "from": "data",
+          "path": "bass/sky-cd/readme.txt"
+        },
+        {
+          "name": "ScummVM licence (GPL-2.0)",
+          "path": "corpus/scummvm-0.6.1/COPYING"
+        }
       ]
     },
     {
-      "id": "fotaq", "thumb": { "frames": 2400 }, "program": "scummvm-queen", "machine": "linux",
-      "title": "Flight of the Amazon Queen", "author": "Interactive Binary Illusions", "year": 1995, "kind": "Adventure",
+      "id": "fotaq",
+      "thumb": {
+        "frames": 2400
+      },
+      "program": "scummvm-queen",
+      "machine": "linux",
+      "title": "Flight of the Amazon Queen",
+      "author": "Interactive Binary Illusions",
+      "year": 1995,
+      "kind": "Adventure",
       "blurb": "The point-and-click adventure, freeware since 2004, run by ScummVM 0.6.1 compiled from its C++ source.",
-      "code": { "license": "GPL-2.0 (ScummVM)", "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/" },
-      "data": { "license": "Freeware: free distribution, readme intact, no fee for the game" },
+      "code": {
+        "license": "GPL-2.0 (ScummVM)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+      },
+      "data": {
+        "license": "Freeware: free distribution, readme intact, no fee for the game"
+      },
       "licenseFiles": [
-        { "name": "Game readme and licence", "from": "data", "path": "queen/FOTAQ_Floppy/readme.txt" },
-        { "name": "ScummVM licence (GPL-2.0)", "path": "corpus/scummvm-0.6.1/COPYING" }
+        {
+          "name": "Game readme and licence",
+          "from": "data",
+          "path": "queen/FOTAQ_Floppy/readme.txt"
+        },
+        {
+          "name": "ScummVM licence (GPL-2.0)",
+          "path": "corpus/scummvm-0.6.1/COPYING"
+        }
       ]
     },
     {
-      "id": "jumpnbump", "thumb": { "frames": 300 }, "program": "jumpnbump-sdl", "machine": "linux", "dataFiles": ["jumpbump.dat"],
-      "title": "Jump 'n Bump", "author": "Brainchild Design", "year": 1998, "kind": "Arcade",
+      "id": "jumpnbump",
+      "thumb": {
+        "frames": 300
+      },
+      "program": "jumpnbump-sdl",
+      "machine": "linux",
+      "dataFiles": [
+        "jumpbump.dat"
+      ],
+      "title": "Jump 'n Bump",
+      "author": "Brainchild Design",
+      "year": 1998,
+      "kind": "Arcade",
       "blurb": "Bunnies stomping bunnies: the 1998 game through its SDL 1.2 port, keyboard players side by side.",
-      "code": { "license": "GPL-2.0+ (SDL port)", "source": "https://gitlab.com/LibreGames/jumpnbump" },
-      "data": { "license": "Freely distributable: \"You are also allowed to put this game on your homepage\"" },
+      "code": {
+        "license": "GPL-2.0+ (SDL port)",
+        "source": "https://gitlab.com/LibreGames/jumpnbump"
+      },
+      "data": {
+        "license": "Freely distributable: \"You are also allowed to put this game on your homepage\""
+      },
       "licenseFiles": [
-        { "name": "Original 1998 readme", "path": "corpus/jumpnbump/docs/original_readme.txt" },
-        { "name": "SDL port licence (GPL-2.0)", "path": "corpus/jumpnbump-sdl12/COPYING" }
+        {
+          "name": "Original 1998 readme",
+          "path": "corpus/jumpnbump/docs/original_readme.txt"
+        },
+        {
+          "name": "SDL port licence (GPL-2.0)",
+          "path": "corpus/jumpnbump-sdl12/COPYING"
+        }
       ]
     },
     {
-      "id": "jumpnbump-dos", "thumb": { "frames": 300 }, "program": "jumpnbump", "machine": "dos", "dataFiles": ["jumpbump.dat"],
-      "title": "Jump 'n Bump (DOS)", "author": "Brainchild Design", "year": 1998, "kind": "Arcade",
+      "id": "jumpnbump-dos",
+      "thumb": {
+        "frames": 300
+      },
+      "program": "jumpnbump",
+      "machine": "dos",
+      "dataFiles": [
+        "jumpbump.dat"
+      ],
+      "title": "Jump 'n Bump (DOS)",
+      "author": "Brainchild Design",
+      "year": 1998,
+      "kind": "Arcade",
       "blurb": "The 1998 DOS original: DJGPP C on a planar VGA, its blitter written in assembly and translated when it loads.",
-      "code": { "license": "\"Do whatever you like with it\" (the 1999 source release)", "source": "https://gitlab.com/LibreGames/jumpnbump" },
-      "data": { "license": "Freely distributable: \"You are also allowed to put this game on your homepage\"" },
+      "code": {
+        "license": "\"Do whatever you like with it\" (the 1999 source release)",
+        "source": "https://gitlab.com/LibreGames/jumpnbump"
+      },
+      "data": {
+        "license": "Freely distributable: \"You are also allowed to put this game on your homepage\""
+      },
       "licenseFiles": [
-        { "name": "Source release note", "path": "corpus/jumpnbump-dos/source.txt" },
-        { "name": "Original 1998 readme", "path": "corpus/jumpnbump/docs/original_readme.txt" }
+        {
+          "name": "Source release note",
+          "path": "corpus/jumpnbump-dos/source.txt"
+        },
+        {
+          "name": "Original 1998 readme",
+          "path": "corpus/jumpnbump/docs/original_readme.txt"
+        }
       ]
     },
     {
-      "id": "gears", "thumb": { "frames": 25 }, "program": "gears", "machine": "linux",
-      "title": "Gears", "author": "Brian Paul", "year": 1999, "kind": "OpenGL demo",
+      "id": "gears",
+      "thumb": {
+        "frames": 25
+      },
+      "program": "gears",
+      "machine": "linux",
+      "title": "Gears",
+      "author": "Brian Paul",
+      "year": 1999,
+      "kind": "OpenGL demo",
       "blurb": "Mesa's classic: three lit gears turning, drawn through PRISM's OpenGL onto WebGL.",
-      "code": { "license": "Public domain", "source": "https://gitlab.freedesktop.org/mesa/demos" }
+      "code": {
+        "license": "Public domain",
+        "source": "https://gitlab.freedesktop.org/mesa/demos"
+      }
     },
     {
-      "id": "texobj", "thumb": { "frames": 25 }, "program": "texobj", "machine": "linux",
-      "title": "Texture objects", "author": "Brian Paul", "year": 1996, "kind": "OpenGL demo",
+      "id": "texobj",
+      "thumb": {
+        "frames": 25
+      },
+      "program": "texobj",
+      "machine": "linux",
+      "title": "Texture objects",
+      "author": "Brian Paul",
+      "year": 1996,
+      "kind": "OpenGL demo",
       "blurb": "Two textured squares, each with its own texture object, spinning.",
-      "code": { "license": "Public domain", "source": "https://gitlab.freedesktop.org/mesa/demos" }
+      "code": {
+        "license": "Public domain",
+        "source": "https://gitlab.freedesktop.org/mesa/demos"
+      }
     },
     {
-      "id": "lua", "thumb": { "args": ["-v", "-e", "local r=' .,:;-=+*#%@' for y=-11,11 do local s='' for x=-39,38 do local cr,ci,zr,zi,i=x/30-0.65,y/10,0,0,0 while i<200 and zr*zr+zi*zi<4 do zr,zi=zr*zr-zi*zi+cr,2*zr*zi+ci i=i+1 end local k=i==200 and 12 or math.min(11,math.floor(math.log(i,2))+1) s=s..r:sub(k,k) end print(s) end"], "shown": "-e mandelbrot" }, "program": "lua", "machine": "linux", "args": "",
-      "title": "Lua 5.4", "author": "PUC-Rio", "year": 2024, "kind": "Interpreter",
+      "id": "lua",
+      "thumb": {
+        "args": [
+          "-v",
+          "-e",
+          "local r=' .,:;-=+*#%@' for y=-11,11 do local s='' for x=-39,38 do local cr,ci,zr,zi,i=x/30-0.65,y/10,0,0,0 while i<200 and zr*zr+zi*zi<4 do zr,zi=zr*zr-zi*zi+cr,2*zr*zi+ci i=i+1 end local k=i==200 and 12 or math.min(11,math.floor(math.log(i,2))+1) s=s..r:sub(k,k) end print(s) end"
+        ],
+        "shown": "-e mandelbrot"
+      },
+      "program": "lua",
+      "machine": "linux",
+      "args": "",
+      "title": "Lua 5.4",
+      "author": "PUC-Rio",
+      "year": 2024,
+      "kind": "Interpreter",
       "blurb": "The reference Lua interpreter, compiled from its own source: an interactive prompt in the page.",
-      "code": { "license": "MIT", "source": "https://github.com/lua/lua" },
-      "licenseFiles": [ { "name": "Lua licence (MIT, in lua.h)", "path": "corpus/lua/lua.h" } ]
+      "code": {
+        "license": "MIT",
+        "source": "https://github.com/lua/lua"
+      },
+      "licenseFiles": [
+        {
+          "name": "Lua licence (MIT, in lua.h)",
+          "path": "corpus/lua/lua.h"
+        }
+      ]
     }
-  ]
+  ],
+  "gallery": [
+    {
+      "id": "quake",
+      "program": "quake",
+      "machine": "linux",
+      "title": "Quake",
+      "author": "id Software",
+      "year": 1996,
+      "kind": "First-person shooter",
+      "blurb": "On five platform layers (DOS, X11, svgalib, SunOS, Win32), drawing the same pixels on four of them; GLQuake within one pixel of Mesa.",
+      "needs": "id1/pak0.pak and pak1.pak from your copy",
+      "source": "https://github.com/id-Software/Quake",
+      "thumb": {
+        "frames": 300,
+        "target": "quake.json:x11"
+      }
+    },
+    {
+      "id": "quake2",
+      "program": "quake2",
+      "machine": "linux",
+      "title": "Quake II",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "Engine, software and GL renderers and game library as the separate modules they were, linked at run time by dlopen.",
+      "needs": "baseq2/ from your copy",
+      "source": "https://github.com/id-Software/Quake-2",
+      "thumb": {
+        "frames": 300
+      }
+    },
+    {
+      "id": "monkey",
+      "program": "scummvm-monkey",
+      "machine": "linux",
+      "title": "The Secret of Monkey Island (demo)",
+      "author": "Lucasfilm Games",
+      "year": 1990,
+      "kind": "Adventure",
+      "blurb": "ScummVM 0.6.1 compiled from its C++: 3,000 frames and every audio buffer equal to a native g++ build.",
+      "needs": "the EGA demo's files",
+      "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
+      "thumb": {
+        "frames": 1500
+      }
+    },
+    {
+      "id": "dott",
+      "program": "scummvm-dott",
+      "machine": "linux",
+      "title": "Day of the Tentacle (demo)",
+      "author": "LucasArts",
+      "year": 1993,
+      "kind": "Adventure",
+      "blurb": "The SCUMM v6 engine of ScummVM 0.6.1, frame for frame and sample for sample with a native build.",
+      "needs": "the demo's files",
+      "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
+      "thumb": {
+        "frames": 1500
+      }
+    },
+    {
+      "id": "samnmax",
+      "program": "scummvm-samnmax",
+      "machine": "linux",
+      "title": "Sam & Max Hit the Road (demo)",
+      "author": "LucasArts",
+      "year": 1993,
+      "kind": "Adventure",
+      "blurb": "Held to a native g++ build of the same ScummVM, with a scripted player.",
+      "needs": "the demo's files",
+      "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
+      "thumb": {
+        "frames": 1500
+      }
+    },
+    {
+      "id": "keendreams",
+      "program": "keendreams",
+      "machine": "dos",
+      "title": "Keen Dreams",
+      "author": "id Software / Softdisk",
+      "year": 1991,
+      "kind": "Platformer",
+      "blurb": "The first 16-bit target: Borland C++ 2.0 and TASM, real segmentation, every screen the shipped KDREAMS.EXE's under DOSBox-X.",
+      "needs": "the 1.13 shareware data",
+      "source": "https://github.com/keendreams/keen",
+      "thumb": {
+        "page": "its title screen, after Space in the page (headless, build.mjs sees no frame of this EGA build)"
+      }
+    },
+    {
+      "id": "sdlpop",
+      "program": "sdlpop",
+      "machine": "linux",
+      "title": "Prince of Persia (SDLPoP)",
+      "author": "Jordan Mechner; SDLPoP by Dávid Nagy",
+      "year": 1989,
+      "kind": "Platformer",
+      "blurb": "SDLPoP on SDL 2: 130 of 130 pictures the same as its native build against the real SDL 2.",
+      "needs": "the original game's data/",
+      "source": "https://github.com/NagyD/SDLPoP",
+      "thumb": {
+        "page": "its title screen, after Space in the page (headless, the key does not reach SDL 2's event queue)"
+      }
+    },
+    {
+      "id": "opentyrian",
+      "program": "opentyrian",
+      "machine": "linux",
+      "title": "Tyrian (OpenTyrian)",
+      "author": "Eclipse Productions; OpenTyrian",
+      "year": 1995,
+      "kind": "Shoot 'em up",
+      "blurb": "OpenTyrian on SDL 2, with its sound.",
+      "needs": "the Tyrian 2.1 data",
+      "source": "https://github.com/OpenTyrian/OpenTyrian",
+      "thumb": {
+        "frames": 400
+      }
+    },
+    {
+      "id": "quake3",
+      "program": "quake3",
+      "machine": "linux",
+      "title": "Quake III Arena",
+      "author": "id Software",
+      "year": 1999,
+      "kind": "First-person shooter",
+      "blurb": "1.32b on GLX: its renderer's OpenGL drawn through WebGL, in a map at the page's frame rate.",
+      "needs": "baseq3/ from your copy",
+      "source": "https://github.com/id-Software/Quake-III-Arena",
+      "thumb": {
+        "page": "taken in the page: q3dm1 at the page's frame rate"
+      }
+    },
+    {
+      "id": "opendune",
+      "program": "opendune",
+      "machine": "dos",
+      "title": "Dune II (OpenDUNE)",
+      "author": "Westwood Studios; OpenDUNE",
+      "year": 1992,
+      "kind": "Strategy",
+      "blurb": "OpenDUNE on its Watcom DOS layer; every screen of its first 28 s is one the real DUNE2.EXE shows under DOSBox-X.",
+      "needs": "the Dune II 1.07 data",
+      "source": "https://github.com/OpenDUNE/OpenDUNE",
+      "thumb": {
+        "page": "taken in the page: its intro, \"Home of the Spice Melange\""
+      }
+    },
+    {
+      "id": "hexen",
+      "program": "hexen",
+      "machine": "dos",
+      "title": "Hexen",
+      "author": "Raven Software",
+      "year": 1995,
+      "kind": "First-person shooter",
+      "blurb": "Raven's Watcom DOS source, GPL since 2008, compiled whole.",
+      "needs": "HEXEN.WAD 1.1 from your copy",
+      "source": "https://sourceforge.net/projects/heretic/",
+      "thumb": {
+        "page": "taken in the page: its title screen"
+      }
+    }
+  ],
+  "_gallery": "Programs PRISM compiles whose data may NOT be passed on: the export shows a thumbnail PRISM drew from the owner's copy, what is needed, and how to run it locally; it ships neither their build nor their data."
 }
