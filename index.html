@@ -94,7 +94,36 @@
   .techs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
   .techs button[aria-pressed="true"] .n { color: inherit; }
   .techs-note { margin: 10px 0 0; font-size: 12.5px; color: var(--dim); }
-  .chips li { cursor: pointer; } .chips li:hover { border-color: var(--accent); }
+  .techs button:disabled { opacity: .35; cursor: default; }
+  .filters { display: grid; gap: 10px; margin: 0 0 18px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .frow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .flabel { width: 6.5em; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1; color: var(--ink); background: none; border: 0; padding: 7px 11px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button .n { color: var(--dim); margin-left: 6px; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .seg button[aria-pressed="true"] .n { color: inherit; opacity: .75; }
+  .seg button:focus-visible, .filters input:focus-visible, .filters summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .seg.view { margin-left: auto; }
+  .filters input[type=search] { font: inherit; font-size: 14px; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                                border-radius: 6px; padding: 6px 10px; min-width: 0; width: 15em; }
+  details.tech { display: block; }
+  details.tech summary { width: auto; cursor: pointer; }
+  details.tech summary span { color: var(--accent); text-transform: none; letter-spacing: 0; }
+  details.tech .techs { margin-top: 10px; }
+  .fcount { margin: 0; font-size: 13px; color: var(--dim); }
+  .linkbtn.plain::after { content: none !important; }
+  .card .run.alt { background: none; color: var(--accent); border: 1px solid var(--accent); }
+  .card .norun { font-size: 12.5px; color: var(--dim); }
+  .grid.list { grid-template-columns: 1fr; gap: 10px; }
+  .grid.list .card { flex-direction: row; }
+  .grid.list .card .shot { flex: 0 0 168px; align-self: flex-start; }
+  .grid.list .card .body { padding: 10px 14px; gap: 4px; }
+  .grid.list .card .blurb { flex: 0; }
+  .grid.list .card .credits { display: none; }
+  @media (max-width: 560px) { .flabel { width: 100%; } .seg.view { margin-left: 0; } .filters input[type=search] { width: 100%; }
+                              .grid.list .card .shot { flex-basis: 104px; } }
   .chips li.on { background: var(--accent); color: var(--accent-ink); }
   .card .needs { margin: 0; font-size: 12.5px; color: var(--dim); }
   .card .needs b { color: var(--ink); font-weight: 500; }
@@ -116,7 +145,8 @@
 <header>
   <span class="logo"><span>◢</span> PRISM</span>
   <nav>
-    <a href="web/" data-shelf hidden>Programs</a>
+    <a href="#play" data-site hidden>Play</a>
+    <a href="web/" data-shelf hidden>Program shelf</a>
     <a href="web/live/">Live C</a>
     <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/COMPAT.md">What runs</a>
     <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/TESTING.md">How it is tested</a>
@@ -146,20 +176,23 @@
 
   <section id="play" data-site hidden>
     <h2>Play</h2>
-    <p class="lead">Each of these was compiled by PRISM from its unmodified source, and runs here from that
-      build: nothing is installed, and nothing is compiled while you wait. Only programs whose code
-      <b>and</b> data may be shared are here; each card links to both licences.</p>
+    <p class="lead">Every one of these was compiled by PRISM from its unmodified source and runs from that
+      build: nothing is installed, and nothing is compiled while you wait. <b>Play</b> starts a program
+      whose code and data may both be shared. <b>Bring your files</b> is for a game whose data is not ours
+      to share: the page asks for your copy, reads it where it is, and uploads nothing.
+      They need a keyboard, and most take the mouse too.</p>
+    <div class="filters" id="filters" role="search" aria-label="Filter the programs">
+      <div class="frow"><span class="flabel" id="f-show">Show</span><div class="seg" role="group" aria-labelledby="f-show" data-facet="avail"></div>
+        <input type="search" id="find" placeholder="Find a title" aria-label="Find a title, an author or a genre">
+        <div class="seg view" role="group" aria-label="Layout"><button type="button" data-view="grid" aria-pressed="true">Grid</button><button type="button" data-view="list" aria-pressed="false">List</button></div></div>
+      <div class="frow"><span class="flabel" id="f-machine">Machine</span><div class="seg" role="group" aria-labelledby="f-machine" data-facet="machine"></div></div>
+      <details class="frow tech" id="f-tech"><summary class="flabel">Technology <span id="tech-on"></span></summary><div class="techs" data-facet="tech"></div></details>
+      <p class="fcount" id="fcount" aria-live="polite"></p>
+    </div>
     <div class="grid" id="grid"></div>
-  </section>
-
-  <section id="gallery-section" data-site hidden>
-    <h2>Also compiled by PRISM</h2>
-    <p class="lead">These run too, from their unmodified source, but their data is not ours to share:
-      the pictures were drawn by PRISM from a copy someone owns. <b>Run with your files</b> asks for the
-      folder that holds yours; the page reads it where it is, and nothing is uploaded.</p>
-    <div class="grid" id="gallery"></div>
-    <p class="fine">The games' pictures belong to their owners and are shown to document what PRISM runs;
-      their names are their owners' trademarks. PRISM is not affiliated with any of them.</p>
+    <p class="fine">The pictures of games whose data is not shared were drawn by PRISM from a copy someone
+      owns, to document what it runs; they and the games' names belong to their owners. PRISM is not
+      affiliated with any of them, and no ROM or game data is hosted or linked here.</p>
   </section>
 
   <section>
@@ -205,7 +238,7 @@
     <div class="box" id="techs-box" data-site hidden style="margin-top:16px">
       <h3>On the cards above</h3>
       <div class="techs" id="techs"></div>
-      <p class="techs-note" id="techs-note">Pick one to show only the programs that use it.</p>
+      <p class="techs-note">The count is how many programs above carry each; pick one to filter them.</p>
     </div>
   </section>
 
@@ -275,7 +308,6 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
   // The corresponding source of a build, as the GPL asks: the program's own (`source`) and how PRISM
   // built it -- its target file, in the compiler's repository.
   const build = (p) => `https://github.com/jfrelat-lab/prism/blob/main/targets/${String(p.target).split(':')[0]}.json`;
-  const chips = (tags) => (tags?.length ? `<ul class="chips">${tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : '');
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   /*
    * The shelf (web/) works under tools/serve.mjs and in an export, not on GitHub Pages: its link is
@@ -288,40 +320,9 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
     showShelf();
     for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
     for (const el of document.querySelectorAll('[data-nosite]')) el.hidden = true;
-    document.getElementById('grid').innerHTML = site.programs.map((p) => {
-      const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
-      // One "licences" link beside source and build opens the code's and the data's licence, each
-      // file named by what it is.
-      const role = { code: 'code', data: 'data', both: 'code and data' };
-      const id = `lic-${esc(p.id)}`;
-      return `<article class="card" data-tags="${esc(JSON.stringify(p.tags ?? []))}">
-        <a class="shot" href="${esc(p.run)}" aria-label="Run ${esc(p.title)}">${shot}</a>
-        <div class="body">
-          <h3>${esc(p.title)} <span class="tag">${esc(p.kind)}</span></h3>
-          <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''}</div>
-          <p class="blurb">${esc(p.blurb)}</p>
-          ${chips(p.tags)}
-          ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
-          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a><button class="linkbtn" type="button" aria-expanded="false" aria-controls="${id}">licences</button></div>
-          <div class="lic" id="${id}" hidden>
-            <span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}
-            <ul>${(p.licences ?? []).map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">· ${role[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>
-          </div>
-        </div></article>`;
-    }).join('');
-    document.getElementById('gallery').innerHTML = (site.gallery ?? []).map((g) => `<article class="card" data-tags="${esc(JSON.stringify(g.tags ?? []))}">
-        <span class="shot"><img src="${esc(g.thumb)}" alt="${esc(g.title)}, as PRISM draws it" loading="lazy"></span>
-        <div class="body">
-          <h3>${esc(g.title)} <span class="tag">your data</span></h3>
-          <div class="meta">${esc(g.author)}${g.year ? `, ${esc(g.year)}` : ''} · ${esc(g.kind)}</div>
-          <p class="blurb">${esc(g.blurb)}</p>
-          <p class="needs">Needs: <b>${esc(g.needs)}</b></p>
-          ${chips(g.tags)}
-          <div class="actions">${g.run ? `<a class="run" href="${esc(g.run)}" title="the page asks for your folder; nothing leaves your browser">Run with your files</a>` : ''}<a href="${esc(g.source)}">source</a><a href="${esc(build(g))}" title="how PRISM builds it">build</a></div>
-        </div></article>`).join('');
-    if (!(site.gallery ?? []).length) document.getElementById('gallery-section').hidden = true;
-    techIndex([...site.programs, ...(site.gallery ?? [])]);
-  }).catch(() => { /* not an export */ });
+    catalogue([...site.programs.map((p) => ({ ...p, avail: 'play' })),
+      ...(site.gallery ?? []).map((g) => ({ ...g, avail: g.run ? 'files' : 'none' }))]);
+  }).catch((err) => console.error(err));
 
   document.addEventListener('click', (ev) => {
     const b = ev.target.closest('.linkbtn[aria-controls]');
@@ -332,9 +333,8 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
   });
 
   /*
-   * The tags of every card, sorted into kinds, with how many cards carry each. A tag no group names
-   * still shows, under "Libraries": site.mjs derives tags from the targets, and a new one should not
-   * vanish from here.
+   * The tags of every card, sorted into kinds. A tag no group names still shows, under "Libraries":
+   * site.mjs derives tags from the targets, and a new one should not vanish from here.
    */
   const TECH_GROUPS = [
     ['Languages', ['C', 'C++']],
@@ -344,44 +344,144 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
     ['3D', ['OpenGL 1.x', 'GLU', 'GLUT', 'GLX', 'WGL', '3Dfx (fxMesa)']],
     ['Libraries', []],
   ];
-  function techIndex(all) {
+  const AVAIL = [['all', 'All'], ['play', 'Play now'], ['files', 'With your files']];
+  const MACHINES = { dos: 'DOS', linux: 'Linux', win: 'Windows' };
+  const ROLE = { code: 'code', data: 'data', both: 'code and data' };
+
+  function card(p) {
+    const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
+    const lic = p.licences?.length ? `<button class="linkbtn" type="button" aria-expanded="false" aria-controls="lic-${esc(p.id)}">licences</button>` : '';
+    const source = p.code?.source ?? p.source;
+    // One "licences" link opens the code's and the data's licence, each file named by what it is.
+    const licBox = lic ? `<div class="lic" id="lic-${esc(p.id)}" hidden>
+            <span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}
+            <ul>${p.licences.map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">· ${ROLE[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>
+          </div>` : '';
+    const go = p.avail === 'play' ? `<a class="run" href="${esc(p.run)}">Play</a>`
+      : p.avail === 'files' ? `<a class="run alt" href="${esc(p.run)}" title="the page asks for your copy; nothing leaves your browser">Bring your files</a>`
+      : `<span class="norun" title="${esc(p.noBuild ?? '')}">Not playable here yet</span>`;
+    const pic = p.avail === 'none' ? `<span class="shot">${shot}</span>` : `<a class="shot" href="${esc(p.run)}" aria-label="${p.avail === 'play' ? 'Play' : 'Bring your files for'} ${esc(p.title)}">${shot}</a>`;
+    return `<article class="card" data-id="${esc(p.id)}">
+        ${pic}
+        <div class="body">
+          <h3>${esc(p.title)}${p.avail === 'play' ? '' : ' <span class="tag">your data</span>'}</h3>
+          <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(MACHINES[p.machine] ?? p.machine)} · ${esc(p.kind)}</div>
+          <p class="blurb">${esc(p.blurb)}</p>
+          ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b></p>` : ''}
+          ${p.tags?.length ? `<ul class="chips">${p.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+          ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
+          <div class="actions">${go}<a href="${esc(source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a>${lic}</div>
+          ${licBox}
+        </div></article>`;
+  }
+
+  /*
+   * One list, three facets that combine: what a visitor can do (play now, or bring their files), the
+   * machine, and one technology; plus a text search. Playable first, then by year. Each option counts
+   * what it would show with the other facets as they are, and the state lives in the URL so a filtered
+   * view can be shared.
+   */
+  function catalogue(all) {
+    all.sort((a, b) => ['play', 'files', 'none'].indexOf(a.avail) - ['play', 'files', 'none'].indexOf(b.avail) || (a.year ?? 0) - (b.year ?? 0));
+    document.getElementById('grid').innerHTML = all.map(card).join('');
+    const cards = new Map([...document.querySelectorAll('#grid .card')].map((c) => [c.dataset.id, c]));
+    const q = new URLSearchParams(location.search);
+    const state = { avail: q.get('show') ?? 'all', machine: q.get('machine') ?? 'all', tech: q.get('tech'), text: q.get('q') ?? '' };
+    const find = document.getElementById('find');
+    find.value = state.text;
+
     const count = new Map();
     for (const p of all) for (const t of p.tags ?? []) count.set(t, (count.get(t) ?? 0) + 1);
-    if (!count.size) return;
+    // A tag every program carries filters nothing: it stays in the index below, not in the filter.
+    const useful = (t) => count.get(t) < all.length;
     const known = new Set(TECH_GROUPS.flatMap(([, ts]) => ts));
     const groups = TECH_GROUPS.map(([name, ts]) => [name, name === 'Libraries'
       ? [...count.keys()].filter((t) => !known.has(t)).sort((a, b) => count.get(b) - count.get(a) || a.localeCompare(b))
       : ts.filter((t) => count.has(t))]).filter(([, ts]) => ts.length);
-    document.getElementById('techs').innerHTML = groups.map(([name, ts]) => `<div><h4>${esc(name)}</h4><ul>${ts.map((t) =>
-      `<li><button type="button" aria-pressed="false" data-tag="${esc(t)}">${esc(t)}<span class="n">${count.get(t)}</span></button></li>`).join('')}</ul></div>`).join('');
-    let current = null;
-    // The index sits below the cards it filters: picking there scrolls up to them; a card's own chip
-    // toggles the same filter where the reader already is.
+    const techButtons = (only) => groups.map(([name, ts]) => [name, ts.filter(only)]).filter(([, ts]) => ts.length)
+      .map(([name, ts]) => `<div><h4>${esc(name)}</h4><ul>${ts.map((t) =>
+        `<li><button type="button" aria-pressed="false" data-tag="${esc(t)}">${esc(t)}<span class="n"></span></button></li>`).join('')}</ul></div>`).join('');
+    document.querySelector('#filters [data-facet=tech]').innerHTML = techButtons(useful);
+    document.getElementById('techs').innerHTML = techButtons(() => true);
+    for (const b of document.querySelectorAll('#techs .n')) b.textContent = count.get(b.parentNode.dataset.tag);
+    document.querySelector('[data-facet=avail]').innerHTML = AVAIL.filter(([k]) => k === 'all' || all.some((p) => p.avail === k))
+      .map(([k, label]) => `<button type="button" data-v="${k}">${label}<span class="n"></span></button>`).join('');
+    const machines = [...new Set(all.map((p) => p.machine))].sort((a, b) => Object.keys(MACHINES).indexOf(a) - Object.keys(MACHINES).indexOf(b));
+    document.querySelector('[data-facet=machine]').innerHTML = [['all', 'All'], ...machines.map((m) => [m, MACHINES[m] ?? m])]
+      .map(([k, label]) => `<button type="button" data-v="${k}">${esc(label)}<span class="n"></span></button>`).join('');
+
+    const words = (p) => `${p.title} ${p.author} ${p.kind} ${p.year}`.toLowerCase();
+    const match = (p, s) => (s.avail === 'all' || p.avail === s.avail || (s.avail === 'files' && p.avail === 'none'))
+      && (s.machine === 'all' || p.machine === s.machine)
+      && (!s.tech || (p.tags ?? []).includes(s.tech))
+      && (!s.text || s.text.toLowerCase().split(/\s+/).every((w) => words(p).includes(w)));
+    const tally = (patch) => all.filter((p) => match(p, { ...state, ...patch })).length;
+
+    function render() {
+      let shown = 0;
+      for (const p of all) {
+        const on = match(p, state);
+        cards.get(p.id).hidden = !on; shown += on;
+        for (const li of cards.get(p.id).querySelectorAll('.chips li')) li.classList.toggle('on', li.textContent === state.tech);
+      }
+      for (const b of document.querySelectorAll('[data-facet=avail] button')) {
+        b.setAttribute('aria-pressed', String(b.dataset.v === state.avail));
+        b.querySelector('.n').textContent = tally({ avail: b.dataset.v });
+      }
+      for (const b of document.querySelectorAll('[data-facet=machine] button')) {
+        b.setAttribute('aria-pressed', String(b.dataset.v === state.machine));
+        b.querySelector('.n').textContent = tally({ machine: b.dataset.v });
+      }
+      for (const b of document.querySelectorAll('[data-facet=tech] button')) {
+        const n = tally({ tech: b.dataset.tag });
+        b.setAttribute('aria-pressed', String(b.dataset.tag === state.tech));
+        b.querySelector('.n').textContent = n;
+        b.disabled = !n && b.dataset.tag !== state.tech;
+      }
+      for (const b of document.querySelectorAll('#techs button')) b.setAttribute('aria-pressed', String(b.dataset.tag === state.tech));
+      document.getElementById('tech-on').textContent = state.tech ? `· ${state.tech}` : '';
+      document.getElementById('fcount').innerHTML = shown === all.length ? `${all.length} programs`
+        : `${shown} of ${all.length} programs · <button type="button" class="linkbtn plain" id="fclear">show all</button>`;
+      const u = new URLSearchParams(location.search);
+      for (const [k, v] of [['show', state.avail !== 'all' && state.avail], ['machine', state.machine !== 'all' && state.machine], ['tech', state.tech], ['q', state.text]]) v ? u.set(k, v) : u.delete(k);
+      history.replaceState(null, '', `${location.pathname}${String(u) ? `?${u}` : ''}${location.hash}`);
+    }
+
+    document.getElementById('filters').addEventListener('click', (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.id === 'fclear') Object.assign(state, { avail: 'all', machine: 'all', tech: null, text: '' }), find.value = '';
+      else if (b.dataset.view) {
+        for (const o of document.querySelectorAll('[data-view]')) o.setAttribute('aria-pressed', String(o === b));
+        document.getElementById('grid').classList.toggle('list', b.dataset.view === 'list');
+        try { localStorage.setItem('prism-view', b.dataset.view); } catch {}
+        return;
+      } else {
+        const facet = b.closest('[data-facet]')?.dataset.facet;
+        if (facet === 'tech') state.tech = state.tech === b.dataset.tag ? null : b.dataset.tag;
+        else if (facet) state[facet] = b.dataset.v;
+        else return;
+      }
+      render();
+    });
+    find.addEventListener('input', () => { state.text = find.value.trim(); render(); });
+    // The index in "What it compiles" sits below the cards: picking there filters them and goes up.
     document.getElementById('techs').addEventListener('click', (ev) => {
       const b = ev.target.closest('button[data-tag]');
-      if (b) filter(b.dataset.tag, true);
-    });
-    for (const id of ['grid', 'gallery']) document.getElementById(id).addEventListener('click', (ev) => {
-      const li = ev.target.closest('.chips li');
-      if (li) filter(li.textContent, false);
-    });
-    function filter(pick, scroll) {
-      const tag = pick === current ? null : pick;
-      current = tag;
-      for (const o of document.querySelectorAll('#techs button')) o.setAttribute('aria-pressed', String(o.dataset.tag === tag));
-      let shown = 0;
-      for (const card of document.querySelectorAll('#grid .card, #gallery .card')) {
-        const has = !tag || JSON.parse(card.dataset.tags).includes(tag);
-        card.hidden = !has; shown += has;
-        for (const li of card.querySelectorAll('.chips li')) li.classList.toggle('on', li.textContent === tag);
+      if (!b) return;
+      state.tech = state.tech === b.dataset.tag ? null : b.dataset.tag;
+      if (state.tech && !useful(state.tech)) state.tech = null;
+      render();
+      if (state.tech) {
+        document.getElementById('f-tech').open = true;
+        document.getElementById('play').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
       }
-      for (const [grid, sec] of [['grid', 'play'], ['gallery', 'gallery-section']])
-        document.getElementById(sec).hidden = !document.querySelector(`#${grid} .card:not([hidden])`);
-      document.getElementById('techs-note').textContent = tag
-        ? `${shown} of ${all.length} programs use ${tag}; pick it again to show them all.`
-        : 'Pick one to show only the programs that use it.';
-      if (scroll && tag) document.querySelector('#play:not([hidden]), #gallery-section:not([hidden])')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-    }
+    });
+    let view = 'grid';
+    try { view = localStorage.getItem('prism-view') ?? 'grid'; } catch {}
+    if (view === 'list') document.querySelector('[data-view=list]').click();
+    if (state.tech) document.getElementById('f-tech').open = true;
+    render();
   }
 </script>
 </body>
