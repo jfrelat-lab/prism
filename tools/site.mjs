@@ -69,7 +69,9 @@ function techTags(target, answer, desc, extra = []) {
   if (units.some((f) => /\.c$/i.test(f))) tags.push('C');
   if (units.some((f) => /\.(cpp|cc|cxx)$/i.test(f))) tags.push('C++');
   if (String(target.compile?.model ?? '').startsWith('dos16')) tags.push('16-bit');
-  if ((desc.host ?? desc.platform) === 'win32') tags.push('Win32');
+  // The host a variant names wins over its descriptor's: quake.exe is the Win32 build of `quake`.
+  // WinQuake's MGL window and a WGL context are Win32 hosts as much as `win32` is.
+  if (['win32', 'mgl', 'wgl'].includes(answer.host ?? desc.host ?? desc.platform)) tags.push('Win32');
   for (const e of target.env ?? []) if (ENV_TAGS[e]) tags.push(ENV_TAGS[e]);
   for (const a of answer.asmTranslate) tags.push(typeof a !== 'string' || /\.s$/i.test(a) ? 'GNU as' : 'NASM');
   if (answer.tasm.length) tags.push('TASM');
@@ -194,7 +196,13 @@ for (const g of manifest.gallery ?? []) {
   }
   if (built) gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: [...new Set([...built.tags, ...(g.tags ?? [])])],
     run: `web/?machine=${encodeURIComponent(g.machine)}&program=${encodeURIComponent(g.variant ? g.file ?? g.program : g.program)}${g.args !== undefined ? `&args=${encodeURIComponent(g.args)}` : ''}&run=1` });
-  else gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: g.tags ?? [] });
+  else {
+    // No build shipped, the tags all the same: they are read off the target, not off a bundle.
+    const [file, variant] = tname.split(':');
+    const answer = await targetAnswer(ROOT, tname);
+    const tags = techTags(loadTarget(join(ROOT, 'targets', `${file}.json`), variant || null), answer, desc, g.tags ?? []);
+    gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags });
+  }
 }
 
 // The picker's answers: only what is shipped, all present.

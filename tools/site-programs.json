@@ -619,6 +619,40 @@
       }
     },
     {
+      "id": "glquake",
+      "program": "quake",
+      "variant": "glx",
+      "file": "glquake.glx",
+      "machine": "linux",
+      "title": "GLQuake (GLX)",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "GLQuake on Linux: its OpenGL 1.1 through GLX, drawn by WebGL; within one pixel of 307,200 of Mesa drawing the same frame.",
+      "needs": "id1/pak0.pak and pak1.pak from your copy",
+      "source": "https://github.com/id-Software/Quake",
+      "thumb": {
+        "page": "E1M1 at 72 fps, from the page"
+      }
+    },
+    {
+      "id": "glquake-win",
+      "program": "quake",
+      "variant": "wgl",
+      "file": "glquake.exe",
+      "machine": "win",
+      "title": "GLQuake (Win32)",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "glquake.exe in a window on the Windows desktop: WGL and Win32 answered in JavaScript, OpenGL drawn by WebGL.",
+      "needs": "id1/pak0.pak and pak1.pak from your copy",
+      "source": "https://github.com/id-Software/Quake",
+      "thumb": {
+        "page": "its window on the Windows desktop, from the page"
+      }
+    },
+    {
       "id": "quake2-win",
       "program": "quake2-win32",
       "machine": "win",
@@ -627,6 +661,40 @@
       "year": 1997,
       "kind": "First-person shooter",
       "blurb": "The Win32 build: quake2.exe loading ref_soft and gamex86 as DLLs through LoadLibrary.",
+      "needs": "baseq2/ from your copy",
+      "source": "https://github.com/id-Software/Quake-2",
+      "thumb": {
+        "page": "its window on the Windows desktop, from the page"
+      }
+    },
+    {
+      "id": "quake2-gl",
+      "program": "quake2",
+      "variant": "gl",
+      "file": "quake2.gl",
+      "machine": "linux",
+      "title": "Quake II GL (3Dfx)",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "ref_gl on Linux through 3Dfx's fxMesa, as the 1997 release shipped it; within 3 pixels of Mesa.",
+      "needs": "baseq2/ from your copy",
+      "source": "https://github.com/id-Software/Quake-2",
+      "thumb": {
+        "page": "demo1, from the page"
+      }
+    },
+    {
+      "id": "quake2-gl-win",
+      "program": "quake2-win32",
+      "variant": "win32gl",
+      "file": "quake2.gl.exe",
+      "machine": "win",
+      "title": "Quake II GL (Win32)",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "quake2.exe loading ref_gl.dll through LoadLibrary, its OpenGL on WGL, in a window on the Windows desktop.",
       "needs": "baseq2/ from your copy",
       "source": "https://github.com/id-Software/Quake-2",
       "thumb": {
@@ -649,6 +717,132 @@
         "page": "its menu in a window, from the page"
       },
       "noBuild": "its source tree carries both gnu.txt and an older 'EULA - Source Code.doc': which governs is to be settled before its build is shipped"
+    },
+    {
+      "id": "mame-dkong",
+      "program": "mame-0.34",
+      "machine": "dos",
+      "title": "Donkey Kong",
+      "author": "Nintendo",
+      "year": 1981,
+      "kind": "Arcade · Platform",
+      "blurb": "Jumpman's first climb: a Z80 arcade board, emulated by MAME 0.34 compiled by PRISM for DOS.",
+      "needs": "dkong.zip, your own ROM set",
+      "source": "https://sourceforge.net/projects/mame/files/mame/0.34/",
+      "args": "dkong -nodouble -soundcard 1",
+      "tags": [
+        "DJGPP",
+        "MAME 0.34"
+      ],
+      "thumb": {
+        "page": "its attract screen, from the page"
+      },
+      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+    },
+    {
+      "id": "mame-invaders",
+      "program": "mame-0.34",
+      "machine": "dos",
+      "title": "Space Invaders",
+      "author": "Taito",
+      "year": 1978,
+      "kind": "Arcade · Shoot 'em up",
+      "blurb": "The 8080 machine with its shift-register chip and the cellophane-tinted monochrome screen.",
+      "needs": "invaders.zip, your own ROM set",
+      "source": "https://sourceforge.net/projects/mame/files/mame/0.34/",
+      "args": "invaders -nodouble -soundcard 1",
+      "tags": [
+        "DJGPP",
+        "MAME 0.34"
+      ],
+      "thumb": {
+        "page": "its attract screen, from the page"
+      },
+      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+    },
+    {
+      "id": "mame-asteroid",
+      "program": "mame-0.34",
+      "machine": "dos",
+      "title": "Asteroids",
+      "author": "Atari",
+      "year": 1979,
+      "kind": "Arcade · Shoot 'em up",
+      "blurb": "Atari's digital vector generator, drawn line by line into a raster by MAME.",
+      "needs": "asteroid.zip, your own ROM set",
+      "source": "https://sourceforge.net/projects/mame/files/mame/0.34/",
+      "args": "asteroid -nodouble -soundcard 1",
+      "tags": [
+        "DJGPP",
+        "MAME 0.34"
+      ],
+      "thumb": {
+        "page": "its attract mode, from the page"
+      },
+      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+    },
+    {
+      "id": "mame-1942",
+      "program": "mame-0.34",
+      "machine": "dos",
+      "title": "1942",
+      "author": "Capcom",
+      "year": 1984,
+      "kind": "Arcade · Vertical shooter",
+      "blurb": "Two Z80s and Capcom's tile hardware; the title screen as the cabinet showed it.",
+      "needs": "1942.zip, your own ROM set",
+      "source": "https://sourceforge.net/projects/mame/files/mame/0.34/",
+      "args": "1942 -nodouble -soundcard 1",
+      "tags": [
+        "DJGPP",
+        "MAME 0.34"
+      ],
+      "thumb": {
+        "page": "its title screen, from the page"
+      },
+      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+    },
+    {
+      "id": "mame-boblbobl",
+      "program": "mame-0.34",
+      "machine": "dos",
+      "title": "Bubble Bobble",
+      "author": "Taito",
+      "year": 1986,
+      "kind": "Arcade · Platform",
+      "blurb": "Bub and Bob in the demo loop: a multi-Z80 Taito board, in one compiled DOS program.",
+      "needs": "boblbobl.zip, your own ROM set",
+      "source": "https://sourceforge.net/projects/mame/files/mame/0.34/",
+      "args": "boblbobl -nodouble -soundcard 1",
+      "tags": [
+        "DJGPP",
+        "MAME 0.34"
+      ],
+      "thumb": {
+        "page": "its demo loop, from the page"
+      },
+      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+    },
+    {
+      "id": "mame-ffight",
+      "program": "mame-0.34",
+      "machine": "dos",
+      "title": "Final Fight",
+      "author": "Capcom",
+      "year": 1989,
+      "kind": "Arcade · Beat 'em up",
+      "blurb": "Capcom's CPS-1 board: a 68000 and a Z80, with its scrolling layers and sprites.",
+      "needs": "ffight.zip, your own ROM set",
+      "source": "https://sourceforge.net/projects/mame/files/mame/0.34/",
+      "args": "ffight -nodouble -soundcard 1",
+      "tags": [
+        "DJGPP",
+        "MAME 0.34"
+      ],
+      "thumb": {
+        "page": "its demo, the subway stage, from the page"
+      },
+      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
     }
   ],
   "_gallery": "Programs PRISM compiles whose data may NOT be passed on: the export shows a thumbnail PRISM drew from the owner's copy, what is needed, and how to run it locally; it ships neither their build nor their data."

@@ -69,15 +69,33 @@
         overflow-x: auto; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, monospace; color: var(--ink); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
   .card { display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .card .shot { display: grid; place-items: center; aspect-ratio: 4 / 3; background: #000; color: var(--dim); font: 600 13px ui-monospace, Menlo, monospace; letter-spacing: .1em; }
-  .card .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+  .card .shot { position: relative; display: grid; place-items: center; aspect-ratio: 4 / 3; background: #000; color: var(--dim); font: 600 13px ui-monospace, Menlo, monospace; letter-spacing: .1em; }
+  .card .shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
   .card .shot:hover { text-decoration: none; }
   .card .body { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 14px; flex: 1; }
   .card h3 { margin: 0; font-size: 16px; color: var(--head); }
   .card .meta { color: var(--dim); font-size: 13px; }
   .card .blurb { margin: 0; font-size: 14px; flex: 1; }
-  .card .lic { font-size: 12.5px; color: var(--dim); display: grid; gap: 2px; }
+  .card .lic { font-size: 12.5px; color: var(--dim); display: grid; gap: 6px; padding: 10px 12px; margin-top: 2px;
+               background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
   .card .lic b { color: var(--ink); font-weight: 500; }
+  .card .lic ul { margin: 0; padding-left: 16px; } .card .lic li { margin: 1px 0; }
+  .card .lic .role { color: var(--dim); }
+  .linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+  .linkbtn:hover { text-decoration: underline; }
+  .linkbtn:focus-visible, .techs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .linkbtn[aria-expanded="true"]::after { content: " ▴"; } .linkbtn[aria-expanded="false"]::after { content: " ▾"; }
+  .techs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; margin-top: 4px; }
+  .techs h4 { margin: 0 0 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  .techs ul { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
+  .techs button { font: 500 12px/1.7 ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent); cursor: pointer;
+                  background: none; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 3px; padding: 0 6px; }
+  .techs button .n { color: var(--dim); margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .techs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .techs button[aria-pressed="true"] .n { color: inherit; }
+  .techs-note { margin: 10px 0 0; font-size: 12.5px; color: var(--dim); }
+  .chips li { cursor: pointer; } .chips li:hover { border-color: var(--accent); }
+  .chips li.on { background: var(--accent); color: var(--accent-ink); }
   .card .needs { margin: 0; font-size: 12.5px; color: var(--dim); }
   .card .needs b { color: var(--ink); font-weight: 500; }
   .fine { margin: 12px 0 0; font-size: 12px; color: var(--dim); max-width: 760px; }
@@ -184,6 +202,11 @@
         </ul>
       </div>
     </div>
+    <div class="box" id="techs-box" data-site hidden style="margin-top:16px">
+      <h3>On the cards above</h3>
+      <div class="techs" id="techs"></div>
+      <p class="techs-note" id="techs-note">Pick one to show only the programs that use it.</p>
+    </div>
   </section>
 
   <section>
@@ -267,22 +290,26 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
     for (const el of document.querySelectorAll('[data-nosite]')) el.hidden = true;
     document.getElementById('grid').innerHTML = site.programs.map((p) => {
       const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
-      // A licence line names the licence and links the files that are its text: the code's, the data's.
-      const files = (side) => (p.licences ?? []).filter((l) => l.for === side || l.for === 'both')
-        .map((l, i) => ` <a href="${esc(l.href)}" title="${esc(l.name)}">[${i + 1}]</a>`).join('');
-      return `<article class="card">
+      // One "licences" link beside source and build opens the code's and the data's licence, each
+      // file named by what it is.
+      const role = { code: 'code', data: 'data', both: 'code and data' };
+      const id = `lic-${esc(p.id)}`;
+      return `<article class="card" data-tags="${esc(JSON.stringify(p.tags ?? []))}">
         <a class="shot" href="${esc(p.run)}" aria-label="Run ${esc(p.title)}">${shot}</a>
         <div class="body">
           <h3>${esc(p.title)} <span class="tag">${esc(p.kind)}</span></h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''}</div>
           <p class="blurb">${esc(p.blurb)}</p>
           ${chips(p.tags)}
-          <div class="lic"><span>Code: <b>${esc(p.code?.license)}</b>${files('code')}</span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b>${files('data')}</span>` : ''}</div>
           ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
-          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a></div>
+          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a><button class="linkbtn" type="button" aria-expanded="false" aria-controls="${id}">licences</button></div>
+          <div class="lic" id="${id}" hidden>
+            <span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}
+            <ul>${(p.licences ?? []).map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">· ${role[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>
+          </div>
         </div></article>`;
     }).join('');
-    document.getElementById('gallery').innerHTML = (site.gallery ?? []).map((g) => `<article class="card">
+    document.getElementById('gallery').innerHTML = (site.gallery ?? []).map((g) => `<article class="card" data-tags="${esc(JSON.stringify(g.tags ?? []))}">
         <span class="shot"><img src="${esc(g.thumb)}" alt="${esc(g.title)}, as PRISM draws it" loading="lazy"></span>
         <div class="body">
           <h3>${esc(g.title)} <span class="tag">your data</span></h3>
@@ -293,7 +320,69 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
           <div class="actions">${g.run ? `<a class="run" href="${esc(g.run)}" title="the page asks for your folder; nothing leaves your browser">Run with your files</a>` : ''}<a href="${esc(g.source)}">source</a><a href="${esc(build(g))}" title="how PRISM builds it">build</a></div>
         </div></article>`).join('');
     if (!(site.gallery ?? []).length) document.getElementById('gallery-section').hidden = true;
+    techIndex([...site.programs, ...(site.gallery ?? [])]);
   }).catch(() => { /* not an export */ });
+
+  document.addEventListener('click', (ev) => {
+    const b = ev.target.closest('.linkbtn[aria-controls]');
+    if (!b) return;
+    const open = b.getAttribute('aria-expanded') !== 'true';
+    b.setAttribute('aria-expanded', String(open));
+    document.getElementById(b.getAttribute('aria-controls')).hidden = !open;
+  });
+
+  /*
+   * The tags of every card, sorted into kinds, with how many cards carry each. A tag no group names
+   * still shows, under "Libraries": site.mjs derives tags from the targets, and a new one should not
+   * vanish from here.
+   */
+  const TECH_GROUPS = [
+    ['Languages', ['C', 'C++']],
+    ['Assembly', ['inline asm', '#pragma aux', 'TASM', 'NASM', 'GNU as']],
+    ['DOS toolchains', ['16-bit', 'Borland C++', 'Watcom · DOS4GW', 'DJGPP', 'Allegro', 'EGA', 'VGA planar']],
+    ['Systems & windowing', ['Win32', 'Winsock', 'X11', 'svgalib', 'SDL 1.2', 'SDL 2', 'SDL_image']],
+    ['3D', ['OpenGL 1.x', 'GLU', 'GLUT', 'GLX', 'WGL', '3Dfx (fxMesa)']],
+    ['Libraries', []],
+  ];
+  function techIndex(all) {
+    const count = new Map();
+    for (const p of all) for (const t of p.tags ?? []) count.set(t, (count.get(t) ?? 0) + 1);
+    if (!count.size) return;
+    const known = new Set(TECH_GROUPS.flatMap(([, ts]) => ts));
+    const groups = TECH_GROUPS.map(([name, ts]) => [name, name === 'Libraries'
+      ? [...count.keys()].filter((t) => !known.has(t)).sort((a, b) => count.get(b) - count.get(a) || a.localeCompare(b))
+      : ts.filter((t) => count.has(t))]).filter(([, ts]) => ts.length);
+    document.getElementById('techs').innerHTML = groups.map(([name, ts]) => `<div><h4>${esc(name)}</h4><ul>${ts.map((t) =>
+      `<li><button type="button" aria-pressed="false" data-tag="${esc(t)}">${esc(t)}<span class="n">${count.get(t)}</span></button></li>`).join('')}</ul></div>`).join('');
+    let current = null;
+    // The index sits below the cards it filters: picking there scrolls up to them; a card's own chip
+    // toggles the same filter where the reader already is.
+    document.getElementById('techs').addEventListener('click', (ev) => {
+      const b = ev.target.closest('button[data-tag]');
+      if (b) filter(b.dataset.tag, true);
+    });
+    for (const id of ['grid', 'gallery']) document.getElementById(id).addEventListener('click', (ev) => {
+      const li = ev.target.closest('.chips li');
+      if (li) filter(li.textContent, false);
+    });
+    function filter(pick, scroll) {
+      const tag = pick === current ? null : pick;
+      current = tag;
+      for (const o of document.querySelectorAll('#techs button')) o.setAttribute('aria-pressed', String(o.dataset.tag === tag));
+      let shown = 0;
+      for (const card of document.querySelectorAll('#grid .card, #gallery .card')) {
+        const has = !tag || JSON.parse(card.dataset.tags).includes(tag);
+        card.hidden = !has; shown += has;
+        for (const li of card.querySelectorAll('.chips li')) li.classList.toggle('on', li.textContent === tag);
+      }
+      for (const [grid, sec] of [['grid', 'play'], ['gallery', 'gallery-section']])
+        document.getElementById(sec).hidden = !document.querySelector(`#${grid} .card:not([hidden])`);
+      document.getElementById('techs-note').textContent = tag
+        ? `${shown} of ${all.length} programs use ${tag}; pick it again to show them all.`
+        : 'Pick one to show only the programs that use it.';
+      if (scroll && tag) document.querySelector('#play:not([hidden]), #gallery-section:not([hidden])')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    }
+  }
 </script>
 </body>
 </html>
