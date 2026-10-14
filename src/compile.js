@@ -1497,7 +1497,11 @@ const typeForRuntime = (t) => (t && t.k === 'func' ? {
 export function snapshotProgram(program) {
   const { mod, src, link } = program;
   if (!link) throw new CompileError('snapshot: only a whole-program build (compileProgram) can be bundled');
-  if (link.paged) throw new CompileError('snapshot: a paged build carries a memory map this does not record yet');
+  /*
+   * A PAGED build records only that it is one. Its memory map is not state to save: every page starts
+   * as itself and the devices claim theirs when the environment installs, after the image loads, so
+   * loadSnapshot builds the same map compileProgram did and hands its two translations to the code.
+   */
   /*
    * The image, as the 64 KB pages that hold anything. A program's statics are a few megabytes at
    * the bottom of an address space of hundreds, and what the linker did not write is zero.
@@ -1511,7 +1515,7 @@ export function snapshotProgram(program) {
   pages.forEach((p, i) => image.set(u8.subarray(p * PAGE, Math.min((p + 1) * PAGE, u8.length)), i * PAGE));
   const meta = {
     format: 1,
-    model: link.model, memory: mod.size, safepoints: link.safepoints, window: link.window,
+    model: link.model, memory: mod.size, safepoints: link.safepoints, window: link.window, paged: !!link.paged,
     brk: mod.brk, farBrk: mod.farBrk, pages,
     symbols: [...mod.symbols].map(([name, s]) => [name, s.addr, s.size ?? 0, s.kind ?? null]),
     // In table order: a function's address IS its index, and the emitted code has them as constants.
@@ -1545,7 +1549,9 @@ export function loadSnapshot({ meta, image, src = null, factory = null }, { shar
   finalizeHeap(M);
   const F = Object.create(null);
   const make = factory ?? new Function(src)();
-  const rebind = make(M, F, mod.dv);
+  // As compileProgram does: the emitted code of a paged build takes the map's two translations.
+  const memmap = meta.paged ? installMemMap(M) : null;
+  const rebind = meta.paged ? make(M, F, mod.dv, memmap.xr, memmap.xw) : make(M, F, mod.dv);
   for (const name of meta.emitted) mod.bindFunc(name, F[name]);
   wireRebind(F, mod, meta.emitted, rebind);
   for (const name of meta.builtinRefs) bindBuiltinAddr(mod, M, name);
