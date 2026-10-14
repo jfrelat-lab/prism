@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { loadTarget, buildTarget, loadTargetBundle } from '../src/target.js';
 import { writeBundle, readBundle } from './bundle.mjs';
+import { loadSnapshot } from '../src/compile.js';
 import { skip } from './gate-skip.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -130,6 +131,26 @@ try {
     const out = r.error ? `(${r.error.code ?? 'stopped'} after 30 s)` : r.stdout;
     check(!same(out), `control: ${what} the output is not the script's`, out.slice(0, 120));
   }
+  /*
+   * ---- a program with Turbo Assembler modules. Its PROCs are bound when it loads (tasm-link), at
+   * the segments the linker placed and with arguments laid out by their C prototypes; a bundle that
+   * lost either could not start Keen Dreams in a static export. Both must read back as compiled, and
+   * a snapshot without the prototypes must not.
+   */
+  const keen = loadTarget(join(ROOT, 'targets', 'keendreams.json'));
+  if (existsSync(join(ROOT, keen.dir))) {
+    const compiled = buildTarget(keen, { root: ROOT }).program;
+    writeBundle(keen, dir, 'keendreams');
+    const { snapshot } = await readBundle(dir, 'keendreams');
+    const t = (x) => (x ? [x.k, x.name, x.size, x.signed, x.to?.k].join() : '-');
+    const sig = (ft) => ft && `${t(ft.ret)}(${(ft.params ?? []).map((p) => t(p.type)).join(';')})`;
+    const agree = (loaded) => loaded.funcTypes?.size > 0 && [...loaded.funcTypes].every(([n, ft]) => sig(ft) === sig(compiled.funcTypes.get(n)))
+      && compiled.externPlaced.size > 0 && [...compiled.externPlaced].every(([k, v]) => loaded.externPlaced?.get(k) === v);
+    const loaded = loadSnapshot(snapshot);
+    check(agree(loaded), `Keen Dreams: ${loaded.externPlaced.size} assembly segments and ${loaded.funcTypes.size} prototypes read back as compiled`);
+    const { externFuncTypes, ...stripped } = snapshot.meta;
+    check(!agree(loadSnapshot({ ...snapshot, meta: stripped })), 'control: without the prototypes the bundle does not agree');
+  } else console.log('skip Keen Dreams is not in corpus/');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

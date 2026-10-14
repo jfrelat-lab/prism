@@ -1493,6 +1493,9 @@ const typeForRuntime = (t) => (t && t.k === 'func' ? {
   params: (t.params ?? []).map((p) => ({ type: { k: p.type?.k, name: p.type?.name, size: p.type?.size } })),
 } : null);
 
+/** A C type, as far as tasm-link reads one to move it through AX, DX:AX or the stack. */
+const typeForAsm = (t) => (t ? { k: t.k, name: t.name, size: t.size, signed: t.signed, to: t.to ? { k: t.to.k } : undefined } : null);
+
 /** { meta: a JSON-able object, image: Uint8Array, src: the emitted JavaScript }. */
 export function snapshotProgram(program) {
   const { mod, src, link } = program;
@@ -1523,6 +1526,11 @@ export function snapshotProgram(program) {
     funcTable: mod.funcTable.length,
     emitted: link.emitted, builtinRefs: link.builtinRefs,
     safepointNames: mod.safepoints,
+    // Where each assembly module's segments were placed, and the C prototypes of what the C declares
+    // and does not define -- its PROCs: tasm-link binds them at load and lays their arguments by type.
+    externPlaced: [...(program.externPlaced ?? [])],
+    externFuncTypes: [...(program.funcTypes ?? [])].filter(([n, t]) => t && !link.emitted.includes(n))
+      .map(([n, t]) => [n, { ret: typeForAsm(t.ret), params: (t.params ?? []).map((p) => ({ type: typeForAsm(p.type) })) }]),
   };
   return { meta, image, src };
 }
@@ -1558,6 +1566,7 @@ export function loadSnapshot({ meta, image, src = null, factory = null }, { shar
   installStdio(M);
   installPIT(installPorts(M), M);
   return { M, F, src, mod, failures: [], duplicates: [], undefined: [], undefinedVars: [],
+           externPlaced: new Map(meta.externPlaced ?? []), funcTypes: new Map(meta.externFuncTypes ?? []),
            safepoints: meta.safepoints, run: makeRunner(M, F, mod, meta.model), bundled: true };
 }
 
