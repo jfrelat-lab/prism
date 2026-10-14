@@ -46,7 +46,9 @@ for (const e of programs.filter((p) => !p._skip && p.thumb?.frames && (!ONLY || 
     const nd = desc.needsData ?? {};
     const files = {};
     const walk = (d, pre) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p, `${pre}${f}/`); else if (f !== 'PROVENANCE.txt') files[pre + f] = new Uint8Array(readFileSync(p)); } };
-    if (nd.dir) walk(join(GAMES, nd.dir), nd.mount ?? '');
+    // `thumb.data`: an unpacked tree to draw from, where the program's own root holds its archive.
+    if (e.thumb.data) walk(join(GAMES, e.thumb.data), '');
+    else if (nd.dir) walk(join(GAMES, nd.dir), nd.mount ?? '');
     const b = buildTarget(loadTarget(join(ROOT, 'targets', `${desc.target}.json`)), { root: ROOT,
       envExtra: { stdio: { files, exactPaths: !!nd.exactPaths }, sdl12: { clock: virtualClock() } } });
     let n = 0;

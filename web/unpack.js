@@ -72,13 +72,53 @@ export async function deice(files) {
   return unzip(whole);
 }
 
+// ---- .tar.gz: Unix releases of the period (Cube's cube_2005_08_29_unix.tar.gz) ----
+
+const isGzip = (b) => b.length > 2 && b[0] === 0x1f && b[1] === 0x8b;
+
+async function gunzip(bytes) {
+  const out = new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')));
+  return new Uint8Array(await out.arrayBuffer());
+}
+
+/**
+ * A tar archive's regular files, as { path, bytes }. 512-byte headers: the name at 0 (100 bytes) with
+ * the ustar prefix at 345 (155), the size in octal at 124, the type at 156 ('0' or NUL a file, '5' a
+ * directory); GNU's 'L' entry carries the next entry's long name. Links and devices are refused by
+ * name rather than skipped, so an archive that needs them is not unpacked half.
+ */
+export function untar(tar) {
+  const str = (at, n) => { let s = ''; for (let i = at; i < at + n && tar[i]; i++) s += String.fromCharCode(tar[i]); return s; };
+  const files = [];
+  let at = 0, longName = null;
+  while (at + 512 <= tar.length) {
+    if (tar.subarray(at, at + 512).every((b) => b === 0)) break;            // the end: two empty blocks
+    const type = String.fromCharCode(tar[at + 156] || 0x30);
+    const size = parseInt(str(at + 124, 12).trim() || '0', 8);
+    const prefix = str(at + 257, 6).startsWith('ustar') ? str(at + 345, 155) : '';
+    const name = longName ?? (prefix ? `${prefix}/${str(at, 100)}` : str(at, 100));
+    const data = tar.subarray(at + 512, at + 512 + size);
+    longName = null;
+    if (type === 'L') longName = str(at + 512, size);
+    else if (type === '0' || type === '7') files.push({ path: name.replace(/^\.\//, ''), bytes: data.slice() });
+    else if (type !== '5' && type !== 'g' && type !== 'x') throw new Error(`${name}: tar entry type '${type}' is not supported (files and directories only)`);
+    at += 512 + Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+
 /**
  * The files a program reads, from its archive: unpacked (and de-iced), then the ones named in
  * `pick` (by name, any directory, any case), each under the name it is listed with. With no `pick`,
  * every file, at its path in the archive.
  */
-export async function unpackArchive(bytes, pick = null) {
-  const files = await deice(await unzip(bytes));
+export async function unpackArchive(bytes, pick = null, root = null) {
+  const files = isGzip(bytes) ? untar(await gunzip(bytes)) : await deice(await unzip(bytes));
+  // `root`: only what the archive holds under this directory, named from there (Cube's cube/).
+  if (root) {
+    const pre = root.endsWith('/') ? root : `${root}/`;
+    return Object.fromEntries(files.filter((f) => f.path.startsWith(pre)).map((f) => [f.path.slice(pre.length), f.bytes]));
+  }
   if (!pick) return Object.fromEntries(files.map((f) => [f.path, f.bytes]));
   const out = {};
   for (const want of pick) {

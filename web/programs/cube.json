@@ -6,12 +6,43 @@
   "fps": 60,
   "needsData": {
     "dir": "cube",
-    "under": "files/cube/",
-    "cwd": true,
-    "hint": "files/cube/ from cube_2005_08_29_unix.tar.gz (data/, packages/, autoexec.cfg)"
+    "under": "zip/cube_2005_08_29_unix",
+    "archive": "zip/cube_2005_08_29_unix.tar.gz",
+    "archiveRoot": "cube/",
+    "hint": "zip/cube_2005_08_29_unix.tar.gz, the release as published, unpacked in the page: its readme allows distributing \"the cube archive unmodified\", not the files inside it"
   },
-  "controls": [["W A S D / arrows", "move"], ["mouse", "look"], ["left button", "fire"], ["Space", "jump"], ["Tab", "scores"], ["`", "console"], ["Esc", "menu"]],
+  "controls": [
+    [
+      "W A S D / arrows",
+      "move"
+    ],
+    [
+      "mouse",
+      "look"
+    ],
+    [
+      "left button",
+      "fire"
+    ],
+    [
+      "Space",
+      "jump"
+    ],
+    [
+      "Tab",
+      "scores"
+    ],
+    [
+      "`",
+      "console"
+    ],
+    [
+      "Esc",
+      "menu"
+    ]
+  ],
   "_why": "The first GL program here chosen for its C++: its own containers, templates and no STL, compiled by src/cxx. It is held to a native build drawn by Mesa (gate-cube: three frames within 0.2% of pixels, its sound sample for sample). In the page it draws through WebGL2, and it reads the depth under its crosshair every frame -- which is what made the WebGL path render into a framebuffer of its own.",
   "_cwd": "Cube opens data/ and packages/ relative to the directory it is started in, which in its archive is files/cube/: the files are named relative to it.",
-  "_music": "Its music is Ogg Vorbis, which PRISM's SDL_mixer does not decode: Mix_LoadMUS fails and Cube plays on without it, as it does on a machine without the codec."
+  "_music": "Its music is Ogg Vorbis, which PRISM's SDL_mixer does not decode: Mix_LoadMUS fails and Cube plays on without it, as it does on a machine without the codec.",
+  "_archive": "Cube is served as its archive because that is what its author lets anyone pass on (readme.html: \"you may freely distribute the cube archive unmodified on any media\"); the page unpacks it (web/unpack.js, a tar.gz) and keeps cube/, the directory the game runs in."
 }

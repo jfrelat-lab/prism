@@ -1,5 +1,5 @@
 {
-  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Tux Racer's data states no licence; its author's SourceForge project publishes it under the GPL v2 (tools/site-licenses/tuxracer-data.txt). Left out for now: morph3d (no licence in its file), Tyrian 2.1 (its own file_id.diz forbids distribution), Cube (some of its media forbid redistribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Tux Racer's data states no licence; its author's SourceForge project publishes it under the GPL v2 (tools/site-licenses/tuxracer-data.txt). Left out for now: morph3d (no licence in its file), Tyrian 2.1 (its own file_id.diz forbids distribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Cube's (its readme: \"you may freely distribute the cube archive unmodified on any media\"), a tar.gz unpacked in the page. So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
   "programs": [
     {
       "id": "chromium-bsu", "thumb": { "frames": 120 }, "program": "chromium-bsu", "machine": "linux",
@@ -50,6 +50,18 @@
         { "name": "Data licence: how it was established", "path": "tools/site-licenses/tuxracer-data.txt" },
         { "name": "Tux Racer licence (GPL-2.0)", "path": "corpus/tuxracer-0.61/COPYING" },
         { "name": "Tcl licence", "path": "corpus/tcl8.4.20/license.terms" }
+      ]
+    },
+    {
+      "id": "cube", "thumb": { "frames": 900, "data": "cube/files/cube" }, "program": "cube", "machine": "linux",
+      "dataFiles": ["zip/cube_2005_08_29_unix.tar.gz"],
+      "title": "Cube", "author": "Wouter van Oortmerssen", "year": 2005, "kind": "First-person shooter",
+      "blurb": "The tiny engine behind Sauerbraten: its C++, its OpenGL and its ENet compiled from the 2005 release, the archive unpacked in the page.",
+      "code": { "license": "zlib (relicensed 2022)", "source": "https://sourceforge.net/projects/cube/" },
+      "data": { "license": "Freeware: \"you may freely distribute the cube archive unmodified on any media\"" },
+      "licenseFiles": [
+        { "name": "How the archive may be shared", "path": "tools/site-licenses/cube.txt" },
+        { "name": "Source licence (readme.txt)", "path": "corpus/cube_2005_08_29/readme.txt" }
       ]
     },
     {

@@ -1,0 +1,25 @@
+Cube — cube_2005_08_29_unix.tar.gz, Wouter van Oortmerssen's last release of Cube (2005-08-29), as
+SourceForge serves it (https://sourceforge.net/projects/cube/, project file
+cube/2005_08_29/cube_2005_08_29_unix.tar.gz; 30,412,318 bytes,
+sha256 f531fdeaa30e5af430b1c9c8eaeb44c92e349490d6235261368049e3915720c4).
+
+THE DATA. The archive's own readme.html, License section, is the permission this showcase relies on:
+
+  Cube is freeware, you may use Cube for any purpose as long as you don't blame me for any damages
+  incurred, and you may freely distribute the cube archive unmodified on any media.
+
+So the archive is served as published, unmodified and free of charge, and unpacked in the browser
+(the site splits it in two parts for its host's file-size limit and joins them back byte for byte).
+Its maps, textures, models and sounds keep their own readmes, inside the archive, unchanged; some
+of them carry their own terms, and they reach the visitor exactly as their author's archive carries
+them. Debian lists Cube as unsuitable for its own archive for reasons of free-software policy (mixed
+media licences, modified network code in the binaries), not because the archive may not be passed
+on (https://wiki.debian.org/Games/Unsuitable).
+
+THE CODE. What plays it is Cube's source of the same release, compiled to JavaScript by PRISM. Its
+readme.txt licenses that source under the zlib licence with one added clause (source versions may
+not be relicensed without the author's written permission); in February 2022 Wouter van Oortmerssen
+and Lee Salzman relicensed all Cube releases under the plain zlib licence
+(https://spdx.org/licenses/Cube.html). The source's own readme.txt is beside this file.
+
+Cube is (C) 2001-2005 Wouter van Oortmerssen; this site is not affiliated with him.

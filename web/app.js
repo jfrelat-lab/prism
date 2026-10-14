@@ -1144,12 +1144,13 @@ async function startRun(typedAs = null) {
         /*
          * `archive`: the data is a shareware archive as published (its licence allows passing on the
          * archive complete and unmodified, not the files inside), unpacked here as its installer would
-         * have -- web/unpack.js -- keeping the files named in `pick`.
+         * have -- web/unpack.js -- keeping the files named in `pick`, or those under `archiveRoot`
+         * (named from there: Cube's cube/ is the directory it runs in).
          */
         if (program.needsData.archive) {
           const zip = dataFiles[program.needsData.archive];
           if (!zip) throw new Error(`no ${program.needsData.archive} in the data directory '${program.needsData.dir}'`);
-          dataFiles = await unpackArchive(zip, program.needsData.pick ?? null);
+          dataFiles = await unpackArchive(zip, program.needsData.pick ?? null, program.needsData.archiveRoot ?? null);
         }
         if (exclude.length) dataFiles = Object.fromEntries(Object.entries(dataFiles).filter(([k]) => !exclude.includes(k.split('/').pop())));
         /*
