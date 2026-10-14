@@ -81,6 +81,9 @@
   .card .needs { margin: 0; font-size: 12.5px; color: var(--dim); }
   .card .needs b { color: var(--ink); font-weight: 500; }
   .fine { margin: 12px 0 0; font-size: 12px; color: var(--dim); max-width: 760px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 0; padding: 0; list-style: none; }
+  .chips li { font: 500 11px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent);
+              border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 3px; padding: 0 5px; }
   .card .credits { margin: 0; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
   .card .actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 13px; flex-wrap: wrap; }
   .card .run { padding: 5px 14px; border-radius: 5px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -134,8 +137,8 @@
   <section id="gallery-section" data-site hidden>
     <h2>Also compiled by PRISM</h2>
     <p class="lead">These run too, from their unmodified source, but their data is not ours to share:
-      the pictures were drawn by PRISM from a copy someone owns. Bring yours and run them locally with
-      <code>node tools/serve.mjs --games=&lt;your games directory&gt;</code>.</p>
+      the pictures were drawn by PRISM from a copy someone owns. <b>Run with your files</b> asks for the
+      folder that holds yours; the page reads it where it is, and nothing is uploaded.</p>
     <div class="grid" id="gallery"></div>
     <p class="fine">The games' pictures belong to their owners and are shown to document what PRISM runs;
       their names are their owners' trademarks. PRISM is not affiliated with any of them.</p>
@@ -188,12 +191,13 @@
     <div class="box table">
       <table>
         <tr><td>MAME 0.34 <span class="tag">DJGPP</span></td><td>15 of 15 games bit-identical to a native gcc build over 1,500 frames.</td></tr>
-        <tr><td>Quake, GLQuake</td><td>The same pixels on DOS, X11, svgalib and Win32; GLQuake within 1 pixel of 307,200 of Mesa.</td></tr>
-        <tr><td>Quake II, Quake III, Enemy Territory</td><td>Play; Quake II's GL renderer within 3 pixels of Mesa.</td></tr>
-        <tr><td>Doom, Heretic, Hexen, Hexen II</td><td>Play; Doom with its sound server running as a second process.</td></tr>
-        <tr><td>ScummVM 0.6.1 and 0.10.0 <span class="tag">C++</span></td><td>Thirteen engines; 3,000 of 3,000 frames and every audio buffer equal to a native g++ build, for 20 game demos.</td></tr>
-        <tr><td>Keen Dreams <span class="tag">16-bit</span></td><td>Plays; its screens are those of the shipped KDREAMS.EXE under DOSBox-X.</td></tr>
-        <tr><td>And more</td><td>OpenDUNE, Jump 'n Bump, SDLPoP, OpenTyrian, Tux Racer, Cube, Chromium B.S.U., Lua 5.4, PuTTY, SQLite.</td></tr>
+        <tr data-nosite><td>Quake, GLQuake</td><td>The same pixels on DOS, X11, svgalib and Win32; GLQuake within 1 pixel of 307,200 of Mesa.</td></tr>
+        <tr data-nosite><td>Quake II, Quake III, Enemy Territory</td><td>Play; Quake II's GL renderer within 3 pixels of Mesa.</td></tr>
+        <tr data-nosite><td>Doom, Heretic, Hexen, Hexen II</td><td>Play; Doom with its sound server running as a second process.</td></tr>
+        <tr data-nosite><td>ScummVM 0.6.1 and 0.10.0 <span class="tag">C++</span></td><td>Thirteen engines; 3,000 of 3,000 frames and every audio buffer equal to a native g++ build, for 20 game demos.</td></tr>
+        <tr data-nosite><td>Keen Dreams <span class="tag">16-bit</span></td><td>Plays; its screens are those of the shipped KDREAMS.EXE under DOSBox-X.</td></tr>
+        <tr data-nosite><td>And more</td><td>OpenDUNE, Jump 'n Bump, SDLPoP, OpenTyrian, Tux Racer, Cube, Chromium B.S.U., Lua 5.4, PuTTY, SQLite.</td></tr>
+        <tr data-site hidden><td>And more</td><td>PuTTY on Win32 with Winsock, SQLite, Tcl 8.4 and zlib against gcc's builds, and ScummVM 0.10.0's thirteen engines; with the games above.</td></tr>
         <tr><td>Not yet</td><td>An optimiser; Catacomb 3-D, which generates code at run time; picture references for some GL games.</td></tr>
       </table>
     </div>
@@ -248,6 +252,7 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
   // The corresponding source of a build, as the GPL asks: the program's own (`source`) and how PRISM
   // built it -- its target file, in the compiler's repository.
   const build = (p) => `https://github.com/jfrelat-lab/prism/blob/main/targets/${String(p.target).split(':')[0]}.json`;
+  const chips = (tags) => (tags?.length ? `<ul class="chips">${tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : '');
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   /*
    * The shelf (web/) works under tools/serve.mjs and in an export, not on GitHub Pages: its link is
@@ -255,23 +260,26 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
    */
   const showShelf = () => { for (const el of document.querySelectorAll('[data-shelf]')) el.hidden = false; };
   fetch('__targets').then((r) => { if (r.ok) showShelf(); }).catch(() => {});
-  fetch('web/site.json').then((r) => (r.ok ? r.json() : null)).then((site) => {
+  fetch('web/site.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).then((site) => {
     if (!site?.programs?.length) return;
     showShelf();
     for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
     for (const el of document.querySelectorAll('[data-nosite]')) el.hidden = true;
     document.getElementById('grid').innerHTML = site.programs.map((p) => {
       const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
-      const lic = (p.licences ?? []).map((l) => `<a href="${esc(l.href)}">${esc(l.name)}</a>`).join(' · ');
+      // A licence line names the licence and links the files that are its text: the code's, the data's.
+      const files = (side) => (p.licences ?? []).filter((l) => l.for === side || l.for === 'both')
+        .map((l, i) => ` <a href="${esc(l.href)}" title="${esc(l.name)}">[${i + 1}]</a>`).join('');
       return `<article class="card">
         <a class="shot" href="${esc(p.run)}" aria-label="Run ${esc(p.title)}">${shot}</a>
         <div class="body">
           <h3>${esc(p.title)} <span class="tag">${esc(p.kind)}</span></h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''}</div>
           <p class="blurb">${esc(p.blurb)}</p>
-          <div class="lic"><span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}</div>
+          ${chips(p.tags)}
+          <div class="lic"><span>Code: <b>${esc(p.code?.license)}</b>${files('code')}</span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b>${files('data')}</span>` : ''}</div>
           ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
-          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a>${lic ? `<span class="meta">${lic}</span>` : ''}</div>
+          <div class="actions"><a class="run" href="${esc(p.run)}">Run</a><a href="${esc(p.code?.source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a></div>
         </div></article>`;
     }).join('');
     document.getElementById('gallery').innerHTML = (site.gallery ?? []).map((g) => `<article class="card">
@@ -281,7 +289,8 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
           <div class="meta">${esc(g.author)}${g.year ? `, ${esc(g.year)}` : ''} · ${esc(g.kind)}</div>
           <p class="blurb">${esc(g.blurb)}</p>
           <p class="needs">Needs: <b>${esc(g.needs)}</b></p>
-          <div class="actions"><a href="${esc(g.source)}">source</a><a href="${esc(build(g))}" title="how PRISM builds it">build</a></div>
+          ${chips(g.tags)}
+          <div class="actions">${g.run ? `<a class="run" href="${esc(g.run)}" title="the page asks for your folder; nothing leaves your browser">Run with your files</a>` : ''}<a href="${esc(g.source)}">source</a><a href="${esc(build(g))}" title="how PRISM builds it">build</a></div>
         </div></article>`).join('');
     if (!(site.gallery ?? []).length) document.getElementById('gallery-section').hidden = true;
   }).catch(() => { /* not an export */ });

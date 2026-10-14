@@ -54,6 +54,54 @@ for (const f of ['index.html', 'LICENSE', 'THIRD-PARTY.md']) copyFileSync(join(R
 cpSync(join(ROOT, 'LICENSES'), join(OUT, 'LICENSES'), { recursive: true });
 write('_headers', '/*\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n  Cross-Origin-Resource-Policy: same-origin\n');
 
+/*
+ * TECHNOLOGY TAGS, read off the target rather than written by hand: its languages (the units' own
+ * extensions), a 16-bit model, its compiler's runtime and every platform layer its env list names, the
+ * assembly it translates; then what a target cannot say for itself (`tags` in the manifest: Tcl, FTGL).
+ */
+const ENV_TAGS = { borland: 'Borland C++', watcom: 'Watcom · DOS4GW', go32: 'DJGPP', dj: 'DJGPP', allegro: 'Allegro',
+  allegro39: 'Allegro', x11: 'X11', svgalib: 'svgalib', sdl12: 'SDL 1.2', sdl2: 'SDL 2', sdlimage12: 'SDL_image',
+  gl: 'OpenGL 1.x', glu: 'GLU', glut: 'GLUT', glx: 'GLX', wgl: 'WGL', fxmesa: '3Dfx (fxMesa)', wsock: 'Winsock',
+  ega: 'EGA', vgaplanar: 'VGA planar' };
+function techTags(target, answer, desc, extra = []) {
+  const units = answer.units.map((u) => u.file);
+  const tags = [];
+  if (units.some((f) => /\.c$/i.test(f))) tags.push('C');
+  if (units.some((f) => /\.(cpp|cc|cxx)$/i.test(f))) tags.push('C++');
+  if (String(target.compile?.model ?? '').startsWith('dos16')) tags.push('16-bit');
+  if ((desc.host ?? desc.platform) === 'win32') tags.push('Win32');
+  for (const e of target.env ?? []) if (ENV_TAGS[e]) tags.push(ENV_TAGS[e]);
+  for (const a of answer.asmTranslate) tags.push(typeof a !== 'string' || /\.s$/i.test(a) ? 'GNU as' : 'NASM');
+  if (answer.tasm.length) tags.push('TASM');
+  return [...new Set([...tags, ...extra])];
+}
+
+/** The build of `tname` as a bundle, its static answers and its assembly; once per target. */
+async function bundle(tname, desc) {
+  if (targets.has(tname)) return targets.get(tname);
+  const [file, variant] = tname.split(':');
+  const target = loadTarget(join(ROOT, 'targets', `${file}.json`), variant || null);
+  // A file name, not a path: a variant's own name can be "quake/x11".
+  const name = tname.replace(/[:/]/g, "-");
+  // A descriptor that runs with safepoints needs a bundle built with them, or the page compiles instead.
+  const b = writeBundle(target, join(OUT, 'dist'), name, { compile: desc.safepoints ? { safepoints: true } : {} });
+  for (const ext of ['js', 'bin']) {
+    const s = statSync(join(OUT, 'dist', `${name}.${ext}`)).size;
+    if (s > MAX_FILE) throw new Error(`dist/${name}.${ext} is ${mb(s)}, over 25 MiB`);
+    total += s;
+  }
+  const answer = await targetAnswer(ROOT, tname, { bundleFor: () => `dist/${name}` });
+  // A bundle needs no C: the unit list stays (the page counts it) but nothing in it is fetched.
+  write(`__static/target/${targetFile(tname)}.json`, JSON.stringify(answer));
+  // The assembly the page still translates when the program loads, at its repository path.
+  const asm = [...answer.asmTranslate.map((a) => (typeof a === 'string' ? a : a.file)), ...answer.tasmFiles,
+    ...answer.dataObjects.map((o) => o.path).filter(Boolean)];
+  for (const f of asm) total += copy(join(ROOT, f), f);
+  const info = { title: answer.title, units: answer.units.length, functions: b.functions, tags: techTags(target, answer, desc) };
+  targets.set(tname, info);
+  return info;
+}
+
 const shipped = [];
 const targets = new Map();
 const dataRoots = new Map();      // root -> Set of files under it
@@ -63,27 +111,7 @@ for (const e of entries) {
   const tname = e.variant ? `${desc.target.split(':')[0]}:${e.variant}` : desc.target;
   console.log(`${e.id}: ${tname}`);
 
-  // The build, as a bundle. Once per target: two shelf entries of one program share it.
-  if (!targets.has(tname)) {
-    const [file, variant] = tname.split(':');
-    const target = loadTarget(join(ROOT, 'targets', `${file}.json`), variant || null);
-    const name = variant ? `${target.name}-${variant}` : target.name;
-    // A descriptor that runs with safepoints needs a bundle built with them, or the page compiles instead.
-    const b = writeBundle(target, join(OUT, 'dist'), name, { compile: desc.safepoints ? { safepoints: true } : {} });
-    for (const ext of ['js', 'bin']) {
-      const s = statSync(join(OUT, 'dist', `${name}.${ext}`)).size;
-      if (s > MAX_FILE) throw new Error(`dist/${name}.${ext} is ${mb(s)}, over 25 MiB`);
-      total += s;
-    }
-    const answer = await targetAnswer(ROOT, tname, { bundleFor: () => `dist/${name}` });
-    // A bundle needs no C: the unit list stays (the page counts it) but nothing in it is fetched.
-    write(`__static/target/${targetFile(tname)}.json`, JSON.stringify(answer));
-    // The assembly the page still translates when the program loads, at its repository path.
-    const asm = [...answer.asmTranslate.map((a) => (typeof a === 'string' ? a : a.file)), ...answer.tasmFiles,
-      ...answer.dataObjects.map((o) => o.path).filter(Boolean)];
-    for (const f of asm) total += copy(join(ROOT, f), f);
-    targets.set(tname, { title: answer.title, units: answer.units.length, functions: b.functions });
-  }
+  const built = await bundle(tname, desc);
 
   /*
    * A SOUND SERVER (Doom's sndserv): a second program the page compiles in a worker of its own
@@ -116,9 +144,9 @@ for (const e of entries) {
     const from = l.from === 'data' ? join(GAMES, l.path) : join(ROOT, l.path);
     const rel = `licenses/${e.id}/${l.path.split('/').pop()}`;
     copy(from, rel);
-    licences.push({ name: l.name, href: rel });
+    licences.push({ name: l.name, href: rel, for: l.for ?? 'code' });
   }
-  shipped.push({ ...e, target: tname, licences, machine: e.machine });
+  shipped.push({ ...e, target: tname, licences, machine: e.machine, tags: [...new Set([...built.tags, ...(e.tags ?? [])])] });
 }
 
 for (const [root, files] of dataRoots) {
@@ -142,6 +170,33 @@ for (const [root, files] of dataRoots) {
   console.log(`  data ${root}: ${files.size} files, ${mb(n)}`);
 }
 
+/*
+ * THE GALLERY: programs PRISM compiles whose data may not be passed on. Their data is never shipped;
+ * a thumbnail PRISM drew from the owner's copy, what a visitor needs, the target the build comes from,
+ * and the build itself when its code may be shipped. An entry without its thumbnail is left out.
+ */
+const gallery = [];
+for (const g of manifest.gallery ?? []) {
+  const t = join(ROOT, 'dist/site-thumbs', `${g.id}.png`);
+  if (!existsSync(t)) { console.log(`  gallery ${g.id}: no thumbnail, left out`); continue; }
+  copy(t, `thumbs/${g.id}.png`);
+  const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${g.program}.json`), 'utf8'));
+  const { thumb, ...rest } = g;
+  const tname = (thumb?.target ?? '').replace('.json', '') || (g.variant ? `${desc.target.split(':')[0]}:${g.variant}` : desc.target);
+  /*
+   * ITS BUILD is shipped (its code's licence allows it; `noBuild` says when not, and why), so a visitor
+   * who has the data can run it: the page asks for the folder (web/app.js), nothing of theirs leaves
+   * the browser. A build that cannot be bundled leaves the entry a picture with no Run.
+   */
+  let built = null;
+  if (!g.noBuild) {
+    try { built = await bundle(tname, desc); } catch (err) { console.log(`  gallery ${g.id}: no build (${err.message.split('\n')[0]})`); }
+  }
+  if (built) gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: [...new Set([...built.tags, ...(g.tags ?? [])])],
+    run: `web/?machine=${encodeURIComponent(g.machine)}&program=${encodeURIComponent(g.variant ? g.file ?? g.program : g.program)}${g.args !== undefined ? `&args=${encodeURIComponent(g.args)}` : ''}&run=1` });
+  else gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: g.tags ?? [] });
+}
+
 // The picker's answers: only what is shipped, all present.
 write('__static/targets.json', JSON.stringify({ targets: [...new Set([...targets.keys()].map((t) => t.split(':')[0]))].map((name) => {
   const variants = [...targets.keys()].filter((t) => t.startsWith(`${name}:`)).map((t) => ({ name: t.split(':')[1], host: null, web: true, args: null }));
@@ -150,7 +205,7 @@ write('__static/targets.json', JSON.stringify({ targets: [...new Set([...targets
 
 // The shelf: each machine keeps only the shipped entries, in the manifest's order; an empty machine goes.
 const machines = JSON.parse(readFileSync(join(ROOT, 'web/machines.json'), 'utf8'));
-const want = new Set(shipped.map((s) => `${s.machine}\0${s.program}\0${s.variant ?? ''}`));
+const want = new Set([...shipped, ...gallery.filter((g) => g.run)].map((s) => `${s.machine}\0${s.program}\0${s.variant ?? ''}`));
 machines.machines = machines.machines.map((m) => ({ ...m, programs: m.programs.filter((p) => want.has(`${m.id}\0${p.program}\0${p.variant ?? ''}`)) }))
   .filter((m) => m.programs.length);
 write('web/machines.json', JSON.stringify(machines, null, 1));
@@ -162,21 +217,6 @@ for (const s of shipped) {
   // nothing. Passed through as it stood, a missing thumbnail reached the page as an object and drew
   // <img src="[object Object]">.
   s.thumb = existsSync(t) ? (copy(t, `thumbs/${s.id}.png`), `thumbs/${s.id}.png`) : null;
-}
-
-/*
- * THE GALLERY: programs PRISM compiles whose data may not be passed on. Neither their build nor their
- * data is shipped; a thumbnail PRISM drew from the owner's copy, what a visitor needs, and the target
- * the build comes from. A gallery entry without its thumbnail is left out rather than shown empty.
- */
-const gallery = [];
-for (const g of manifest.gallery ?? []) {
-  const t = join(ROOT, 'dist/site-thumbs', `${g.id}.png`);
-  if (!existsSync(t)) { console.log(`  gallery ${g.id}: no thumbnail, left out`); continue; }
-  copy(t, `thumbs/${g.id}.png`);
-  const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${g.program}.json`), 'utf8'));
-  const { thumb, ...rest } = g;
-  gallery.push({ ...rest, thumb: `thumbs/${g.id}.png`, target: (thumb?.target ?? desc.target ?? '').replace(/\.json.*$/, '') });
 }
 
 write('web/site.json', JSON.stringify({

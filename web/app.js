@@ -210,7 +210,7 @@ let site = null;
 let api = endpoints(false);
 
 async function discover() {
-  try { const r = await fetch('./site.json'); if (r.ok) site = await r.json(); } catch { /* a server */ }
+  try { const r = await fetch('./site.json', { cache: 'no-cache' }); if (r.ok) site = await r.json(); } catch { /* a server */ }
   api = endpoints(!!site);
   // What only a server has (the MAME catalogue reads the ROM directory) is not offered by an export.
   for (const el of document.querySelectorAll('[data-server]')) el.hidden = !!site;
@@ -721,11 +721,13 @@ const dataCache = new Map();               // root + under -> { name: Uint8Array
  * One data root, fetched once. Progress goes to the machine's own screen, because that is where you
  * are looking: a 50 MB pak takes a moment and a page that simply sits there looks broken.
  */
-async function loadData(root, say, under = '') {
+async function loadData(root, say, under = '', hint = '') {
   // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
   const key = `${root}\0${under}`;
   if (dataCache.has(key)) return dataCache.get(key);
   const r = await fetch(api.dataList(root));
+  // A static export ships some programs' builds without their data: the visitor brings it.
+  if (!r.ok && site) { const own = await pickData(root, under, hint, say); dataCache.set(key, own); return own; }
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const listing = await r.json();
   const files = listing.files.filter((f) => f.startsWith(under));
@@ -752,6 +754,47 @@ async function loadData(root, say, under = '') {
   dataCache.set(key, out);
   return out;
 }
+
+/*
+ * THE VISITOR'S OWN DATA, for a program a static export ships without it (its gallery: Quake, the
+ * ScummVM demos...). The page asks for the folder, reads it in the browser and runs the program on it;
+ * nothing is uploaded. The folder chosen is taken as the data ROOT the descriptor names (Quake's holds
+ * id1/), and the top folder's own name is dropped -- a browser gives every path under it. If none of
+ * the files is `under` the prefix the program wants, the visitor chose that directory itself (the
+ * Monkey Island demo's folder rather than the one holding it), and the prefix is put back.
+ */
+function pickData(root, under, hint, say) {
+  return new Promise((resolve, reject) => {
+    const box = document.createElement('div');
+    box.className = 'byo';
+    box.innerHTML = `<p><b>Your copy, read here.</b> This site ships the program, not its data.
+      Choose the folder that holds ${hint ? escapeHtml(hint) : `the program's files (${escapeHtml(root)})`}.
+      It is read by this page and never leaves your browser.</p>
+      <div class="byo-actions"><button type="button" class="byo-pick">Choose folder…</button>
+      <button type="button" class="byo-cancel">Cancel</button></div>`;
+    const input = document.createElement('input');
+    input.type = 'file'; input.webkitdirectory = true; input.multiple = true; input.hidden = true;
+    box.append(input);
+    $('stage').append(box);
+    const done = () => box.remove();
+    box.querySelector('.byo-cancel').onclick = () => { done(); reject(new Error('no data chosen')); };
+    box.querySelector('.byo-pick').onclick = () => input.click();
+    input.onchange = async () => {
+      const list = [...input.files];
+      if (!list.length) return;
+      say?.(`reading ${list.length} file${list.length === 1 ? '' : 's'} from your folder…`);
+      let out = {};
+      await Promise.all(list.map(async (f) => {
+        const rel = (f.webkitRelativePath || f.name).split('/').slice(1).join('/') || f.name;
+        out[rel] = new Uint8Array(await f.arrayBuffer());
+      }));
+      if (under && !Object.keys(out).some((k) => k.startsWith(under))) out = Object.fromEntries(Object.entries(out).map(([k, v]) => [under + k, v]));
+      done();
+      resolve(Object.fromEntries(Object.entries(out).filter(([k]) => k.startsWith(under))));
+    };
+  });
+}
+const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 /**
  * A data root that is only LISTED (`needsData.lazy`), optionally the part of it `under` a prefix.
@@ -1135,7 +1178,7 @@ async function startRun(typedAs = null) {
          * 0.6.1 asserts, native and here alike.
          */
         const { under = '', exclude = [], also = [] } = program.needsData;
-        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, under);
+        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, under, program.needsData.hint);
         /*
          * `cwd`: the program runs IN `under` and opens its files relative to it -- Cube asks for
          * data/ and packages/ beside itself -- so they are named without that prefix.

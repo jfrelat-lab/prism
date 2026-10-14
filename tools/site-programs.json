@@ -24,24 +24,33 @@
       "licenseFiles": [
         {
           "name": "Game licence (Clarified Artistic)",
-          "path": "corpus/chromium-bsu-0.9.16.1/COPYING"
+          "path": "corpus/chromium-bsu-0.9.16.1/COPYING",
+          "for": "both"
         },
         {
           "name": "Sounds licence (MIT)",
-          "path": "corpus/chromium-bsu-0.9.16.1/data/wav/license.txt"
+          "path": "corpus/chromium-bsu-0.9.16.1/data/wav/license.txt",
+          "for": "data"
         },
         {
           "name": "FreeType licence (FTL)",
-          "path": "corpus/freetype-2.3.11/docs/FTL.TXT"
+          "path": "corpus/freetype-2.3.11/docs/FTL.TXT",
+          "for": "code"
         },
         {
           "name": "FTGL licence",
-          "path": "corpus/ftgl-2.1.3~rc5/COPYING"
+          "path": "corpus/ftgl-2.1.3~rc5/COPYING",
+          "for": "code"
         },
         {
           "name": "libjpeg (IJG) README",
-          "path": "corpus/jpeg-6b/README"
+          "path": "corpus/jpeg-6b/README",
+          "for": "code"
         }
+      ],
+      "tags": [
+        "FreeType",
+        "FTGL"
       ]
     },
     {
@@ -70,11 +79,13 @@
       "licenseFiles": [
         {
           "name": "Shareware terms",
-          "path": "tools/site-licenses/doom-shareware.txt"
+          "path": "tools/site-licenses/doom-shareware.txt",
+          "for": "data"
         },
         {
           "name": "DOOM source licence (GPL-2.0)",
-          "path": "corpus/DOOM/LICENSE.TXT"
+          "path": "corpus/DOOM/LICENSE.TXT",
+          "for": "code"
         }
       ]
     },
@@ -103,12 +114,17 @@
       "licenseFiles": [
         {
           "name": "Shareware licence (LICENSE.DOC)",
-          "path": "tools/site-licenses/heretic-shareware.txt"
+          "path": "tools/site-licenses/heretic-shareware.txt",
+          "for": "data"
         },
         {
           "name": "Heretic source licence (GPL-2.0)",
-          "path": "tools/site-licenses/heretic-source-GPL-2.0.txt"
+          "path": "tools/site-licenses/heretic-source-GPL-2.0.txt",
+          "for": "code"
         }
+      ],
+      "tags": [
+        "#pragma aux"
       ]
     },
     {
@@ -133,16 +149,22 @@
       "licenseFiles": [
         {
           "name": "Data licence: how it was established",
-          "path": "tools/site-licenses/tuxracer-data.txt"
+          "path": "tools/site-licenses/tuxracer-data.txt",
+          "for": "data"
         },
         {
           "name": "Tux Racer licence (GPL-2.0)",
-          "path": "corpus/tuxracer-0.61/COPYING"
+          "path": "corpus/tuxracer-0.61/COPYING",
+          "for": "code"
         },
         {
           "name": "Tcl licence",
-          "path": "corpus/tcl8.4.20/license.terms"
+          "path": "corpus/tcl8.4.20/license.terms",
+          "for": "code"
         }
+      ],
+      "tags": [
+        "Tcl 8.4"
       ]
     },
     {
@@ -171,12 +193,17 @@
       "licenseFiles": [
         {
           "name": "How the archive may be shared",
-          "path": "tools/site-licenses/cube.txt"
+          "path": "tools/site-licenses/cube.txt",
+          "for": "data"
         },
         {
           "name": "Source licence (readme.txt)",
-          "path": "corpus/cube_2005_08_29/readme.txt"
+          "path": "corpus/cube_2005_08_29/readme.txt",
+          "for": "code"
         }
+      ],
+      "tags": [
+        "ENet"
       ]
     },
     {
@@ -207,11 +234,13 @@
         {
           "name": "Game readme and licence",
           "from": "data",
-          "path": "bass/sky-cd/readme.txt"
+          "path": "bass/sky-cd/readme.txt",
+          "for": "data"
         },
         {
           "name": "ScummVM licence (GPL-2.0)",
-          "path": "corpus/scummvm-0.6.1/COPYING"
+          "path": "corpus/scummvm-0.6.1/COPYING",
+          "for": "code"
         }
       ]
     },
@@ -238,11 +267,13 @@
         {
           "name": "Game readme and licence",
           "from": "data",
-          "path": "queen/FOTAQ_Floppy/readme.txt"
+          "path": "queen/FOTAQ_Floppy/readme.txt",
+          "for": "data"
         },
         {
           "name": "ScummVM licence (GPL-2.0)",
-          "path": "corpus/scummvm-0.6.1/COPYING"
+          "path": "corpus/scummvm-0.6.1/COPYING",
+          "for": "code"
         }
       ]
     },
@@ -271,11 +302,13 @@
       "licenseFiles": [
         {
           "name": "Original 1998 readme",
-          "path": "corpus/jumpnbump/docs/original_readme.txt"
+          "path": "corpus/jumpnbump/docs/original_readme.txt",
+          "for": "data"
         },
         {
           "name": "SDL port licence (GPL-2.0)",
-          "path": "corpus/jumpnbump-sdl12/COPYING"
+          "path": "corpus/jumpnbump-sdl12/COPYING",
+          "for": "code"
         }
       ]
     },
@@ -304,11 +337,13 @@
       "licenseFiles": [
         {
           "name": "Source release note",
-          "path": "corpus/jumpnbump-dos/source.txt"
+          "path": "corpus/jumpnbump-dos/source.txt",
+          "for": "code"
         },
         {
           "name": "Original 1998 readme",
-          "path": "corpus/jumpnbump/docs/original_readme.txt"
+          "path": "corpus/jumpnbump/docs/original_readme.txt",
+          "for": "data"
         }
       ]
     },
@@ -371,7 +406,8 @@
       "licenseFiles": [
         {
           "name": "Lua licence (MIT, in lua.h)",
-          "path": "corpus/lua/lua.h"
+          "path": "corpus/lua/lua.h",
+          "for": "code"
         }
       ]
     }
@@ -466,7 +502,10 @@
       "source": "https://github.com/keendreams/keen",
       "thumb": {
         "page": "its title screen, after Space in the page (headless, build.mjs sees no frame of this EGA build)"
-      }
+      },
+      "tags": [
+        "inline asm"
+      ]
     },
     {
       "id": "sdlpop",
@@ -541,7 +580,75 @@
       "source": "https://sourceforge.net/projects/heretic/",
       "thumb": {
         "page": "taken in the page: its title screen"
+      },
+      "tags": [
+        "#pragma aux"
+      ]
+    },
+    {
+      "id": "et",
+      "program": "et",
+      "machine": "linux",
+      "title": "Wolfenstein: Enemy Territory",
+      "author": "Splash Damage",
+      "year": 2003,
+      "kind": "First-person shooter",
+      "blurb": "Engine, cgame and ui modules in C linked at run time, its camera splines in C++ held to g++; Oasis's command map over GLX.",
+      "needs": "etmain/ from the free 2.60b release, which its licence does not let anyone pass on with other software",
+      "source": "https://github.com/id-Software/Enemy-Territory",
+      "args": "+set com_introplayed 1 +set net_noudp 1 +set sv_pure 0 +map oasis",
+      "thumb": {
+        "page": "the Oasis command map, from the page"
       }
+    },
+    {
+      "id": "quake-win",
+      "program": "quake",
+      "variant": "win",
+      "file": "quake.exe",
+      "machine": "win",
+      "title": "WinQuake",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "Quake's Win32 build in a window on PRISM's Windows desktop: GDI, DirectSound and Winsock answered in JavaScript.",
+      "needs": "id1/pak0.pak and pak1.pak from your copy",
+      "source": "https://github.com/id-Software/Quake",
+      "thumb": {
+        "page": "its window on the Windows desktop, from the page"
+      }
+    },
+    {
+      "id": "quake2-win",
+      "program": "quake2-win32",
+      "machine": "win",
+      "title": "Quake II (Win32)",
+      "author": "id Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "The Win32 build: quake2.exe loading ref_soft and gamex86 as DLLs through LoadLibrary.",
+      "needs": "baseq2/ from your copy",
+      "source": "https://github.com/id-Software/Quake-2",
+      "thumb": {
+        "page": "its window on the Windows desktop, from the page"
+      }
+    },
+    {
+      "id": "hexen2",
+      "program": "hexen2",
+      "machine": "win",
+      "title": "Hexen II",
+      "author": "Raven Software",
+      "year": 1997,
+      "kind": "First-person shooter",
+      "blurb": "Raven's own Win32 source, released under the GPL (gnu.txt in its tree): glh2.exe on WGL, its OpenGL drawn through WebGL.",
+      "needs": "data1/ from your copy",
+      "source": "https://archive.org/details/hexen2-master",
+      "args": "-window -nomidi",
+      "thumb": {
+        "page": "its menu in a window, from the page"
+      },
+      "noBuild": "its source tree carries both gnu.txt and an older 'EULA - Source Code.doc': which governs is to be settled before its build is shipped"
     }
   ],
   "_gallery": "Programs PRISM compiles whose data may NOT be passed on: the export shows a thumbnail PRISM drew from the owner's copy, what is needed, and how to run it locally; it ships neither their build nor their data."

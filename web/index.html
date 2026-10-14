@@ -56,6 +56,15 @@
   /* The bar every PRISM page shares (index.html, web/, web/live/): the name is the way home, and the
      prism's spectrum under it. border-image rather than a pseudo-element, because the bar scrolls. */
   header { border-bottom: 2px solid transparent; border-image: linear-gradient(90deg, #ff6b6b, #ffb35c, #ffe066, #7ee2a8, #6cb6ff, #9b8cff, #d38cff) 1; }
+  /* The visitor's own data (web/app.js pickData): a panel over the screen, asking for the folder. */
+  .byo { position: absolute; inset: 0; display: grid; place-content: center; gap: 12px; padding: 24px;
+         background: rgba(14, 16, 19, .92); color: var(--fg); text-align: center; z-index: 5; }
+  .byo p { max-width: 52ch; margin: 0; line-height: 1.55; }
+  .byo b { color: var(--accent); }
+  .byo-actions { display: flex; gap: 10px; justify-content: center; }
+  .byo button { font: inherit; color: var(--fg); background: var(--panel-2); border: 1px solid var(--edge);
+                border-radius: 5px; padding: 6px 12px; cursor: pointer; }
+  .byo button.byo-pick { border-color: var(--accent); color: var(--accent); }
   header a.name { border: none; padding: 0; border-radius: 0; color: var(--fg); text-decoration: none; }
   header a.name:hover { color: var(--accent); }
   header .name .mark { color: var(--accent); }
