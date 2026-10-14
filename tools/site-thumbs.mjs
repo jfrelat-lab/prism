@@ -25,11 +25,32 @@ mkdirSync(OUT, { recursive: true });
 
 const { programs } = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'), 'utf8'));
 // `thumb.page`: a thumbnail taken in the page by hand, where no headless run reaches the picture.
-for (const e of programs.filter((p) => !p._skip && p.thumb?.frames && (!ONLY || ONLY.includes(p.id)))) {
+for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.args) && (!ONLY || ONLY.includes(p.id)))) {
   const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${e.program}.json`), 'utf8'));
   const file = join(OUT, `${e.id}.png`);
   const frame = e.thumb.frames;
-  if (desc.host === 'glut') {
+  if (desc.host === 'console') {
+    /*
+     * A CONSOLE program (Lua): run with `thumb.args`, and what it prints drawn as the page draws its
+     * 80x25 text screen -- the VGA ROM font of assets/, light grey on black (attribute 07), the
+     * shell's `$ ` line first as the machine's terminal shows it.
+     */
+    const b = buildTarget(loadTarget(join(ROOT, 'targets', `${desc.target}.json`)), { root: ROOT });
+    const r = b.program.run([desc.target, ...e.thumb.args]);
+    const lines = [`$ ${desc.target}${e.thumb.shown ? ` ${e.thumb.shown}` : ''}`, ...String(r.stdout).replace(/\n$/, '').split('\n')].slice(-25);
+    const font = readFileSync(join(ROOT, 'assets/vga-rom-8x16.bin'));
+    const W = 80 * 8, H = 25 * 16, bgrx = new Uint8Array(W * H * 4);
+    lines.forEach((line, row) => {
+      for (let col = 0; col < Math.min(80, line.length); col++) {
+        const glyph = line.charCodeAt(col) & 0xff;
+        for (let y = 0; y < 16; y++) {
+          const bits = font[glyph * 16 + y];
+          for (let x = 0; x < 8; x++) if (bits & (0x80 >> x)) bgrx.fill(0xaa, ((row * 16 + y) * W + col * 8 + x) * 4, ((row * 16 + y) * W + col * 8 + x) * 4 + 3);
+        }
+      }
+    });
+    writeRgbPng(file, { bytes: bgrx, width: W, height: H });
+  } else if (desc.host === 'glut') {
     let shot = null;
     buildTarget(loadTarget(join(ROOT, 'targets', `${desc.target}.json`)), { root: ROOT,
       envExtra: { glut: { frames: [frame], onFrame: (n, rgba, w, h) => { shot = { rgba, w, h }; } } } }).program.run([desc.target]);
@@ -72,5 +93,5 @@ for (const e of programs.filter((p) => !p._skip && p.thumb?.frames && (!ONLY || 
     { cwd: ROOT, encoding: 'utf8', timeout: (e.thumb.seconds ?? 120) * 1000, killSignal: 'SIGKILL' });
     if (!existsSync(file)) { console.log(`${e.id}: no thumbnail (${r.error?.code ?? `exit ${r.status}`}) ${(r.stdout + r.stderr).trim().split('\n').slice(-2).join(' | ')}`); continue; }
   }
-  console.log(`${e.id}: frame ${frame} -> ${file}`);
+  console.log(`${e.id}: ${frame ? `frame ${frame}` : 'its output'} -> ${file}`);
 }

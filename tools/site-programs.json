@@ -122,7 +122,7 @@
       "code": { "license": "Public domain", "source": "https://gitlab.freedesktop.org/mesa/demos" }
     },
     {
-      "id": "lua", "program": "lua", "machine": "linux", "args": "",
+      "id": "lua", "thumb": { "args": ["-v", "-e", "local r=' .,:;-=+*#%@' for y=-11,11 do local s='' for x=-39,38 do local cr,ci,zr,zi,i=x/30-0.65,y/10,0,0,0 while i<200 and zr*zr+zi*zi<4 do zr,zi=zr*zr-zi*zi+cr,2*zr*zi+ci i=i+1 end local k=i==200 and 12 or math.min(11,math.floor(math.log(i,2))+1) s=s..r:sub(k,k) end print(s) end"], "shown": "-e mandelbrot" }, "program": "lua", "machine": "linux", "args": "",
       "title": "Lua 5.4", "author": "PUC-Rio", "year": 2024, "kind": "Interpreter",
       "blurb": "The reference Lua interpreter, compiled from its own source: an interactive prompt in the page.",
       "code": { "license": "MIT", "source": "https://github.com/lua/lua" },
