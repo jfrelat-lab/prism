@@ -317,8 +317,11 @@ for (const s of shipped) {
  * whoever passes it on to pass on its source too, not to point at someone else's copy (that is v3);
  * upstreams also go away (Raven's site has). So every source tree a shipped build was made from goes
  * into sources/<tree>.tar.gz exactly as it sits in corpus/ -- PRISM never edits a program's source --
- * with PRISM itself (compiler, tools, targets: the scripts that control the build), a checksum list
- * and a README saying where each tree came from. Archives are kept in dist/site-sources/ under the
+ * with build-scripts.tar.gz (what the GPL calls the scripts that control the build: each shipped
+ * program's targets/*.json, and the tools that write its generated files -- a configure run in the
+ * oracle container, MAME's light driver tables), a checksum list and a README saying where each tree
+ * came from and which commit of PRISM, the compiler, built them. The compiler itself is not a script
+ * of the programs' builds and is not shipped here. Archives are kept in dist/site-sources/ under the
  * tree's hash, as bundles are.
  *
  * --sources=release[:<tag>]: the archives are not copied into the export but published as the assets
@@ -351,16 +354,40 @@ function sourceArchive(tree, fetch) {
   archives.set(tree, a);
   return a;
 }
-// PRISM as committed: the tree a reader can rebuild every bundle from, with the targets in it.
+// The commit of PRISM the export was built from; the README links it.
 const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 const dirty = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim() !== '';
 mkdirSync(SRC_CACHE, { recursive: true });
-const prismFile = join(SRC_CACHE, 'prism.tar.gz');
-const prismTar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', '--prefix=prism/', '-o', prismFile, 'HEAD']);
-if (prismTar.status !== 0) throw new Error(`sources/prism.tar.gz: git archive failed: ${prismTar.stderr}`);
-const prismBytes = RELEASE ? statSync(prismFile).size : copy(prismFile, 'sources/prism.tar.gz');
+/*
+ * THE BUILD SCRIPTS: the shipped targets' files, and every tool that writes a generated tree one of
+ * them reads (named in the tool's own text), with the local modules those tools import and the oracle
+ * container they run in. Read from the working tree, so they are what built this export.
+ */
+const scriptFiles = new Set(['LICENSE']);
+const usedTargets = new Set([...shipped, ...gallery.filter((g) => g.run)].map((x) => String(x.target).split(':')[0]));
+for (const t of usedTargets) scriptFiles.add(`targets/${t}.json`);
+if (Object.keys(light).length) { scriptFiles.add('tools/mame-light.mjs'); scriptFiles.add('targets/light/mame034.json'); }
+const generated = [...new Set([...targets.values()].flatMap((t) => t.trees ?? []))].filter((t) => t.endsWith('-generated'));
+const toolNames = readdirSync(join(ROOT, 'tools')).filter((f) => f.endsWith('.mjs') && !f.startsWith('gate-'));
+for (const tree of generated) for (const f of toolNames) if (readFileSync(join(ROOT, 'tools', f), 'utf8').includes(tree)) scriptFiles.add(`tools/${f}`);
+for (const f of [...scriptFiles]) {
+  // A tool's own imports from tools/, followed to the end.
+  const walkImports = (rel) => {
+    if (!rel.startsWith('tools/') || !rel.endsWith('.mjs')) return;
+    for (const m of readFileSync(join(ROOT, rel), 'utf8').matchAll(/from '\.\/([\w.-]+\.mjs)'/g)) {
+      const dep = `tools/${m[1]}`;
+      if (!scriptFiles.has(dep)) { scriptFiles.add(dep); walkImports(dep); }
+    }
+  };
+  walkImports(f);
+}
+if ([...scriptFiles].includes('tools/oracle.mjs')) scriptFiles.add('tools/oracle/Dockerfile');
+const prismFile = join(SRC_CACHE, 'build-scripts.tar.gz');
+const scriptsTar = spawnSync('tar', ['-czf', prismFile, '-C', ROOT, ...[...scriptFiles].sort()]);
+if (scriptsTar.status !== 0) throw new Error(`sources/build-scripts.tar.gz: tar failed: ${scriptsTar.stderr}`);
+const prismBytes = RELEASE ? statSync(prismFile).size : copy(prismFile, 'sources/build-scripts.tar.gz');
 if (!RELEASE) total += prismBytes;
-const prismArchive = { href: hrefOf('prism.tar.gz'), name: 'prism.tar.gz', file: prismFile, bytes: prismBytes,
+const prismArchive = { href: hrefOf('build-scripts.tar.gz'), name: 'build-scripts.tar.gz', file: prismFile, bytes: prismBytes,
   sha256: createHash('sha256').update(readFileSync(prismFile)).digest('hex') };
 const sourcesOf = (tname) => {
   // `file` is where the archive sits on this machine: for publish-sources.mjs, not for the page.
@@ -376,13 +403,16 @@ write('sources/README.txt', [
   'The source of every program this site runs, as it was built.',
   '',
   'Each <tree>.tar.gz is a source tree exactly as it was fetched from its publisher -- PRISM compiles',
-  "programs' sources unmodified -- and prism.tar.gz is the compiler that built them, with tools/ and",
-  'targets/ (one JSON file per program: its units, defines and options). tools/site.mjs rebuilds every',
-  'bundle of this site from the two. SHA256SUMS holds the archives\' checksums.',
+  "programs' sources unmodified. build-scripts.tar.gz holds the scripts that control their builds: one",
+  'targets/<program>.json per program (its units, defines and options) and the tools that write the',
+  'generated trees (the *-generated archives: what each program\'s own configure wrote, run in the',
+  'container tools/oracle/Dockerfile describes). SHA256SUMS holds the archives\' checksums.',
+  '',
+  'The compiler that turned them into this site\'s builds is PRISM, at this commit:',
+  `  https://github.com/jfrelat-lab/prism/tree/${head}${dirty ? '  (built from a working tree with uncommitted changes)' : ''}`,
+  'and node tools/site.mjs there rebuilds every bundle of this site from the archives here.',
   ...(RELEASE ? ['', `The archives are the assets of the release ${RELEASE} of https://github.com/${SOURCES_REPO}:`,
     `  https://github.com/${SOURCES_REPO}/releases/tag/${RELEASE}`] : []),
-  '',
-  `prism.tar.gz: commit ${head}${dirty ? ' (the export was built from a working tree with uncommitted changes)' : ''}`,
   '',
   ...[...archives.entries()].flatMap(([tree, a]) => [`${a.name}: corpus/${tree}/`, `  fetched with: ${a.fetch ?? '(see the target file)'}`]),
   '',
@@ -394,7 +424,7 @@ if (RELEASE) {
     files: [...[...archives.values()].map((a) => a.file), prismFile, join(SRC_CACHE, 'README.txt'), join(SRC_CACHE, 'SHA256SUMS')] }, null, 1));
   console.log(`  sources: to publish as ${SOURCES_REPO} release ${RELEASE}: node tools/publish-sources.mjs`);
 }
-console.log(`  sources: ${archives.size} trees and PRISM, ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${dirty ? ' (PRISM: uncommitted changes are not in prism.tar.gz)' : ''}`);
+console.log(`  sources: ${archives.size} trees and the build scripts (${scriptFiles.size} files), ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${dirty ? ' (built from uncommitted changes: the README says so)' : ''}`);
 
 write('web/site.json', JSON.stringify({
   generated: new Date().toISOString().slice(0, 10),

@@ -4,7 +4,7 @@
 //   node tools/publish-sources.mjs [--dry-run]         then this creates it, with gh
 //
 // tools/site.mjs writes dist/site-sources/release.json: the repository, the tag, and the files -- each
-// source tree's archive as it was fetched, prism.tar.gz, the README and SHA256SUMS. This uploads them
+// source tree's archive as it was fetched, build-scripts.tar.gz, the README and SHA256SUMS. This uploads them
 // as they are. A tag that already exists is refused rather than overwritten: an export's pages link to
 // its release, and changing the files under a published link would change the source a build claims.
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -23,7 +23,7 @@ if (missing.length) { console.error(`missing: ${missing.join(', ')}`); process.e
 const mb = rel.files.reduce((t, f) => t + statSync(f).size, 0) / 1048576;
 console.log(`${rel.repo} release ${rel.tag}: ${rel.files.length} files, ${mb.toFixed(1)} MB, PRISM ${rel.commit.slice(0, 12)}${rel.dirty ? ' (built from a working tree with uncommitted changes)' : ''}`);
 for (const f of rel.files) console.log(`  ${basename(f)}`);
-if (rel.dirty) console.log('warning: prism.tar.gz is HEAD, not the working tree the export was built from');
+if (rel.dirty) console.log('warning: the export was built from uncommitted changes, so the commit its README links is not exactly what built it');
 if (dry) process.exit(0);
 
 const gh = (...args) => spawnSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
