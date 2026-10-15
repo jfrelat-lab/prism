@@ -268,6 +268,18 @@
           min-height: 0; background: var(--panel); }
   main.nopanel { grid-template-columns: 1fr; }
   main.nopanel aside { display: none; }
+  /* The player (web/app.js PLAYER): the program's screen and its own controls, nothing of the shelf. */
+  .playeronly { display: none; }
+  body.player .playeronly { display: inline-block; }
+  body.player #machines, body.player header a[href^="./"]:not(.playeronly), body.player aside,
+  body.player #panel, body.player #vmSpec, body.player #vmState, body.player .vmtop label { display: none !important; }
+  body.player main { grid-template-columns: 1fr !important; }
+  /* A desktop in the player holds the one program it was opened for. */
+  body.player .desktop .shortcut[aria-selected="false"] { display: none; }
+  body.player #vmName { font-weight: 600; }
+  #playerr { position: absolute; inset: auto 16px 16px 16px; z-index: 6; padding: 12px 14px; border-radius: 6px;
+             background: rgba(60, 14, 14, .95); border: 1px solid #ff8a80; color: var(--fg); font-size: 13px; }
+  #playerr p { margin: 0 0 4px; } #playerr a { color: #ffb4ab; }
   .bar { padding: 8px 12px; border-bottom: 1px solid var(--edge); color: var(--dim);
          display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   #stats { color: var(--fg); }
@@ -286,6 +298,7 @@
   <span class="sep"></span>
   <a href="./mame/" data-server title="MAME 0.34 game by game: which start, which are held to a native build, a screenshot of each">MAME games &rarr;</a>
   <a href="./live/" title="write C and run it, with no machine and no program">Live C &rarr;</a>
+  <a id="toShelf" class="playeronly" href="./" title="the same program in the shelf: its arguments, PRISM's log, the other machines">Open in the shelf &rarr;</a>
 </header>
 
 <main id="main-panel-host">

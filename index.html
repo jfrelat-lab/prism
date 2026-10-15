@@ -351,10 +351,12 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
             <span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}
             <ul>${p.licences.map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">· ${ROLE[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>
           </div>` : '';
-    const go = p.avail === 'play' ? `<a class="run" href="${esc(p.run)}">Play</a>`
-      : p.avail === 'files' ? `<a class="run alt" href="${esc(p.run)}" title="the page asks for your copy; nothing leaves your browser">Bring your files</a>`
+    // A card opens the player (web/ ?player=1): the program alone; the shelf is one link away there.
+    const play = p.run ? `${p.run}&player=1` : '';
+    const go = p.avail === 'play' ? `<a class="run" href="${esc(play)}">Play</a>`
+      : p.avail === 'files' ? `<a class="run alt" href="${esc(play)}" title="the page asks for your copy; nothing leaves your browser">Bring your files</a>`
       : `<span class="norun" title="${esc(p.noBuild ?? '')}">Not playable here yet</span>`;
-    const pic = p.avail === 'none' ? `<span class="shot">${shot}</span>` : `<a class="shot" href="${esc(p.run)}" aria-label="${p.avail === 'play' ? 'Play' : 'Bring your files for'} ${esc(p.title)}">${shot}</a>`;
+    const pic = p.avail === 'none' ? `<span class="shot">${shot}</span>` : `<a class="shot" href="${esc(play)}" aria-label="${p.avail === 'play' ? 'Play' : 'Bring your files for'} ${esc(p.title)}">${shot}</a>`;
     return `<article class="card" data-id="${esc(p.id)}">
         ${pic}
         <div class="body">

@@ -305,13 +305,31 @@ function renderMachines() {
   }
 }
 
+/*
+ * THE PLAYER (?player=1): one program and its screen, for a visitor who came to play it -- no machine
+ * tabs, no argument field, no log. The machine is the same one; only the shelf around it is folded
+ * away, and "Open in the shelf" brings it back with the program as it stands.
+ */
+const PLAYER = new URLSearchParams(location.search).get('player') === '1';
+document.body.classList.toggle('player', PLAYER);
+function playerError(text) {
+  let box = $('playerr');
+  if (!box) {
+    box = Object.assign(document.createElement('div'), { id: 'playerr', role: 'alert' });
+    $('stage').append(box);
+  }
+  box.innerHTML = `<p>${escapeHtml(text)}</p><p><a href="${escapeHtml(shelfUrl())}">Open it in the shelf</a> for PRISM's log.</p>`;
+}
+const shelfUrl = () => { const q = new URLSearchParams(location.search); q.delete('player'); return `${location.pathname}?${q}`; };
+
 /** Sit down at a machine, at one of its programs. */
 function pick(m, i) {
   const changed = m !== machine;
   machine = m; chosen = i;
   if (changed) clearScreen();
   for (const x of machines) x.el.setAttribute('aria-selected', String(x === m));
-  $('vmName').textContent = m.name;
+  $('vmName').textContent = PLAYER ? (m.programs[i]?.name ?? m.name) : m.name;
+  if (PLAYER) document.title = `${m.programs[i]?.name ?? m.name} — PRISM`;
   $('vmSpec').textContent = m.spec || '';
   // describe() first: it fills the argument field, and the prompt on the machine's own screen shows
   // the command line those arguments make. Drawing the screen first left the prompt one program
@@ -687,6 +705,7 @@ let lastLine = null, lastEl = null, lastCount = 0;
 function log(line, kind = 'info') {
   if (kind === 'guest') { console.log('%c[guest]', 'color:#8b929e', line); return; }
   if (kind === 'error') showPanel(true);      // a build failure must never be behind a closed panel
+  if (kind === 'error' && PLAYER) playerError(line);
   if (line === lastLine && lastEl) {
     lastEl.textContent = `${line}   ×${++lastCount}`;
     $('log').scrollTop = $('log').scrollHeight;
@@ -1276,6 +1295,7 @@ $('run').onclick = () => startRun();
  * (Quake takes its basedir from argv[0]'s directory).
  */
 async function startRun(typedAs = null) {
+  $('playerr')?.remove();
   const program = current();
   if (!program || !entry()?.present || worker) return;
   if (typeof SharedArrayBuffer === 'undefined') {
@@ -1756,7 +1776,9 @@ function publishQuery() {
   if ($('args').value.trim()) q.set('args', $('args').value.trim());
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
   for (const k of ['gl', 'glcheck', 'bundle']) if (pageOptions[k]) q.set(k, pageOptions[k]);
+  if (PLAYER) q.set('player', '1');
   history.replaceState(null, '', `${location.pathname}?${q}`);
+  if (PLAYER) $('toShelf').href = shelfUrl();
 }
 
 /* Whatever was chosen last time; closed the first time, because the machine's screen is the point. */
