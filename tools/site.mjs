@@ -269,7 +269,15 @@ for (const g of manifest.gallery ?? []) {
       try { await lightBundle(tname, game, desc); } catch (err) { console.log(`  gallery ${g.id}: no light build (${err.message.split('\n')[0]})`); }
     }
   }
-  if (built) gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: [...new Set([...built.tags, ...(g.tags ?? [])])],
+  /*
+   * `data`: the root the program reads and the one file that shows a copy is there (the descriptor's
+   * marker, or for a ROM collection the game's own zip), for a local library (serve.mjs --site) to
+   * tell the page which games it holds.
+   */
+  const nd = desc.needsData ?? {};
+  const game = String(g.args ?? '').split(/\s+/).find((a) => a && !a.startsWith('-'));
+  const data = nd.dir ? { root: nd.dir, under: nd.under ?? '', need: nd.marker ?? (nd.lazy && game ? `${game}.zip` : null) } : null;
+  if (built) gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: [...new Set([...built.tags, ...(g.tags ?? [])])], data,
     run: `web/?machine=${encodeURIComponent(g.machine)}&program=${encodeURIComponent(g.variant ? g.file ?? g.program : g.program)}${g.args !== undefined ? `&args=${encodeURIComponent(g.args)}` : ''}&run=1` });
   else {
     // No build shipped, the tags all the same: they are read off the target, not off a bundle.

@@ -14,11 +14,11 @@
 // re-picking six files by hand on every reload is not a workflow; it exposes a directory the user
 // names explicitly, and nothing else.
 //
-//   node tools/serve.mjs [--port=8080] [--data=<dir>] [--games=<dir>]
+//   node tools/serve.mjs [--port=8080] [--data=<dir>] [--games=<dir>] [--site[=<export dir>]]
 
 import { createServer } from 'node:http';
 import { readFile, stat, readdir } from 'node:fs/promises';
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync, existsSync } from 'node:fs';
 import { join, dirname, extname, normalize, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { targetAnswer } from './target-answer.mjs';
@@ -55,6 +55,19 @@ for (const a of process.argv.filter(x => x.startsWith('--games='))) {
   } catch { console.error(`--games: cannot read ${root}`); }
 }
 const dataDir = dataDirs[0];
+
+/*
+ * --site[=<dir>]: serve a STATIC EXPORT (tools/site.mjs, site/ by default) instead of the repository,
+ * as a local library: what the export ships answers as it would on any host, and a game it does not
+ * ship (its gallery) is answered from --games -- the same roots, by the same names -- so its card says
+ * Play instead of asking for a folder. /__library.json lists those roots for the project page, which
+ * marks such a game as the visitor's own copy. Nothing of --games is copied into the export.
+ */
+const siteArg = process.argv.find(a => a === '--site' || a.startsWith('--site='));
+const SITE = siteArg ? resolvePath(siteArg.includes('=') ? siteArg.slice(7) : join(ROOT, 'site')) : null;
+const BASE = SITE ?? ROOT;
+const rootName = (d) => d.replace(/\/+$/, '').split('/').pop();
+const libraryDir = (root) => dataDirs.find(d => rootName(d) === root) ?? null;
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -231,11 +244,34 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    // The local library (--site): which data roots --games holds, and a root the export does not ship.
+    if (SITE && path === '/__library.json') {
+      headers(res, TYPES['.json']);
+      res.end(JSON.stringify({ roots: dataDirs.map(rootName) }));
+      return;
+    }
+    if (SITE && path.startsWith('/__static/data/') && !existsSync(join(SITE, path))) {
+      const d = libraryDir(decodeURIComponent(path.slice('/__static/data/'.length).replace(/\.json$/, '')));
+      if (d) {
+        const files = await listTree(d);
+        headers(res, TYPES['.json']);
+        res.end(JSON.stringify({ files, entries: files.map(file => ({ root: rootName(d), file })), roots: [rootName(d)], chunks: {}, library: true }));
+        return;
+      }
+    }
+    if (SITE && path.startsWith('/data/') && !existsSync(join(SITE, path))) {
+      const [, , root, ...rest] = path.split('/');
+      const d = libraryDir(root);
+      const f = d && safeJoin(d, rest.join('/'));
+      const body = f && await readFile(f).catch(() => null);
+      if (body) { headers(res, 'application/octet-stream'); res.end(body); return; }
+    }
+
     // `/` is the project page, index.html at the root, which links to the shelf (web/). Not web/index.html
     // rewritten to `/`: its `./app.js` would resolve to `/app.js`, which does not exist.
-    if (path === '/') { headers(res, TYPES['.html']); res.end(await readFile(join(ROOT, 'index.html'))); return; }
+    if (path === '/') { headers(res, TYPES['.html']); res.end(await readFile(join(BASE, 'index.html'))); return; }
 
-    const file = safeJoin(ROOT, path);
+    const file = safeJoin(BASE, path);
     if (!file) { res.writeHead(403).end('outside the repository'); return; }
     let st = await stat(file).catch(() => null);
     if (st && st.isDirectory()) {
@@ -257,7 +293,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, () => {
   console.log(`PRISM shell:  http://localhost:${port}/`);
-  console.log(`serving       ${ROOT}`);
+  console.log(`serving       ${BASE}${SITE ? '  (a static export, as a local library)' : ''}`);
   console.log(dataDirs.length ? `data dirs     ${dataDirs.join('  ')}  (exposed at /__data/)`
     : `data dir      none — pick data files in the page (--data=<dir> to serve one)`);
 });
