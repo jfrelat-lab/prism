@@ -362,7 +362,14 @@
       "code": {
         "license": "Public domain",
         "source": "https://gitlab.freedesktop.org/mesa/demos"
-      }
+      },
+      "licenseFiles": [
+        {
+          "name": "Public domain (Brian Paul, in gears.c)",
+          "path": "corpus/gears/gears.c",
+          "for": "code"
+        }
+      ]
     },
     {
       "id": "texobj",
@@ -379,7 +386,14 @@
       "code": {
         "license": "Public domain",
         "source": "https://gitlab.freedesktop.org/mesa/demos"
-      }
+      },
+      "licenseFiles": [
+        {
+          "name": "Public domain (Brian Paul, in texobj.c)",
+          "path": "corpus/mesademos/texobj.c",
+          "for": "code"
+        }
+      ]
     },
     {
       "id": "lua",
