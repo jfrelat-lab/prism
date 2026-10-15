@@ -12,6 +12,7 @@
 // Everything else is shared memory: the pipe carrying Doom's commands, and the control block whose
 // audio ring the page is already reading. Nothing is posted back except log lines.
 
+import { at } from './endpoints.js';
 import { compileProgram } from '../src/compile.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installDsp } from '../src/env/dsp.js';
@@ -41,7 +42,7 @@ async function start({ dir, pipeSab, control, files }) {
    * The listing comes from serve.mjs. A static export has no /__ls, and ships sndserv/'s sources at
    * their paths: then the names are the units above and the headers they include.
    */
-  const listing = await fetch(`/__ls?dir=${encodeURIComponent(dir)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+  const listing = await fetch(at(`__ls?dir=${encodeURIComponent(dir)}`)).then((r) => (r.ok ? r.json() : null)).catch(() => null)
     ?? { files: [...WANT, 'sounds.h', 'soundsrv.h', 'soundst.h', 'wadread.h'] };
   const present = new Set(listing.files.map(f => f.toLowerCase()));
 
@@ -49,7 +50,7 @@ async function start({ dir, pipeSab, control, files }) {
   await Promise.all(listing.files
     .filter(f => /\.(c|h)$/i.test(f))
     .map(async (f) => {
-      const r = await fetch(`/${dir}/${f}`);
+      const r = await fetch(at(`${dir}/${f}`));
       if (r.ok) tree.set(f.toLowerCase(), await r.text());
     }));
 

@@ -18,7 +18,7 @@ import { makeControl, controlViews, makeKeyboard, makeMouse, wake, KEY_HOLD_FRAM
   KBD_EXTENDED, SLOT, STATE } from '../src/env/webhost.js';
 import { scancodeForEvent, extendedForEvent } from '../src/env/scancodes.js';
 import { makePipe } from '../src/env/pipe.js';
-import { endpoints } from './endpoints.js';
+import { endpoints, at } from './endpoints.js';
 import { unpackArchive } from './unpack.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 
@@ -59,7 +59,7 @@ let font = null;                       // 4096 bytes: 256 glyphs x 16 rows, MSB 
 let textImage = null, textU32 = null;
 let blink = 0;
 
-fetch('/assets/vga-rom-8x16.bin')
+fetch(at('assets/vga-rom-8x16.bin'))
   .then(r => r.arrayBuffer())
   .then(b => { font = new Uint8Array(b); })
   .catch(() => log('could not load assets/vga-rom-8x16.bin — text mode will be blank', 'error'));
@@ -570,7 +570,7 @@ function desktopScreen(m) {
     `data-i="${x.present ? i : ''}" title="double-click to run">` +
     /* The program's OWN .ico, straight out of its source tree: a browser decodes the format
        natively, so there is no conversion step and no build artefact to keep in step with it. */
-    (x.icon ? `<img src="/${x.icon}" alt="">` : '<img alt="">') +
+    (x.icon ? `<img src="${at(x.icon)}" alt="">` : '<img alt="">') +
     `<span>${esc(x.name)}</span></button>`).join('');
   const task = worker ? esc(m.programs[chosen]?.name ?? '') : '';
   return `<div class="desktop"><div class="icons">${icons}</div>` +

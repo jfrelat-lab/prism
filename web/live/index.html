@@ -168,7 +168,7 @@
 <script>
   // The shelf exists beside Live C under serve.mjs and in a static export (web/site.json), not on
   // GitHub Pages, where it would open on nothing: the link is offered only where it leads somewhere.
-  Promise.any([fetch('../site.json'), fetch('/__targets')].map((p) => p.then((r) => (r.ok ? r : Promise.reject()))))
+  Promise.any([fetch('../site.json'), fetch('../__targets')].map((p) => p.then((r) => (r.ok ? r : Promise.reject()))))
     .then(() => { document.getElementById('shelfLink').hidden = false; }).catch(() => {});
 </script>
 </body>
