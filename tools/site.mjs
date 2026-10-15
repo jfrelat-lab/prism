@@ -16,7 +16,8 @@
 // The output holds game data and is never committed (.gitignore). No file it writes is over 25 MiB, the
 // largest a common static host accepts: a bundle over it is refused, a data file over it goes in parts.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync, statSync, readdirSync, copyFileSync } from 'node:fs';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, normalize } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { targetAnswer } from './target-answer.mjs';
@@ -138,7 +139,11 @@ async function bundle(tname, desc) {
   const asm = [...answer.asmTranslate.map((a) => (typeof a === 'string' ? a : a.file)), ...answer.tasmFiles,
     ...answer.dataObjects.map((o) => o.path).filter(Boolean)];
   for (const f of asm) total += copy(join(ROOT, f), f);
-  const info = { title: answer.title, units: answer.units.length, functions: b.functions, tags: techTags(target, answer, desc) };
+  // The source trees it was built from: each top directory of corpus/ the build reads anything in --
+  // its units, include paths, assembly, generated files (Chromium B.S.U.'s FreeType is a tree of its own).
+  const trees = [...new Set([answer.dir, ...answer.units.filter((u) => u.source === undefined).map((u) => u.file),
+    ...answer.include, ...asm].map((p) => normalize(p).split('/')).filter((s) => s[0] === 'corpus' && s[1]).map((s) => s[1]))];
+  const info = { title: answer.title, units: answer.units.length, functions: b.functions, tags: techTags(target, answer, desc), trees };
   targets.set(tname, info);
   return info;
 }
@@ -298,6 +303,70 @@ for (const s of shipped) {
   // <img src="[object Object]">.
   s.thumb = existsSync(t) ? (copy(t, `thumbs/${s.id}.png`), `thumbs/${s.id}.png`) : null;
 }
+
+/*
+ * THE CORRESPONDING SOURCE, shipped beside the builds. A bundle is object code, and the GPL v2 asks
+ * whoever passes it on to pass on its source too, not to point at someone else's copy (that is v3);
+ * upstreams also go away (Raven's site has). So every source tree a shipped build was made from goes
+ * into sources/<tree>.tar.gz exactly as it sits in corpus/ -- PRISM never edits a program's source --
+ * with PRISM itself (compiler, tools, targets: the scripts that control the build), a checksum list
+ * and a README saying where each tree came from. Archives are kept in dist/site-sources/ under the
+ * tree's hash, as bundles are.
+ */
+const SRC_CACHE = join(ROOT, 'dist', 'site-sources');
+const archives = new Map();               // tree -> { href, name, bytes, sha256, fetch }
+function sourceArchive(tree, fetch) {
+  if (archives.has(tree)) return archives.get(tree);
+  const key = treeHash(join(ROOT, 'corpus', tree));
+  const file = join(SRC_CACHE, `${tree}.tar.gz`);
+  let fresh = false;
+  try { fresh = readFileSync(join(SRC_CACHE, `${tree}.key`), 'utf8') === key; } catch { /* a miss */ }
+  if (!fresh) {
+    mkdirSync(SRC_CACHE, { recursive: true });
+    const r = spawnSync('tar', ['-czf', file, '--exclude', '.git', '--exclude', '.DS_Store', '-C', join(ROOT, 'corpus'), tree]);
+    if (r.status !== 0) throw new Error(`sources/${tree}.tar.gz: tar failed: ${r.stderr}`);
+    writeFileSync(join(SRC_CACHE, `${tree}.key`), key);
+  }
+  const bytes = copy(file, `sources/${tree}.tar.gz`);
+  total += bytes;
+  const a = { href: `sources/${tree}.tar.gz`, name: `${tree}.tar.gz`, bytes,
+    sha256: createHash('sha256').update(readFileSync(file)).digest('hex'), fetch };
+  archives.set(tree, a);
+  return a;
+}
+// PRISM as committed: the tree a reader can rebuild every bundle from, with the targets in it.
+const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+const dirty = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim() !== '';
+mkdirSync(join(OUT, 'sources'), { recursive: true });
+const prismTar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', '--prefix=prism/', '-o', join(OUT, 'sources', 'prism.tar.gz'), 'HEAD']);
+if (prismTar.status !== 0) throw new Error(`sources/prism.tar.gz: git archive failed: ${prismTar.stderr}`);
+const prismBytes = statSync(join(OUT, 'sources', 'prism.tar.gz')).size;
+total += prismBytes;
+const prismArchive = { href: 'sources/prism.tar.gz', name: 'prism.tar.gz', bytes: prismBytes,
+  sha256: createHash('sha256').update(readFileSync(join(OUT, 'sources', 'prism.tar.gz'))).digest('hex') };
+const sourcesOf = (tname) => {
+  const t = targets.get(tname);
+  if (!t) return null;
+  const fetch = loadTarget(join(ROOT, 'targets', `${tname.split(':')[0]}.json`)).fetch ?? null;
+  return [...t.trees.map((tree) => sourceArchive(tree, fetch)), prismArchive];
+};
+for (const s of shipped) s.sources = sourcesOf(s.target);
+for (const g of gallery) if (g.run) g.sources = sourcesOf(g.target);
+write('sources/SHA256SUMS', [...archives.values(), prismArchive].map((a) => `${a.sha256}  ${a.name}`).join('\n') + '\n');
+write('sources/README.txt', [
+  'The source of every program this site runs, as it was built.',
+  '',
+  'Each <tree>.tar.gz is a source tree exactly as it was fetched from its publisher -- PRISM compiles',
+  "programs' sources unmodified -- and prism.tar.gz is the compiler that built them, with tools/ and",
+  'targets/ (one JSON file per program: its units, defines and options). tools/site.mjs rebuilds every',
+  'bundle of this site from the two. SHA256SUMS holds the archives\' checksums.',
+  '',
+  `prism.tar.gz: commit ${head}${dirty ? ' (the export was built from a working tree with uncommitted changes)' : ''}`,
+  '',
+  ...[...archives.entries()].flatMap(([tree, a]) => [`${a.name}: corpus/${tree}/`, `  fetched with: ${a.fetch ?? '(see the target file)'}`]),
+  '',
+].join('\n'));
+console.log(`  sources: ${archives.size} trees and PRISM, ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${dirty ? ' (PRISM: uncommitted changes are not in prism.tar.gz)' : ''}`);
 
 write('web/site.json', JSON.stringify({
   generated: new Date().toISOString().slice(0, 10),

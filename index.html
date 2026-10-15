@@ -311,9 +311,6 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
    * The programs, when this page is a static export of the shelf (tools/site.mjs writes web/site.json
    * beside the shelf). On GitHub Pages there is no export and no file, and the page stays as it is.
    */
-  // The corresponding source of a build, as the GPL asks: the program's own (`source`) and how PRISM
-  // built it -- its target file, in the compiler's repository.
-  const build = (p) => `https://github.com/jfrelat-lab/prism/blob/main/targets/${String(p.target).split(':')[0]}.json`;
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   /*
    * The shelf (web/) works under tools/serve.mjs and in an export, not on GitHub Pages: its link is
@@ -348,7 +345,9 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
       p.data?.license ? `<p><span class="k">Data</span> ${esc(p.data.license)}</p>` : '',
       p.licences?.length ? `<ul>${p.licences.map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">${ROLE[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>` : '',
       p.credits ? `<p class="credits">${esc(p.credits)}</p>` : '',
-      `<p class="src"><a href="${esc(p.code?.source ?? p.source)}">Its source</a> · <a href="${esc(build(p))}">how PRISM builds it</a></p>`,
+      // The source this build was made from, served by this site (tools/site.mjs: sources/), then where it came from.
+      p.sources?.length ? `<p class="k">Source of this build</p><ul class="srcs">${p.sources.map((a) => `<li><a href="${esc(a.href)}" download>${esc(a.name)}</a> <span class="role">${(a.bytes / 1048576).toFixed(1)} MB</span></li>`).join('')}</ul>` : '',
+      `<p class="src">Upstream: <a href="${esc(p.code?.source ?? p.source)}">its publisher's source</a> · <a href="sources/README.txt">what these archives are</a> · <a href="sources/SHA256SUMS">checksums</a></p>`,
     ].join('');
     dlg.showModal();
   });
@@ -372,10 +371,8 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
 
   function card(p) {
     const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
-    // One "licence" button opens the dialog (licenceDialog): the licences, a caution, the credits.
-    const lic = p.licences?.length || p.caution || p.credits
-      ? `<button class="linkbtn plain" type="button" data-lic="${esc(p.id)}">licence</button>` : '';
-    const source = p.code?.source ?? p.source;
+    // One button opens the dialog: the source this build came from, the licences, a caution, the credits.
+    const lic = `<button class="linkbtn plain" type="button" data-lic="${esc(p.id)}">source &amp; licence</button>`;
     // A card opens the player (web/ ?player=1): the program alone; the shelf is one link away there.
     const play = p.run ? `${p.run}&player=1` : '';
     const go = p.avail === 'play' ? `<a class="run" href="${esc(play)}">Play</a>`
@@ -390,7 +387,7 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
           <p class="blurb">${esc(p.blurb)}</p>
           ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b></p>` : ''}
           ${p.tags?.length ? `<ul class="chips">${p.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
-          <div class="actions">${go}<a href="${esc(source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a>${lic}</div>
+          <div class="actions">${go}${lic}</div>
         </div></article>`;
   }
 
