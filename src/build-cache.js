@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 const SRC = dirname(fileURLToPath(import.meta.url));
 let srcHash = null;
 /** The hash of every file under src/, once a process. */
-function prismHash() {
+export function prismHash() {
   if (srcHash) return srcHash;
   const h = createHash('sha256');
   const walk = (d) => {

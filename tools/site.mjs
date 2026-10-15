@@ -21,6 +21,8 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { targetAnswer } from './target-answer.mjs';
 import { writeBundle } from './bundle.mjs';
+import { prismHash } from '../src/build-cache.js';
+import { createHash } from 'node:crypto';
 import { loadTarget } from '../src/target.js';
 import { targetFile } from '../web/endpoints.js';
 
@@ -78,6 +80,43 @@ function techTags(target, answer, desc, extra = []) {
   return [...new Set([...tags, ...extra])];
 }
 
+/*
+ * BUNDLES ARE KEPT between runs, in dist/site-bundles/. Compiling them is nearly all of an export's
+ * time -- the MAME builds alone are minutes -- and tools/bundle.mjs asks buildTarget for the program
+ * it just compiled, which src/build-cache.js does not keep. A bundle is a function of PRISM's src/,
+ * the target's description and its source tree; the key hashes the three, the tree by every file's
+ * path, size and mtime, so a header or an assembly file touched is a miss as much as a unit.
+ */
+const CACHE = join(ROOT, 'dist', 'site-bundles');
+function treeHash(dir) {
+  const h = createHash('sha256');
+  (function walk(d) {
+    for (const f of readdirSync(d).sort()) {
+      const p = join(d, f), s = statSync(p);
+      if (s.isDirectory()) walk(p); else h.update(`${p.slice(dir.length)}\0${s.size}\0${s.mtimeMs}\n`);
+    }
+  })(dir);
+  return h.digest('hex');
+}
+let hits = 0;
+function cachedBundle(target, name, opts) {
+  const key = createHash('sha256').update(JSON.stringify([prismHash(), target, opts]))
+    .update(target.dir ? treeHash(join(ROOT, target.dir)) : '').digest('hex');
+  const at = (ext) => join(CACHE, `${name}.${ext}`);
+  let result = null;
+  try { if (readFileSync(at('key'), 'utf8') === key) result = JSON.parse(readFileSync(at('json'), 'utf8')); } catch { /* a miss */ }
+  if (result) hits++;
+  else {
+    mkdirSync(CACHE, { recursive: true });
+    result = writeBundle(target, CACHE, name, opts);
+    writeFileSync(at('json'), JSON.stringify(result));
+    writeFileSync(at('key'), key);
+  }
+  mkdirSync(join(OUT, 'dist'), { recursive: true });
+  for (const ext of ['js', 'bin']) copyFileSync(at(ext), join(OUT, 'dist', `${name}.${ext}`));
+  return result;
+}
+
 /** The build of `tname` as a bundle, its static answers and its assembly; once per target. */
 async function bundle(tname, desc) {
   if (targets.has(tname)) return targets.get(tname);
@@ -86,7 +125,7 @@ async function bundle(tname, desc) {
   // A file name, not a path: a variant's own name can be "quake/x11".
   const name = tname.replace(/[:/]/g, "-");
   // A descriptor that runs with safepoints needs a bundle built with them, or the page compiles instead.
-  const b = writeBundle(target, join(OUT, 'dist'), name, { compile: desc.safepoints ? { safepoints: true } : {} });
+  const b = cachedBundle(target, name, { compile: desc.safepoints ? { safepoints: true } : {} });
   for (const ext of ['js', 'bin']) {
     const s = statSync(join(OUT, 'dist', `${name}.${ext}`)).size;
     if (s > MAX_FILE) throw new Error(`dist/${name}.${ext} is ${mb(s)}, over 25 MiB`);
@@ -117,7 +156,7 @@ async function lightBundle(tname, game, desc) {
   const name = answer.bundle.slice('dist/'.length);
   if (!targets.has(name)) {
     const resolved = (await import(join(ROOT, loadTarget(join(ROOT, 'targets', `${tname}.json`)).light.module))).lightFor(game);
-    writeBundle(resolved, join(OUT, 'dist'), name, { compile: desc.safepoints ? { safepoints: true } : {} });
+    cachedBundle(resolved, name, { compile: desc.safepoints ? { safepoints: true } : {} });
     for (const ext of ['js', 'bin']) {
       const s = statSync(join(OUT, 'dist', `${name}.${ext}`)).size;
       if (s > MAX_FILE) throw new Error(`dist/${name}.${ext} is ${mb(s)}, over 25 MiB`);
@@ -267,4 +306,4 @@ write('web/site.json', JSON.stringify({
   programs: shipped.map(({ licenseFiles, ...s }) => ({ ...s, units: targets.get(s.target)?.units ?? null,
     run: `web/?machine=${encodeURIComponent(s.machine)}&program=${encodeURIComponent(s.variant ? s.file ?? s.program : s.program)}${s.args !== undefined ? `&args=${encodeURIComponent(s.args)}` : ''}&run=1` })),
 }, null, 1));
-console.log(`\n${shipped.length} programs, ${targets.size} builds, ${mb(total)} of bundles, assembly and data in ${OUT}`);
+console.log(`\n${shipped.length} programs, ${targets.size} builds (${hits} from dist/site-bundles), ${mb(total)} of bundles, assembly and data in ${OUT}`);

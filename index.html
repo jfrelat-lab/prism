@@ -76,15 +76,22 @@
   .card h3 { margin: 0; font-size: 16px; color: var(--head); }
   .card .meta { color: var(--dim); font-size: 13px; }
   .card .blurb { margin: 0; font-size: 14px; flex: 1; }
-  .card .lic { font-size: 12.5px; color: var(--dim); display: grid; gap: 6px; padding: 10px 12px; margin-top: 2px;
-               background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
-  .card .lic b { color: var(--ink); font-weight: 500; }
-  .card .lic ul { margin: 0; padding-left: 16px; } .card .lic li { margin: 1px 0; }
-  .card .lic .role { color: var(--dim); }
+  #licdlg { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 20px 22px; color: var(--ink);
+            background: var(--panel); border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
+  #licdlg::backdrop { background: rgba(0, 0, 0, .55); }
+  #licdlg h3 { margin: 0 32px 12px 0; font-size: 17px; color: var(--head); }
+  #licdlg p { margin: 0 0 8px; } #licdlg ul { margin: 4px 0 12px; padding-left: 18px; } #licdlg li { margin: 3px 0; }
+  #licdlg .k { display: inline-block; min-width: 3.5em; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  #licdlg .role { color: var(--dim); font-size: 12.5px; margin-left: 4px; }
+  #licdlg .caution { padding: 10px 12px; border: 1px solid #c9a227; border-radius: 6px; background: color-mix(in srgb, #c9a227 12%, transparent); }
+  #licdlg .credits { font-size: 12px; color: var(--dim); line-height: 1.5; }
+  #licdlg .src { margin: 12px 0 0; font-size: 13px; }
+  #licdlg form { position: absolute; top: 12px; right: 12px; margin: 0; }
+  #licdlg .x { background: none; border: 0; color: var(--dim); font-size: 16px; cursor: pointer; padding: 4px 6px; border-radius: 4px; }
+  #licdlg .x:hover, #licdlg .x:focus-visible { color: var(--ink); outline: 2px solid var(--accent); }
   .linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
   .linkbtn:hover { text-decoration: underline; }
   .linkbtn:focus-visible, .techs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .linkbtn[aria-expanded="true"]::after { content: " ▴"; } .linkbtn[aria-expanded="false"]::after { content: " ▾"; }
   .techs { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 20px; margin-top: 4px; }
   .techs h4 { margin: 0 0 6px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
   .techs ul { display: flex; flex-wrap: wrap; gap: 5px; margin: 0; padding: 0; list-style: none; }
@@ -112,18 +119,15 @@
   details.tech summary span { color: var(--accent); text-transform: none; letter-spacing: 0; }
   details.tech .techs { margin-top: 10px; }
   .fcount { margin: 0; font-size: 13px; color: var(--dim); }
-  .linkbtn.plain::after { content: none !important; }
   .card .run.alt { background: none; color: var(--accent); border: 1px solid var(--accent); }
   .card .norun { font-size: 12.5px; color: var(--dim); }
-  .card .caution { margin: 0; font-size: 12.5px; color: var(--dim); }
-  .card .caution b { color: var(--ink); font-weight: 500; }
-  .card h3 .warn { font-size: 14px; cursor: help; }
+  .card h3 .warn { font-size: 14px; background: none; border: 0; padding: 0 2px; cursor: pointer; vertical-align: 1px; }
+  .card h3 .warn:focus-visible { outline: 2px solid var(--accent); border-radius: 3px; }
   .grid.list { grid-template-columns: 1fr; gap: 10px; }
   .grid.list .card { flex-direction: row; }
   .grid.list .card .shot { flex: 0 0 168px; align-self: flex-start; }
   .grid.list .card .body { padding: 10px 14px; gap: 4px; }
   .grid.list .card .blurb { flex: 0; }
-  .grid.list .card .credits { display: none; }
   @media (max-width: 560px) { .flabel { width: 100%; } .seg.view { margin-left: 0; } .filters input[type=search] { width: 100%; }
                               .grid.list .card .shot { flex-basis: 104px; } }
   .chips li.on { background: var(--accent); color: var(--accent-ink); }
@@ -133,7 +137,6 @@
   .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 0; padding: 0; list-style: none; }
   .chips li { font: 500 11px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: var(--accent);
               border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 3px; padding: 0 5px; }
-  .card .credits { margin: 0; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
   .card .actions { display: flex; align-items: center; gap: 12px; margin-top: 6px; font-size: 13px; flex-wrap: wrap; }
   .card .run { padding: 5px 14px; border-radius: 5px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
   .card .run:hover { text-decoration: none; filter: brightness(1.12); }
@@ -291,6 +294,12 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
   </section>
 </main>
 
+<dialog id="licdlg" aria-labelledby="licdlg-title">
+  <form method="dialog"><button class="x" aria-label="Close">&#10005;</button></form>
+  <h3 id="licdlg-title"></h3>
+  <div id="licdlg-body"></div>
+</dialog>
+
 <footer>
   PRISM is free software under the <a href="https://github.com/jfrelat-lab/prism/blob/main/LICENSE">MIT licence</a>;
   <a href="https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md">some parts</a> keep their upstream licence.
@@ -321,13 +330,29 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
       ...(site.gallery ?? []).map((g) => ({ ...g, avail: g.run ? 'files' : 'none' }))]);
   }).catch((err) => console.error(err));
 
+  /*
+   * THE LICENCE DIALOG, one for the page: the code's and the data's licence with each file named by
+   * what it is, a caution where the licence is not plain (Hexen II), and the credits a licence asks
+   * for (FreeType's). A click outside it closes it, as Esc does.
+   */
+  const byId = new Map();
+  const dlg = document.getElementById('licdlg');
   document.addEventListener('click', (ev) => {
-    const b = ev.target.closest('.linkbtn[aria-controls]');
+    const b = ev.target.closest('[data-lic]');
     if (!b) return;
-    const open = b.getAttribute('aria-expanded') !== 'true';
-    b.setAttribute('aria-expanded', String(open));
-    document.getElementById(b.getAttribute('aria-controls')).hidden = !open;
+    const p = byId.get(b.dataset.lic);
+    document.getElementById('licdlg-title').textContent = p.title;
+    document.getElementById('licdlg-body').innerHTML = [
+      p.caution ? `<p class="caution"><span aria-hidden="true">⚠️</span> ${esc(p.caution)}</p>` : '',
+      p.code?.license ? `<p><span class="k">Code</span> ${esc(p.code.license)}</p>` : '',
+      p.data?.license ? `<p><span class="k">Data</span> ${esc(p.data.license)}</p>` : '',
+      p.licences?.length ? `<ul>${p.licences.map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">${ROLE[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>` : '',
+      p.credits ? `<p class="credits">${esc(p.credits)}</p>` : '',
+      `<p class="src"><a href="${esc(p.code?.source ?? p.source)}">Its source</a> · <a href="${esc(build(p))}">how PRISM builds it</a></p>`,
+    ].join('');
+    dlg.showModal();
   });
+  dlg.addEventListener('click', (ev) => { if (ev.target === dlg) dlg.close(); });
 
   /*
    * The tags of every card, sorted into kinds. A tag no group names still shows, under "Libraries":
@@ -347,13 +372,10 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
 
   function card(p) {
     const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
-    const lic = p.licences?.length ? `<button class="linkbtn" type="button" aria-expanded="false" aria-controls="lic-${esc(p.id)}">licences</button>` : '';
+    // One "licence" button opens the dialog (licenceDialog): the licences, a caution, the credits.
+    const lic = p.licences?.length || p.caution || p.credits
+      ? `<button class="linkbtn plain" type="button" data-lic="${esc(p.id)}">licence</button>` : '';
     const source = p.code?.source ?? p.source;
-    // One "licences" link opens the code's and the data's licence, each file named by what it is.
-    const licBox = lic ? `<div class="lic" id="lic-${esc(p.id)}" hidden>
-            <span>Code: <b>${esc(p.code?.license)}</b></span>${p.data ? `<span>Data: <b>${esc(p.data.license)}</b></span>` : ''}
-            <ul>${p.licences.map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">· ${ROLE[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>
-          </div>` : '';
     // A card opens the player (web/ ?player=1): the program alone; the shelf is one link away there.
     const play = p.run ? `${p.run}&player=1` : '';
     const go = p.avail === 'play' ? `<a class="run" href="${esc(play)}">Play</a>`
@@ -363,15 +385,12 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
     return `<article class="card" data-id="${esc(p.id)}">
         ${pic}
         <div class="body">
-          <h3>${esc(p.title)}${p.avail === 'play' ? '' : ' <span class="tag">your data</span>'}${p.caution ? ' <span class="warn" title="licence: read the note below" aria-hidden="true">⚠️</span>' : ''}</h3>
+          <h3>${esc(p.title)}${p.avail === 'play' ? '' : ' <span class="tag">your data</span>'}${p.caution ? ` <button class="warn" type="button" data-lic="${esc(p.id)}" title="a note on its licence" aria-label="A note on its licence">⚠️</button>` : ''}</h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(MACHINES[p.machine] ?? p.machine)} · ${esc(p.kind)}</div>
           <p class="blurb">${esc(p.blurb)}</p>
           ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b></p>` : ''}
-          ${p.caution ? `<p class="caution"><span aria-hidden="true">⚠️</span> <b>Licence:</b> ${esc(p.caution)}</p>` : ''}
           ${p.tags?.length ? `<ul class="chips">${p.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
-          ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
           <div class="actions">${go}<a href="${esc(source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a>${lic}</div>
-          ${licBox}
         </div></article>`;
   }
 
@@ -383,6 +402,7 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
    */
   function catalogue(all) {
     all.sort((a, b) => ['play', 'files', 'none'].indexOf(a.avail) - ['play', 'files', 'none'].indexOf(b.avail) || (a.year ?? 0) - (b.year ?? 0));
+    for (const p of all) byId.set(p.id, p);
     document.getElementById('grid').innerHTML = all.map(card).join('');
     const cards = new Map([...document.querySelectorAll('#grid .card')].map((c) => [c.dataset.id, c]));
     const q = new URLSearchParams(location.search);
