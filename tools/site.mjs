@@ -29,9 +29,15 @@ import { targetFile } from '../web/endpoints.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
-const OUT = resolve(arg('out') ?? join(ROOT, 'site'));
 const GAMES = resolve((arg('games') ?? join(homedir(), 'games')).replace(/^~/, homedir()));
-const ONLY = arg('only')?.split(',');
+/*
+ * --standalone=<id>: ONE program, as a folder anyone can put on their own site (tools/standalone.mjs):
+ * the export of that program alone, its index.html a page of its own with a Play button rather than
+ * the catalogue, and HOSTING.txt (with .htaccess and _headers) saying how to serve it.
+ */
+const STANDALONE = arg('standalone') ?? null;
+const ONLY = STANDALONE ? [STANDALONE] : arg('only')?.split(',');
+const OUT = resolve(arg('out') ?? join(ROOT, STANDALONE ? `dist/standalone/${STANDALONE}` : 'site'));
 const MAX_FILE = 25 * 1024 * 1024;
 
 const manifest = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'), 'utf8'));
@@ -248,7 +254,7 @@ for (const [root, files] of dataRoots) {
  * and the build itself when its code may be shipped. An entry without its thumbnail is left out.
  */
 const gallery = [];
-for (const g of manifest.gallery ?? []) {
+for (const g of (manifest.gallery ?? []).filter((x) => !ONLY || ONLY.includes(x.id))) {
   const t = join(ROOT, 'dist/site-thumbs', `${g.id}.png`);
   if (!existsSync(t)) { console.log(`  gallery ${g.id}: no thumbnail, left out`); continue; }
   copy(t, `thumbs/${g.id}.png`);
@@ -434,3 +440,105 @@ write('web/site.json', JSON.stringify({
     run: `web/?machine=${encodeURIComponent(s.machine)}&program=${encodeURIComponent(s.variant ? s.file ?? s.program : s.program)}${s.args !== undefined ? `&args=${encodeURIComponent(s.args)}` : ''}&run=1` })),
 }, null, 1));
 console.log(`\n${shipped.length} programs, ${targets.size} builds (${hits} from dist/site-bundles), ${mb(total)} of bundles, assembly and data in ${OUT}`);
+
+if (STANDALONE) standalonePage();
+
+/*
+ * THE STANDALONE PAGE: the one program's own index.html -- its picture, what it is, Play (the player,
+ * web/?...&player=1), its licences and the source of its build -- in place of the catalogue, and how
+ * to host the folder. Everything in it is relative, so the folder works under any path.
+ */
+function standalonePage() {
+  const all = [...shipped.map((p) => ({ ...p, avail: 'play' })), ...gallery.filter((g) => g.run).map((g) => ({ ...g, avail: 'files' }))];
+  const p = all[0];
+  if (!p) throw new Error(`--standalone=${STANDALONE}: no such program, or it has no build to ship`);
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const run = `web/?machine=${encodeURIComponent(p.machine)}&program=${encodeURIComponent(p.variant ? p.file ?? p.program : p.program)}${p.args !== undefined ? `&args=${encodeURIComponent(p.args)}` : ''}&run=1&player=1`;
+  const thumb = typeof p.thumb === 'string' ? p.thumb : null;
+  const li = (items) => items.map((x) => `<li>${x}</li>`).join('');
+  write('index.html', `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(p.title)}</title>
+<meta name="description" content="${esc(p.blurb)}">
+<style>
+  :root { --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594; --head: #edf1f6; --accent: #6cb6ff; --accent-ink: #061524; --warn: #c9a227; }
+  @media (prefers-color-scheme: light) { :root { --bg: #f4f6f9; --panel: #fff; --line: #d9dee6; --ink: #2b3440; --dim: #5f6b7a; --head: #0f1720; --accent: #1f6fd1; --accent-ink: #fff; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; display: grid; gap: 18px; }
+  .shot { display: block; aspect-ratio: 4 / 3; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
+  h1 { margin: 0; font-size: 28px; color: var(--head); text-wrap: balance; }
+  .meta { color: var(--dim); }
+  .play { justify-self: start; padding: 10px 22px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-weight: 600; text-decoration: none; font-size: 16px; }
+  .play:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  a { color: var(--accent); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  ul { margin: 0; padding-left: 18px; } p { margin: 0 0 6px; }
+  .caution { border-color: var(--warn); }
+  footer { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  ${thumb ? `<a class="shot" href="${esc(run)}" aria-label="Play ${esc(p.title)}"><img src="${esc(thumb)}" alt="${esc(p.title)}"></a>` : ''}
+  <div>
+    <h1>${esc(p.title)}</h1>
+    <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(p.kind)}</div>
+  </div>
+  <p>${esc(p.blurb)}</p>
+  <a class="play" href="${esc(run)}">${p.avail === 'play' ? 'Play' : 'Play with your files'}</a>
+  ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
+  <p class="meta">It needs a keyboard, and most games take the mouse too.</p>
+  ${p.caution ? `<section class="caution"><h2>⚠️ Licence</h2><p>${esc(p.caution)}</p></section>` : ''}
+  <section>
+    <h2>Licences</h2>
+    ${p.code?.license ? `<p>Code: ${esc(p.code.license)}</p>` : ''}${p.data?.license ? `<p>Data: ${esc(p.data.license)}</p>` : ''}
+    ${p.licences?.length ? `<ul>${li(p.licences.map((l) => `<a href="${esc(l.href)}">${esc(l.name)}</a>`))}</ul>` : ''}
+    ${p.credits ? `<p class="meta">${esc(p.credits)}</p>` : ''}
+  </section>
+  <section>
+    <h2>Source of this build</h2>
+    <ul>${li((p.sources ?? []).map((a) => `<a href="${esc(a.href)}" download>${esc(a.name)}</a> <span class="meta">${(a.bytes / 1048576).toFixed(1)} MB</span>`))}</ul>
+    <p class="meta"><a href="sources/README.txt">What these archives are</a> · <a href="sources/SHA256SUMS">checksums</a> · <a href="${esc(p.code?.source ?? p.source)}">the publisher's source</a></p>
+  </section>
+  <footer>Compiled from its unmodified source to JavaScript by <a href="https://github.com/jfrelat-lab/prism">PRISM</a>, and run in this page.</footer>
+</main>
+</body>
+</html>
+`);
+  // Cross-origin isolation (SharedArrayBuffer) from the server where it can say so; web/coi-sw.js does it otherwise.
+  const H = ['Cross-Origin-Opener-Policy: same-origin', 'Cross-Origin-Embedder-Policy: require-corp', 'Cross-Origin-Resource-Policy: same-origin'];
+  write('.htaccess', ['# Apache (mod_headers): the headers PRISM needs for SharedArrayBuffer.', '<IfModule mod_headers.c>',
+    ...H.map((h) => `  Header set ${h.replace(': ', ' "')}"`), '</IfModule>', ''].join('\n'));
+  write('HOSTING.txt', [
+    `${p.title}, as a folder for your own site`,
+    '',
+    'Copy this folder anywhere on a web server, under any path, and link to it (its index.html). It',
+    'needs no server code: every file is static, and every path in it is relative to the folder.',
+    '',
+    'CROSS-ORIGIN ISOLATION. The program runs in a worker that shares its memory with the page',
+    '(SharedArrayBuffer), which a browser allows only in a cross-origin isolated page. Either:',
+    '  - your server sends these three headers for the folder:',
+    ...H.map((h) => `      ${h}`),
+    '    _headers does it on Cloudflare Pages and Netlify, .htaccess on Apache; for nginx:',
+    ...H.map((h) => `      add_header ${h.split(': ')[0]} ${h.split(': ')[1]};`),
+    '  - or it does not, and web/coi-sw.js, a service worker, adds them: the first visit reloads',
+    '    once. That needs HTTPS (or localhost).',
+    '',
+    'IN AN IFRAME. A frame is isolated only if the page around it is too: the page holding the',
+    'iframe must send the same COOP/COEP headers, and the frame must be allowed to be isolated:',
+    `  <iframe src="<this folder>/${run}"`,
+    '          allow="cross-origin-isolated; fullscreen; autoplay; gamepad" width="800" height="600"></iframe>',
+    'On a page that cannot send those headers (most blogs), link to the folder instead.',
+    '',
+    'LICENCES. The folder holds the licences of the program and of its data (licenses/), and the',
+    'source its build was made from (sources/, or the release its README names): keep them with it.',
+    '',
+  ].join('\n'));
+  console.log(`  standalone: ${p.title} in ${OUT} (index.html, HOSTING.txt)`);
+}

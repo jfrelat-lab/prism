@@ -7,7 +7,9 @@
 // reloading for ever; the page then says SharedArrayBuffer is missing.
 (() => {
   if (window.crossOriginIsolated || !('serviceWorker' in navigator) || !window.isSecureContext) return;
-  const KEY = 'prism-coi-reloaded';
+  // Per worker scope, not per origin: two exports on one site (a catalogue, a game's own folder) each
+  // register their own worker, and the first one's reload must not stop the second's.
+  const KEY = `prism-coi-reloaded:${new URL('./', document.currentScript.src).pathname}`;
   let reloaded = false;
   try { reloaded = sessionStorage.getItem(KEY) === '1'; } catch { /* storage refused: try once anyway */ }
   navigator.serviceWorker.register(new URL('./coi-sw.js', document.currentScript.src)).then(() => {
