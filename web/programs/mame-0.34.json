@@ -8,9 +8,9 @@
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the program paces itself from drv->frames_per_second through the real clock.",
   "needsData": {
-    "hint": "one zip per game, named after it (invaders.zip, 1942.zip), in a mame/ directory under roms/. From 0.34 on MAME identifies a ROM inside the zip by its CRC, so the set has to be the one this release expects: `node tools/mame-audit.mjs --roms=<dir>` says which of yours are.",
-    "dir": "roms",
-    "under": "mame/",
+    "hint": "one zip per game, named after it (invaders.zip, 1942.zip), in a mame/ directory of the games directory. From 0.34 on MAME identifies a ROM inside the zip by its CRC, so the set has to be the one this release expects: `node tools/mame-audit.mjs --roms=<dir>` says which of yours are.",
+    "dir": "mame",
+    "under": "",
     "lazy": true
   },
   "controls": [
