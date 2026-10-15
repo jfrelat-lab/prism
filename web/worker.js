@@ -95,7 +95,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
    */
   // A static bundle of this build, when the server has a fresh one (tools/bundle.mjs): see stage 2.
   let bundleAt = null;
-  const api = endpoints(!!options.site);
+  const api = endpoints(!!options.site, options.light);
   if (program.target) {
     // `subject` is the first word of the command line that is not a switch: for a target whose
     // build depends on what it is asked to run (MAME, one archive of games), the server reads it.

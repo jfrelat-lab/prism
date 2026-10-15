@@ -736,8 +736,7 @@
       ],
       "thumb": {
         "page": "its attract screen, from the page"
-      },
-      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+      }
     },
     {
       "id": "mame-invaders",
@@ -757,8 +756,7 @@
       ],
       "thumb": {
         "page": "its attract screen, from the page"
-      },
-      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+      }
     },
     {
       "id": "mame-asteroid",
@@ -778,8 +776,7 @@
       ],
       "thumb": {
         "page": "its attract mode, from the page"
-      },
-      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+      }
     },
     {
       "id": "mame-1942",
@@ -799,8 +796,7 @@
       ],
       "thumb": {
         "page": "its title screen, from the page"
-      },
-      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+      }
     },
     {
       "id": "mame-boblbobl",
@@ -820,8 +816,7 @@
       ],
       "thumb": {
         "page": "its demo loop, from the page"
-      },
-      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+      }
     },
     {
       "id": "mame-ffight",
@@ -841,8 +836,7 @@
       ],
       "thumb": {
         "page": "its demo, the subway stage, from the page"
-      },
-      "noBuild": "MAME runs only on ROM images, which are never shipped or fetched; its own notice asks that it not be distributed with ROMs"
+      }
     }
   ],
   "_gallery": "Programs PRISM compiles whose data may NOT be passed on: the export shows a thumbnail PRISM drew from the owner's copy, what is needed, and how to run it locally; it ships neither their build nor their data."

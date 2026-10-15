@@ -13,7 +13,7 @@ export const targetFile = (name) => String(name).replace(/:/g, '~');
 
 const enc = (p) => p.split('/').map(encodeURIComponent).join('/');
 
-export function endpoints(site) {
+export function endpoints(site, light = null) {
   if (!site) {
     return {
       targets: () => '/__targets',
@@ -25,8 +25,9 @@ export function endpoints(site) {
   }
   return {
     targets: () => '/__static/targets.json',
-    // A static export ships one build per target, so the subject (MAME's light build) is not asked.
-    target: (name) => `/__static/target/${encodeURIComponent(targetFile(name))}.json`,
+    // A static export ships one build per target, and a light one for each game site.json lists under
+    // it (MAME's, tools/site.mjs): another subject gets the whole build.
+    target: (name, subject = '') => `/__static/target/${encodeURIComponent(targetFile(name))}${light?.[name]?.includes(subject) ? `@${encodeURIComponent(subject)}` : ''}.json`,
     dataList: (root) => `/__static/data/${encodeURIComponent(root)}.json`,
     dataFile: (root, f) => `/data/${encodeURIComponent(root)}/${enc(f)}`,
   };

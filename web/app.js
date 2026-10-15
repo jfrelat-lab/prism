@@ -721,13 +721,13 @@ const dataCache = new Map();               // root + under -> { name: Uint8Array
  * One data root, fetched once. Progress goes to the machine's own screen, because that is where you
  * are looking: a 50 MB pak takes a moment and a page that simply sits there looks broken.
  */
-async function loadData(root, say, under = '', hint = '', marker = '') {
+async function loadData(root, say, under = '', hint = '', marker = '', pick = {}) {
   // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
-  const key = `${root}\0${under}`;
+  const key = `${root}\0${under}\0${pick.only ?? ''}`;
   if (dataCache.has(key)) return dataCache.get(key);
   const r = await fetch(api.dataList(root));
   // A static export ships some programs' builds without their data: the visitor brings it.
-  if (!r.ok && site) { const own = await pickData(root, under, hint, say, marker); dataCache.set(key, own); return own; }
+  if (!r.ok && site) { const own = await pickData(root, under, hint, say, marker, pick); dataCache.set(key, own); return own; }
   if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const listing = await r.json();
   const files = listing.files.filter((f) => f.startsWith(under));
@@ -762,8 +762,8 @@ async function loadData(root, say, under = '', hint = '', marker = '') {
  * chosen is found by rootData. On request the files are kept on this device (kept.*), so a second
  * visit does not ask again; "forget" removes them.
  */
-function pickData(root, under, hint, say, marker) {
-  const key = `${root}\0${under}`;
+function pickData(root, under, hint, say, marker, pick = {}) {
+  const key = `${root}\0${under}\0${pick.only ?? ''}`;
   return new Promise(async (resolve, reject) => {
     const box = document.createElement('div');
     box.className = 'byo';
@@ -799,7 +799,7 @@ function pickData(root, under, hint, say, marker) {
       err.hidden = true;
       say?.(`reading ${entries.length} file${entries.length === 1 ? '' : 's'}…`);
       try {
-        const out = rootData(await readChosen(entries), under, marker);
+        const out = rootData(await readChosen(entries, pick), under, marker);
         if (box.querySelector('.byo-keep input').checked) await kept.save(key, out).catch((e) => say?.(`not kept: ${e.message}`));
         box.remove();
         resolve(out);
@@ -872,12 +872,25 @@ async function walkEntry(entry) {
  * (web/unpack.js: zip, tar.gz); one found inside a folder is data like any other file -- Keen's
  * folder holds kd113.zip, and MAME's ROMs are zips it opens itself.
  */
-async function readChosen(entries) {
+async function readChosen(entries, { only = null, keepArchives = false } = {}) {
   const out = {};
   const loose = entries.length && entries.every(([p]) => !p.includes('/'));
+  /*
+   * `only`: of what was chosen, the one file the run needs, matched by name and taken before anything
+   * is read -- a MAME collection is thousands of zips and the game opens one. A single file chosen by
+   * itself is that file, whatever it is called.
+   */
+  if (only) {
+    const want = only.toLowerCase();
+    const named = entries.filter(([p]) => p.split('/').pop().toLowerCase() === want);
+    if (named.length) entries = named.map(([p]) => [p.slice(0, p.length - want.length) + only, named[0][1]]).slice(0, 1);
+    else if (entries.length === 1 && loose) entries = [[only, entries[0][1]]];
+    else throw new Error(`No ${only} in what you chose: choose it, or the folder that holds it.`);
+  }
   for (const [path, file] of entries) {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    if (loose && /\.(zip|tar\.gz|tgz)$/i.test(path)) Object.assign(out, await unpackArchive(bytes));
+    // `keepArchives`: the program opens its zips itself (MAME's ROM sets).
+    if (loose && !keepArchives && /\.(zip|tar\.gz|tgz)$/i.test(path)) Object.assign(out, await unpackArchive(bytes));
     else out[path] = bytes;
   }
   return out;
@@ -1284,8 +1297,19 @@ async function startRun(typedAs = null) {
   if (program.needsData?.dir) {
     const busy = worker;                              // nothing may have started in the meantime
     try {
-      if (program.needsData.lazy) lazyNames = await listData(program.needsData.dir, program.needsData.under ?? '');
-      else {
+      const lazyHere = program.needsData.lazy && !(site && !(await fetch(api.dataList(program.needsData.dir))).ok);
+      if (lazyHere) lazyNames = await listData(program.needsData.dir, program.needsData.under ?? '');
+      else if (program.needsData.lazy) {
+        /*
+         * An export ships no ROMs: the visitor's are asked for, and of a whole collection only the
+         * game the command line names is read, kept a zip as MAME opens it.
+         */
+        const game = tokenise($('args').value).find((a) => a && !/^[-\/]/.test(a));
+        if (!game) throw new Error('name a game on the command line (invaders, 1942...) to choose its ROMs');
+        dataFiles = await loadData(program.needsData.dir, (m) => { termNote(m); log(m); }, program.needsData.under ?? '',
+          `${game}.zip, from a ROM set made for MAME 0.34 (a later set may hold the same game under other file names, and then MAME says which ROM it cannot find). ROMs are their makers' copyright: use a set you have the right to`,
+          '', { only: `${game}.zip`, keepArchives: true });
+      } else {
         /*
          * `under` keeps one game of a root holding several (scumm/ has a directory per demo), and
          * `exclude` leaves out files the program cannot read -- DOTT's demo speech, on which ScummVM
@@ -1404,7 +1428,7 @@ async function startRun(typedAs = null) {
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
   worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
-                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: { ...pageOptions, site: !!site },
+                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: { ...pageOptions, site: !!site, light: site?.light ?? null },
                        /* The machine's own screen, so the program's output continues under the
                           command line instead of starting on a blank page. */
                        screen: machine.kind === 'desktop' ? null

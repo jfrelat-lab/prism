@@ -104,6 +104,32 @@ async function bundle(tname, desc) {
   return info;
 }
 
+/*
+ * A LIGHT BUILD for one game of a target that has them (MAME: the makefile archive that holds the
+ * game, tools/mame-light.mjs). Under serve.mjs the page names the game and the server answers; an
+ * export has no server, so the answer for each game it shows is written beside the whole build's, as
+ * __static/target/<target>@<game>.json, and site.json lists those games (web/endpoints.js).
+ */
+const light = {};                  // target -> [game]
+async function lightBundle(tname, game, desc) {
+  const answer = await targetAnswer(ROOT, tname, { subject: game, bundleFor: (n) => `dist/${n.replace(/[:/]/g, '-')}` });
+  if (!answer.lightOf) return false;
+  const name = answer.bundle.slice('dist/'.length);
+  if (!targets.has(name)) {
+    const resolved = (await import(join(ROOT, loadTarget(join(ROOT, 'targets', `${tname}.json`)).light.module))).lightFor(game);
+    writeBundle(resolved, join(OUT, 'dist'), name, { compile: desc.safepoints ? { safepoints: true } : {} });
+    for (const ext of ['js', 'bin']) {
+      const s = statSync(join(OUT, 'dist', `${name}.${ext}`)).size;
+      if (s > MAX_FILE) throw new Error(`dist/${name}.${ext} is ${mb(s)}, over 25 MiB`);
+      total += s;
+    }
+    targets.set(name, { title: answer.title, light: true });
+  }
+  write(`__static/target/${targetFile(tname)}@${game}.json`, JSON.stringify(answer));
+  (light[tname] ??= []).push(game);
+  return true;
+}
+
 const shipped = [];
 const targets = new Map();
 const dataRoots = new Map();      // root -> Set of files under it
@@ -193,6 +219,11 @@ for (const g of manifest.gallery ?? []) {
   let built = null;
   if (!g.noBuild) {
     try { built = await bundle(tname, desc); } catch (err) { console.log(`  gallery ${g.id}: no build (${err.message.split('\n')[0]})`); }
+    // `light`: the game its command line names gets its light build too, which loads in a fraction.
+    const game = String(g.args ?? '').split(/\s+/).find((a) => a && !a.startsWith('-'));
+    if (built && game && loadTarget(join(ROOT, 'targets', `${tname.split(':')[0]}.json`)).light) {
+      try { await lightBundle(tname, game, desc); } catch (err) { console.log(`  gallery ${g.id}: no light build (${err.message.split('\n')[0]})`); }
+    }
   }
   if (built) gallery.push({ ...rest, target: tname, thumb: `thumbs/${g.id}.png`, tags: [...new Set([...built.tags, ...(g.tags ?? [])])],
     run: `web/?machine=${encodeURIComponent(g.machine)}&program=${encodeURIComponent(g.variant ? g.file ?? g.program : g.program)}${g.args !== undefined ? `&args=${encodeURIComponent(g.args)}` : ''}&run=1` });
@@ -206,7 +237,7 @@ for (const g of manifest.gallery ?? []) {
 }
 
 // The picker's answers: only what is shipped, all present.
-write('__static/targets.json', JSON.stringify({ targets: [...new Set([...targets.keys()].map((t) => t.split(':')[0]))].map((name) => {
+write('__static/targets.json', JSON.stringify({ targets: [...new Set([...targets.keys()].filter((t) => !targets.get(t).light).map((t) => t.split(':')[0]))].map((name) => {
   const variants = [...targets.keys()].filter((t) => t.startsWith(`${name}:`)).map((t) => ({ name: t.split(':')[1], host: null, web: true, args: null }));
   return { name, title: targets.get(name)?.title ?? name, variants, present: true };
 }) }));
@@ -231,6 +262,7 @@ for (const s of shipped) {
 
 write('web/site.json', JSON.stringify({
   generated: new Date().toISOString().slice(0, 10),
+  light,
   gallery,
   programs: shipped.map(({ licenseFiles, ...s }) => ({ ...s, units: targets.get(s.target)?.units ?? null,
     run: `web/?machine=${encodeURIComponent(s.machine)}&program=${encodeURIComponent(s.variant ? s.file ?? s.program : s.program)}${s.args !== undefined ? `&args=${encodeURIComponent(s.args)}` : ''}&run=1` })),
