@@ -320,8 +320,17 @@ for (const s of shipped) {
  * with PRISM itself (compiler, tools, targets: the scripts that control the build), a checksum list
  * and a README saying where each tree came from. Archives are kept in dist/site-sources/ under the
  * tree's hash, as bundles are.
+ *
+ * --sources=release[:<tag>]: the archives are not copied into the export but published as the assets
+ * of a release of jfrelat-lab/prism-sources (tools/publish-sources.mjs, from dist/site-sources/
+ * release.json), and the pages link there; the export keeps the README and the checksums. The tag
+ * defaults to site-<date>. The archives themselves are the same files either way.
  */
 const SRC_CACHE = join(ROOT, 'dist', 'site-sources');
+const SOURCES_REPO = 'jfrelat-lab/prism-sources';
+const RELEASE = arg('sources')?.startsWith('release')
+  ? (arg('sources').split(':')[1] || `site-${new Date().toISOString().slice(0, 10)}`) : null;
+const hrefOf = (name) => (RELEASE ? `https://github.com/${SOURCES_REPO}/releases/download/${RELEASE}/${encodeURIComponent(name)}` : `sources/${name}`);
 const archives = new Map();               // tree -> { href, name, bytes, sha256, fetch }
 function sourceArchive(tree, fetch) {
   if (archives.has(tree)) return archives.get(tree);
@@ -335,9 +344,9 @@ function sourceArchive(tree, fetch) {
     if (r.status !== 0) throw new Error(`sources/${tree}.tar.gz: tar failed: ${r.stderr}`);
     writeFileSync(join(SRC_CACHE, `${tree}.key`), key);
   }
-  const bytes = copy(file, `sources/${tree}.tar.gz`);
-  total += bytes;
-  const a = { href: `sources/${tree}.tar.gz`, name: `${tree}.tar.gz`, bytes,
+  const bytes = RELEASE ? statSync(file).size : copy(file, `sources/${tree}.tar.gz`);
+  if (!RELEASE) total += bytes;
+  const a = { href: hrefOf(`${tree}.tar.gz`), name: `${tree}.tar.gz`, file, bytes,
     sha256: createHash('sha256').update(readFileSync(file)).digest('hex'), fetch };
   archives.set(tree, a);
   return a;
@@ -345,18 +354,20 @@ function sourceArchive(tree, fetch) {
 // PRISM as committed: the tree a reader can rebuild every bundle from, with the targets in it.
 const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
 const dirty = spawnSync('git', ['-C', ROOT, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).stdout.trim() !== '';
-mkdirSync(join(OUT, 'sources'), { recursive: true });
-const prismTar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', '--prefix=prism/', '-o', join(OUT, 'sources', 'prism.tar.gz'), 'HEAD']);
+mkdirSync(SRC_CACHE, { recursive: true });
+const prismFile = join(SRC_CACHE, 'prism.tar.gz');
+const prismTar = spawnSync('git', ['-C', ROOT, 'archive', '--format=tar.gz', '--prefix=prism/', '-o', prismFile, 'HEAD']);
 if (prismTar.status !== 0) throw new Error(`sources/prism.tar.gz: git archive failed: ${prismTar.stderr}`);
-const prismBytes = statSync(join(OUT, 'sources', 'prism.tar.gz')).size;
-total += prismBytes;
-const prismArchive = { href: 'sources/prism.tar.gz', name: 'prism.tar.gz', bytes: prismBytes,
-  sha256: createHash('sha256').update(readFileSync(join(OUT, 'sources', 'prism.tar.gz'))).digest('hex') };
+const prismBytes = RELEASE ? statSync(prismFile).size : copy(prismFile, 'sources/prism.tar.gz');
+if (!RELEASE) total += prismBytes;
+const prismArchive = { href: hrefOf('prism.tar.gz'), name: 'prism.tar.gz', file: prismFile, bytes: prismBytes,
+  sha256: createHash('sha256').update(readFileSync(prismFile)).digest('hex') };
 const sourcesOf = (tname) => {
+  // `file` is where the archive sits on this machine: for publish-sources.mjs, not for the page.
   const t = targets.get(tname);
   if (!t) return null;
   const fetch = loadTarget(join(ROOT, 'targets', `${tname.split(':')[0]}.json`)).fetch ?? null;
-  return [...t.trees.map((tree) => sourceArchive(tree, fetch)), prismArchive];
+  return [...t.trees.map((tree) => sourceArchive(tree, fetch)), prismArchive].map(({ file, ...a }) => a);
 };
 for (const s of shipped) s.sources = sourcesOf(s.target);
 for (const g of gallery) if (g.run) g.sources = sourcesOf(g.target);
@@ -368,12 +379,21 @@ write('sources/README.txt', [
   "programs' sources unmodified -- and prism.tar.gz is the compiler that built them, with tools/ and",
   'targets/ (one JSON file per program: its units, defines and options). tools/site.mjs rebuilds every',
   'bundle of this site from the two. SHA256SUMS holds the archives\' checksums.',
+  ...(RELEASE ? ['', `The archives are the assets of the release ${RELEASE} of https://github.com/${SOURCES_REPO}:`,
+    `  https://github.com/${SOURCES_REPO}/releases/tag/${RELEASE}`] : []),
   '',
   `prism.tar.gz: commit ${head}${dirty ? ' (the export was built from a working tree with uncommitted changes)' : ''}`,
   '',
   ...[...archives.entries()].flatMap(([tree, a]) => [`${a.name}: corpus/${tree}/`, `  fetched with: ${a.fetch ?? '(see the target file)'}`]),
   '',
 ].join('\n'));
+if (RELEASE) {
+  // What tools/publish-sources.mjs uploads: the archives as they are in the cache, the README, the sums.
+  for (const f of ['README.txt', 'SHA256SUMS']) copyFileSync(join(OUT, 'sources', f), join(SRC_CACHE, f));
+  writeFileSync(join(SRC_CACHE, 'release.json'), JSON.stringify({ repo: SOURCES_REPO, tag: RELEASE, commit: head, dirty,
+    files: [...[...archives.values()].map((a) => a.file), prismFile, join(SRC_CACHE, 'README.txt'), join(SRC_CACHE, 'SHA256SUMS')] }, null, 1));
+  console.log(`  sources: to publish as ${SOURCES_REPO} release ${RELEASE}: node tools/publish-sources.mjs`);
+}
 console.log(`  sources: ${archives.size} trees and PRISM, ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${dirty ? ' (PRISM: uncommitted changes are not in prism.tar.gz)' : ''}`);
 
 write('web/site.json', JSON.stringify({
