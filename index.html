@@ -93,7 +93,6 @@
   .techs button .n { color: var(--dim); margin-left: 5px; font-variant-numeric: tabular-nums; }
   .techs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
   .techs button[aria-pressed="true"] .n { color: inherit; }
-  .techs-note { margin: 10px 0 0; font-size: 12.5px; color: var(--dim); }
   .techs button:disabled { opacity: .35; cursor: default; }
   .filters { display: grid; gap: 10px; margin: 0 0 18px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
   .frow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
@@ -234,11 +233,6 @@
             Winsock, SDL 1.2 and 2, OpenGL 1.x with GLU and GLUT on WebGL.</li>
         </ul>
       </div>
-    </div>
-    <div class="box" id="techs-box" data-site hidden style="margin-top:16px">
-      <h3>On the cards above</h3>
-      <div class="techs" id="techs"></div>
-      <p class="techs-note">The count is how many programs above carry each; pick one to filter them.</p>
     </div>
   </section>
 
@@ -392,7 +386,7 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
 
     const count = new Map();
     for (const p of all) for (const t of p.tags ?? []) count.set(t, (count.get(t) ?? 0) + 1);
-    // A tag every program carries filters nothing: it stays in the index below, not in the filter.
+    // A tag every program carries filters nothing.
     const useful = (t) => count.get(t) < all.length;
     const known = new Set(TECH_GROUPS.flatMap(([, ts]) => ts));
     const groups = TECH_GROUPS.map(([name, ts]) => [name, name === 'Libraries'
@@ -402,8 +396,6 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
       .map(([name, ts]) => `<div><h4>${esc(name)}</h4><ul>${ts.map((t) =>
         `<li><button type="button" aria-pressed="false" data-tag="${esc(t)}">${esc(t)}<span class="n"></span></button></li>`).join('')}</ul></div>`).join('');
     document.querySelector('#filters [data-facet=tech]').innerHTML = techButtons(useful);
-    document.getElementById('techs').innerHTML = techButtons(() => true);
-    for (const b of document.querySelectorAll('#techs .n')) b.textContent = count.get(b.parentNode.dataset.tag);
     document.querySelector('[data-facet=avail]').innerHTML = AVAIL.filter(([k]) => k === 'all' || all.some((p) => p.avail === k))
       .map(([k, label]) => `<button type="button" data-v="${k}">${label}<span class="n"></span></button>`).join('');
     const machines = [...new Set(all.map((p) => p.machine))].sort((a, b) => Object.keys(MACHINES).indexOf(a) - Object.keys(MACHINES).indexOf(b));
@@ -438,7 +430,6 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
         b.querySelector('.n').textContent = n;
         b.disabled = !n && b.dataset.tag !== state.tech;
       }
-      for (const b of document.querySelectorAll('#techs button')) b.setAttribute('aria-pressed', String(b.dataset.tag === state.tech));
       document.getElementById('tech-on').textContent = state.tech ? `· ${state.tech}` : '';
       document.getElementById('fcount').innerHTML = shown === all.length ? `${all.length} programs`
         : `${shown} of ${all.length} programs · <button type="button" class="linkbtn plain" id="fclear">show all</button>`;
@@ -465,18 +456,6 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
       render();
     });
     find.addEventListener('input', () => { state.text = find.value.trim(); render(); });
-    // The index in "What it compiles" sits below the cards: picking there filters them and goes up.
-    document.getElementById('techs').addEventListener('click', (ev) => {
-      const b = ev.target.closest('button[data-tag]');
-      if (!b) return;
-      state.tech = state.tech === b.dataset.tag ? null : b.dataset.tag;
-      if (state.tech && !useful(state.tech)) state.tech = null;
-      render();
-      if (state.tech) {
-        document.getElementById('f-tech').open = true;
-        document.getElementById('play').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
-      }
-    });
     let view = 'grid';
     try { view = localStorage.getItem('prism-view') ?? 'grid'; } catch {}
     if (view === 'list') document.querySelector('[data-view=list]').click();
