@@ -709,14 +709,14 @@
       "author": "Raven Software",
       "year": 1997,
       "kind": "First-person shooter",
-      "blurb": "Raven's own Win32 source, released under the GPL (gnu.txt in its tree): glh2.exe on WGL, its OpenGL drawn through WebGL.",
+      "blurb": "Raven's own Win32 source as released in 2000: glh2.exe on WGL, its OpenGL drawn through WebGL.",
       "needs": "data1/ from your copy",
       "source": "https://archive.org/details/hexen2-master",
       "args": "-window -nomidi",
       "thumb": {
         "page": "its menu in a window, from the page"
       },
-      "noBuild": "its source tree carries both gnu.txt and an older 'EULA - Source Code.doc': which governs is to be settled before its build is shipped"
+      "caution": "Raven's own 2000 source release holds the GPL (gnu.txt) and also an Activision source-code EULA, with no licence in the files themselves. It is offered here under the GPL, as Debian and the source ports have done since."
     },
     {
       "id": "mame-dkong",

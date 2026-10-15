@@ -115,6 +115,9 @@
   .linkbtn.plain::after { content: none !important; }
   .card .run.alt { background: none; color: var(--accent); border: 1px solid var(--accent); }
   .card .norun { font-size: 12.5px; color: var(--dim); }
+  .card .caution { margin: 0; font-size: 12.5px; color: var(--dim); }
+  .card .caution b { color: var(--ink); font-weight: 500; }
+  .card h3 .warn { font-size: 14px; cursor: help; }
   .grid.list { grid-template-columns: 1fr; gap: 10px; }
   .grid.list .card { flex-direction: row; }
   .grid.list .card .shot { flex: 0 0 168px; align-self: flex-start; }
@@ -360,10 +363,11 @@ node tools/serve.mjs --data=/path/to/your/game/files</pre>
     return `<article class="card" data-id="${esc(p.id)}">
         ${pic}
         <div class="body">
-          <h3>${esc(p.title)}${p.avail === 'play' ? '' : ' <span class="tag">your data</span>'}</h3>
+          <h3>${esc(p.title)}${p.avail === 'play' ? '' : ' <span class="tag">your data</span>'}${p.caution ? ' <span class="warn" title="licence: read the note below" aria-hidden="true">⚠️</span>' : ''}</h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(MACHINES[p.machine] ?? p.machine)} · ${esc(p.kind)}</div>
           <p class="blurb">${esc(p.blurb)}</p>
           ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b></p>` : ''}
+          ${p.caution ? `<p class="caution"><span aria-hidden="true">⚠️</span> <b>Licence:</b> ${esc(p.caution)}</p>` : ''}
           ${p.tags?.length ? `<ul class="chips">${p.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
           ${p.credits ? `<p class="credits">${esc(p.credits)}</p>` : ''}
           <div class="actions">${go}<a href="${esc(source)}">source</a><a href="${esc(build(p))}" title="how PRISM builds it: the target file, in the compiler's repository">build</a>${lic}</div>
