@@ -492,7 +492,7 @@ function standalonePage() {
   </div>
   <p>${esc(p.blurb)}</p>
   <a class="play" href="${esc(run)}">${p.avail === 'play' ? 'Play' : 'Play with your files'}</a>
-  ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
+  ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}${p.get ? ` (from <a href="${esc(p.get.href)}">${esc(p.get.label)}</a>)` : ''}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
   <p class="meta">It needs a keyboard, and most games take the mouse too.</p>
   ${p.caution ? `<section class="caution"><h2>⚠️ Licence</h2><p>${esc(p.caution)}</p></section>` : ''}
   <section>

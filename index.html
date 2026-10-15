@@ -421,7 +421,7 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
           <h3>${esc(p.title)}${p.avail === 'play' ? '' : p.avail === 'mine' ? ' <span class="tag mine">your copy</span>' : ' <span class="tag">your data</span>'}${p.caution ? ` <button class="warn" type="button" data-lic="${esc(p.id)}" title="a note on its licence" aria-label="A note on its licence">⚠️</button>` : ''}</h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(MACHINES[p.machine] ?? p.machine)} · ${esc(p.kind)}</div>
           <p class="blurb">${esc(p.blurb)}</p>
-          ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b></p>` : ''}
+          ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b>${p.get && p.avail !== 'mine' ? ` · get it from <a href="${esc(p.get.href)}" rel="noopener">${esc(p.get.label)}</a>` : ''}</p>` : ''}
           ${p.tags?.length ? `<ul class="chips">${p.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
           <div class="actions">${go}${lic}</div>
         </div></article>`;

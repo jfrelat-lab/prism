@@ -471,6 +471,10 @@
       "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
       "thumb": {
         "frames": 1500
+      },
+      "get": {
+        "href": "https://www.scummvm.org/demos/",
+        "label": "ScummVM's demo downloads"
       }
     },
     {
@@ -486,6 +490,10 @@
       "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
       "thumb": {
         "frames": 1500
+      },
+      "get": {
+        "href": "https://www.scummvm.org/demos/",
+        "label": "ScummVM's demo downloads"
       }
     },
     {
@@ -501,6 +509,10 @@
       "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
       "thumb": {
         "frames": 1500
+      },
+      "get": {
+        "href": "https://www.scummvm.org/demos/",
+        "label": "ScummVM's demo downloads"
       }
     },
     {
