@@ -203,7 +203,8 @@
     <div class="grid" id="grid"></div>
     <p class="fine">The pictures of games whose data is not shared were drawn by PRISM from a copy someone
       owns, to document what it runs; they and the games' names belong to their owners. PRISM is not
-      affiliated with any of them, and no ROM or game data is hosted or linked here.</p>
+      affiliated with any of them. The only game data hosted here is what its owners let anyone pass on;
+      no ROM, and nothing else of theirs, is hosted or linked.</p>
   </section>
 
   <section>
@@ -291,10 +292,12 @@
 <pre>git clone https://github.com/jfrelat-lab/prism && cd prism
 git clone --depth 1 -b v5.4.7 https://github.com/lua/lua.git corpus/lua
 node tools/build.mjs targets/lua.json --run "--args=-e print(6*7)"
-node tools/serve.mjs --data=/path/to/your/game/files</pre>
+node tools/serve.mjs --data=/path/to/your/game/files
+node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
       <p style="margin:10px 0 0">Node 22. The shelf in <code>web/</code> compiles each program in a
         worker and shows it on a canvas; <code>tools/serve.mjs</code> exists for the COOP/COEP headers
-        SharedArrayBuffer needs. Sibling project: <a href="https://github.com/jfrelat-lab/mirage-x86">MIRAGE</a>,
+        SharedArrayBuffer needs. The last line serves this page from your own export, with your game
+        folders behind it: the games found there say <i>your copy</i> and play from them. Sibling project: <a href="https://github.com/jfrelat-lab/mirage-x86">MIRAGE</a>,
         which runs the x86 binary when there is no source.</p>
     </div>
   </section>
