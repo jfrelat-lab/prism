@@ -730,7 +730,7 @@
       "thumb": {
         "page": "its menu in a window, from the page"
       },
-      "caution": "Raven's own 2000 source release holds the GPL (gnu.txt) and also an Activision source-code EULA, with no licence in the files themselves. It is offered here under the GPL, as Debian and the source ports have done since."
+      "caution": "Raven's own 2000 source release holds the GPL (gnu.txt) and also an Activision source-code EULA, with no licence in the files themselves. Its build is offered here under the GPL, as Debian and the source ports have done since; no Hexen II data is. If you hold rights to it and object, open an issue at github.com/jfrelat-lab/prism/issues and the build comes down."
     },
     {
       "id": "mame-dkong",
