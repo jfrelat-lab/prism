@@ -3,6 +3,9 @@
 //
 //   node tools/scummvm010-configure.mjs           write corpus/scummvm-0.10.0-generated/{config.h,config.mk,objs.json}
 //   node tools/scummvm010-configure.mjs --check   exit 1 if the files on disk differ from what they write
+//   --engines=scumm                               the same, configured with that engine alone, into
+//                                                 corpus/scummvm-0.10.0-scumm-generated/ (targets/scummvm010.json's
+//                                                 `scumm` variant: a build a static host takes, under 25 MiB)
 //
 // configure runs in the i386 oracle container with its default engines and none of the optional
 // libraries (Ogg Vorbis, Tremor, FLAC, MAD, ALSA, zlib, libmpeg2, FluidSynth, NASM). It accepts gcc
@@ -19,7 +22,15 @@ import { sh } from './oracle.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SRC = join(ROOT, 'corpus/scummvm-0.10.0');
-const OUT = join(ROOT, 'corpus/scummvm-0.10.0-generated');
+/*
+ * --engines=<list>: configure's own --disable-<engine> for every other engine of the release, and for
+ * the SCUMM engine's v7/v8 and HE parts, which the demos it is for (v4 to v6) do not use.
+ */
+const ENGINES = ['agi', 'agos', 'cine', 'gob', 'kyra', 'parallaction', 'queen', 'saga', 'scumm', 'sky', 'sword1', 'sword2', 'touche'];
+const keep = process.argv.find((a) => a.startsWith('--engines='))?.slice(10).split(',') ?? null;
+if (keep?.some((e) => !ENGINES.includes(e))) { console.error(`--engines: one of ${ENGINES.join(' ')}`); process.exit(2); }
+const only = keep ? [...ENGINES.filter((e) => !keep.includes(e)).map((e) => `--disable-${e}`), '--disable-scumm-7-8', '--disable-he'].join(' ') : '';
+const OUT = join(ROOT, keep ? `corpus/scummvm-0.10.0-${keep.join('-')}-generated` : 'corpus/scummvm-0.10.0-generated');
 const WORK = join(ROOT, '.oracle/scummvm010-configure');
 
 if (!existsSync(SRC)) { console.error(`no ${SRC}: see the fetch line of targets/scummvm010.json`); process.exit(1); }
@@ -27,7 +38,7 @@ rmSync(WORK, { recursive: true, force: true });
 cpSync(SRC, WORK, { recursive: true });
 writeFileSync(join(WORK, 'gxx4'), '#!/bin/sh\ncase "$1" in -dumpversion) echo 4.1.2; exit 0;; esac\nexec g++ "$@"\n', { mode: 0o755 });
 writeFileSync(join(WORK, 'print.mk'), 'include Makefile\nprint-vars:\n\t@echo "OBJS=$(OBJS)"\n\t@echo "ALL=$(foreach m,$(MODULES),$(MODULE_OBJS-$(m)))"\n');
-const r = sh('cd scummvm010-configure && CXX=/work/scummvm010-configure/gxx4 ./configure --disable-alsa --disable-vorbis --disable-tremor --disable-mad --disable-flac --disable-zlib --disable-mpeg2 --disable-fluidsynth --disable-nasm >/dev/null && make -f print.mk print-vars');
+const r = sh(`cd scummvm010-configure && CXX=/work/scummvm010-configure/gxx4 ./configure --disable-alsa --disable-vorbis --disable-tremor --disable-mad --disable-flac --disable-zlib --disable-mpeg2 --disable-fluidsynth --disable-nasm ${only} >/dev/null && make -f print.mk print-vars`);
 if (r.code !== 0) { console.error(r.stdout + r.stderr); process.exit(1); }
 const words = (k) => (r.stdout.match(new RegExp(`^${k}=(.*)$`, 'm'))?.[1] ?? '').trim().split(/\s+/).filter(Boolean);
 // The modules' objects, and the ones a module adds to OBJS itself: backends/platform/sdl does not use

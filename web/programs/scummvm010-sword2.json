@@ -4,7 +4,7 @@
   "target": "scummvm010",
   "host": "sdl",
   "args": "-psword2-win-demo-en/files sword2demo",
-  "argsHint": "-p<dir> where the game is, then its id. Other switches: -g<scaler>, -f full screen, -m<volume> music, -s<volume> effects, -n no subtitles.",
+  "argsHint": "-p<dir> where the game is, then its id. Other switches: -g<scaler>, -f full screen, -m<volume> music, -s<volume> effects, -n subtitles (off by default; with speech, the text is shown too).",
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
   "needsData": {

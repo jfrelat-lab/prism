@@ -436,13 +436,13 @@
       "author": "Lucasfilm Games",
       "year": 1990,
       "kind": "Adventure",
-      "blurb": "ScummVM 0.6.1 compiled from its C++: 3,000 frames and every audio buffer equal to a native g++ build.",
+      "blurb": "ScummVM 0.10.0 compiled from its C++, the SCUMM v4 engine running the EGA demo as the ScummVM project distributes it.",
       "thumb": {
         "frames": 1500
       },
       "code": {
-        "license": "GPL-2.0-or-later (ScummVM 0.6.1)",
-        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+        "license": "GPL-2.0-or-later (ScummVM 0.10.0)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.10.0/"
       },
       "data": {
         "license": "LucasArts' demo, all rights reserved; passed on as the ScummVM project distributes it (monkey1-dos-ega-demo-en.zip, sha256 1cb530fc4ab1d1f0…)"
@@ -451,7 +451,7 @@
       "licenseFiles": [
         {
           "name": "ScummVM's licence (GPL-2.0)",
-          "path": "corpus/scummvm-0.6.1/COPYING",
+          "path": "corpus/scummvm-0.10.0/COPYING",
           "for": "code"
         }
       ],
@@ -471,13 +471,13 @@
       "author": "LucasArts",
       "year": 1993,
       "kind": "Adventure",
-      "blurb": "The SCUMM v6 engine of ScummVM 0.6.1, frame for frame and sample for sample with a native build.",
+      "blurb": "ScummVM 0.10.0 compiled from its C++: the SCUMM v6 engine with the demo's speech and subtitles (0.6.1, held frame for frame to a native build, asserts on that speech).",
       "thumb": {
         "frames": 1500
       },
       "code": {
-        "license": "GPL-2.0-or-later (ScummVM 0.6.1)",
-        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+        "license": "GPL-2.0-or-later (ScummVM 0.10.0)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.10.0/"
       },
       "data": {
         "license": "LucasArts' demo, all rights reserved; passed on as the ScummVM project distributes it (dott-dos-ni-demo-en.zip, sha256 b77f03981da3815a…)"
@@ -486,7 +486,7 @@
       "licenseFiles": [
         {
           "name": "ScummVM's licence (GPL-2.0)",
-          "path": "corpus/scummvm-0.6.1/COPYING",
+          "path": "corpus/scummvm-0.10.0/COPYING",
           "for": "code"
         }
       ],
@@ -506,13 +506,13 @@
       "author": "LucasArts",
       "year": 1993,
       "kind": "Adventure",
-      "blurb": "Held to a native g++ build of the same ScummVM, with a scripted player.",
+      "blurb": "ScummVM 0.10.0 compiled from its C++: the SCUMM v6 engine with the demo's speech and subtitles.",
       "thumb": {
         "frames": 1500
       },
       "code": {
-        "license": "GPL-2.0-or-later (ScummVM 0.6.1)",
-        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+        "license": "GPL-2.0-or-later (ScummVM 0.10.0)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.10.0/"
       },
       "data": {
         "license": "LucasArts' demo, all rights reserved; passed on as the ScummVM project distributes it (samnmax-dos-demo-en.zip, sha256 3b13c9337324c23e…)"
@@ -521,7 +521,7 @@
       "licenseFiles": [
         {
           "name": "ScummVM's licence (GPL-2.0)",
-          "path": "corpus/scummvm-0.6.1/COPYING",
+          "path": "corpus/scummvm-0.10.0/COPYING",
           "for": "code"
         }
       ],

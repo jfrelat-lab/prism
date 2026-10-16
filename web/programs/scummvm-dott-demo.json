@@ -1,19 +1,16 @@
 {
   "title": "DAY OF THE TENTACLE",
-  "subtitle": "LucasArts, 1993 · the non-interactive demo, on ScummVM 0.6.1's SCUMM engine (v6), without its speech",
-  "target": "scummvm",
+  "subtitle": "LucasArts, 1993 · the non-interactive demo, with its speech, on ScummVM 0.10.0 (2007)",
+  "target": "scummvm010:scumm",
   "host": "sdl",
-  "args": "-pdott-demo dottdemo",
-  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "args": "-n -pdott-demo tentacle",
+  "argsHint": "-p<dir> where the game is, then its id (0.10.0's: monkey, monkey2, atlantis, tentacle, samnmax, queen...; it upgrades 0.6.1's monkeyEGA and the like). Other switches: -g<scaler> (1x, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f full screen, -m<volume> music, -s<volume> effects, -n subtitles (off by default; with speech, the text is shown too), -z the games each engine knows.",
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
   "needsData": {
     "dir": "scumm-demos",
     "archive": "dott-dos-ni-demo-en.zip",
     "archiveUnder": "dott-demo/",
-    "exclude": [
-      "MONSTER.SOU"
-    ],
     "hint": "dott-dos-ni-demo-en.zip as the ScummVM project distributes it (downloads.scummvm.org/frs/demos/scumm/), unpacked in the page"
   },
   "controls": [
@@ -23,5 +20,5 @@
     ]
   ],
   "_why": "A SCUMM v6 game on the same build. Its speech file is left out: ScummVM 0.6.1 asserts on it (sound/voc.cpp:125), natively as here. Held to a native g++ build frame by frame (gate-scummvm).",
-  "_shipped": "The same program as scummvm-dott.json, with its data the demo archive ScummVM hosts, passed on whole and unpacked in the page: what the static export ships (tools/site-programs.json)."
+  "_shipped": "The game of scummvm-dott.json, with its data the demo archive ScummVM hosts, passed on whole and unpacked in the page: what the static export ships (tools/site-programs.json). It runs on ScummVM 0.10.0, whose SCUMM engine plays the demos' speech (MONSTER.SOU), on which 0.6.1 asserts."
 }

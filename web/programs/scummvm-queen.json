@@ -4,7 +4,7 @@
   "target": "scummvm",
   "host": "sdl",
   "args": "-pFOTAQ_Floppy queen",
-  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n to show subtitles (off by default; with speech, the text is shown too).",
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
   "needsData": {

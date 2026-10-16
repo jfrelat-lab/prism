@@ -1,10 +1,10 @@
 {
   "title": "SAM & MAX HIT THE ROAD",
-  "subtitle": "LucasArts, 1993 · the demo, on ScummVM 0.6.1's SCUMM engine (v6)",
-  "target": "scummvm",
+  "subtitle": "LucasArts, 1993 · the demo, with its speech, on ScummVM 0.10.0 (2007)",
+  "target": "scummvm010:scumm",
   "host": "sdl",
-  "args": "-psamnmax-demo snmdemo",
-  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "args": "-n -psamnmax-demo samnmax",
+  "argsHint": "-p<dir> where the game is, then its id (0.10.0's: monkey, monkey2, atlantis, tentacle, samnmax, queen...; it upgrades 0.6.1's monkeyEGA and the like). Other switches: -g<scaler> (1x, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f full screen, -m<volume> music, -s<volume> effects, -n subtitles (off by default; with speech, the text is shown too), -z the games each engine knows.",
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
   "needsData": {
@@ -20,5 +20,5 @@
     ]
   ],
   "_why": "SCUMM v6, the engine of Day of the Tentacle, with its iMUSE music. Held to a native g++ build frame by frame (gate-scummvm).",
-  "_shipped": "The same program as scummvm-samnmax.json, with its data the demo archive ScummVM hosts, passed on whole and unpacked in the page: what the static export ships (tools/site-programs.json)."
+  "_shipped": "The game of scummvm-samnmax.json, with its data the demo archive ScummVM hosts, passed on whole and unpacked in the page: what the static export ships (tools/site-programs.json). It runs on ScummVM 0.10.0, whose SCUMM engine plays the demos' speech (MONSTER.SOU), on which 0.6.1 asserts."
 }
