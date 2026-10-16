@@ -301,7 +301,7 @@
           const x = r.solutions[s];
           const head = i === 0 ? `<th scope="rowgroup" rowspan="${order.length}">${esc(r.program)} <span class="n">${r.lang === 'cpp' ? 'C++' : 'C'} · ${esc(r.arg)}</span><br><span class="n">${esc(r.what)}</span></th>` : '';
           if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="n">not run</td></tr>`;
-          if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="n err">✗ ${esc(x.error)}</td></tr>`;
+          if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="err num"><span role="img" aria-label="does not build or run" title="${esc(x.error)}">❌</span></td></tr>`;
           const v = rel(r, s, m), w = max && m.get(x) ? Math.max(2, Math.round((m.get(x) / max) * 120)) : 0;
           return `<tr>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs: not compared)</span>' : ''}</td>` +
             `<td class="num">${m.fmt(m.get(x))}${w ? `<span class="bar ${s === 'native' ? 'native' : v && v < 0.2 ? 'slow' : ''}" style="width:${w}px"></span>` : ''}</td>` +
