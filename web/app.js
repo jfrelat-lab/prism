@@ -1352,6 +1352,8 @@ async function startRun(typedAs = null) {
           const zip = dataFiles[program.needsData.archive];
           if (!zip) throw new Error(`no ${program.needsData.archive} in the data directory '${program.needsData.dir}'`);
           dataFiles = await unpackArchive(zip, program.needsData.pick ?? null, program.needsData.archiveRoot ?? null);
+          // `archiveUnder`: where the program looks for what the archive holds at its top (ScummVM's -p<dir>).
+          if (program.needsData.archiveUnder) dataFiles = Object.fromEntries(Object.entries(dataFiles).map(([k, v]) => [program.needsData.archiveUnder + k, v]));
         }
         if (exclude.length) dataFiles = Object.fromEntries(Object.entries(dataFiles).filter(([k]) => !exclude.includes(k.split('/').pop())));
         /*

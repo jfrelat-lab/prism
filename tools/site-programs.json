@@ -424,6 +424,111 @@
           "for": "code"
         }
       ]
+    },
+    {
+      "id": "monkey",
+      "program": "scummvm-monkey-demo",
+      "machine": "linux",
+      "dataFiles": [
+        "monkey1-dos-ega-demo-en.zip"
+      ],
+      "title": "The Secret of Monkey Island (demo)",
+      "author": "Lucasfilm Games",
+      "year": 1990,
+      "kind": "Adventure",
+      "blurb": "ScummVM 0.6.1 compiled from its C++: 3,000 frames and every audio buffer equal to a native g++ build.",
+      "thumb": {
+        "frames": 1500
+      },
+      "code": {
+        "license": "GPL-2.0-or-later (ScummVM 0.6.1)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+      },
+      "data": {
+        "license": "LucasArts' demo, all rights reserved; passed on as the ScummVM project distributes it (monkey1-dos-ega-demo-en.zip, sha256 1cb530fc4ab1d1f0…)"
+      },
+      "caution": "This demo is LucasArts' own, all rights reserved; no licence lets us pass it on. It is the archive the ScummVM project has long distributed (downloads.scummvm.org/frs/demos/scumm/monkey1-dos-ega-demo-en.zip, sha256 1cb530fc4ab1d1f005e6630de31fe1a4186a7ad5d1a2b73e126e898e5e9039d0), shipped as it is and unpacked in the page. If you hold rights to it and object, open an issue at github.com/jfrelat-lab/prism/issues and it comes down.",
+      "licenseFiles": [
+        {
+          "name": "ScummVM's licence (GPL-2.0)",
+          "path": "corpus/scummvm-0.6.1/COPYING",
+          "for": "code"
+        }
+      ],
+      "get": {
+        "href": "https://www.scummvm.org/demos/",
+        "label": "ScummVM's demo downloads"
+      }
+    },
+    {
+      "id": "dott",
+      "program": "scummvm-dott-demo",
+      "machine": "linux",
+      "dataFiles": [
+        "dott-dos-ni-demo-en.zip"
+      ],
+      "title": "Day of the Tentacle (demo)",
+      "author": "LucasArts",
+      "year": 1993,
+      "kind": "Adventure",
+      "blurb": "The SCUMM v6 engine of ScummVM 0.6.1, frame for frame and sample for sample with a native build.",
+      "thumb": {
+        "frames": 1500
+      },
+      "code": {
+        "license": "GPL-2.0-or-later (ScummVM 0.6.1)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+      },
+      "data": {
+        "license": "LucasArts' demo, all rights reserved; passed on as the ScummVM project distributes it (dott-dos-ni-demo-en.zip, sha256 b77f03981da3815a…)"
+      },
+      "caution": "This demo is LucasArts' own, all rights reserved; no licence lets us pass it on. It is the archive the ScummVM project has long distributed (downloads.scummvm.org/frs/demos/scumm/dott-dos-ni-demo-en.zip, sha256 b77f03981da3815a352330f39f54d46e187bb05503cf1c832bb0d14539f15964), shipped as it is and unpacked in the page. If you hold rights to it and object, open an issue at github.com/jfrelat-lab/prism/issues and it comes down.",
+      "licenseFiles": [
+        {
+          "name": "ScummVM's licence (GPL-2.0)",
+          "path": "corpus/scummvm-0.6.1/COPYING",
+          "for": "code"
+        }
+      ],
+      "get": {
+        "href": "https://www.scummvm.org/demos/",
+        "label": "ScummVM's demo downloads"
+      }
+    },
+    {
+      "id": "samnmax",
+      "program": "scummvm-samnmax-demo",
+      "machine": "linux",
+      "dataFiles": [
+        "samnmax-dos-demo-en.zip"
+      ],
+      "title": "Sam & Max Hit the Road (demo)",
+      "author": "LucasArts",
+      "year": 1993,
+      "kind": "Adventure",
+      "blurb": "Held to a native g++ build of the same ScummVM, with a scripted player.",
+      "thumb": {
+        "frames": 1500
+      },
+      "code": {
+        "license": "GPL-2.0-or-later (ScummVM 0.6.1)",
+        "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/"
+      },
+      "data": {
+        "license": "LucasArts' demo, all rights reserved; passed on as the ScummVM project distributes it (samnmax-dos-demo-en.zip, sha256 3b13c9337324c23e…)"
+      },
+      "caution": "This demo is LucasArts' own, all rights reserved; no licence lets us pass it on. It is the archive the ScummVM project has long distributed (downloads.scummvm.org/frs/demos/scumm/samnmax-dos-demo-en.zip, sha256 3b13c9337324c23e262a9fa5a84778216e1eeacf689b24e81cf9ad9b6e00d0c7), shipped as it is and unpacked in the page. If you hold rights to it and object, open an issue at github.com/jfrelat-lab/prism/issues and it comes down.",
+      "licenseFiles": [
+        {
+          "name": "ScummVM's licence (GPL-2.0)",
+          "path": "corpus/scummvm-0.6.1/COPYING",
+          "for": "code"
+        }
+      ],
+      "get": {
+        "href": "https://www.scummvm.org/demos/",
+        "label": "ScummVM's demo downloads"
+      }
     }
   ],
   "gallery": [
@@ -456,63 +561,6 @@
       "source": "https://github.com/id-Software/Quake-2",
       "thumb": {
         "frames": 300
-      }
-    },
-    {
-      "id": "monkey",
-      "program": "scummvm-monkey",
-      "machine": "linux",
-      "title": "The Secret of Monkey Island (demo)",
-      "author": "Lucasfilm Games",
-      "year": 1990,
-      "kind": "Adventure",
-      "blurb": "ScummVM 0.6.1 compiled from its C++: 3,000 frames and every audio buffer equal to a native g++ build.",
-      "needs": "the EGA demo's files",
-      "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
-      "thumb": {
-        "frames": 1500
-      },
-      "get": {
-        "href": "https://www.scummvm.org/demos/",
-        "label": "ScummVM's demo downloads"
-      }
-    },
-    {
-      "id": "dott",
-      "program": "scummvm-dott",
-      "machine": "linux",
-      "title": "Day of the Tentacle (demo)",
-      "author": "LucasArts",
-      "year": 1993,
-      "kind": "Adventure",
-      "blurb": "The SCUMM v6 engine of ScummVM 0.6.1, frame for frame and sample for sample with a native build.",
-      "needs": "the demo's files",
-      "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
-      "thumb": {
-        "frames": 1500
-      },
-      "get": {
-        "href": "https://www.scummvm.org/demos/",
-        "label": "ScummVM's demo downloads"
-      }
-    },
-    {
-      "id": "samnmax",
-      "program": "scummvm-samnmax",
-      "machine": "linux",
-      "title": "Sam & Max Hit the Road (demo)",
-      "author": "LucasArts",
-      "year": 1993,
-      "kind": "Adventure",
-      "blurb": "Held to a native g++ build of the same ScummVM, with a scripted player.",
-      "needs": "the demo's files",
-      "source": "https://downloads.scummvm.org/frs/scummvm/0.6.1/",
-      "thumb": {
-        "frames": 1500
-      },
-      "get": {
-        "href": "https://www.scummvm.org/demos/",
-        "label": "ScummVM's demo downloads"
       }
     },
     {

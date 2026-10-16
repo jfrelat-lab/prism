@@ -376,6 +376,7 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
     document.getElementById('licdlg-title').textContent = p.title;
     document.getElementById('licdlg-body').innerHTML = [
       p.caution ? `<p class="caution"><span aria-hidden="true">⚠️</span> ${esc(p.caution)}</p>` : '',
+      p.get ? `<p><span class="k">From</span> <a href="${esc(p.get.href)}" rel="noopener">${esc(p.get.label)}</a></p>` : '',
       p.code?.license ? `<p><span class="k">Code</span> ${esc(p.code.license)}</p>` : '',
       p.data?.license ? `<p><span class="k">Data</span> ${esc(p.data.license)}</p>` : '',
       p.licences?.length ? `<ul>${p.licences.map((l) => `<li><a href="${esc(l.href)}">${esc(l.name)}</a> <span class="role">${ROLE[l.for] ?? esc(l.for)}</span></li>`).join('')}</ul>` : '',
@@ -421,6 +422,7 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
           <h3>${esc(p.title)}${p.avail === 'play' ? '' : p.avail === 'mine' ? ' <span class="tag mine">your copy</span>' : ' <span class="tag">your data</span>'}${p.caution ? ` <button class="warn" type="button" data-lic="${esc(p.id)}" title="a note on its licence" aria-label="A note on its licence">⚠️</button>` : ''}</h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(MACHINES[p.machine] ?? p.machine)} · ${esc(p.kind)}</div>
           <p class="blurb">${esc(p.blurb)}</p>
+          ${p.avail === 'play' && p.get ? `<p class="needs">Data from <a href="${esc(p.get.href)}" rel="noopener">${esc(p.get.label)}</a>, as distributed there</p>` : ''}
           ${p.needs ? `<p class="needs">Needs: <b>${esc(p.needs)}</b>${p.get && p.avail !== 'mine' ? ` · get it from <a href="${esc(p.get.href)}" rel="noopener">${esc(p.get.label)}</a>` : ''}</p>` : ''}
           ${p.tags?.length ? `<ul class="chips">${p.tags.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
           <div class="actions">${go}${lic}</div>

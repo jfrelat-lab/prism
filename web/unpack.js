@@ -16,6 +16,67 @@ async function inflateRaw(bytes) {
   return new Uint8Array(await out.arrayBuffer());
 }
 
+/*
+ * IMPLODED entries (method 6), PKZIP 1.x's: Day of the Tentacle's 1993 demo archive holds nothing
+ * else. As PKWARE's APPNOTE and Info-ZIP's explode.c describe it: a sliding window of 4 or 8 KiB
+ * (flag bit 1), two or three Shannon-Fano trees (bit 2: a tree for literals too), each sent as runs of
+ * bit lengths. The trees are canonical codes over those lengths, read with every bit INVERTED (the
+ * format's codes count down from all ones; explode.c reads ~b); a literal without a tree, the
+ * literal/match flag and a distance's low bits are read as they are, least significant bit first.
+ */
+export function explode(src, size, flags) {
+  let pos = 0, bit = 0;
+  const one = () => {
+    if (pos >= src.length) throw new Error('imploded data ends early');
+    const b = (src[pos] >> bit) & 1;
+    if (++bit === 8) { bit = 0; pos++; }
+    return b;
+  };
+  const bits = (n) => { let v = 0; for (let i = 0; i < n; i++) v |= one() << i; return v; };
+  // A tree: its byte count, then bytes of (count - 1) << 4 | (length - 1) at the byte boundary.
+  const tree = (n) => {
+    const lens = [];
+    for (let k = src[pos++] + 1; k > 0; k--) {
+      const b = src[pos++];
+      for (let c = (b >> 4) + 1; c > 0; c--) lens.push((b & 15) + 1);
+    }
+    if (lens.length !== n) throw new Error(`imploded tree: ${lens.length} lengths, ${n} expected`);
+    const count = new Array(17).fill(0);
+    for (const l of lens) count[l]++;
+    const offs = [0];
+    for (let l = 1; l <= 16; l++) offs[l] = offs[l - 1] + count[l - 1];
+    const sym = new Array(n);
+    lens.forEach((l, s) => { sym[offs[l]++] = s; });
+    return { count, sym };
+  };
+  const decode = (t) => {
+    let code = 0, first = 0, index = 0;
+    for (let l = 1; l <= 16; l++) {
+      code |= one() ^ 1;
+      const c = t.count[l];
+      if (code - first < c) return t.sym[index + code - first];
+      index += c; first += c; first <<= 1; code <<= 1;
+    }
+    throw new Error('imploded data: no code matches');
+  };
+  const big = (flags & 2) !== 0, lit = (flags & 4) !== 0;
+  const lt = lit ? tree(256) : null, len = tree(64), dist = tree(64);
+  const dbits = big ? 7 : 6, minMatch = lit ? 3 : 2;
+  const out = new Uint8Array(size);
+  let o = 0;
+  while (o < size) {
+    if (one()) { out[o++] = lt ? decode(lt) : bits(8); continue; }
+    const low = bits(dbits);
+    const d = ((decode(dist) << dbits) | low) + 1;
+    let n = decode(len);
+    if (n === 63) n += bits(8);
+    n += minMatch;
+    // Bytes before the start of the output read as zero, as the window starts zeroed.
+    for (; n > 0 && o < size; n--, o++) out[o] = o - d >= 0 ? out[o - d] : 0;
+  }
+  return out;
+}
+
 /** A ZIP's files, as { path, bytes }; directories are implied by the paths. */
 export async function unzip(zip) {
   const dv = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
@@ -46,7 +107,8 @@ export async function unzip(zip) {
     let bytes;
     if (method === 0) bytes = data.slice();
     else if (method === 8) bytes = await inflateRaw(data);
-    else throw new Error(`${name}: compression method ${method} is not supported (only stored and deflate)`);
+    else if (method === 6) bytes = explode(data, size, flags);
+    else throw new Error(`${name}: compression method ${method} is not supported (only stored, imploded and deflate)`);
     if (bytes.length !== size) throw new Error(`${name}: ${bytes.length} bytes unpacked, the directory says ${size}`);
     files.push({ path: name.replace(/\\/g, '/'), bytes });
   }

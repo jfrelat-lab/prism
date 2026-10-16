@@ -1,0 +1,24 @@
+{
+  "title": "SAM & MAX HIT THE ROAD",
+  "subtitle": "LucasArts, 1993 · the demo, on ScummVM 0.6.1's SCUMM engine (v6)",
+  "target": "scummvm",
+  "host": "sdl",
+  "args": "-psamnmax-demo snmdemo",
+  "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n for no subtitles.",
+  "fps": 60,
+  "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
+  "needsData": {
+    "dir": "scumm-demos",
+    "archive": "samnmax-dos-demo-en.zip",
+    "archiveUnder": "samnmax-demo/",
+    "hint": "samnmax-dos-demo-en.zip as the ScummVM project distributes it (downloads.scummvm.org/frs/demos/scumm/), unpacked in the page"
+  },
+  "controls": [
+    [
+      "Esc",
+      "skip a scene"
+    ]
+  ],
+  "_why": "SCUMM v6, the engine of Day of the Tentacle, with its iMUSE music. Held to a native g++ build frame by frame (gate-scummvm).",
+  "_shipped": "The same program as scummvm-samnmax.json, with its data the demo archive ScummVM hosts, passed on whole and unpacked in the page: what the static export ships (tools/site-programs.json)."
+}
