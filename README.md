@@ -118,6 +118,13 @@ COOP/COEP headers come from `_headers`, or from `web/coi-sw.js` where the host s
   page of its own and `HOSTING.txt`.
 - `tools/site-thumbs.mjs` draws the thumbnails.
 
+**The visitor's language, calendar and keyboard.** In the page, a program that can be told a
+language gets the browser's (Beneath a Steel Sky's text in French on a French browser), sees the
+real date and the browser's time zone, and reads typed text in the visitor's keyboard layout. Keys
+stay positions by default, as game controls expect; *keys: your layout* names them by what the
+layout types. The gates keep a fixed date, UTC and US positions. See
+[ARCHITECTURE.md](docs/ARCHITECTURE.md#the-visitors-language-calendar-and-keyboard).
+
 **No game data is fetched or stored by this repository.** The page reads only the files you
 give it, or a directory you name with `--data`.
 

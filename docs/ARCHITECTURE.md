@@ -281,6 +281,36 @@ carried straight on. The program asked a question and ignored the answer — whi
 like the prompt appearing for no reason. It now blocks in the worker on `Atomics.wait` until a
 character arrives, with a timeout so Stop can still reach it.
 
+### The visitor's language, calendar and keyboard
+
+A program in the page meets the visitor's locale in three places. Each is decided once, in one place,
+and the Node gates never see it: they stay on a fixed date, UTC and US key positions, so a run is
+reproducible.
+
+| What | Default (gates, Node) | In the page | Where |
+|---|---|---|---|
+| **Language** of a program that can be told one | its own default | the first of the browser's languages the program knows, passed as its switch, unless the arguments name one | a descriptor's `language` (`flag`, `codes`); `web/app.js` `withLanguage` |
+| **Date and time zone** | `time()` is 1997-01-01 plus the program's seconds; local time is UTC | the real date and the browser's zone, summer time included: `localtime`, `mktime`, DOS `INT 21h AH=2Ch`, Win32 `GetLocalTime` | `M.wallClock`, `M.utcOffset`, `M.isDst` (`src/runtime/runtime.js`), set by `web/worker.js` |
+| **Keyboard** | a key is its position on a US keyboard | the same, unless the visitor picks *keys: your layout* | `src/env/scancodes.js` `keyNames` |
+
+**Language.** Beneath a Steel Sky's CD holds its text in seven languages, and ScummVM 0.6.1 picks one
+with `-q`. `web/programs/scummvm.json` maps the browser's languages to those codes, so a French browser
+gets `-q fr`. A language the data lacks falls back to English with a warning; a browser language the
+program does not know adds nothing. Other demos are one language each: the language of their text is
+the language of the archive.
+
+**Text versus position.** Typed text always follows the visitor's layout, as `KEYB` made DOS do: the
+BIOS queue `getchar` and `INT 16h` read, and SDL's `unicode`. What a program names a KEY by -- an X
+keysym, an SDL symbol -- is the key's position by default, because game controls are laid out by
+position: on AZERTY the Z key is still "w" and the number row still "1". With *your layout*
+(`?keys=typed`) it is what the layout typed instead, as a real X server or SDL set to that language
+answers: letters right in a Quake console, and the number row "&", "é" as French players knew it. A
+release keeps its press's name, so press and release still pair. Games that read scan codes
+themselves (an INT 9 handler, Allegro's `key[]`) get positions in both modes, as they did under `KEYB`.
+
+Win32's `TranslateMessage` posts no `WM_CHAR` yet, so a Win32 program reads keys and no text. The C
+library keeps the "C" locale on purpose: a French one would make `strtod("1.5")` stop at the comma.
+
 ### Genericity that is structural, not asserted
 
 The page knows nothing about any program: it compiles C, paints an 8-bit indexed framebuffer at
