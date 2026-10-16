@@ -77,6 +77,8 @@ if (!existsSync(SRC)) { console.error(`no ${SRC}: the Benchmarks Game sources (b
 const WORK = join(ROOT, '.oracle', 'bench-compare');
 rmSync(WORK, { recursive: true, force: true });
 mkdirSync(WORK, { recursive: true });
+// Emscripten writes CommonJS, and the repository's package.json says ES modules: this directory says otherwise.
+writeFileSync(join(WORK, 'package.json'), '{ "type": "commonjs" }\n');
 
 const run = (cmd, opts = {}) => spawnSync('sh', ['-c', cmd], { encoding: 'buffer', maxBuffer: 1 << 28, ...opts });
 const best = (fn) => { let b = null; for (let k = 0; k < RUNS; k++) { const r = fn(); if (!r.ok) return r; if (!b || r.runMs < b.runMs) b = r; } return b; };
@@ -123,9 +125,11 @@ function solutionPrism(p, lang, file) {
 
 const EMSDK = join(process.env.HOME, 'Projects/emsdk');
 const EMCC = join(EMSDK, 'upstream/emscripten/emcc');
+// emsdk wants Python 3.10 or later, which macOS does not ship: Homebrew's, when it is there.
+if (!process.env.EMSDK_PYTHON && existsSync('/opt/homebrew/opt/python@3.12/bin/python3.12')) process.env.EMSDK_PYTHON = '/opt/homebrew/opt/python@3.12/bin/python3.12';
 function solutionEmscripten(p, lang, file) {
   const js = join(WORK, `${p.id}-${lang}-em.js`), wasm = js.replace(/\.js$/, '.wasm');
-  const cc = lang === 'cpp' ? `${EMCC.replace(/emcc$/, 'em++')} -std=c++17` : EMCC;
+  const cc = lang === 'cpp' ? `${EMCC.replace(/emcc$/, 'em++')} -std=c++17 -x c++` : `${EMCC} -x c`;
   const c = timed(`${cc} -O2 -w -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -o ${js} ${file} 2>&1`);
   if (c.r.status !== 0) return { ok: false, error: String(c.r.stdout).split('\n').find((l) => /error/.test(l)) ?? 'compile failed' };
   const size = statSync(js).size + (existsSync(wasm) ? statSync(wasm).size : 0);
