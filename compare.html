@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PRISM compared</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="PRISM beside Emscripten, Cheerp, a native build and an emulated x86 container: what each does with the same C and C++ source, and how fast, how large, how quick to build.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230e1116'/><path d='M8 2 L14 13 H2 Z' fill='none' stroke='%236cb6ff' stroke-width='1.6'/></svg>">
+<!--
+  A comparison page in the manner of the "Comparison of ..." tables open-source projects keep: one
+  table, features down the side, solutions across, a mark and a note per cell, the same table holding
+  what only PRISM does, what it does like the others and where it has holes. The measurements below it
+  come from tools/bench-compare.mjs (dist/bench-compare/results.json, copied to web/bench.json by
+  tools/site.mjs). A cell nobody has checked says "?" rather than guessing.
+-->
+<style>
+  :root {
+    --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594;
+    --head: #edf1f6; --accent: #6cb6ff; --accent-ink: #061524;
+    --yes: #7ee2a8; --part: #ffd36b; --no: #ff8a80; --unk: #9aa4b2;
+    --yes-bg: rgba(126, 226, 168, .10); --part-bg: rgba(255, 211, 107, .10); --no-bg: rgba(255, 138, 128, .09);
+    --spectrum: linear-gradient(90deg, #ff6b6b, #ffb35c, #ffe066, #7ee2a8, #6cb6ff, #9b8cff, #d38cff);
+  }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+    --bg: #f5f7fa; --panel: #ffffff; --line: #dde2ea; --ink: #2b3440; --dim: #5f6b7a; --head: #0f1720;
+    --accent: #1f6fd1; --accent-ink: #ffffff; --yes: #13804b; --part: #8a6100; --no: #b42318; --unk: #5f6b7a;
+    --yes-bg: rgba(19, 128, 75, .08); --part-bg: rgba(200, 140, 0, .10); --no-bg: rgba(180, 35, 24, .07);
+  } }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .92em; }
+  b { color: var(--head); font-weight: 600; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 12px 24px;
+           background: var(--panel); border-bottom: 1px solid var(--line); position: relative; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--spectrum); opacity: .85; }
+  header .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; }
+  header .logo span { color: var(--accent); }
+  header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
+  main { max-width: 1160px; margin: 0 auto; padding: 0 24px 56px; }
+  h1 { margin: 40px 0 10px; font-size: clamp(26px, 3.6vw, 36px); line-height: 1.15; color: var(--head); text-wrap: balance; }
+  h2 { margin: 44px 0 6px; font-size: 21px; color: var(--head); text-wrap: balance; }
+  .lead { margin: 0 0 14px; color: var(--dim); max-width: 780px; }
+  .wip { display: inline-block; margin: 0 0 14px; padding: 2px 9px; border: 1px solid var(--part); border-radius: 999px; color: var(--part); font-size: 12.5px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 12px; font-size: 13px; color: var(--dim); }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { padding: 8px 10px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
+  thead th { position: sticky; top: 0; background: var(--panel); color: var(--head); font-size: 13px; border-top: none; white-space: nowrap; }
+  thead th.prism { color: var(--accent); }
+  tbody th { color: var(--head); font-weight: 500; min-width: 15em; }
+  tr.cat th { padding-top: 16px; color: var(--dim); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; background: transparent; }
+  td.c { min-width: 9.5em; }
+  td.prism { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .m { display: inline-block; min-width: 1.5em; font-weight: 700; }
+  .yes .m { color: var(--yes); } .part .m { color: var(--part); } .no .m { color: var(--no); } .unk .m, .na .m { color: var(--unk); }
+  td.yes { background: var(--yes-bg); } td.part { background: var(--part-bg); } td.no { background: var(--no-bg); }
+  .n { color: var(--dim); font-size: 12.5px; }
+  sup a { font-size: 11px; }
+  .notes { margin: 14px 0 0; padding-left: 20px; font-size: 13px; color: var(--dim); max-width: 900px; }
+  .notes li { margin: 3px 0; }
+  .aside { margin: 16px 0 0; padding: 10px 14px; border-left: 3px solid var(--accent); background: var(--panel); border-radius: 0 6px 6px 0; font-size: 14px; max-width: 900px; }
+  .env { font-size: 12.5px; color: var(--dim); margin: 8px 0 14px; }
+  .env code { color: var(--ink); }
+  .bench td, .bench th { white-space: nowrap; }
+  .bench td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { display: inline-block; height: 8px; border-radius: 2px; background: var(--accent); vertical-align: middle; margin-left: 6px; }
+  .bar.native { background: var(--yes); } .bar.slow { background: var(--part); }
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 10px 0 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .k { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .card .v { font-size: 22px; color: var(--head); font-variant-numeric: tabular-nums; }
+  .card .v small { font-size: 13px; color: var(--dim); }
+  footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
+  @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="./"><span>◢</span> PRISM</a>
+  <nav>
+    <a href="./#play">Play</a>
+    <a href="web/live/">Live C</a>
+    <a href="compare.html" aria-current="page">Compared</a>
+    <a href="https://github.com/jfrelat-lab/prism">Source</a>
+  </nav>
+</header>
+
+<main>
+  <h1>PRISM compared</h1>
+  <span class="wip" id="wip">Work in progress — checked as of <span id="asof">2026-10</span></span>
+  <p class="lead">Five ways to run the same C and C++ <b>source</b>. PRISM compiles it to JavaScript, in a
+    compiler that is itself JavaScript; Emscripten and Cheerp compile it to WebAssembly or JavaScript with
+    LLVM; the last two columns are what the browser solutions are measured against: a native build, and the
+    same source built for x86 and emulated on this ARM machine. Where PRISM is alone, where it does what the
+    others do, and where it has holes are in one table, because they are one question.</p>
+
+  <div class="legend" aria-hidden="true">
+    <span class="yes"><span class="m">✓</span> yes</span>
+    <span class="part"><span class="m">~</span> partly</span>
+    <span class="no"><span class="m">✗</span> no</span>
+    <span class="unk"><span class="m">?</span> not checked yet</span>
+  </div>
+  <div class="scroll"><table id="matrix"></table></div>
+  <ol class="notes" id="notes"></ol>
+  <p class="aside">Running a <b>binary</b> without its source -- a DOS or Windows 3.x program as shipped -- is
+    an emulator's job, and the sister project <a href="https://github.com/jfrelat-lab/mirage-x86">MIRAGE</a>
+    does it in the page. This page compares solutions that compile the source.</p>
+
+  <h2>Measurements</h2>
+  <p class="lead">To place PRISM, not to rank it: the C and C++ programs of
+    <a href="https://benchmarksgame-team.pages.debian.net/benchmarksgame/description/summary.html">The Computer
+    Language Benchmarks Game</a> (revised BSD), one single-threaded variant without SIMD each, with
+    arguments small enough for every solution to finish. Every run's output is checked against the native
+    one; a solution that differs is shown, not compared. Times are wall clock, the best of several runs, on
+    one machine. PRISM's numbers are its first tier, with no optimiser yet.</p>
+  <div id="bench"><p class="lead">No measurements in this copy of the page: <code>node tools/bench-compare.mjs</code> writes them.</p></div>
+</main>
+
+<footer>PRISM is free software under the <a href="https://github.com/jfrelat-lab/prism/blob/main/LICENSE">MIT licence</a>.
+  Corrections to this table are welcome as issues.</footer>
+
+<script>
+  /*
+   * THE TABLE. One row per feature, one cell per solution: [mark, note, footnote]. The marks are
+   * yes / part / no / na / unk; a footnote is a number into NOTES. Keep a cell "unk" until it has
+   * been checked against the project's own documentation.
+   */
+  const SOLUTIONS = [
+    ['prism', 'PRISM'], ['emscripten', 'Emscripten'], ['cheerp', 'Cheerp'], ['native', 'Native (clang, gcc)'], ['docker', 'x86 build, emulated (Docker linux/386 on ARM)'],
+  ];
+  const Y = (n, f) => ['yes', n, f], P = (n, f) => ['part', n, f], N = (n, f) => ['no', n, f], U = (n) => ['unk', n], X = (n) => ['na', n];
+  const ROWS = [
+    ['Languages'],
+    ['C89 / C99, with the GNU extensions real code uses', Y('checked against gcc', 1), Y(), Y(), Y(), Y()],
+    ['C++ language', P('a C++98 subset: classes, virtual and multiple inheritance, templates, exceptions', 2), Y('C++20 and later'), Y('C++20 and later'), Y(), Y()],
+    ['C++ standard library (<vector>, <iostream>...)', N('not yet', 3), Y('libc++'), Y('libc++'), Y(), Y()],
+    ['The program\'s own x86 assembly', Y('translated: Borland inline asm, TASM, Watcom #pragma aux, NASM, GNU as'), N(), N(), P('on an x86 host'), Y('emulated')],
+    ['Retro sources', ],
+    ['Unmodified period sources (Borland, Watcom, DJGPP dialects)', Y('as shipped; nothing is edited'), N('to be ported'), N('to be ported'), P('to be ported to today\'s compilers'), P('to be ported')],
+    ['16-bit real-mode DOS (small to huge models, far pointers)', Y('held to Borland C++ and Open Watcom'), N(), N(), N(), N()],
+    ['DOS and PC hardware: INT 21h, BIOS, VGA, EGA planes, PIT, 8042', Y(), N(), N(), N(), N()],
+    ['Win32 (USER, GDI, WGL, Winsock, registry, LoadLibrary)', P('the part the programs here use'), N(), N(), P('on Windows'), N()],
+    ['X11, svgalib, Allegro, the DOS extenders\' runtimes', P('the part the programs here use'), U('Emscripten has a small Xlib for its own uses'), N(), P('on the OS they were for'), P('Linux only')],
+    ['Graphics, sound, libraries'],
+    ['OpenGL 1.x fixed pipeline', Y('on WebGL; GLQuake within 1 pixel of Mesa', 4), P('LEGACY_GL_EMULATION, incomplete by its own account', 5), U(), Y(), P('software rendering')],
+    ['OpenGL ES 2/3, WebGPU', N(), Y(), U(), Y(), P('software rendering')],
+    ['SDL', P('1.2 and 2, with SDL_mixer and SDL_image'), Y('1.2, 2 and 3, with image, mixer, ttf, net'), U(), Y(), Y()],
+    ['GLUT, GLU', Y(), Y(), U(), Y(), Y()],
+    ['OpenAL', N(), Y(), U(), Y(), Y()],
+    ['Ready-made library ports', N('a library is compiled from its source with the program (FreeType, zlib, libjpeg, Tcl)'), Y('-sUSE_* ports: zlib, libpng, FreeType, HarfBuzz, Bullet...'), P('libc++, musl'), Y('the OS\'s packages'), Y('Debian\'s packages')],
+    ['In the browser'],
+    ['Runs in a web page', Y('JavaScript'), Y('WebAssembly + JavaScript'), Y('JavaScript and/or WebAssembly'), X('no'), X('no')],
+    ['The compiler runs in the page', Y('Live C: preprocess, compile, link, run in a tab'), N(), N(), X('—'), X('—')],
+    ['Builds shipped precompiled', Y('static bundles'), Y(), Y(), Y(), Y()],
+    ['Threads', P('cooperative processes: fork, pipes, Doom\'s sound server'), Y('pthreads on SharedArrayBuffer'), U(), Y(), Y()],
+    ['SIMD', N(), Y('WebAssembly SIMD'), U(), Y(), P('emulated')],
+    ['Source-level debugging', N('not yet'), Y('DWARF'), Y('source maps'), Y(), Y()],
+    ['Speed, size, build time', ['bench', 'see the measurements below']],
+    ['Project'],
+    ['Licence', Y('MIT'), Y('MIT / University of Illinois'), Y('Apache 2.0 with LLVM exception, since 3.0 (2023)', 6), X('—'), X('—')],
+    ['Toolchain', Y('plain JavaScript, no dependencies'), P('LLVM, Binaryen, Python, Node'), P('a fork of LLVM'), X('—'), X('—')],
+    ['Since', P('2026, experimental'), Y('2011'), U(), X('—'), X('—')],
+  ];
+  const NOTES = {
+    1: 'Preprocessor token for token against gcc -E over 289 translation units; c-testsuite and gcc.c-torture with no wrong answer; csmith programs against gcc -O0 and -O2.',
+    2: 'Enough for ScummVM, Enemy Territory and Tux Racer. Lowered to C, the old cfront way.',
+    3: 'Every C++ variant of the Benchmarks Game uses it, so PRISM compiles none of them yet.',
+    4: 'GLQuake within 1 pixel of 307,200 of Mesa; Quake II\'s GL renderer within 3.',
+    5: 'emscripten.org/docs/porting/multimedia_and_graphics/OpenGL-support.html',
+    6: 'labs.leaningtech.com/blog/cheerp-3-now-permissively-licensed',
+  };
+  const MARK = { yes: '✓', part: '~', no: '✗', unk: '?', na: '' };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const cell = (c, col) => {
+    if (c[0] === 'bench') return `<td class="c ${col === 'prism' ? 'prism' : ''}"><span class="n">${esc(c[1])}</span></td>`;
+    const [mark, note, foot] = c;
+    return `<td class="c ${mark} ${col === 'prism' ? 'prism' : ''}"><span class="m" aria-label="${mark}">${MARK[mark]}</span>${note ? ` <span class="n">${esc(note)}</span>` : ''}${foot ? `<sup><a href="#note-${foot}">${foot}</a></sup>` : ''}</td>`;
+  };
+  document.getElementById('matrix').innerHTML =
+    `<thead><tr><th scope="col">Feature</th>${SOLUTIONS.map(([k, t]) => `<th scope="col" class="${k}">${esc(t)}</th>`).join('')}</tr></thead><tbody>` +
+    ROWS.map((r) => {
+      if (r.length === 1) return `<tr class="cat"><th colspan="${SOLUTIONS.length + 1}" scope="rowgroup">${esc(r[0])}</th></tr>`;
+      if (r[1]?.[0] === 'bench') return `<tr><th scope="row">${esc(r[0])}</th><td colspan="${SOLUTIONS.length}"><span class="n">${esc(r[1][1])}</span></td></tr>`;
+      return `<tr><th scope="row">${esc(r[0])}</th>${r.slice(1).map((c, i) => cell(c, SOLUTIONS[i][0])).join('')}</tr>`;
+    }).join('') + '</tbody>';
+  document.getElementById('notes').innerHTML = Object.entries(NOTES).map(([k, v]) => `<li id="note-${k}" value="${k}">${esc(v)}</li>`).join('');
+
+  /*
+   * THE MEASUREMENTS, from web/bench.json (an export) or dist/bench-compare/results.json (the
+   * repository under serve.mjs). Per program and language, each solution's run time and its ratio to
+   * native, its compile time and its gzipped size; above them, the geometric mean of those ratios.
+   */
+  const LABEL = { native: 'Native (clang -O2)', 'docker-i386': 'x86 gcc -O2, emulated', prism: 'PRISM', emscripten: 'Emscripten -O2', cheerp: 'Cheerp' };
+  const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`);
+  const fmtKiB = (b) => (b ? `${(b / 1024).toFixed(b < 10240 ? 1 : 0)} KiB` : '—');
+  const geo = (xs) => (xs.length ? Math.exp(xs.reduce((t, x) => t + Math.log(x), 0) / xs.length) : null);
+  (async () => {
+    let data = null;
+    for (const url of ['web/bench.json', 'dist/bench-compare/results.json']) {
+      try { const r = await fetch(url, { cache: 'no-cache' }); if (r.ok) { data = await r.json(); break; } } catch { /* next */ }
+    }
+    if (!data?.results?.length) return;
+    document.getElementById('asof').textContent = data.env.date.slice(0, 10);
+    const sols = Object.keys(LABEL).filter((s) => data.results.some((r) => r.solutions[s]));
+    const ratios = {};
+    for (const r of data.results) {
+      const n = r.solutions.native;
+      for (const s of sols) {
+        const x = r.solutions[s];
+        if (!n?.ok || !x?.ok || x.sameOutput === false) continue;
+        ((ratios[s] ??= { c: [], cpp: [] })[r.lang]).push(x.runMs / n.runMs);
+      }
+    }
+    const summary = sols.filter((s) => s !== 'native').map((s) => {
+      const c = geo(ratios[s]?.c ?? []), p = geo(ratios[s]?.cpp ?? []);
+      const f = (v, k) => (v ? `${v.toFixed(v < 10 ? 2 : 1)}× <small>native, ${k}</small>` : `— <small>${k}: none built</small>`);
+      return `<div class="card"><div class="k">${esc(LABEL[s])}</div><div class="v">${f(c, 'C')}</div><div class="v">${f(p, 'C++')}</div></div>`;
+    }).join('');
+    const env = Object.entries(data.env).filter(([k, v]) => v && !['date', 'host', 'node'].includes(k))
+      .map(([k, v]) => `${esc(LABEL[k] ?? k)}: <code>${esc(v)}</code>`).join(' · ');
+    const rows = data.results.map((r) => {
+      const n = r.solutions.native;
+      const max = Math.max(...sols.map((s) => (r.solutions[s]?.ok ? r.solutions[s].runMs : 0)));
+      return sols.map((s, i) => {
+        const x = r.solutions[s];
+        const head = i === 0 ? `<th scope="rowgroup" rowspan="${sols.length}">${esc(r.program)} <span class="n">${r.lang === 'cpp' ? 'C++' : 'C'} · ${esc(r.arg)}</span><br><span class="n">${esc(r.what)}</span></th>` : '';
+        if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="4" class="n">not run</td></tr>`;
+        if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="4" class="n">✗ ${esc(x.error)}</td></tr>`;
+        const ratio = n?.ok ? x.runMs / n.runMs : null;
+        const w = Math.max(2, Math.round((x.runMs / max) * 120));
+        return `<tr>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs)</span>' : ''}</td>` +
+          `<td class="num">${fmtMs(x.runMs)}<span class="bar ${s === 'native' ? 'native' : ratio > 5 ? 'slow' : ''}" style="width:${w}px"></span></td>` +
+          `<td class="num">${ratio ? `${ratio.toFixed(2)}×` : '—'}</td><td class="num">${fmtMs(x.compileMs)}</td><td class="num">${fmtKiB(x.gz)}</td></tr>`;
+      }).join('');
+    }).join('');
+    document.getElementById('bench').innerHTML =
+      `<div class="summary">${summary}</div>` +
+      `<p class="env">${esc(data.env.host)} · Node ${esc(data.env.node)} · ${env} · best of ${data.runs} · ${esc(data.env.date.slice(0, 10))}</p>` +
+      `<div class="scroll"><table class="bench"><thead><tr><th>Program</th><th>Solution</th><th>Run</th><th>× native</th><th>Compile</th><th>Size (gzip)</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+      `<p class="notes">Sizes are what ships: a native or x86 executable; PRISM's bundle (JavaScript and memory image); Emscripten's .js and .wasm. The x86 build runs under QEMU on an ARM host: it is what an old x86 binary costs here, not x86 speed.</p>`;
+  })();
+</script>
+</body>
+</html>

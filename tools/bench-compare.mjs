@@ -1,0 +1,179 @@
+// bench-compare.mjs — where PRISM stands: the same C and C++ programs, built and run several ways.
+//
+//   node tools/bench-compare.mjs [--only=nbody,fasta] [--runs=3] [--skip=docker-i386]
+//
+// The programs are The Computer Language Benchmarks Game's (benchmarksgame-team.pages.debian.net,
+// revised BSD), in corpus/bench/benchmarksgame/src -- one C and one C++ variant of each, the plainest
+// that is single-threaded and uses no SIMD intrinsics, so every solution compiles the same source.
+// The arguments are smaller than the Game's own, so the slow solutions finish: what is compared is
+// each solution against the others on the same work, not against the Game's published figures.
+//
+// The solutions, each measured on what it is for:
+//   native      clang / clang++ -O2 on this host (arm64): the reference.
+//   docker-i386 gcc / g++ -O2 in the oracle container, a linux/386 image -- EMULATED on an arm64 host,
+//               so it is what running an old x86 binary costs here, not native x86 speed.
+//   prism       PRISM in Node: the compile is PRISM's own front end to JavaScript; the run is the
+//               emitted JavaScript under V8. Its size is what a static bundle ships (JS + memory image).
+//   emscripten  emcc / em++ -O2, run in Node, when emsdk is installed (~/Projects/emsdk).
+//
+// Every run's stdout is hashed: a solution whose output differs from the native one is reported, and
+// its time is not a comparison. Times are wall-clock, best of --runs. Results go to
+// dist/bench-compare/results.json, with the machine and every toolchain's version.
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, rmSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
+import { cpus, totalmem } from 'node:os';
+
+const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+const SELF = fileURLToPath(import.meta.url);
+const SRC = join(ROOT, 'corpus/bench/benchmarksgame/src');
+const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
+const sha = (s) => createHash('sha256').update(s).digest('hex').slice(0, 16);
+
+/** The programs: the Game's name, the argument used here, and the C and C++ variant files. */
+export const PROGRAMS = [
+  { id: 'nbody', what: 'double-precision N-body simulation', arg: '5000000', c: 'nbody/nbody.gcc', cpp: 'nbody/nbody.gpp' },
+  { id: 'spectralnorm', what: 'eigenvalue by the power method', arg: '2000', c: 'spectralnorm/spectralnorm.gcc-8.gcc', cpp: 'spectralnorm/spectralnorm.gpp' },
+  { id: 'fannkuchredux', what: 'indexed access to a tiny integer sequence', arg: '10', c: 'fannkuchredux/fannkuchredux.gcc', cpp: 'fannkuchredux/fannkuchredux.gpp-3.gpp' },
+  { id: 'mandelbrot', what: 'Mandelbrot set, a 1-bit bitmap', arg: '2000', c: 'mandelbrot/mandelbrot.gcc-8.gcc', cpp: 'mandelbrot/mandelbrot.gpp-3.gpp' },
+  { id: 'binarytrees', what: 'allocate and free many binary trees', arg: '16', c: 'binarytrees/binarytrees.gcc', cpp: 'binarytrees/binarytrees.gpp-2.gpp' },
+  { id: 'fasta', what: 'generate and write random DNA sequences', arg: '2500000', c: 'fasta/fasta.gcc', cpp: 'fasta/fasta.gpp' },
+];
+
+// ---- one PRISM build and run, in a process of its own so each starts with a cold JIT
+if (process.argv[2] === '--prism-one') {
+  const [, , , file, lang, a] = process.argv;
+  const { compileProgram, snapshotProgram } = await import('../src/compile.js');
+  const { installStdio } = await import('../src/env/stdio.js');
+  const { HEADERS } = await import('../src/env/headers.js');
+  const resolve = (name) => { const std = HEADERS[name] ?? HEADERS[name.replace(/^.*\//, '')]; return std === undefined ? null : { path: `<${name}>`, text: std }; };
+  const unit = `/bench/${basename(file).replace(/\.(gcc|gpp)$/, lang === 'cpp' ? '.cpp' : '.c')}`;
+  let out;
+  try {
+    const t0 = performance.now();
+    let snap = null;
+    const prog = compileProgram([{ file: unit, source: readFileSync(file, 'latin1') }], { resolve, memory: 512 * 1024 * 1024 });
+    const compileMs = performance.now() - t0;
+    try { snap = snapshotProgram(prog); } catch { /* sizes unknown */ }
+    installStdio(prog.M, {});
+    const t1 = performance.now();
+    const r = prog.run(['bench', a]);
+    const runMs = performance.now() - t1;
+    const js = snap ? Buffer.from(snap.src) : null, img = snap ? Buffer.from(snap.image) : null;
+    out = { ok: true, compileMs, runMs, stdout: sha(Buffer.from(String(r.stdout), 'latin1')),
+      bytes: js ? js.length + img.length : null, gz: js ? gzipSync(js).length + gzipSync(img).length : null };
+  } catch (e) { out = { ok: false, error: String(e.message).split('\n')[0].slice(0, 200) }; }
+  process.stdout.write(JSON.stringify(out));
+  process.exit(0);
+}
+
+const only = arg('only')?.split(',');
+const skip = new Set(arg('skip')?.split(',') ?? []);
+const RUNS = +(arg('runs') ?? 3);
+if (!existsSync(SRC)) { console.error(`no ${SRC}: the Benchmarks Game sources (benchmarksgame-sourcecode.zip) unpacked there`); process.exit(77); }
+const WORK = join(ROOT, '.oracle', 'bench-compare');
+rmSync(WORK, { recursive: true, force: true });
+mkdirSync(WORK, { recursive: true });
+
+const run = (cmd, opts = {}) => spawnSync('sh', ['-c', cmd], { encoding: 'buffer', maxBuffer: 1 << 28, ...opts });
+const best = (fn) => { let b = null; for (let k = 0; k < RUNS; k++) { const r = fn(); if (!r.ok) return r; if (!b || r.runMs < b.runMs) b = r; } return b; };
+const timed = (cmd) => { const t0 = performance.now(); const r = run(cmd); return { r, ms: performance.now() - t0 }; };
+
+/** One native-style solution: a compile command and a run command, timed from here. */
+function solutionNative(p, lang, file) {
+  const exe = join(WORK, `${p.id}-${lang}-native`);
+  const cc = lang === 'cpp' ? `clang++ -O2 -std=c++17 -w -x c++` : `clang -O2 -w -x c`;
+  const c = timed(`${cc} -o ${exe} ${file} -lm 2>&1`);
+  if (c.r.status !== 0) return { ok: false, error: String(c.r.stdout).split('\n')[0] };
+  const size = statSync(exe).size, gz = gzipSync(readFileSync(exe)).length;
+  return best(() => {
+    const t = timed(`${exe} ${p.arg}`);
+    return t.r.status === 0 ? { ok: true, compileMs: c.ms, runMs: t.ms, bytes: size, gz, stdout: sha(t.r.stdout) } : { ok: false, error: `exit ${t.r.status}` };
+  });
+}
+
+/** gcc in the linux/386 container: compile and run timed INSIDE it, so docker exec's own cost is left out. */
+function solutionDocker(p, lang, file) {
+  const { sh } = DOCKER;
+  const name = `${p.id}-${lang}`;
+  writeFileSync(join(WORK, `${name}.${lang === 'cpp' ? 'cpp' : 'c'}`), readFileSync(file));
+  const cc = lang === 'cpp' ? 'g++ -O2 -std=gnu++17 -w' : 'gcc -O2 -w';
+  const ms = (cmd) => `s=$(date +%s%N); ${cmd}; e=$?; t=$(date +%s%N); echo "@@ $e $(( (t - s) / 1000 ))" >&2`;
+  const c = sh(`cd bench-compare && ${ms(`${cc} -o ${name}.i386 ${name}.${lang === 'cpp' ? 'cpp' : 'c'} -lm`)}`, { timeout: 600000 });
+  const cm = c.stderr.match(/@@ (\d+) (\d+)/);
+  if (!cm || cm[1] !== '0') return { ok: false, error: (c.stdout + c.stderr).split('\n')[0] };
+  const exe = join(WORK, `${name}.i386`), size = statSync(exe).size, gz = gzipSync(readFileSync(exe)).length;
+  return best(() => {
+    const r = sh(`cd bench-compare && ${ms(`./${name}.i386 ${p.arg} > ${name}.out`)}`, { timeout: 1800000 });
+    const m = r.stderr.match(/@@ (\d+) (\d+)/);
+    if (!m || m[1] !== '0') return { ok: false, error: `exit ${m?.[1] ?? '?'}` };
+    return { ok: true, compileMs: +cm[2] / 1000, runMs: +m[2] / 1000, bytes: size, gz, stdout: sha(readFileSync(join(WORK, `${name}.out`))) };
+  });
+}
+
+function solutionPrism(p, lang, file) {
+  return best(() => {
+    const r = spawnSync('node', [SELF, '--prism-one', file, lang, p.arg], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 1800000 });
+    try { return JSON.parse(r.stdout); } catch { return { ok: false, error: (r.stderr || r.stdout || `exit ${r.status}`).split('\n')[0] }; }
+  });
+}
+
+const EMSDK = join(process.env.HOME, 'Projects/emsdk');
+const EMCC = join(EMSDK, 'upstream/emscripten/emcc');
+function solutionEmscripten(p, lang, file) {
+  const js = join(WORK, `${p.id}-${lang}-em.js`), wasm = js.replace(/\.js$/, '.wasm');
+  const cc = lang === 'cpp' ? `${EMCC.replace(/emcc$/, 'em++')} -std=c++17` : EMCC;
+  const c = timed(`${cc} -O2 -w -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -o ${js} ${file} 2>&1`);
+  if (c.r.status !== 0) return { ok: false, error: String(c.r.stdout).split('\n').find((l) => /error/.test(l)) ?? 'compile failed' };
+  const size = statSync(js).size + (existsSync(wasm) ? statSync(wasm).size : 0);
+  const gz = gzipSync(readFileSync(js)).length + (existsSync(wasm) ? gzipSync(readFileSync(wasm)).length : 0);
+  return best(() => {
+    const t = timed(`node ${js} ${p.arg}`);
+    return t.r.status === 0 ? { ok: true, compileMs: c.ms, runMs: t.ms, bytes: size, gz, stdout: sha(t.r.stdout) } : { ok: false, error: `exit ${t.r.status}` };
+  });
+}
+
+let DOCKER = null;
+const SOLUTIONS = [
+  ['native', solutionNative],
+  ['docker-i386', solutionDocker],
+  ['prism', solutionPrism],
+  ['emscripten', solutionEmscripten],
+].filter(([n]) => !skip.has(n))
+  .filter(([n]) => n !== 'emscripten' || existsSync(EMCC));
+if (SOLUTIONS.some(([n]) => n === 'docker-i386')) DOCKER = await import('./oracle.mjs');
+
+const version = (cmd) => String(run(cmd).stdout).split('\n')[0].trim();
+const env = {
+  date: new Date().toISOString(),
+  host: `${String(run('sysctl -n machdep.cpu.brand_string').stdout).trim() || cpus()[0]?.model}, ${cpus().length} cores, ${Math.round(totalmem() / 2 ** 30)} GiB`,
+  node: process.version,
+  native: version('clang --version'),
+  'docker-i386': DOCKER ? DOCKER.sh('gcc --version | head -1').stdout.trim() + ' (linux/386, emulated)' : null,
+  prism: version(`git -C ${ROOT} log -1 --format='%h %ad' --date=short`),
+  emscripten: existsSync(EMCC) ? version(`${EMCC} --version`) : null,
+};
+console.log(Object.entries(env).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('\n'), '\n');
+
+const results = [];
+for (const p of PROGRAMS.filter((x) => !only || only.includes(x.id))) {
+  for (const lang of ['c', 'cpp']) {
+    const file = join(SRC, p[lang]);
+    const row = { program: p.id, what: p.what, lang, source: p[lang], arg: p.arg, solutions: {} };
+    for (const [name, fn] of SOLUTIONS) {
+      const r = fn(p, lang, file);
+      row.solutions[name] = r;
+      process.stdout.write(`${p.id.padEnd(14)} ${lang.padEnd(4)} ${name.padEnd(12)} ${r.ok ? `compile ${r.compileMs.toFixed(0).padStart(6)} ms  run ${r.runMs.toFixed(0).padStart(7)} ms  ${r.bytes ? `${(r.bytes / 1024).toFixed(0)} KiB` : ''}` : `-- ${r.error}`}\n`);
+    }
+    const ref = row.solutions.native?.stdout;
+    for (const [name, r] of Object.entries(row.solutions)) if (r.ok && ref && r.stdout !== ref) { r.sameOutput = false; console.log(`   ⚠ ${name}'s output differs from native: its time is not a comparison`); }
+    results.push(row);
+  }
+}
+const OUT = join(ROOT, 'dist/bench-compare');
+mkdirSync(OUT, { recursive: true });
+writeFileSync(join(OUT, 'results.json'), JSON.stringify({ env, runs: RUNS, results }, null, 1));
+console.log(`\n${join(OUT, 'results.json')}`);
