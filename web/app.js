@@ -610,6 +610,22 @@ function mergeArgs(variantArgs, programArgs) {
   return [...theirs, ...mine].flatMap((g) => g.tokens).join(' ').trim();
 }
 
+/*
+ * THE BROWSER'S LANGUAGE, for a program that can be told one (a descriptor's `language`: the switch,
+ * and the browser languages it maps to the program's own codes -- Beneath a Steel Sky's text comes in
+ * seven). The first of the visitor's languages the program knows is passed, unless the arguments
+ * already name one; none known, nothing is added and the program keeps its own default.
+ */
+function withLanguage(args, lang) {
+  if (!lang?.codes || tokenise(args).includes(lang.flag)) return args;
+  for (const tag of navigator.languages ?? [navigator.language]) {
+    const code = lang.codes[tag] ?? lang.codes[String(tag).split('-')[0]];
+    if (code === undefined) continue;
+    return code ? `${lang.flag} ${code} ${args}`.trim() : args;
+  }
+  return args;
+}
+
 function describe() {
   const x = entry(), p = current();
   if (!p) return;
@@ -634,7 +650,7 @@ function describe() {
    * mandatory `-nosound` and threw on GUS_Init before drawing a pixel. Anything you typed is still
    * safe, because then the field no longer matches what was written.
    */
-  const want = mergeArgs(x.variantArgs, p.args);
+  const want = withLanguage(mergeArgs(x.variantArgs, p.args), p.language);
   if (argsFor !== x || $('args').value === lastArgsWritten) {
     argsFor = x;
     lastArgsWritten = want;

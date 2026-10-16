@@ -5,6 +5,20 @@
   "host": "sdl",
   "args": "-n -psky-cd sky",
   "argsHint": "-p<dir> where the game is, then its name. Other switches of 0.6.1: -g<scaler> (normal, 2x, 3x, 2xsai, super2xsai, supereagle, advmame2x, advmame3x, hq2x, hq3x, tv2x, dotmatrix), -f for full screen, -m<volume> for the music, -s<volume> for the sound effects, -n to show subtitles (off by default; with speech, the text is shown too).",
+  "language": {
+    "flag": "-q",
+    "codes": {
+      "fr": "fr",
+      "de": "de",
+      "it": "it",
+      "pt": "pt",
+      "es": "es",
+      "sv": "se",
+      "en-US": "",
+      "en": "gb"
+    },
+    "_codes": "The CD's text in the browser's language: ScummVM 0.6.1's codes (common/util.cpp), sky.cpp's seven. An empty code is a language the game's default already is (US English); a language the data lacks falls back to English with a warning."
+  },
   "fps": 60,
   "fpsNote": "A FALLBACK cap only: the engine paces itself on the SDL clock.",
   "needsData": {
