@@ -40,6 +40,10 @@ These files are built only with the program they serve, and never become part of
 `assets/vga-rom-8x16.bin` is the IBM VGA 8x16 text font. It was rebuilt from glyphs rendered by
 DOSBox, not copied from a ROM file (see `assets/README.md`).
 
+`goldens/tasm-run.json` holds the object code Turbo Assembler 2.5 made of Keen Dreams' three assembly
+modules (`id_*_a.asm`), the reference `tools/gate-tasm-run.mjs` replays. Keen Dreams' source is
+released under the GNU GPL version 2, and so is that object code.
+
 ## GNU Lesser General Public License 2.1
 
 Applies to the routines of `src/env/sdlmixer.js` and `src/env/sdl12.js` listed above as LGPL-2.1. The
