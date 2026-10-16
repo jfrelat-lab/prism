@@ -206,6 +206,14 @@ export function makeMachine(mod = new Module()) {
   M.stackOverflow = (fp) => {
     throw new Trap(`stack overflow: a frame at ${fp} is below the ${M.mod.model} stack's floor at ${M.mod.stackLimit}`);
   };
+  /*
+   * WALL TIME, for a host that wants the visitor's: none by default, so time() is a fixed date and
+   * local time is UTC, and every run is reproducible. The page sets all three (web/worker.js): the
+   * real date, and the browser's time zone with its summer time.
+   */
+  M.wallClock = null;                       // () => seconds since 1970, or null for the fixed date
+  M.utcOffset = () => 0;                    // seconds east of UTC at a given time
+  M.isDst = () => false;
   M.rt = makeLibc(M);
   return M;
 }
@@ -860,7 +868,9 @@ function makeLibc(M) {
     mktime: (tmPtr) => {
       tmIsI386(M, 'mktime');
       const d = M.mod.dv, g = (o) => d.getInt32(tmPtr + o * 4, true);
+      // The fields are LOCAL time (localtime's inverse): their UTC reading, less the offset in force then.
       const ms = Date.UTC(g(5) + 1900, g(4), g(3), g(2), g(1), g(0));
+      const at = Math.floor(ms / 1000), off = M.utcOffset(at - M.utcOffset(at));
       /*
        * mktime WRITES the struct as well as reading it (C99 7.23.2.3): out-of-range fields are
        * normalised and tm_wday/tm_yday are filled in, whatever they held. Lua's os.time relies on
@@ -871,9 +881,9 @@ function makeLibc(M) {
       const y = t.getUTCFullYear();
       const yday = (Date.UTC(y, t.getUTCMonth(), t.getUTCDate()) - Date.UTC(y, 0, 1)) / 86400000;
       const f = [t.getUTCSeconds(), t.getUTCMinutes(), t.getUTCHours(), t.getUTCDate(), t.getUTCMonth(),
-        y - 1900, t.getUTCDay(), yday, 0];
+        y - 1900, t.getUTCDay(), yday, M.isDst(at - off) ? 1 : 0];
       for (let i = 0; i < 9; i++) d.setInt32(tmPtr + i * 4, f[i] | 0, true);
-      return Math.floor(ms / 1000) | 0;
+      return (at - off) | 0;
     },
     difftime: (a, b) => (a | 0) - (b | 0),
     /*
@@ -1197,7 +1207,11 @@ function makeLibc(M) {
     // A fixed date, so a run is reproducible -- moving on with the program's clock where it has one
     // (M.timeSeconds, src/env/sdl12.js): Simon the Sorcerer starts its scenes when time()'s second
     // changes, and on a frozen date it waited forever on a black screen.
-    time: (p) => { const t = 852076800 + (M.timeSeconds ? M.timeSeconds() : 0); if (p) dv().setInt32(p, t, true); return t; },
+    time: (p) => {
+      const t = M.wallClock ? Math.floor(M.wallClock()) : 852076800 + (M.timeSeconds ? M.timeSeconds() : 0);
+      if (p) dv().setInt32(p, t, true);
+      return t;
+    },
 
     /**
      * setjmp/longjmp. The buffer records the shadow-stack frame that called setjmp and the resume

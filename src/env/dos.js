@@ -38,7 +38,7 @@ export function installDos(M, { keys = [] } = {}) {
     const ah = r.ax >>> 8, al = r.ax & 255;
     switch (ah) {
       case 0x2c: {          // get time: CH hours, CL minutes, DH seconds, DL hundredths
-        const d = new Date(M.rt.time(0) * 1000);
+        const now = M.rt.time(0), d = new Date((now + M.utcOffset(now)) * 1000);   // DOS keeps local time
         r.cx = (d.getUTCHours() << 8) | d.getUTCMinutes();
         r.dx = d.getUTCSeconds() << 8;
         return;

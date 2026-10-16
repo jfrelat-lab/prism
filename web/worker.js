@@ -2032,6 +2032,18 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     speed: () => Atomics.load(ctrl, SLOT.SPEED),
     paused: () => Atomics.load(ctrl, SLOT.PAUSE) !== 0,
   });
+  /*
+   * And the visitor's date and time zone, for the same reason: in the page a game's clock, a file's
+   * date or OpenTyrian's Christmas reads what the visitor's calendar does. The gates keep the fixed
+   * date and UTC (src/runtime/runtime.js).
+   */
+  prog.M.wallClock = () => Date.now() / 1000;
+  prog.M.utcOffset = (secs) => -new Date(secs * 1000).getTimezoneOffset() * 60;
+  prog.M.isDst = (secs) => {
+    const y = new Date(secs * 1000).getFullYear();
+    const std = Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset());
+    return new Date(secs * 1000).getTimezoneOffset() < std;
+  };
 
   /*
    * And the reason a real clock does not cost a whole core: every service a program polls in a tight

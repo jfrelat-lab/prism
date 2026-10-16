@@ -259,6 +259,17 @@ export function installStdio(M, {
       throw new Error(`${what}: its fields are laid out for i386 and this is ${m}`);
     }
   };
+  // The calendar of `secs` (already shifted to local time when it is local) into ONE static struct tm.
+  const tmOf = (secs, isdst) => {
+    flatShapeOnly('struct tm');
+    if (!M.__tm) { M.__tm = M.rt.malloc(9 * 4); }
+    const d = new Date(secs * 1000);
+    const f = [d.getUTCSeconds(), d.getUTCMinutes(), d.getUTCHours(), d.getUTCDate(),
+               d.getUTCMonth(), d.getUTCFullYear() - 1900, d.getUTCDay(),
+               Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000) - 1, isdst ? 1 : 0];
+    for (let i = 0; i < 9; i++) M.mod.dv.setInt32(M.__tm + i * 4, f[i] | 0, true);
+    return M.__tm;
+  };
 
   const api = {
     /*
@@ -1055,24 +1066,19 @@ export function installStdio(M, {
      *
      * It used to return NULL, on the grounds that a caller must handle it and SQLite does. Then
      * OpenTyrian's xmas_time() wrote `localtime(&now)->tm_mon == 11` and dereferenced it, which is
-     * ordinary C: localtime only returns NULL when the time cannot be represented. There is no time
-     * zone here, so localtime and gmtime are the same function -- said rather than implied.
+     * ordinary C: localtime only returns NULL when the time cannot be represented. Local time is UTC
+     * plus M.utcOffset, the runtime's (0 unless the host gives one: the page gives the browser's
+     * time zone, so a game's clock reads what the visitor's does; Node's gates stay on UTC).
      */
     localtime: (tp) => {
-      flatShapeOnly('struct tm');
       const secs = tp ? (M.mod.dv.getInt32(tp, true) >>> 0) : Math.floor(M.rt.time(0));
-      if (!M.__tm) { M.__tm = M.rt.malloc(9 * 4); }
-      const d = new Date(secs * 1000);
-      const f = [d.getUTCSeconds(), d.getUTCMinutes(), d.getUTCHours(), d.getUTCDate(),
-                 d.getUTCMonth(), d.getUTCFullYear() - 1900, d.getUTCDay(),
-                 Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000) - 1, 0];
-      for (let i = 0; i < 9; i++) M.mod.dv.setInt32(M.__tm + i * 4, f[i] | 0, true);
-      return M.__tm;
+      const off = M.utcOffset(secs);
+      return tmOf(secs + off, M.isDst(secs));
     },
-    gmtime: (tp) => api.localtime(tp),
+    gmtime: (tp) => tmOf(tp ? (M.mod.dv.getInt32(tp, true) >>> 0) : Math.floor(M.rt.time(0)), 0),
     // The caller's struct tm instead of the shared one (nine ints).
     localtime_r: (tp, res) => { const t = api.localtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + 36); return res; },
-    gmtime_r: (tp, res) => api.localtime_r(tp, res),
+    gmtime_r: (tp, res) => { const t = api.gmtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + 36); return res; },
     tzset: () => {},
     // The path made absolute and tidy, when it names something that exists (there are no links to follow).
     realpath: (pathPtr, out) => {
