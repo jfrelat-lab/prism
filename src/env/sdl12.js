@@ -662,7 +662,8 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       state.heldKey = null;
       if (!e) return 0;
       if (!ev) { state.heldKey = e; return 1; }
-      const sym = sdl12KeySym(e.scan, e.extended);
+      state.keys?.note(e.scan, e.ascii ?? 0, e.down);
+      const sym = (!e.extended && state.keys?.sym(e.scan)) || sdl12KeySym(e.scan, e.extended);
       // The modifiers as they stand AFTER this event, which is what SDL reports with it.
       const bit = KMOD_OF[sym] ?? 0;
       state.mods = e.down ? (state.mods | bit) : (state.mods & ~bit);

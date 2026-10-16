@@ -15,6 +15,7 @@
 // vid_x.c wants nearly the same set plus MIT-SHM, which is deliberately refused: `XShmQueryExtension`
 // answering "no" is a supported answer that sends a program down its ordinary XImage path.
 
+import { keyNames } from './scancodes.js';
 import { SLOT } from './webhost.js';
 
 const DISPLAY = 0x7200_0001;      // the token XOpenDisplay hands back
@@ -49,7 +50,7 @@ const XEV_X = 32, XEV_Y = 36, XEV_X_ROOT = 40, XEV_Y_ROOT = 44, XEV_STATE = 48, 
 /* X numbers its buttons 1 left, 2 MIDDLE, 3 right, and its state mask starts at bit 8. */
 const X_BUTTON_MASK = [0, 1 << 8, 1 << 9, 1 << 10];
 
-export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null } = {}) {
+export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null, keys = keyNames() } = {}) {
   let peeked = null, errorHandler = 0;
   const pointerCtl = [2, 1, 4];
   const dv = () => M.mod.dv;
@@ -381,9 +382,10 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       }
       dv().setInt32(ev, e.down ? 2 : 3, true);          // KeyPress / KeyRelease
       dv().setInt32(ev + XKEY_KEYCODE, e.scan, true);
+      keys.note(e.scan, e.ascii ?? 0, e.down);
       return 0;
     },
-    XKeycodeToKeysym: (_dpy, code) => keysymFor(code | 0),
+    XKeycodeToKeysym: (_dpy, code) => keys.sym(code | 0) || keysymFor(code | 0),
 
     /*
      * XLookupString, which is the OTHER way an X client asks what a key was -- and it was a stub
@@ -400,10 +402,11 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * shortcut -- it is what a real Xlib answers for a function key.
      */
     // The keysym of a key event's keycode, the same table XLookupString reads (index 0: unshifted).
-    XLookupKeysym: (ev) => keysymFor(ev ? dv().getInt32(ev + XKEY_KEYCODE, true) : 0),
+    XLookupKeysym: (ev) => { const scan = ev ? dv().getInt32(ev + XKEY_KEYCODE, true) : 0; return keys.sym(scan) || keysymFor(scan); },
     XLookupString: (ev, buf, n, ksOut, _status) => {
       const scan = ev ? dv().getInt32(ev + XKEY_KEYCODE, true) : 0;
-      const ks = keysymFor(scan);
+      // With the visitor's layout, what the key typed, shift included, as XLookupString composes it.
+      const ks = keys.char(scan) || keysymFor(scan);
       if (ksOut) dv().setInt32(ksOut, ks, true);
       if (!buf || (n | 0) <= 0) return 0;
       const printable = ks >= 0x20 && ks <= 0x7e;

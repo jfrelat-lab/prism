@@ -272,7 +272,7 @@
   .playeronly { display: none; }
   body.player .playeronly { display: inline-block; }
   body.player #machines, body.player header a[href^="./"]:not(.playeronly), body.player aside,
-  body.player #panel, body.player #vmSpec, body.player #vmState, body.player .vmtop label { display: none !important; }
+  body.player #panel, body.player #vmSpec, body.player #vmState, body.player .vmtop label:not(.keepin) { display: none !important; }
   body.player main { grid-template-columns: 1fr !important; }
   /* A desktop in the player holds the one program it was opened for. */
   body.player .desktop .shortcut[aria-selected="false"] { display: none; }
@@ -314,6 +314,12 @@
       <button id="pause">Pause</button>
       <button id="fullscreen" title="fill the screen — Esc or F11 to come back">Fullscreen</button>
       <button id="panel" title="PRISM's own messages — the program's output is on its screen and in the browser console">Log</button>
+      <label class="keepin" title="positions: a key is where it is on a US keyboard, as games expect (W A S D, 1-8). your layout: what your keyboard types on it, for typing text -- as on a real machine set to your language. Takes effect at the next Run.">keys
+        <select id="keys">
+          <option value="positions" selected>positions</option>
+          <option value="typed">your layout</option>
+        </select>
+      </label>
       <label>speed
         <select id="speed">
           <option value="25">25%</option>

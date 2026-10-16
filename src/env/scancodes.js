@@ -105,3 +105,25 @@ export function extendedForEvent(e) {
   if (e.code) return EXTENDED.has(e.code);
   return !!(e.key && BY_KEY[e.key] && EXTENDED.has(BY_KEY[e.key]));
 }
+
+/*
+ * THE VISITOR'S LAYOUT, for a host that names a key by what it says (an X keysym, an SDL symbol).
+ * By default a key is its POSITION -- the letter a US keyboard prints there -- because that is what a
+ * game's controls are laid out for: on AZERTY the Z key is still "w" and the number row still "1".
+ * Asked to (`typed`), a key is the character the visitor's layout produced on it, as a real X server
+ * or SDL on a French machine would answer: letters right for typing, and the number row "&" and "é"
+ * as French players knew it. The character is the one the page saw on the press; a release keeps it,
+ * so a program that pairs presses with releases by symbol still finds them.
+ */
+export function keyNames(mode = 'positions') {
+  const typed = new Uint16Array(128);
+  return {
+    typed: mode === 'typed',
+    // Record what a press produced on that key (printable characters only).
+    note(scan, ascii, down) { if (down && ascii >= 0x20 && ascii < 0x7f) typed[scan & 127] = ascii; },
+    // The character for that key in `typed` mode, or 0: the caller's own table answers then.
+    char(scan) { return mode === 'typed' ? typed[scan & 127] : 0; },
+    // The same, unshifted, as a keysym or an SDL symbol is: a letter in lower case.
+    sym(scan) { const c = this.char(scan); return c >= 0x41 && c <= 0x5a ? c + 0x20 : c; },
+  };
+}

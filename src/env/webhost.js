@@ -388,11 +388,11 @@ export function makeKeyboard(views) {
       if (this.pending() <= 0) return null;
       const tail = Atomics.load(ctrl, SLOT.KBD_TAIL);
       const at = (tail % KBD_SIZE) * KBD_STRIDE;
-      const raw = kbd[at], flags = kbd[at + 2];
+      const raw = kbd[at], ascii = kbd[at + 1], flags = kbd[at + 2];
       Atomics.store(ctrl, SLOT.KBD_TAIL, tail + 1);
       // `extended` is what a host feeding port 0x60 needs to send the 0xE0 byte first; a host that
       // wants set 1's software convention ignores it and reads the same number it always did.
-      return { scan: raw & 0x7f, down: (raw & 0x80) === 0, extended: (flags & KBD_EXTENDED) !== 0 };
+      return { scan: raw & 0x7f, down: (raw & 0x80) === 0, extended: (flags & KBD_EXTENDED) !== 0, ascii };
     },
 
     /**

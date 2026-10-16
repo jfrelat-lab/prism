@@ -27,6 +27,7 @@ import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
 import { installQuake } from '../src/env/quake.js';
 import { installX11 } from '../src/env/x11.js';
+import { keyNames } from '../src/env/scancodes.js';
 import { installGL } from '../src/env/gl.js';
 import { installGlx } from '../src/env/glx.js';
 import { installFxMesa } from '../src/env/fxmesa.js';
@@ -695,6 +696,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     }
     installX11(prog.M, {
       publish: { ctrl, pal },
+      keys: keyNames(options.keys),
       keyboard: {
         pending: () => keyboard.pending(),
         next: () => keyboard.nextEvent(),
@@ -741,6 +743,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     if ((program.env ?? []).includes('dsp')) installDsp(prog.M, { publish: { ctrl, audio } });
     installX11(prog.M, {
+      keys: keyNames(options.keys),
       keyboard: { pending: () => keyboard.pending(), next: () => keyboard.nextEvent() },
       mouse,
     });
@@ -1743,10 +1746,12 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * the numeric keypad share scan code 72, SDL 1.2 gives them different symbols, and this game
      * binds them to two different players. Dropping the flag would merge their controls silently.
      */
+    sdl.state.keys = keyNames(options.keys);
     sdl.state.keyboard = {
       next: () => {
         const e = keyboard.nextEvent();
-        return e ? { scan: e.scan, extended: !!e.extended, down: e.down, ascii: 0 } : null;
+        // `ascii` is SDL's `unicode`: text, so always the visitor's layout, as on a real machine.
+        return e ? { scan: e.scan, extended: !!e.extended, down: e.down, ascii: e.down ? e.ascii : 0 } : null;
       },
     };
 

@@ -670,6 +670,11 @@ function showPanel(on) {
   try { localStorage.setItem('prism.panel', on ? '1' : '0'); } catch {}
 }
 $('panel').onclick = () => showPanel($('main-panel-host').classList.contains('nopanel'));
+$('keys').onchange = () => {
+  try { localStorage.setItem('prism.keys', $('keys').value); } catch { /* the choice lasts this page only */ }
+  log(`keys: ${$('keys').value === 'typed' ? 'your layout' : 'positions'}${worker ? ' -- from the next Run' : ''}`);
+  if (machine) publishQuery();
+};
 
 /* Retyping the command line as the arguments change: the prompt is the one place both are visible. */
 $('args').oninput = () => { if (!worker) renderChooser(); };
@@ -1466,7 +1471,7 @@ async function startRun(typedAs = null) {
     soundWorker.postMessage({ type: 'start', dir: program.soundServer, pipeSab, control, files: dataFiles });
   }
   worker.postMessage({ type: 'start', program: { ...program, target: chosenTarget() ?? program.target },
-                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: { ...pageOptions, site: !!site, light: site?.light ?? null },
+                       control, data: dataFiles, lazyData: lazyNames, argv, pipeSab, options: { ...pageOptions, keys: $('keys').value, site: !!site, light: site?.light ?? null },
                        /* The machine's own screen, so the program's output continues under the
                           command line instead of starting on a blank page. */
                        screen: machine.kind === 'desktop' ? null
@@ -1769,6 +1774,10 @@ let pageOptions = {};
 function applyQuery() {
   const q = new URLSearchParams(location.search);
   pageOptions = { gl: q.get('gl'), glcheck: q.get('glcheck'), bundle: q.get('bundle') };
+  // How a key is named to a program that names keys (src/env/scancodes.js keyNames): by position unless asked.
+  let keys = q.get('keys');
+  if (keys !== 'typed' && keys !== 'positions') { try { keys = localStorage.getItem('prism.keys'); } catch { keys = null; } }
+  $('keys').value = keys === 'typed' ? 'typed' : 'positions';
   const want = q.get('program') || q.get('p');
   const wantMachine = q.get('machine') || q.get('m');
   // A variant shares its program name with the base build, so a link names it by its shelf file.
@@ -1794,6 +1803,7 @@ function publishQuery() {
   if ($('args').value.trim()) q.set('args', $('args').value.trim());
   if ($('speed').value !== '100') q.set('speed', $('speed').value);
   for (const k of ['gl', 'glcheck', 'bundle']) if (pageOptions[k]) q.set(k, pageOptions[k]);
+  if ($('keys').value === 'typed') q.set('keys', 'typed');
   if (PLAYER) q.set('player', '1');
   history.replaceState(null, '', `${location.pathname}?${q}`);
   if (PLAYER) $('toShelf').href = shelfUrl();
