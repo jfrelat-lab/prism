@@ -95,12 +95,28 @@ COOP/COEP headers (GitHub Pages), `web/coi-sw.js` adds them. The repository's `i
 the project page for GitHub Pages and links to it.
 
 **A static showcase.** `node tools/site.mjs` writes `site/`, a copy of the shelf that needs no
-server. It holds only the programs in `tools/site-programs.json`: those whose code **and** data
-may be redistributed, each with both licences. Each one ships as a precompiled bundle
-(`tools/bundle.mjs`), with its data taken from `--games`. `tools/site-thumbs.mjs` draws the
-thumbnails. Any static host serves it (`python3 -m http.server --directory site`), and
-`index.html` turns into a gallery of those programs. `site/` holds game data and is never
-committed.
+server, and `index.html` turns into its catalogue. The programs are listed in
+`tools/site-programs.json`:
+
+- the ones it **ships** have code and data that may be passed on (or, for a few, a stated caution);
+- its **gallery** holds the ones whose data is not ours to pass on. The page asks the visitor for
+  their copy, a folder or a `.zip`, and reads it where it is.
+
+Each program ships as a precompiled bundle (`tools/bundle.mjs`, kept between runs in
+`dist/site-bundles/`), with its licences and the **source it was built from**. Every source tree it
+reads is archived as published, beside the build scripts (`sources/`, or a release of
+`jfrelat-lab/prism-sources` with `--sources=release` and `tools/publish-sources.mjs`).
+
+Before putting an export on a host, check it with `tools/site-check.mjs` (file sizes, data that must
+not be there, sources and licences present). Any static host serves it, under any path; the
+COOP/COEP headers come from `_headers`, or from `web/coi-sw.js` where the host sends none.
+`site/` holds game data and is never committed.
+
+- `node tools/serve.mjs --site --games=<dir>` serves the export as a **local library**: the gallery
+  games found in `<dir>` say *your copy* and play from it.
+- `node tools/standalone.mjs <id>` writes **one** program as a folder for anyone's own site, with a
+  page of its own and `HOSTING.txt`.
+- `tools/site-thumbs.mjs` draws the thumbnails.
 
 **No game data is fetched or stored by this repository.** The page reads only the files you
 give it, or a directory you name with `--data`.
