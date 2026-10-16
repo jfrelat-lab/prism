@@ -1,6 +1,6 @@
 // bench-compare.mjs — where PRISM stands: the same C and C++ programs, built and run several ways.
 //
-//   node tools/bench-compare.mjs [--only=nbody,fasta] [--runs=3] [--skip=docker-i386]
+//   node tools/bench-compare.mjs [--only=nbody,fasta] [--runs=3] [--docker-runs=1] [--skip=docker-i386]
 //
 // The programs are The Computer Language Benchmarks Game's (benchmarksgame-team.pages.debian.net,
 // revised BSD), in corpus/bench/benchmarksgame/src -- one C and one C++ variant of each, the plainest
@@ -19,7 +19,7 @@
 // Every run's stdout is hashed: a solution whose output differs from the native one is reported, and
 // its time is not a comparison. Times are wall-clock, best of --runs. Results go to
 // dist/bench-compare/results.json, with the machine and every toolchain's version.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, rmSync, readdirSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -73,22 +73,28 @@ if (process.argv[2] === '--prism-one') {
 const only = arg('only')?.split(',');
 const skip = new Set(arg('skip')?.split(',') ?? []);
 const RUNS = +(arg('runs') ?? 3);
+// The emulated x86 column is ~100x native: one run decides it, and three cost the better part of an hour.
+const DOCKER_RUNS = +(arg('docker-runs') ?? 1);
 if (!existsSync(SRC)) { console.error(`no ${SRC}: the Benchmarks Game sources (benchmarksgame-sourcecode.zip) unpacked there`); process.exit(77); }
 const WORK = join(ROOT, '.oracle', 'bench-compare');
 rmSync(WORK, { recursive: true, force: true });
 mkdirSync(WORK, { recursive: true });
+// The Game's C is written for Linux: <malloc.h> is glibc's, and macOS keeps it as <malloc/malloc.h>. A
+// header of that name for the native build only -- a platform's missing header, not an edit to a program.
+mkdirSync(join(WORK, 'compat'), { recursive: true });
+writeFileSync(join(WORK, 'compat', 'malloc.h'), '#include <stdlib.h>\n#include <malloc/malloc.h>\n');
 // Emscripten writes CommonJS, and the repository's package.json says ES modules: this directory says otherwise.
 writeFileSync(join(WORK, 'package.json'), '{ "type": "commonjs" }\n');
 
 const run = (cmd, opts = {}) => spawnSync('sh', ['-c', cmd], { encoding: 'buffer', maxBuffer: 1 << 28, ...opts });
-const best = (fn) => { let b = null; for (let k = 0; k < RUNS; k++) { const r = fn(); if (!r.ok) return r; if (!b || r.runMs < b.runMs) b = r; } return b; };
+const best = (fn, runs = RUNS) => { let b = null; for (let k = 0; k < runs; k++) { const r = fn(); if (!r.ok) return r; if (!b || r.runMs < b.runMs) b = r; } return b; };
 const timed = (cmd) => { const t0 = performance.now(); const r = run(cmd); return { r, ms: performance.now() - t0 }; };
 
 /** One native-style solution: a compile command and a run command, timed from here. */
 function solutionNative(p, lang, file) {
   const exe = join(WORK, `${p.id}-${lang}-native`);
   const cc = lang === 'cpp' ? `clang++ -O2 -std=c++17 -w -x c++` : `clang -O2 -w -x c`;
-  const c = timed(`${cc} -o ${exe} ${file} -lm 2>&1`);
+  const c = timed(`${cc} -I${join(WORK, 'compat')} -o ${exe} ${file} -lm 2>&1`);
   if (c.r.status !== 0) return { ok: false, error: String(c.r.stdout).split('\n')[0] };
   const size = statSync(exe).size, gz = gzipSync(readFileSync(exe)).length;
   return best(() => {
@@ -113,7 +119,7 @@ function solutionDocker(p, lang, file) {
     const m = r.stderr.match(/@@ (\d+) (\d+)/);
     if (!m || m[1] !== '0') return { ok: false, error: `exit ${m?.[1] ?? '?'}` };
     return { ok: true, compileMs: +cm[2] / 1000, runMs: +m[2] / 1000, bytes: size, gz, stdout: sha(readFileSync(join(WORK, `${name}.out`))) };
-  });
+  }, DOCKER_RUNS);
 }
 
 function solutionPrism(p, lang, file) {
@@ -130,7 +136,7 @@ if (!process.env.EMSDK_PYTHON && existsSync('/opt/homebrew/opt/python@3.12/bin/p
 function solutionEmscripten(p, lang, file) {
   const js = join(WORK, `${p.id}-${lang}-em.js`), wasm = js.replace(/\.js$/, '.wasm');
   const cc = lang === 'cpp' ? `${EMCC.replace(/emcc$/, 'em++')} -std=c++17 -x c++` : `${EMCC} -x c`;
-  const c = timed(`${cc} -O2 -w -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -o ${js} ${file} 2>&1`);
+  const c = timed(`${cc} -O2 -w -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -sNODERAWFS=1 -o ${js} ${file} 2>&1`);
   if (c.r.status !== 0) return { ok: false, error: String(c.r.stdout).split('\n').find((l) => /error/.test(l)) ?? 'compile failed' };
   const size = statSync(js).size + (existsSync(wasm) ? statSync(wasm).size : 0);
   const gz = gzipSync(readFileSync(js)).length + (existsSync(wasm) ? gzipSync(readFileSync(wasm)).length : 0);
@@ -160,7 +166,19 @@ const env = {
   prism: version(`git -C ${ROOT} log -1 --format='%h %ad' --date=short`),
   emscripten: existsSync(EMCC) ? version(`${EMCC} --version`) : null,
 };
-console.log(Object.entries(env).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('\n'), '\n');
+/*
+ * PRISM's RUNTIME, which its bundles do not include: the page loads it once for every program, where
+ * an Emscripten .js carries its own. Measured as all of src/ and the worker, each file gzipped as a
+ * server would send it -- an upper bound, since a page loads the environments its program names.
+ */
+{
+  let bytes = 0, gz = 0, files = 0;
+  const walkGz = (d) => { for (const f of readdirSync(d, { withFileTypes: true })) { const q = join(d, f.name); if (f.isDirectory()) walkGz(q); else if (/\.(js|c|h)$/.test(f.name)) { const b = readFileSync(q); bytes += b.length; gz += gzipSync(b).length; files++; } } };
+  walkGz(join(ROOT, 'src'));
+  for (const f of ['web/worker.js', 'web/endpoints.js']) { const b = readFileSync(join(ROOT, f)); bytes += b.length; gz += gzipSync(b).length; files++; }
+  env.prismRuntime = { files, bytes, gz };
+}
+console.log(Object.entries(env).filter(([, v]) => v && typeof v === 'string').map(([k, v]) => `${k}: ${v}`).join('\n'), '\n');
 
 const results = [];
 for (const p of PROGRAMS.filter((x) => !only || only.includes(x.id))) {
@@ -179,5 +197,13 @@ for (const p of PROGRAMS.filter((x) => !only || only.includes(x.id))) {
 }
 const OUT = join(ROOT, 'dist/bench-compare');
 mkdirSync(OUT, { recursive: true });
-writeFileSync(join(OUT, 'results.json'), JSON.stringify({ env, runs: RUNS, results }, null, 1));
+// --only re-measures some programs: their rows replace the same rows of the results already there.
+let all = results;
+if (only && existsSync(join(OUT, 'results.json'))) {
+  const before = JSON.parse(readFileSync(join(OUT, 'results.json'), 'utf8')).results ?? [];
+  const key = (r) => `${r.program}/${r.lang}`, fresh = new Set(results.map(key));
+  all = [...before.filter((r) => !fresh.has(key(r))), ...results]
+    .sort((a, b) => PROGRAMS.findIndex((p) => p.id === a.program) - PROGRAMS.findIndex((p) => p.id === b.program) || a.lang.localeCompare(b.lang));
+}
+writeFileSync(join(OUT, 'results.json'), JSON.stringify({ env, runs: RUNS, dockerRuns: DOCKER_RUNS, results: all }, null, 1));
 console.log(`\n${join(OUT, 'results.json')}`);

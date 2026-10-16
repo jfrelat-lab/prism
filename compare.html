@@ -66,6 +66,12 @@
   .env code { color: var(--ink); }
   .bench td, .bench th { white-space: nowrap; }
   .bench td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bench th.on, .bench td.on { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 4px 0 6px; }
+  .seg button { font: inherit; font-size: 13.5px; color: var(--ink); background: var(--panel); border: 0; padding: 7px 14px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .bar { display: inline-block; height: 8px; border-radius: 2px; background: var(--accent); vertical-align: middle; margin-left: 6px; }
   .bar.native { background: var(--yes); } .bar.slow { background: var(--part); }
   .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 10px 0 18px; }
@@ -155,9 +161,15 @@
     ['svgalib', Y(), N(), N(), N(), N('gone from Debian')],
     ['Win32 USER and GDI: windows, messages, a desktop', P('the part Quake, Quake II, Hexen II, PuTTY use'), N(), N(), N('Windows only'), N()],
     ['SciTech MGL', Y('WinQuake\'s'), N(), N(), N(), N()],
+    ['SDL'],
     ['SDL 1.2', Y(), P('libsdl.js, a JavaScript SDL 1.2'), U(), Y(), Y()],
     ['SDL 2', Y(), Y('port'), U(), Y(), Y()],
     ['SDL 3', N(), Y('port'), U(), Y(), N('not in Debian 12')],
+    ['SDL audio', Y(), Y(), U(), Y(), Y()],
+    ['SDL_mixer', Y('for SDL 1.2 and SDL 2'), Y('SDL2_mixer port'), U(), Y(), Y()],
+    ['SDL_image', Y('for SDL 1.2 and SDL 2: PNG decoded in JavaScript'), Y('SDL2_image port'), U(), Y(), Y()],
+    ['SDL_ttf', N(), Y('SDL2_ttf and SDL3_ttf ports'), U(), Y(), Y()],
+    ['SDL_net', N(), Y('SDL2_net port'), U(), Y(), Y()],
     ['3D'],
     ['OpenGL 1.x, fixed pipeline', Y('on WebGL; GLQuake within 1 pixel of Mesa', 4), P('LEGACY_GL_EMULATION, incomplete by its own account', 5), U(), Y(), P('Mesa, in software')],
     ['GLU', Y('and GLU 9\'s tessellator compiled from source'), P('gluPerspective, gluLookAt, gluProject'), U(), Y(), Y()],
@@ -170,14 +182,9 @@
     ['GLFW', N(), Y(), U(), Y(), Y()],
     ['Sound'],
     ['OSS (/dev/dsp)', Y('Doom\'s and Quake\'s'), N(), N(), N(), P('Linux, through ALSA')],
-    ['SDL audio', Y(), Y(), U(), Y(), Y()],
-    ['SDL_mixer', Y('for SDL 1.2 and SDL 2'), Y('SDL2_mixer port'), U(), Y(), Y()],
     ['OpenAL', N(), Y(), U(), Y(), Y()],
     ['Tracker music (MOD, S3M, IT)', N('not yet: Tux Racer\'s music', 6), Y('libmodplug port'), U(), Y(), Y()],
     ['Libraries'],
-    ['SDL_image', Y('for SDL 1.2 and SDL 2: PNG decoded in JavaScript'), Y('SDL2_image port'), U(), Y(), Y()],
-    ['SDL_ttf', N(), Y('SDL2_ttf and SDL3_ttf ports'), U(), Y(), Y()],
-    ['SDL_net', N(), Y('SDL2_net port'), U(), Y(), Y()],
     ['zlib', Y('compiled from source; a JavaScript zlib for MAME, held to it'), Y('port'), U(), Y(), Y()],
     ['libpng, libjpeg, giflib', P('libjpeg compiled from source with Cube'), Y('ports'), U(), Y(), Y()],
     ['FreeType, HarfBuzz', P('FreeType compiled from source with Chromium B.S.U.'), Y('ports'), U(), Y(), Y()],
@@ -242,42 +249,62 @@
     if (!data?.results?.length) return;
     document.getElementById('asof').textContent = data.env.date.slice(0, 10);
     const sols = Object.keys(LABEL).filter((s) => data.results.some((r) => r.solutions[s]));
-    const ratios = {};
-    for (const r of data.results) {
-      const n = r.solutions.native;
-      for (const s of sols) {
-        const x = r.solutions[s];
-        if (!n?.ok || !x?.ok || x.sameOutput === false) continue;
-        ((ratios[s] ??= { c: [], cpp: [] })[r.lang]).push(x.runMs / n.runMs);
-      }
-    }
-    const summary = sols.filter((s) => s !== 'native').map((s) => {
-      const c = geo(ratios[s]?.c ?? []), p = geo(ratios[s]?.cpp ?? []);
-      const f = (v, k) => (v ? `${v.toFixed(v < 10 ? 2 : 1)}× <small>native, ${k}</small>` : `— <small>${k}: none built</small>`);
-      return `<div class="card"><div class="k">${esc(LABEL[s])}</div><div class="v">${f(c, 'C')}</div><div class="v">${f(p, 'C++')}</div></div>`;
-    }).join('');
-    const env = Object.entries(data.env).filter(([k, v]) => v && !['date', 'host', 'node'].includes(k))
+    /*
+     * THREE WAYS TO COMPARE, one table: by run time, compile time or size. Each is turned into the
+     * same reading -- native's value over this one, so above 1 is better than native and below 1
+     * worse, higher better -- with the words beside it, since 0.65 is easy to misread. The cards are
+     * the geometric mean of that over the programs each solution built; each program's solutions are
+     * ordered best first by the chosen measure.
+     */
+    const METRICS = {
+      run: { label: 'Run time', get: (x) => x.runMs, fmt: fmtMs, better: 'faster', worse: 'slower' },
+      compile: { label: 'Compile time', get: (x) => x.compileMs, fmt: fmtMs, better: 'faster', worse: 'slower' },
+      size: { label: 'Size, gzip', get: (x) => x.gz, fmt: fmtKiB, better: 'smaller', worse: 'larger' },
+    };
+    const valid = (x) => x?.ok && x.sameOutput !== false;
+    const words = (v, m) => (v >= 1.005 ? `${v.toFixed(2)}× ${m.better}` : v <= 0.995 ? `${(1 / v).toFixed(v > 0.1 ? 2 : 0)}× ${m.worse}` : 'the same');
+    const rel = (r, s, m) => { const n = r.solutions.native, x = r.solutions[s]; return valid(n) && valid(x) && m.get(x) ? m.get(n) / m.get(x) : null; };
+    const env = Object.entries(data.env).filter(([k, v]) => v && typeof v === 'string' && !['date', 'host', 'node'].includes(k))
       .map(([k, v]) => `${esc(LABEL[k] ?? k)}: <code>${esc(v)}</code>`).join(' · ');
-    const rows = data.results.map((r) => {
-      const n = r.solutions.native;
-      const max = Math.max(...sols.map((s) => (r.solutions[s]?.ok ? r.solutions[s].runMs : 0)));
-      return sols.map((s, i) => {
-        const x = r.solutions[s];
-        const head = i === 0 ? `<th scope="rowgroup" rowspan="${sols.length}">${esc(r.program)} <span class="n">${r.lang === 'cpp' ? 'C++' : 'C'} · ${esc(r.arg)}</span><br><span class="n">${esc(r.what)}</span></th>` : '';
-        if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="4" class="n">not run</td></tr>`;
-        if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="4" class="n">✗ ${esc(x.error)}</td></tr>`;
-        const ratio = n?.ok ? x.runMs / n.runMs : null;
-        const w = Math.max(2, Math.round((x.runMs / max) * 120));
-        return `<tr>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs)</span>' : ''}</td>` +
-          `<td class="num">${fmtMs(x.runMs)}<span class="bar ${s === 'native' ? 'native' : ratio > 5 ? 'slow' : ''}" style="width:${w}px"></span></td>` +
-          `<td class="num">${ratio ? `${ratio.toFixed(2)}×` : '—'}</td><td class="num">${fmtMs(x.compileMs)}</td><td class="num">${fmtKiB(x.gz)}</td></tr>`;
+
+    function draw(key) {
+      const m = METRICS[key];
+      const mean = (s, lang) => geo(data.results.filter((r) => r.lang === lang).map((r) => rel(r, s, m)).filter((v) => v));
+      const cards = sols.filter((s) => s !== 'native').sort((a, b) => (mean(b, 'c') ?? 0) - (mean(a, 'c') ?? 0)).map((s) => {
+        const f = (v, k) => (v ? `${v.toFixed(v < 10 ? 2 : 1)} <small>${k}: ${words(v, m)} than native</small>` : `— <small>${k}: none built</small>`);
+        return `<div class="card"><div class="k">${esc(LABEL[s])}</div><div class="v">${f(mean(s, 'c'), 'C')}</div><div class="v">${f(mean(s, 'cpp'), 'C++')}</div></div>`;
       }).join('');
-    }).join('');
+      const rows = data.results.map((r) => {
+        const max = Math.max(...sols.map((s) => (valid(r.solutions[s]) ? m.get(r.solutions[s]) ?? 0 : 0)));
+        const order = [...sols].sort((a, b) => (valid(r.solutions[a]) ? m.get(r.solutions[a]) ?? Infinity : Infinity) - (valid(r.solutions[b]) ? m.get(r.solutions[b]) ?? Infinity : Infinity));
+        return order.map((s, i) => {
+          const x = r.solutions[s];
+          const head = i === 0 ? `<th scope="rowgroup" rowspan="${order.length}">${esc(r.program)} <span class="n">${r.lang === 'cpp' ? 'C++' : 'C'} · ${esc(r.arg)}</span><br><span class="n">${esc(r.what)}</span></th>` : '';
+          if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="5" class="n">not run</td></tr>`;
+          if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="5" class="n">✗ ${esc(x.error)}</td></tr>`;
+          const v = rel(r, s, m), w = max && m.get(x) ? Math.max(2, Math.round((m.get(x) / max) * 120)) : 0;
+          const cellOf = (k) => `<td class="num${k === key ? ' on' : ''}">${METRICS[k].fmt(METRICS[k].get(x))}${k === key && w ? `<span class="bar ${s === 'native' ? 'native' : v && v < 0.2 ? 'slow' : ''}" style="width:${w}px"></span>` : ''}</td>`;
+          return `<tr>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs: not compared)</span>' : ''}</td>` +
+            `<td class="num">${v ? `${v.toFixed(v < 0.1 ? 3 : 2)} <span class="n">${s === 'native' ? '' : words(v, m)}</span>` : '—'}</td>` +
+            Object.keys(METRICS).map(cellOf).join('') + '</tr>';
+        }).join('');
+      }).join('');
+      document.getElementById('bench-body').innerHTML =
+        `<div class="summary">${cards}</div>` +
+        `<div class="scroll"><table class="bench"><thead><tr><th>Program</th><th>Solution</th><th>${esc(m.label)} vs native <span class="n">higher is better</span></th>` +
+        Object.entries(METRICS).map(([k, x]) => `<th class="${k === key ? 'on' : ''}">${esc(x.label)} <span class="n">lower is better</span></th>`).join('') +
+        `</tr></thead><tbody>${rows}</tbody></table></div>`;
+      for (const b of document.querySelectorAll('#bench .seg button')) b.setAttribute('aria-pressed', String(b.dataset.m === key));
+    }
+
     document.getElementById('bench').innerHTML =
-      `<div class="summary">${summary}</div>` +
-      `<p class="env">${esc(data.env.host)} · Node ${esc(data.env.node)} · ${env} · best of ${data.runs} · ${esc(data.env.date.slice(0, 10))}</p>` +
-      `<div class="scroll"><table class="bench"><thead><tr><th>Program</th><th>Solution</th><th>Run</th><th>× native</th><th>Compile</th><th>Size (gzip)</th></tr></thead><tbody>${rows}</tbody></table></div>` +
-      `<p class="notes">Sizes are what ships: a native or x86 executable; PRISM's bundle (JavaScript and memory image); Emscripten's .js and .wasm. The x86 build runs under QEMU on an ARM host: it is what an old x86 binary costs here, not x86 speed.</p>`;
+      `<p class="env">${esc(data.env.host)} · Node ${esc(data.env.node)} · ${env} · best of ${data.runs}${data.dockerRuns ? ` (the emulated x86 build: ${data.dockerRuns})` : ''} · ${esc(data.env.date.slice(0, 10))}</p>` +
+      `<div class="seg" role="group" aria-label="Compare by">${Object.entries(METRICS).map(([k, x]) => `<button type="button" data-m="${k}" aria-pressed="false">${esc(x.label)}</button>`).join('')}</div>` +
+      `<p class="notes">Each value against native's: above 1 is better than native, below 1 worse. The cards are the geometric mean over the programs each solution built; in the table each program's solutions are best first.</p>` +
+      `<div id="bench-body"></div>` +
+      `<p class="notes">Sizes are what ships: a native or x86 executable; PRISM's bundle (JavaScript and memory image); Emscripten's .js and .wasm, its runtime included.${data.env.prismRuntime ? ` PRISM's bundle is the program alone: the runtime it runs on is shared by every program and loaded once -- at most ${Math.round(data.env.prismRuntime.gz / 1024)} KiB gzipped (all of src/ and the worker; a page loads only the environments its program names).` : ''} The x86 build runs under QEMU on an ARM host: it is what an old x86 binary costs here, not x86 speed.</p>`;
+    document.querySelector('#bench .seg').addEventListener('click', (ev) => { const b = ev.target.closest('button[data-m]'); if (b) draw(b.dataset.m); });
+    draw('run');
   })();
 </script>
 </body>
