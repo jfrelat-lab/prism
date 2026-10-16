@@ -136,7 +136,7 @@ if (!process.env.EMSDK_PYTHON && existsSync('/opt/homebrew/opt/python@3.12/bin/p
 function solutionEmscripten(p, lang, file) {
   const js = join(WORK, `${p.id}-${lang}-em.js`), wasm = js.replace(/\.js$/, '.wasm');
   const cc = lang === 'cpp' ? `${EMCC.replace(/emcc$/, 'em++')} -std=c++17 -x c++` : `${EMCC} -x c`;
-  const c = timed(`${cc} -O2 -w -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -sNODERAWFS=1 -o ${js} ${file} 2>&1`);
+  const c = timed(`${cc} -O2 -w -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -sEXIT_RUNTIME=1 --pre-js ${join(ROOT, 'tools/bench/em-stdout.js')} -o ${js} ${file} 2>&1`);
   if (c.r.status !== 0) return { ok: false, error: String(c.r.stdout).split('\n').find((l) => /error/.test(l)) ?? 'compile failed' };
   const size = statSync(js).size + (existsSync(wasm) ? statSync(wasm).size : 0);
   const gz = gzipSync(readFileSync(js)).length + (existsSync(wasm) ? gzipSync(readFileSync(wasm)).length : 0);
@@ -190,20 +190,31 @@ for (const p of PROGRAMS.filter((x) => !only || only.includes(x.id))) {
       row.solutions[name] = r;
       process.stdout.write(`${p.id.padEnd(14)} ${lang.padEnd(4)} ${name.padEnd(12)} ${r.ok ? `compile ${r.compileMs.toFixed(0).padStart(6)} ms  run ${r.runMs.toFixed(0).padStart(7)} ms  ${r.bytes ? `${(r.bytes / 1024).toFixed(0)} KiB` : ''}` : `-- ${r.error}`}\n`);
     }
-    const ref = row.solutions.native?.stdout;
-    for (const [name, r] of Object.entries(row.solutions)) if (r.ok && ref && r.stdout !== ref) { r.sameOutput = false; console.log(`   ⚠ ${name}'s output differs from native: its time is not a comparison`); }
     results.push(row);
   }
 }
 const OUT = join(ROOT, 'dist/bench-compare');
 mkdirSync(OUT, { recursive: true });
-// --only re-measures some programs: their rows replace the same rows of the results already there.
+// --only and --skip re-measure part of the table: what this run measured replaces the same program,
+// language and solution in the results already there, and the rest is kept.
 let all = results;
-if (only && existsSync(join(OUT, 'results.json'))) {
-  const before = JSON.parse(readFileSync(join(OUT, 'results.json'), 'utf8')).results ?? [];
-  const key = (r) => `${r.program}/${r.lang}`, fresh = new Set(results.map(key));
-  all = [...before.filter((r) => !fresh.has(key(r))), ...results]
+if ((only || arg('skip')) && existsSync(join(OUT, 'results.json'))) {
+  const prev = JSON.parse(readFileSync(join(OUT, 'results.json'), 'utf8')), before = prev.results ?? [];
+  // A skipped solution's version line stays the one it was measured with.
+  for (const [k, v] of Object.entries(prev.env ?? {})) if (env[k] == null || skip.has(k)) env[k] = v;
+  const key = (r) => `${r.program}/${r.lang}`, fresh = new Map(results.map((r) => [key(r), r]));
+  all = [...before.filter((r) => !fresh.has(key(r))), ...before.filter((r) => fresh.has(key(r))).map((r) => {
+    const n = fresh.get(key(r)); fresh.delete(key(r)); return { ...n, solutions: { ...r.solutions, ...n.solutions } };
+  }), ...fresh.values()]
     .sort((a, b) => PROGRAMS.findIndex((p) => p.id === a.program) - PROGRAMS.findIndex((p) => p.id === b.program) || a.lang.localeCompare(b.lang));
+}
+// Compared with native's output once the table is whole: a solution kept from an earlier run is checked too.
+for (const row of all) {
+  const ref = row.solutions.native?.stdout;
+  for (const [name, r] of Object.entries(row.solutions)) {
+    delete r.sameOutput;
+    if (r.ok && ref && r.stdout !== ref) { r.sameOutput = false; console.log(`   ⚠ ${row.program} ${row.lang} ${name}'s output differs from native: its time is not a comparison`); }
+  }
 }
 writeFileSync(join(OUT, 'results.json'), JSON.stringify({ env, runs: RUNS, dockerRuns: DOCKER_RUNS, results: all }, null, 1));
 console.log(`\n${join(OUT, 'results.json')}`);

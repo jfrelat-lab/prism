@@ -39,6 +39,7 @@
   header .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; }
   header .logo span { color: var(--accent); }
   header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
+  header nav a[aria-current] { color: var(--head); }
   main { max-width: 1160px; margin: 0 auto; padding: 0 24px 56px; }
   h1 { margin: 40px 0 10px; font-size: clamp(26px, 3.6vw, 36px); line-height: 1.15; color: var(--head); text-wrap: balance; }
   h2 { margin: 44px 0 6px; font-size: 21px; color: var(--head); text-wrap: balance; }
@@ -50,9 +51,12 @@
   th, td { padding: 8px 10px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
   thead th { position: sticky; top: 0; background: var(--panel); color: var(--head); font-size: 13px; border-top: none; white-space: nowrap; }
   thead th.prism { color: var(--accent); }
-  tbody th { color: var(--head); font-weight: 500; min-width: 15em; }
+  tbody th { color: var(--head); font-weight: 500; min-width: 13em; }
+  /* The feature column stays in view when a narrow screen scrolls the five solutions sideways. */
+  #matrix tbody th[scope="row"], #matrix thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--line); }
+  #matrix thead th:first-child { z-index: 2; }
   tr.cat th { padding-top: 16px; color: var(--dim); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; background: transparent; }
-  td.c { min-width: 9.5em; }
+  td.c { min-width: 8em; }
   td.prism { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .m { display: inline-block; min-width: 1.5em; font-weight: 700; }
   .yes .m { color: var(--yes); } .part .m { color: var(--part); } .no .m { color: var(--no); } .unk .m, .na .m { color: var(--unk); }
@@ -66,6 +70,7 @@
   .env code { color: var(--ink); }
   .bench td, .bench th { white-space: nowrap; }
   .bench td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bench td.err, .bench th[scope="rowgroup"] { white-space: normal; overflow-wrap: anywhere; min-width: 14ch; max-width: 26ch; }
   .bench th.on, .bench td.on { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin: 4px 0 6px; }
   .seg button { font: inherit; font-size: 13.5px; color: var(--ink); background: var(--panel); border: 0; padding: 7px 14px; cursor: pointer; }
@@ -80,16 +85,21 @@
   .card .v { font-size: 22px; color: var(--head); font-variant-numeric: tabular-nums; }
   .card .v small { font-size: 13px; color: var(--dim); }
   footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
-  @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; } }
+  @media (max-width: 560px) { header { padding: 10px 16px; } main { padding: 0 16px 40px; } header nav { margin-left: 0; }
+    tbody th { min-width: 9em; font-size: 12.5px; } td.c { min-width: 6.5em; } }
 </style>
 </head>
 <body>
 <header>
   <a class="logo" href="./"><span>◢</span> PRISM</a>
   <nav>
-    <a href="./#play">Play</a>
+    <a href="./#play" data-site hidden>Play</a>
+    <a href="web/" data-shelf hidden>Program shelf</a>
     <a href="web/live/">Live C</a>
     <a href="compare.html" aria-current="page">Compared</a>
+    <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/COMPAT.md">What runs</a>
+    <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/TESTING.md">How it is tested</a>
+    <a href="https://github.com/jfrelat-lab/prism/tree/main/docs">Documentation</a>
     <a href="https://github.com/jfrelat-lab/prism">Source</a>
   </nav>
 </header>
@@ -129,13 +139,23 @@
   Corrections to this table are welcome as issues.</footer>
 
 <script>
+  // The home page's rule: the shelf where the server or an export answers, Play only in an export.
+  const showShelf = () => { for (const el of document.querySelectorAll('[data-shelf]')) el.hidden = false; };
+  fetch('__targets').then((r) => { if (r.ok) showShelf(); }).catch(() => {});
+  fetch('web/site.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).then((site) => {
+    if (!site?.programs?.length) return;
+    showShelf();
+    for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
+  }).catch(() => {});
+
   /*
    * THE TABLE. One row per feature, one cell per solution: [mark, note, footnote]. The marks are
    * yes / part / no / na / unk; a footnote is a number into NOTES. Keep a cell "unk" until it has
    * been checked against the project's own documentation.
    */
   const SOLUTIONS = [
-    ['prism', 'PRISM'], ['emscripten', 'Emscripten'], ['cheerp', 'Cheerp'], ['native', 'Native (clang, gcc)'], ['docker', 'x86 build, emulated (Docker linux/386 on ARM)'],
+    ['prism', 'PRISM', 'C → JavaScript'], ['emscripten', 'Emscripten', 'LLVM → WebAssembly'], ['cheerp', 'Cheerp', 'LLVM → JS / Wasm'],
+    ['native', 'Native', 'clang, gcc'], ['docker', 'x86, emulated', '32-bit Linux on ARM'],
   ];
   const Y = (n, f) => ['yes', n, f], P = (n, f) => ['part', n, f], N = (n, f) => ['no', n, f], U = (n) => ['unk', n], X = (n) => ['na', n];
   const ROWS = [
@@ -224,7 +244,7 @@
     return `<td class="c ${mark} ${col === 'prism' ? 'prism' : ''}"><span class="m" aria-label="${mark}">${MARK[mark]}</span>${note ? ` <span class="n">${esc(note)}</span>` : ''}${foot ? `<sup><a href="#note-${foot}">${foot}</a></sup>` : ''}</td>`;
   };
   document.getElementById('matrix').innerHTML =
-    `<thead><tr><th scope="col">Feature</th>${SOLUTIONS.map(([k, t]) => `<th scope="col" class="${k}">${esc(t)}</th>`).join('')}</tr></thead><tbody>` +
+    `<thead><tr><th scope="col">Feature</th>${SOLUTIONS.map(([k, t, sub]) => `<th scope="col" class="${k}">${esc(t)}<br><span class="n">${esc(sub)}</span></th>`).join('')}</tr></thead><tbody>` +
     ROWS.map((r) => {
       if (r.length === 1) return `<tr class="cat"><th colspan="${SOLUTIONS.length + 1}" scope="rowgroup">${esc(r[0])}</th></tr>`;
       if (r[1]?.[0] === 'bench') return `<tr><th scope="row">${esc(r[0])}</th><td colspan="${SOLUTIONS.length}"><span class="n">${esc(r[1][1])}</span></td></tr>`;
@@ -237,7 +257,7 @@
    * repository under serve.mjs). Per program and language, each solution's run time and its ratio to
    * native, its compile time and its gzipped size; above them, the geometric mean of those ratios.
    */
-  const LABEL = { native: 'Native (clang -O2)', 'docker-i386': 'x86 gcc -O2, emulated', prism: 'PRISM', emscripten: 'Emscripten -O2', cheerp: 'Cheerp' };
+  const LABEL = { native: 'Native (clang -O2)', 'docker-i386': '32-bit x86 Linux build (gcc -O2), emulated on ARM', prism: 'PRISM', emscripten: 'Emscripten -O2', cheerp: 'Cheerp' };
   const fmtMs = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${Math.round(ms)} ms`);
   const fmtKiB = (b) => (b ? `${(b / 1024).toFixed(b < 10240 ? 1 : 0)} KiB` : '—');
   const geo = (xs) => (xs.length ? Math.exp(xs.reduce((t, x) => t + Math.log(x), 0) / xs.length) : null);
@@ -280,20 +300,17 @@
         return order.map((s, i) => {
           const x = r.solutions[s];
           const head = i === 0 ? `<th scope="rowgroup" rowspan="${order.length}">${esc(r.program)} <span class="n">${r.lang === 'cpp' ? 'C++' : 'C'} · ${esc(r.arg)}</span><br><span class="n">${esc(r.what)}</span></th>` : '';
-          if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="5" class="n">not run</td></tr>`;
-          if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="5" class="n">✗ ${esc(x.error)}</td></tr>`;
+          if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="n">not run</td></tr>`;
+          if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="n err">✗ ${esc(x.error)}</td></tr>`;
           const v = rel(r, s, m), w = max && m.get(x) ? Math.max(2, Math.round((m.get(x) / max) * 120)) : 0;
-          const cellOf = (k) => `<td class="num${k === key ? ' on' : ''}">${METRICS[k].fmt(METRICS[k].get(x))}${k === key && w ? `<span class="bar ${s === 'native' ? 'native' : v && v < 0.2 ? 'slow' : ''}" style="width:${w}px"></span>` : ''}</td>`;
           return `<tr>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs: not compared)</span>' : ''}</td>` +
-            `<td class="num">${v ? `${v.toFixed(v < 0.1 ? 3 : 2)} <span class="n">${s === 'native' ? '' : words(v, m)}</span>` : '—'}</td>` +
-            Object.keys(METRICS).map(cellOf).join('') + '</tr>';
+            `<td class="num">${m.fmt(m.get(x))}${w ? `<span class="bar ${s === 'native' ? 'native' : v && v < 0.2 ? 'slow' : ''}" style="width:${w}px"></span>` : ''}</td>` +
+            `<td class="num">${v ? `${v.toFixed(v < 0.1 ? 3 : 2)}<br><span class="n">${s === 'native' ? '' : words(v, m)}</span>` : '—'}</td></tr>`;
         }).join('');
       }).join('');
       document.getElementById('bench-body').innerHTML =
         `<div class="summary">${cards}</div>` +
-        `<div class="scroll"><table class="bench"><thead><tr><th>Program</th><th>Solution</th><th>${esc(m.label)} vs native <span class="n">higher is better</span></th>` +
-        Object.entries(METRICS).map(([k, x]) => `<th class="${k === key ? 'on' : ''}">${esc(x.label)} <span class="n">lower is better</span></th>`).join('') +
-        `</tr></thead><tbody>${rows}</tbody></table></div>`;
+        `<div class="scroll"><table class="bench"><thead><tr><th>Program</th><th>Solution</th><th>${esc(m.label)} <span class="n">lower is better</span></th><th>vs native <span class="n">higher is better</span></th></tr></thead><tbody>${rows}</tbody></table></div>`;
       for (const b of document.querySelectorAll('#bench .seg button')) b.setAttribute('aria-pressed', String(b.dataset.m === key));
     }
 
@@ -302,7 +319,7 @@
       `<div class="seg" role="group" aria-label="Compare by">${Object.entries(METRICS).map(([k, x]) => `<button type="button" data-m="${k}" aria-pressed="false">${esc(x.label)}</button>`).join('')}</div>` +
       `<p class="notes">Each value against native's: above 1 is better than native, below 1 worse. The cards are the geometric mean over the programs each solution built; in the table each program's solutions are best first.</p>` +
       `<div id="bench-body"></div>` +
-      `<p class="notes">Sizes are what ships: a native or x86 executable; PRISM's bundle (JavaScript and memory image); Emscripten's .js and .wasm, its runtime included.${data.env.prismRuntime ? ` PRISM's bundle is the program alone: the runtime it runs on is shared by every program and loaded once -- at most ${Math.round(data.env.prismRuntime.gz / 1024)} KiB gzipped (all of src/ and the worker; a page loads only the environments its program names).` : ''} The x86 build runs under QEMU on an ARM host: it is what an old x86 binary costs here, not x86 speed.</p>`;
+      `<p class="notes">Sizes are what ships: a native or x86 executable; PRISM's bundle (JavaScript and memory image); Emscripten's .js and .wasm, its runtime included.${data.env.prismRuntime ? ` PRISM's bundle is the program alone: the runtime it runs on is shared by every program and loaded once -- at most ${Math.round(data.env.prismRuntime.gz / 1024)} KiB gzipped (all of src/ and the worker; a page loads only the environments its program names).` : ''} The 32-bit x86 build is the same source compiled by gcc for i386 Linux, in a Docker <code>linux/386</code> container on this Apple-silicon Mac: every x86 instruction is translated to ARM by QEMU's user-mode emulator, as Rosetta does not run 32-bit code. It stands for an old x86 binary run on today's ARM machines -- what emulation costs there, not what an x86 processor does.</p>`;
     document.querySelector('#bench .seg').addEventListener('click', (ev) => { const b = ev.target.closest('button[data-m]'); if (b) draw(b.dataset.m); });
     draw('run');
   })();
