@@ -51,13 +51,22 @@
   th, td { padding: 8px 10px; border-top: 1px solid var(--line); vertical-align: top; text-align: left; }
   thead th { position: sticky; top: 0; background: var(--panel); color: var(--head); font-size: 13px; border-top: none; white-space: nowrap; }
   thead th.prism { color: var(--accent); }
+  /* PRISM's column, and its rows in the measurements: an outline and a tint laid over the cell's own
+     yes / partly / no colour (a background-image, so the two show together). */
+  :root { --hi: color-mix(in srgb, var(--accent) 11%, transparent); }
+  #matrix .prism { background-image: linear-gradient(var(--hi), var(--hi)); box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent); }
+  #matrix thead th.prism { box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent), inset 0 3px 0 var(--accent); }
+  #matrix tbody tr:last-child td.prism { box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent), inset 0 -2px 0 var(--accent); }
+  .bench tr.prism td { background-image: linear-gradient(var(--hi), var(--hi)); }
+  .bench tr.prism td:first-of-type { box-shadow: inset 3px 0 0 var(--accent); color: var(--accent); font-weight: 600; }
+  .card.prism { border-color: var(--accent); background-image: linear-gradient(var(--hi), var(--hi)); }
+  .card.prism .k { color: var(--accent); }
   tbody th { color: var(--head); font-weight: 500; min-width: 13em; }
   /* The feature column stays in view when a narrow screen scrolls the five solutions sideways. */
   #matrix tbody th[scope="row"], #matrix thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--line); }
   #matrix thead th:first-child { z-index: 2; }
   tr.cat th { padding-top: 16px; color: var(--dim); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; background: transparent; }
   td.c { min-width: 8em; }
-  td.prism { background: color-mix(in srgb, var(--accent) 5%, transparent); }
   .m { display: inline-block; min-width: 1.5em; font-weight: 700; }
   .yes .m { color: var(--yes); } .part .m { color: var(--part); } .no .m { color: var(--no); } .unk .m, .na .m { color: var(--unk); }
   td.yes { background: var(--yes-bg); } td.part { background: var(--part-bg); } td.no { background: var(--no-bg); }
@@ -292,7 +301,7 @@
       const mean = (s, lang) => geo(data.results.filter((r) => r.lang === lang).map((r) => rel(r, s, m)).filter((v) => v));
       const cards = sols.filter((s) => s !== 'native').sort((a, b) => (mean(b, 'c') ?? 0) - (mean(a, 'c') ?? 0)).map((s) => {
         const f = (v, k) => (v ? `${v.toFixed(v < 10 ? 2 : 1)} <small>${k}: ${words(v, m)} than native</small>` : `— <small>${k}: none built</small>`);
-        return `<div class="card"><div class="k">${esc(LABEL[s])}</div><div class="v">${f(mean(s, 'c'), 'C')}</div><div class="v">${f(mean(s, 'cpp'), 'C++')}</div></div>`;
+        return `<div class="card${s === 'prism' ? ' prism' : ''}"><div class="k">${esc(LABEL[s])}</div><div class="v">${f(mean(s, 'c'), 'C')}</div><div class="v">${f(mean(s, 'cpp'), 'C++')}</div></div>`;
       }).join('');
       const rows = data.results.map((r) => {
         const max = Math.max(...sols.map((s) => (valid(r.solutions[s]) ? m.get(r.solutions[s]) ?? 0 : 0)));
@@ -300,10 +309,10 @@
         return order.map((s, i) => {
           const x = r.solutions[s];
           const head = i === 0 ? `<th scope="rowgroup" rowspan="${order.length}">${esc(r.program)} <span class="n">${r.lang === 'cpp' ? 'C++' : 'C'} · ${esc(r.arg)}</span><br><span class="n">${esc(r.what)}</span></th>` : '';
-          if (!x) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="n">not run</td></tr>`;
-          if (!x.ok) return `<tr>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="err num"><span role="img" aria-label="does not build or run" title="${esc(x.error)}">❌</span></td></tr>`;
+          if (!x) return `<tr${s === 'prism' ? ' class="prism"' : ''}>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="n">not run</td></tr>`;
+          if (!x.ok) return `<tr${s === 'prism' ? ' class="prism"' : ''}>${head}<td>${esc(LABEL[s])}</td><td colspan="2" class="err num"><span role="img" aria-label="does not build or run" title="${esc(x.error)}">❌</span></td></tr>`;
           const v = rel(r, s, m), w = max && m.get(x) ? Math.max(2, Math.round((m.get(x) / max) * 120)) : 0;
-          return `<tr>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs: not compared)</span>' : ''}</td>` +
+          return `<tr${s === 'prism' ? ' class="prism"' : ''}>${head}<td>${esc(LABEL[s])}${x.sameOutput === false ? ' <span class="n">(output differs: not compared)</span>' : ''}</td>` +
             `<td class="num">${m.fmt(m.get(x))}${w ? `<span class="bar ${s === 'native' ? 'native' : v && v < 0.2 ? 'slow' : ''}" style="width:${w}px"></span>` : ''}</td>` +
             `<td class="num">${v ? `${v.toFixed(v < 0.1 ? 3 : 2)}<br><span class="n">${s === 'native' ? '' : words(v, m)}</span>` : '—'}</td></tr>`;
         }).join('');
