@@ -399,6 +399,10 @@ export class Parser {
         // and a string literal sizes the array by its bytes plus the NUL.
         let type = d.type;
         if (type.k === 'array' && type.n === null && init) {
+          // `char c[] = {"long"}` is sized by its string, as `char c[] = "long"` is (C11 6.7.9p14).
+          const braced = init.n === 'initlist' && init.items.length === 1 && !init.items[0].designators
+            && init.items[0].value?.expr?.n === 'str' && type.of.k === 'scalar' && (type.of.size === 1 || type.of.size === 4);
+          if (braced) init = init.items[0].value;
           if (init.n === 'initlist') type = T.array(type.of, initListExtent(init, type.of));
           else if (init.expr?.n === 'str') {
             // Sized in ELEMENTS, so a wide literal in a wchar_t[] gets the same count as its
@@ -1674,6 +1678,14 @@ function elidesInto(type, it) {
   // A string literal is a complete initialiser for a character array, not one of its elements.
   if (e.n === 'str' && type.k === 'array' && type.of.k === 'scalar'
       && (type.of.size === 1 || type.of.size === 4)) return false;
+  /*
+   * A value that is already a whole aggregate initialises the element, it is not spread over its
+   * members -- the emitter's #elidable rule, which this counting must agree with. Rosetta Code's
+   * Nested templated data sizes `(struct ntd[]){ (struct ntd){...}, (struct ntd){...} }` with sizeof:
+   * counted two items per element (struct ntd has two members), it came out 1 instead of 2.
+   */
+  if (e.n === 'compound' && e.type && (e.type.k === 'struct' || e.type.k === 'union' || e.type.k === 'array')) return false;
+  if (e.n !== 'str' && e.type && (e.type.k === 'struct' || e.type.k === 'union')) return false;
   return true;
 }
 

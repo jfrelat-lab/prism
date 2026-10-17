@@ -121,6 +121,16 @@ function sideEffects(node) {
 export class EmitError extends Error {}
 
 const unsup = (what) => { throw new EmitError(`tier-0 does not support ${what} yet`); };
+/*
+ * The step of pointer arithmetic: the pointee's size, or 1 for a pointer to void (GNU). A pointer to
+ * a variable-length array -- `double (*)[n]` -- steps by a size known only at run time, which PRISM
+ * does not carry; falling back to 1 compiled such code to WRONG ADDRESSES (Rosetta Code's LU
+ * decomposition read rows 1 and 2 from inside row 0). Refused, as a VLA of VLAs is.
+ */
+function stride(t) {
+  if (t.k === 'array' && (t.vla || t.size == null)) unsup('arithmetic through a pointer to a variable-length array');
+  return t.size ?? 1;
+}
 
 // ---------------------------------------------------------------- load / store
 
@@ -873,6 +883,14 @@ export class FunctionEmitter {
   }
 
   #initList(addr, type, init) {
+    // `{ "Hi!" }` fills a character array as "Hi!" does (C11 6.7.9p14): #staticList's rule, for a
+    // local. Without it the string decayed to its address and a byte of that landed in element 0.
+    if (type.k === 'array' && type.of.k === 'scalar' && (type.of.size === 1 || type.of.size === 4)
+        && init.items.length === 1 && !init.items[0].designators) {
+      let e = init.items[0].value?.expr;
+      while (e && e.n === 'cast') e = e.expr;
+      if (e && e.n === 'str') { this.#initDynamic(addr, type, { n: 'init', expr: e }); return; }
+    }
     if (type.k === 'array') {
       let idx = 0;
       for (let i = 0; i < init.items.length; i++) {
@@ -1257,7 +1275,7 @@ export class FunctionEmitter {
         if (bt.k !== 'ptr') return null;
         let n;
         try { n = evalConstNumber(this.ty, e.index); } catch { return null; }
-        return base + n * (bt.to.size ?? 1);
+        return base + n * (stride(bt.to));
       }
       case 'str': return this.#stringAddr(e);
     }
@@ -1414,6 +1432,10 @@ export class FunctionEmitter {
      * path learned elision -- the static path had never reached them, because a struct variable is
      * not a constant initialiser.
      */
+    // A string literal is an array too, but it is a copy only into a character array (above):
+    // anywhere else it decays to a pointer and is the first ITEM -- `child c = { "Lisa", 18 };`
+    // gives it to c.p.name. Taken as a copy of the whole member, Lisa's name came out empty.
+    if (e.n === 'str') return true;
     const et = e.type;
     if (et && (T.isRecord(et) || et.k === 'array')) return false;
     return true;
@@ -1544,6 +1566,10 @@ export class FunctionEmitter {
       case 'return': {
         const ret = this.decl.type.ret;
         if (!s.expr || ret.k === 'void') {
+          // `return g(x);` in a void function -- a void call, which gcc accepts as C++ does: the
+          // call still happens. Dropped with the value, Rosetta Code's Named parameters printed
+          // nothing for its wrapper.
+          if (s.expr) this.out.push(this.#rval(s.expr).js + ';');
           this.out.push(FRAME_RESTORE);
           this.out.push('return;');
           return;
@@ -1941,7 +1967,7 @@ export class FunctionEmitter {
         const i = this.#rval(e.index);
         const bt = this.ty.decay(b.type);
         if (bt.k !== 'ptr') throw new EmitError('subscripting a non-pointer');
-        const es = bt.to.size ?? 1;
+        const es = stride(bt.to);
         return { addr: `(${addrOfPtr(b.js, bt)}+Math.imul(${indexJs(this.ty, i)},${es})|0)`, type: bt.to };
       }
       case 'member': {
@@ -2333,15 +2359,15 @@ export class FunctionEmitter {
     }
     // Pointer arithmetic scales by the pointee, and p - q divides by it.
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
-      const s = at.to.size ?? 1;
+      const s = stride(at.to);
       return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };
     }
     if (bt.k === 'ptr' && T.isInteger(at) && op === '+') {
-      const s = bt.to.size ?? 1;
+      const s = stride(bt.to);
       return { js: `((${b.js})+Math.imul(${indexJs(this.ty, a)},${s})|0)`, type: bt };
     }
     if (at.k === 'ptr' && bt.k === 'ptr' && op === '-') {
-      const s = at.to.size ?? 1;
+      const s = stride(at.to);
       // ptrdiff_t: a LONG between huge pointers, whose distance can pass 64K; an int otherwise --
       // two bytes under a 16-bit model (Watcom -mm: sizeof(hp - hp) 4, fp - fp and np - np 2).
       const d = (at.qual === 'huge' || bt.qual === 'huge') ? this.ty.LONG : this.ty.INT;
@@ -2491,7 +2517,7 @@ export class FunctionEmitter {
     // a far pointer at seg:n*sizeof is a paragraph again only when n*sizeof is a multiple of 16.
     if (isSeg(at) && (op === '+' || op === '-')) unsup('arithmetic on a _seg pointer');
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
-      const s = at.to.size ?? 1;
+      const s = stride(at.to);
       return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };
     }
     if (op === '<<' || op === '>>') {
