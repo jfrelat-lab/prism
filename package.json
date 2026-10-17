@@ -23,7 +23,8 @@
     "mame": "node tools/mame.mjs",
     "mamediff": "node tools/mamediff.mjs",
     "z80diff": "node tools/z80diff.mjs",
-    "gates": "node tools/gates.mjs"
+    "gates": "node tools/gates.mjs",
+    "deploy": "node tools/deploy.mjs"
   },
   "engines": {
     "node": ">=22"
