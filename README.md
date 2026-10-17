@@ -25,7 +25,7 @@ is supplied in JavaScript underneath it. That platform covers:
 Nothing in a game's tree is edited. Build switches the tree already has are configuration, not
 modification.
 
-PRISM has a sibling, [MIRAGE](https://github.com/jfrelat-lab/mirage-x86), which recompiles a
+PRISM has a sibling, MIRAGE, which recompiles a
 program's x86 **binary**. MIRAGE needs a binary and no source; PRISM needs published source and no
 binary.
 

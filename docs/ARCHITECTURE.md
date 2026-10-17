@@ -3,7 +3,7 @@
 PRISM is a **C→JavaScript compiler written in pure JavaScript, that runs in the page**. It compiles
 the *unmodified source* of DOS-era games and emulators and runs them in the browser or headless in Node.
 
-Sibling project: [MIRAGE](https://github.com/jfrelat-lab/mirage-x86) recompiles a program's **x86 binary**; PRISM compiles its
+Sibling project: MIRAGE recompiles a program's **x86 binary**; PRISM compiles its
 **C source**. The real difference is what each one needs: MIRAGE needs a binary and no source, PRISM
 needs published source and no binary. Doom qualifies for PRISM because id released the Linux tree;
 a program whose source was never published is MIRAGE's alone, and one that ships only source is
