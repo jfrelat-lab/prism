@@ -384,6 +384,15 @@ export class Parser {
         out.push({ n: 'typedef', name: d.name, type: d.type });
       } else {
         let init = null;
+        /*
+         * The name is in scope from the end of its declarator, so its own initialiser sees it (C11
+         * 6.2.1p7): `filt_t *f = calloc(2, sizeof(*f));` is the everyday case. Declared only after
+         * the initialiser, `*f` there had no type: refused as "sizeof an expression of unknown
+         * type" in a constant, and in a call compiled to something that lost f[1] of Rosetta Code's
+         * Ludic numbers (1 0 3 4 5 ... instead of 1 2 3 5 7 ...). Re-declared below with the type
+         * the initialiser completes (`int a[] = {...}`).
+         */
+        if (this.isP('=')) this.scope.declare(d.name, { kind: d.type.k === 'func' ? 'func' : 'var', type: d.type });
         if (this.eatP('=')) init = this.#initializer(d.type);
         // `int a[] = {…};` completes the array from its initialiser. Two traps: a designated
         // initialiser can reach past the item count (`{5, [2]=2, 3}` has 3 items and 4 elements),

@@ -161,16 +161,22 @@ const hasMain = (code) => /\bmain\s*\(/.test(code) || /\bWinMain\s*\(/.test(code
 // ---------------------------------------------------------------- run
 const NATIVE = !flag('no-native') && spawnSync('cc', ['--version']).status === 0;
 /** A child process with a wall-clock limit: { code, stdout, stderr, timedOut }. Output kept as bytes read as latin1. */
-function child(cmd, args, ms) {
+/*
+ * PRISM's side answers in JSON, which is UTF-8 on the wire: read as latin1 like a program's raw bytes,
+ * every character above 0x7f came back encoded twice and a correct "°" was counted as a difference.
+ * A native program runs as `prog`, the argv[0] PRISM gives: a usage line that prints its own name
+ * differed by the build directory's path alone.
+ */
+function child(cmd, args, ms, { json = false } = {}) {
   return new Promise((resolve) => {
     // In a folder of their own: Rosetta's file tasks create, rename and delete files where they run.
-    const c = spawn(cmd, args, { cwd: RUN, stdio: ['ignore', 'pipe', 'pipe'] });
+    const c = spawn(cmd, args, { cwd: RUN, argv0: json ? undefined : 'prog', stdio: ['ignore', 'pipe', 'pipe'] });
     const out = [], err = [];
     let size = 0, timedOut = false;
     c.stdout.on('data', (d) => { if ((size += d.length) < 64 << 20) out.push(d); });
     c.stderr.on('data', (d) => err.push(d));
     const t = setTimeout(() => { timedOut = true; c.kill('SIGKILL'); }, ms);
-    c.on('close', (code) => { clearTimeout(t); resolve({ code, timedOut, stdout: Buffer.concat(out).toString('latin1'), stderr: Buffer.concat(err).toString('utf8') }); });
+    c.on('close', (code) => { clearTimeout(t); resolve({ code, timedOut, stdout: Buffer.concat(out).toString(json ? 'utf8' : 'latin1'), stderr: Buffer.concat(err).toString('utf8') }); });
     c.on('error', () => { clearTimeout(t); resolve({ code: -1, timedOut, stdout: '', stderr: 'spawn failed' }); });
   });
 }
@@ -182,7 +188,7 @@ async function native(file) {
   return { built: true, timedOut: r.timedOut, code: r.code, stdout: r.stdout };
 }
 async function prism(file) {
-  const r = await child(process.execPath, [SELF, '--one', file], 20000);
+  const r = await child(process.execPath, [SELF, '--one', file], 20000, { json: true });
   if (r.timedOut) return { phase: 'timeout' };
   try { return JSON.parse(r.stdout); } catch { return { phase: 'crash', err: r.stderr.split('\n').find((l) => l.trim()) ?? `exit ${r.code}` }; }
 }
