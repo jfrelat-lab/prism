@@ -55,6 +55,46 @@ if (process.argv[2] === '--one') {
   process.exit(0);
 }
 
+/*
+ * --build <env> <file>: a block that asks for a graphical environment, built the way a target is
+ * (src/target.js), with the environment PRISM has for it. Step 1 is the BUILD only: compiled and
+ * linked, or which units failed and which functions nothing defines. Running it needs a screen.
+ */
+const ENV_TARGET = {
+  glut: { env: ['stdio', 'tz', 'gl', 'glut', 'glu'] },
+  gl: { env: ['stdio', 'tz', 'gl', 'glut', 'glu'] },
+  sdl: { env: ['stdio', 'tz', 'sdl12'] },
+  sdl2: { env: ['stdio', 'tz', 'sdl2'] },
+  x11: { env: ['stdio', 'tz', 'x11'] },
+  // The Win32 shim is C compiled with the program, as Hexen II and WinQuake have it: win32.c is the
+  // window and expects win32-net.c's pump beside it (targets/hexen2.json).
+  win32: { env: ['stdio', 'tz', 'wsock', 'vgafont'], generated: ['src/env/wide.c', 'src/env/inttypes.c', 'src/env/win32-app.c', 'src/env/win32-net.c', 'src/env/win32.c'] },
+};
+if (process.argv[2] === '--build') {
+  const { buildTarget } = await import('../src/target.js');
+  const [, , , env, file] = process.argv;
+  const root = dirname(dirname(fileURLToPath(import.meta.url)));
+  const target = { name: 'rosetta', dir: dirname(file).slice(root.length + 1), units: { list: [basename(file)] },
+    compile: { memory: 64, collect: true }, ...ENV_TARGET[env] };
+  try {
+    const t = buildTarget(target, { root });
+    const p = t.program ?? t;
+    const failures = (p.failures ?? []).map((f) => `${f.fn ? `${f.fn}: ` : ''}${String(f.message ?? f.error ?? JSON.stringify(f)).split('\n')[0]}`.slice(0, 200));
+    // A header the build could not find is a failure too: it says which library is missing.
+    if (t.missingHeaders?.length) failures.unshift(`missing header ${t.missingHeaders.join(', ')}`);
+    // Only what the PROGRAM asks for: the shim's own units leave names for a real program to define
+    // (PuTTY defines its COM GUIDs), and those say nothing about this one.
+    // windows.h declares the COM GUIDs a real program's own sources define (PuTTY's do): any unit
+    // that includes it lists them, used or not.
+    const mine = (u) => (!u.units || u.units.some((x) => x === basename(file))) && !/^(CLSID|IID)_/.test(u.name ?? '');
+    const undef = [...new Set([...(p.undefined ?? []), ...(p.undefinedVars ?? [])].filter(mine).map((u) => u.name ?? String(u)))];
+    process.stdout.write(JSON.stringify({ phase: failures.length ? 'compile' : undef.length ? 'unresolved' : 'built', err: failures[0] ?? null, undefined: undef }));
+  } catch (e) {
+    process.stdout.write(JSON.stringify({ phase: 'compile', err: String(e.message ?? e).split('\n')[0].slice(0, 300), undefined: [] }));
+  }
+  process.exit(0);
+}
+
 const API = 'https://rosettacode.org/w/api.php';
 const UA = 'PRISM-rosetta-survey/1.0 (C compiler compatibility measurement; https://github.com/jfrelat-lab/prism)';
 const CACHE = join(ROOT, '.oracle', 'rosetta');
@@ -214,7 +254,9 @@ for (const [i, title] of tasks.entries()) {
     const row = { task: title, revid: entry.revid, block: n, sub: b.sub, env, input: inputOf(b.code), lines: b.code.split('\n').length };
     if (!hasMain(b.code)) { results.push({ ...row, status: 'fragment' }); return; }
     // PRISM runs console programs here; the others are counted by what they need, not attempted.
+    if (ENV_TARGET[env] && !flag('no-envs')) { jobs.push({ row, code: b.code, env, file: join(CACHE, 'blocks', `${slug(title)}-${n}.c`) }); return; }
     if (env !== 'console' && env !== 'posix') { results.push({ ...row, status: 'needs-env' }); return; }
+    if (flag('envs-only')) return;   // --envs-only: the graphical ones alone, into the partial index
     jobs.push({ row, code: b.code, file: join(CACHE, 'blocks', `${slug(title)}-${n}.c`) });
   });
 }
@@ -224,6 +266,15 @@ if (flag('fetch-only')) process.exit(0);
 let done = 0;
 async function work(j) {
   writeFileSync(j.file, j.code, 'latin1');
+  if (j.env) {
+    const r = await child(process.execPath, [SELF, '--build', j.env, j.file], 120000, { json: true });
+    let b = null;
+    try { b = JSON.parse(r.stdout); } catch { b = { phase: r.timedOut ? 'timeout' : 'crash', err: r.stderr.split('\n').find((l) => l.trim()) ?? null, undefined: [] }; }
+    const status = { built: 'env-builds', unresolved: 'env-unresolved', compile: 'env-compile-error' }[b.phase] ?? `env-${b.phase}`;
+    results.push({ ...j.row, status, err: b.err, undefined: b.undefined });
+    process.stdout.write(`\rran ${++done}/${jobs.length} blocks, ${JOBS} at a time`);
+    return;
+  }
   const [p, nat] = await Promise.all([prism(j.file), NATIVE ? native(j.file) : null]);
   let status = p.phase === 'ran' ? 'runs' : p.phase === 'compile' ? 'compile-error' : p.phase === 'run' ? 'run-error' : p.phase;
   if (status === 'runs' && nat?.built && !nat.timedOut) status = nat.stdout === p.stdout ? 'same-output' : 'output-differs';
@@ -248,7 +299,9 @@ for (const r of results.filter((x) => x.status === 'compile-error' || x.status =
   const k = `${r.status}: ${r.err.replace(/'[^']*'/g, "'…'").replace(/\b\d+\b/g, 'N').replace(/^[^:]*:\d+:(\d+:)?\s*/, '')}`;
   errs[k] = (errs[k] ?? 0) + 1;
 }
-writeFileSync(join(OUT, 'index.json'), JSON.stringify({
+// A partial run (--task, --tasks) must not replace the survey a page reads.
+const INDEX = join(OUT, only || arg('tasks') || flag('envs-only') ? 'index-partial.json' : 'index.json');
+writeFileSync(INDEX, JSON.stringify({
   note: 'PRISM\'s measurements on Rosetta Code\'s C solutions. No Rosetta Code content: a solution is under the GNU FDL and is read from rosettacode.org, with its authors.',
   date: new Date().toISOString(), native: NATIVE, tasks: tasks.length, blocks: results.length, byStatus, byStatusSelf, byEnv, results,
 }, null, 1));
@@ -256,4 +309,4 @@ const show = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]).map(([k, v]) =
 console.log(`\n${results.length} C blocks in ${tasks.length} tasks\n\nby status\n${show(byStatus)}\n\nby status, the ${selfContained.length} that read neither input nor files\n${show(byStatusSelf)}\n\nby environment\n${show(byEnv)}`);
 const top = Object.entries(errs).sort((a, b) => b[1] - a[1]);
 console.log(`\nthe ${Math.min(25, top.length)} most frequent failures, of ${top.length} kinds\n${top.slice(0, 25).map(([k, v]) => `  ${String(v).padStart(5)}  ${k.slice(0, 150)}`).join('\n')}`);
-console.log(`\n${join(OUT, 'index.json')}`);
+console.log(`\n${INDEX}`);
