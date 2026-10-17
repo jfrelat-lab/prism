@@ -105,16 +105,17 @@ const got = program.M.audio.wav;
 /*
  * The expectation, computed without the mixer.
  *
- * SEAL's 8-bit format is UNSIGNED, centred on 128, and its volume runs 0..64 — msdos.c passes
- * MAME's 0..255 as volume/4. The play cursor advances freq/rate source samples per output sample,
- * and the wave loops. Everything here comes from SEAL's documented contract, not from reading the
- * shim.
+ * SEAL's 8-bit format is SIGNED, silence 0 -- its own wavfile.c flips the top bit of a WAV's
+ * unsigned bytes before AWriteAudioData -- and its volume runs 0..64; msdos.c passes MAME's 0..255
+ * as volume/4. The play cursor advances freq/rate source samples per output sample, and the wave
+ * loops. Everything here comes from SEAL's own code and contract, not from reading the shim (this
+ * expectation once said "unsigned", and the gate held the shim to the same mistake).
  */
 const vol = Math.floor(VOLUME / 4);
 const want = [];
 let pos = 0;
 for (let n = 0; n < got.length; n++) {
-  want.push(Math.max(-32768, Math.min(32767, (WAVE[Math.floor(pos)] - 128) * vol * 4)));
+  want.push(Math.max(-32768, Math.min(32767, ((WAVE[Math.floor(pos)] << 24) >> 24) * vol * 4)));
   pos += FREQ / RATE;
   if (pos >= WAVE_LEN) pos -= WAVE_LEN;
 }

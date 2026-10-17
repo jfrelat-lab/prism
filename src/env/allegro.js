@@ -287,8 +287,10 @@ export function installAllegro(M, {
      * with TIME -- and AUpdateAudio does what SEAL's really does: mix everything that has become due
      * since the last call, and no more.
      *
-     * AUDIO_FORMAT_8BITS in SEAL is UNSIGNED 8-bit, centred on 128, and volume runs 0..64 (msdos.c
-     * passes MAME's 0..255 as `volume/4`).
+     * AUDIO_FORMAT_8BITS in SEAL is SIGNED 8-bit, silence 0: its own WAV loader (wavfile.c) flips
+     * the top bit of a WAV's unsigned bytes before AWriteAudioData, MAME 0.34's sound.c clears a
+     * wave with memset 0, and MAME 0.5's cclimber adds 0x80 to its unsigned samples. Volume runs
+     * 0..64 (msdos.c passes MAME's 0..255 as `volume/4`).
      */
     AInitialize: () => 0,
     /*
@@ -483,10 +485,19 @@ export function installAllegro(M, {
       if (audio.clockUs === null) { audio.clockUs = nowUs; return 0; }
       const dt = nowUs - audio.clockUs;
       if (dt <= 0) return 0;
-      audio.clockUs = nowUs;
       // Bounded, so a long pause (a compile, a backgrounded tab) resumes rather than trying to
       // render the silence it missed.
-      return Math.min(Math.floor(dt * audio.rate / 1e6), audio.rate >> 2);
+      if (dt > 250000) { audio.clockUs = nowUs; return audio.rate >> 2; }
+      /*
+       * The clock moves on by the time the WHOLE samples cover, not to now: the fraction carries to
+       * the next call. Dropping it at every call -- and msdos.c's stream wait calls this many times
+       * a frame -- made the DAC some 35 samples a second slower than real time, so the ring the
+       * page plays from drained until it ran dry (measured on Donkey Kong: 3,500 samples ahead to
+       * none in about 100 s, then crackling).
+       */
+      const n = Math.floor(dt * audio.rate / 1e6);
+      audio.clockUs += n * 1e6 / audio.rate;
+      return n;
     }
     return Math.floor(audio.rate / 60);
   }
@@ -496,13 +507,17 @@ export function installAllegro(M, {
     // Headless, an update that names its frame count (AUpdateAudioEx) is taken at its word.
     let n = asked && !M.realClock ? asked : due();
     if (!n) return;
-    // Never overrun the reader. The page publishes what it has consumed; without a page there is no
-    // reader and the ring is a sliding window that nobody is behind.
+    /*
+     * Never overrun the reader -- but never stop the DAC for it either. A sound card plays on when
+     * nobody listens: what the ring has no room for is mixed and dropped, so the play cursor keeps
+     * real time. Holding the voices back instead froze the guest, because msdos.c's stream waits
+     * for that cursor, and the page stops reading whenever the browser has not started its audio.
+     * Without a page there is no reader and the ring is a sliding window nobody is behind.
+     */
+    let keep = n;
     if (publish) {
       const read = Atomics.load(publish.ctrl, SLOT.AUDIO_READ);
-      const room = audio.ring.length - (audio.written - read);
-      if (room <= 0) return;
-      if (n > room) n = room;
+      keep = Math.max(0, Math.min(n, audio.ring.length - (audio.written - read)));
     }
     const mask = audio.ring.length - 1;
     for (let i = 0; i < n; i++) {
@@ -514,7 +529,7 @@ export function installAllegro(M, {
           acc += (dv().getInt16(v.data + ((v.pos | 0) & ~1), true) >> 8) * v.vol;
           v.pos += (2 * v.freq) / audio.rate;
         } else {
-          acc += (M.u8[v.data + (v.pos | 0)] - 128) * v.vol;   // 8-bit unsigned, centred on 128
+          acc += ((M.u8[v.data + (v.pos | 0)] << 24) >> 24) * v.vol;   // 8-bit signed, as SEAL's are
           v.pos += v.freq / audio.rate;
         }
         if (v.pos >= (v.loop ? v.loopEnd : v.length)) {
@@ -524,10 +539,10 @@ export function installAllegro(M, {
       }
       // vol is 0..64 and a sample is -128..127, so the sum of four voices fits 16 bits with room.
       const out = Math.max(-32768, Math.min(32767, acc * 4));
-      audio.ring[(audio.written + i) & mask] = out;
+      if (i < keep) audio.ring[(audio.written + i) & mask] = out;
       if (audio.wav) audio.wav.push(out);
     }
-    audio.written += n;
+    audio.written += keep;
     if (publish) Atomics.store(publish.ctrl, SLOT.AUDIO_WRITE, audio.written);
   }
 

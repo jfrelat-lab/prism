@@ -54,6 +54,14 @@ class GuestAudio extends AudioWorkletProcessor {
       this.started = true;
       this.read = Math.max(0, written - lead);
     }
+    /*
+     * Too far behind: catch up to the same lead. A guest that writes a burst -- MAME fills half a
+     * second of stream before its first frame -- or a device clock a little slower than the guest's
+     * would otherwise keep the delay it started with for good (Final Fight played 10,000 samples,
+     * half a second, behind its picture), and a ring that fills makes the guest's newest sound the
+     * part that is dropped.
+     */
+    if (written - this.read > frames >> 1) this.read = written - lead;
 
     /*
      * Resample, because the two rates are not the same number and cannot be made to be.
