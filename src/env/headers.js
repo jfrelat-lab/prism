@@ -410,6 +410,27 @@ float fmodf(float x, float y);
 double ldexp(double x, int e);
 float ldexpf(float x, int e);
 double frexp(double x, int *e);
+/* C99. No long double forms (powl, sqrtl...): PRISM has no long double type yet. */
+double cbrt(double x);
+float cbrtf(float x);
+double fmin(double x, double y);
+double fmax(double x, double y);
+float fminf(float x, float y);
+float fmaxf(float x, float y);
+double fdim(double x, double y);
+double nan(const char *tag);
+float nanf(const char *tag);
+double exp2(double x);
+double log1p(double x);
+double expm1(double x);
+double asinh(double x);
+double acosh(double x);
+double atanh(double x);
+double copysign(double x, double y);
+double rint(double x);
+double nearbyint(double x);
+double remainder(double x, double y);
+double fma(double x, double y, double z);
 #endif
 `;
 

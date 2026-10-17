@@ -1382,7 +1382,7 @@ function makeLibc(M) {
     round: (x) => Math.sign(x) * Math.round(Math.abs(x)),
     trunc: Math.trunc,
     lround: (x) => (Math.sign(x) * Math.round(Math.abs(x))) | 0,
-    atan2: Math.atan2, exp: Math.exp, log: Math.log, log10: Math.log10, pow: Math.pow,
+    atan2: Math.atan2, exp: Math.exp, log: Math.log, log10: Math.log10, pow: cPow,
     floor: Math.floor, ceil: Math.ceil, fabs: Math.abs,
     /*
      * The float family. Math.fround on the way out is not a nicety: the C library computes in the
@@ -1398,7 +1398,23 @@ function makeLibc(M) {
     atan2f: (y, x) => Math.fround(Math.atan2(y, x)),
     expf: (x) => Math.fround(Math.exp(x)), logf: (x) => Math.fround(Math.log(x)),
     log10f: (x) => Math.fround(Math.log10(x)),
-    powf: (x, y) => Math.fround(Math.pow(x, y)),
+    powf: (x, y) => Math.fround(cPow(x, y)),
+    // C99's additions, double and float. cbrt is not pow(x, 1/3): that is NaN below zero and off in
+    // the last bit for perfect cubes; Math.cbrt is neither.
+    cbrt: Math.cbrt, cbrtf: (x) => Math.fround(Math.cbrt(x)),
+    // fmin/fmax ignore a NaN argument (the other one is the answer), which Math.min/max do not.
+    fmin: (x, y) => (Number.isNaN(x) ? y : Number.isNaN(y) ? x : Math.min(x, y)),
+    fmax: (x, y) => (Number.isNaN(x) ? y : Number.isNaN(y) ? x : Math.max(x, y)),
+    fminf: (x, y) => Math.fround(Number.isNaN(x) ? y : Number.isNaN(y) ? x : Math.min(x, y)),
+    fmaxf: (x, y) => Math.fround(Number.isNaN(x) ? y : Number.isNaN(y) ? x : Math.max(x, y)),
+    fdim: (x, y) => (Number.isNaN(x) || Number.isNaN(y) ? NaN : x > y ? x - y : 0),
+    nan: () => NaN, nanf: () => NaN,
+    exp2: (x) => Math.pow(2, x), log1p: Math.log1p, expm1: Math.expm1,
+    asinh: Math.asinh, acosh: Math.acosh, atanh: Math.atanh,
+    // To nearest, ties to even: the default rounding mode, and the only one (PRISM has no fesetround).
+    rint: (x) => roundTiesEven(x), nearbyint: (x) => roundTiesEven(x),
+    remainder: (x, y) => x - roundTiesEven(x / y) * y,
+    fma: (x, y, z) => x * y + z,
     floorf: (x) => Math.fround(Math.floor(x)), ceilf: (x) => Math.fround(Math.ceil(x)),
     // Ties to even; out of range or NaN is the x86 "integer indefinite" 0x80000000, as cvtss2si gives.
     lrintf: (x) => lrintTiesEven(x), lrint: (x) => lrintTiesEven(x),
@@ -1496,7 +1512,12 @@ export function format(M, fmtPtr, args) {
     if (fmt[i] === '%') { out += '%'; continue; }
 
     let flags = '';
-    while ('-+ #0'.includes(fmt[i])) flags += fmt[i++];
+    /*
+     * `'` (thousands grouping, POSIX) is read and has no effect: grouping comes from the locale's
+     * LC_NUMERIC, and PRISM's only locale is "C", whose thousands separator is empty -- glibc and the
+     * BSD libc both print %'d there as %d. Not reading it printed the conversion back verbatim.
+     */
+    while ("-+ #0'".includes(fmt[i])) flags += fmt[i++];
     let width = '';
     if (fmt[i] === '*') { width = String(nextArg() | 0); i++; }
     else while (/[0-9]/.test(fmt[i])) width += fmt[i++];
@@ -1841,6 +1862,23 @@ function fixed(v, p) {
  * NOT the default, and never in the gates: this is where reproducibility is traded for faithfulness,
  * and that trade belongs to an interactive host only.
  */
+/*
+ * C's pow, where it differs from Math.pow: pow(1, y) is 1 for every y, NaN included, and pow(-1, +-inf)
+ * is 1 (C99 F.9.4.4); JavaScript answers NaN for both. pow(1, 1.0/0) -- a geometric mean over no
+ * numbers -- printed nan.
+ */
+function cPow(x, y) {
+  if (x === 1 || y === 0) return 1;
+  if (x === -1 && (y === Infinity || y === -Infinity)) return 1;
+  return Math.pow(x, y);
+}
+/** To nearest, ties to even, as a double. */
+function roundTiesEven(x) {
+  if (!Number.isFinite(x)) return x;
+  const r = Math.round(x);
+  return (Math.abs(x % 1) === 0.5 && r % 2 !== 0) ? r - 1 : (r === 0 ? 0 * x : r);
+}
+
 function lrintTiesEven(x) {
   const r = Math.abs(x % 1) === 0.5 ? 2 * Math.round(x / 2) : Math.round(x);
   return Number.isFinite(r) && r >= -2147483648 && r <= 2147483647 ? r | 0 : -2147483648;

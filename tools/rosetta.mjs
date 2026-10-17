@@ -63,6 +63,8 @@ const PAUSE_MS = 400;
 mkdirSync(join(CACHE, 'tasks'), { recursive: true });
 mkdirSync(join(CACHE, 'blocks'), { recursive: true });
 mkdirSync(OUT, { recursive: true });
+const RUN = join(CACHE, 'run');
+mkdirSync(RUN, { recursive: true });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const slug = (t) => t.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 120) + '-' + createHash('sha1').update(t).digest('hex').slice(0, 8);
@@ -161,7 +163,8 @@ const NATIVE = !flag('no-native') && spawnSync('cc', ['--version']).status === 0
 /** A child process with a wall-clock limit: { code, stdout, stderr, timedOut }. Output kept as bytes read as latin1. */
 function child(cmd, args, ms) {
   return new Promise((resolve) => {
-    const c = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // In a folder of their own: Rosetta's file tasks create, rename and delete files where they run.
+    const c = spawn(cmd, args, { cwd: RUN, stdio: ['ignore', 'pipe', 'pipe'] });
     const out = [], err = [];
     let size = 0, timedOut = false;
     c.stdout.on('data', (d) => { if ((size += d.length) < 64 << 20) out.push(d); });

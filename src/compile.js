@@ -490,6 +490,14 @@ export const BUILTINS = new Map(Object.entries({
   lrintf: { ret: I, params: [FLT] }, lrint: { ret: I, params: [D] },
   fabsf: { ret: FLT, params: [FLT] }, fmodf: { ret: FLT, params: [FLT, FLT] }, modff: { ret: FLT, params: [FLT, P] },
   ldexp: { ret: D, params: [D, I] }, ldexpf: { ret: FLT, params: [FLT, I] },
+  cbrt: { ret: D, params: [D] }, cbrtf: { ret: FLT, params: [FLT] },
+  fmin: { ret: D, params: [D, D] }, fmax: { ret: D, params: [D, D] },
+  fminf: { ret: FLT, params: [FLT, FLT] }, fmaxf: { ret: FLT, params: [FLT, FLT] },
+  fdim: { ret: D, params: [D, D] }, nan: { ret: D, params: [P] }, nanf: { ret: FLT, params: [P] },
+  exp2: { ret: D, params: [D] }, log1p: { ret: D, params: [D] }, expm1: { ret: D, params: [D] },
+  asinh: { ret: D, params: [D] }, acosh: { ret: D, params: [D] }, atanh: { ret: D, params: [D] },
+  rint: { ret: D, params: [D] }, nearbyint: { ret: D, params: [D] },
+  remainder: { ret: D, params: [D, D] }, fma: { ret: D, params: [D, D, D] },
   frexp: { ret: D, params: [D, P] },
 
   // gcc's torture suite calls the __builtin_ spelling rather than the library name — 124 programs

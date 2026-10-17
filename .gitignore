@@ -34,3 +34,6 @@ DATA/
 
 # A static export (tools/site.mjs): it holds game data, so it never enters the repository.
 /site/
+
+# wrangler (tools/deploy.mjs): Cloudflare's local cache.
+.wrangler/
