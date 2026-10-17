@@ -1883,7 +1883,13 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
     return 0;
   };
   M.rt.uclock = () => BigInt(Math.round(advance() * 1.19318));   // µs -> PIT ticks at 1193180 Hz
-  M.realClock = { micros: () => micros };
+  /*
+   * `micros` is the guest time as last handed out; `now` advances it to the present first. A device
+   * that keeps real time on its own (src/env/allegro.js's DAC) must read `now`: msdos.c's stream wait
+   * polls the play cursor and never asks the time, so a cursor driven by `micros` stood still and the
+   * loop never ended -- a freeze that came or not with when the loop happened to be entered.
+   */
+  M.realClock = { micros: () => micros, now: advance };
 }
 
 /**

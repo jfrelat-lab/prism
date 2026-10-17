@@ -373,7 +373,7 @@ export function installAllegro(M, {
     ACreateAudioData: (lpWave) => {
       const len = dv().getInt32(lpWave + 8, true) >>> 0;
       const buf = M.rt.malloc(Math.max(len, 1));
-      M.u8.fill(128, buf, buf + Math.max(len, 1));        // 8-bit silence is 128, not 0
+      M.u8.fill(0, buf, buf + Math.max(len, 1));          // silence: SEAL's 8-bit samples are signed
       dv().setInt32(lpWave + 24, buf, true);              // AUDIOWAVE.lpData
       return 0;
     },
@@ -481,7 +481,7 @@ export function installAllegro(M, {
    */
   function due() {
     if (M.realClock) {
-      const nowUs = M.realClock.micros();
+      const nowUs = M.realClock.now ? M.realClock.now() : M.realClock.micros();
       if (audio.clockUs === null) { audio.clockUs = nowUs; return 0; }
       const dt = nowUs - audio.clockUs;
       if (dt <= 0) return 0;
