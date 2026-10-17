@@ -390,6 +390,12 @@ function termBanner() {
   termChar(10);
 }
 
+/**
+ * The programs this terminal knows. The player's machine holds the one program it was opened for --
+ * its listing, its tab completion and what it will run -- as its desktop shows that one shortcut.
+ */
+const shelfOf = () => machine.programs.map((x, i) => [x, i]).filter(([, i]) => !PLAYER || i === chosen);
+
 /** What `dir` or `ls -l` answered. The unit counts are the server's, from targets/*.json. */
 function termListing() {
   const dos = machine.kind === 'dos';
@@ -400,7 +406,7 @@ function termListing() {
     termLine(' Directory of C:\\');
     termChar(10);
   }
-  machine.programs.forEach((x, i) => {
+  shelfOf().forEach(([x, i]) => {
     const name = dos ? `${x.file.padEnd(8)} ${(x.ext || '').padEnd(3)}`
       : `-rwxr-xr-x  ${x.file.padEnd(12)}`;
     const units = x.units ? `${String(x.units).padStart(3)} units` : '         ';
@@ -411,7 +417,7 @@ function termListing() {
       x.present ? (i === chosen ? A_BRIGHT : A_DIM) : A_DIM);
   });
   termChar(10);
-  if (dos) { termLine(`        ${machine.programs.length} File(s)`); termChar(10); }
+  if (dos) { termLine(`        ${shelfOf().length} File(s)`); termChar(10); }
 }
 
 /** The prompt, and everything typed after it. */
@@ -491,11 +497,11 @@ function termEnter() {
 
   // A program, by the name this machine calls it: HEXEN, HEXEN.EXE, ./quake or quake all match.
   const want = cmd.replace(/^\.\//, '');
-  const i = machine.programs.findIndex((x) => {
+  const i = shelfOf().find(([x]) => {
     const f = x.file.toLowerCase();
     return want === f || want === `${f}.${(x.ext || '').toLowerCase()}` ||
            want === f.replace(/\.exe$/, '');
-  });
+  })?.[1] ?? -1;
   if (i < 0) {
     termLine(machine.kind === 'dos' ? 'Bad command or file name' : `${word}: command not found`, A_ERR);
     termPrompt();
@@ -517,8 +523,8 @@ function termEnter() {
 function termComplete() {
   const typed = cmdline.trim().toLowerCase();
   if (!typed || /\s/.test(cmdline.trim())) return;
-  const hits = machine.programs
-    .map(x => (machine.kind === 'dos' ? x.file : `./${x.file}`))
+  const hits = shelfOf()
+    .map(([x]) => (machine.kind === 'dos' ? x.file : `./${x.file}`))
     .filter(n => n.toLowerCase().replace(/^\.\//, '').startsWith(typed.replace(/^\.\//, '')));
   if (hits.length === 1) { cmdline = `${hits[0]} `; termRedrawLine(); }
   else if (hits.length > 1) {
