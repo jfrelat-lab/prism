@@ -316,6 +316,18 @@ Each entry is a row of [ROADMAP.md](ROADMAP.md), verbatim, as it stood when the 
 
 **Why / unblocks:** The measured win it would buy is the front end only; the back end still emits.
 
+<a id="p2-6"></a>
+
+### P2.6
+
+⚪ **Revisit the module epilogue** (`moduleEpilogue`, src/compile.js). Each emitted function costs two lines there: `F["name"]=name;` to hand it out of the module's closure, and `case "name":name=fn;return true;` in the rebinder that lets `prog.F[name] = w` reach the binding a DIRECT call names (P2.1). It is not instrumentation-only: the Win32 frame boundary wraps GetMessage/PeekMessage through it (web/worker.js), as do the MGL and Allegro presenters. Measured 2026-10-18: 42.5 kB of `win32-bars.c`'s 223 kB of JavaScript, mostly the Win32 shim's 467 functions. Two leads, neither measured:
+- **Compact, same behaviour.** The module returns its functions as an array in emission order and the rebinder switches on an index (`case 3:f=fn;return;`); `F` is filled outside. Roughly halves the epilogue; the emitted bodies do not change, so the speed should not either -- to be checked on the hash and pixel gates.
+- **A generic setter**, `(n, fn) => eval(n + '=fn')` (legal in strict mode). The epilogue all but disappears, but a direct `eval` forces every module binding into a context and may cost the 2–2.5× the direct calls bought: only with a before/after bench (`tools/bench.mjs`, Quake's timedemo).
+
+**Effort:** S
+
+**Why / unblocks:** Smaller bundles and emitted JS; Live C already folds the epilogue, so readability is not the reason.
+
 ## P2b · Safepoints — the only way a loop that calls nothing is reachable
 
 <a id="p2b-1"></a>

@@ -89,6 +89,7 @@ default-buffering decision (P8.11).
 | P2.3 | ⚪ | **Reframed 2026-09-27: a PRISM-level JIT mostly duplicates the JS engine's own.** V8 already compiles lazily, re-optimises hot code and specialises on what it observes. What it cannot see is C's memory semantics (aliasing, alignment, a local that never escapes) and that is STATIC knowledge, since PRISM always holds the whole program: it belongs to the IR's whole-program optimiser (P13.2), not to a tier. Profile-guided re-emission stays open, to be taken only when a measurement shows a gain the static pass cannot reach -- none does today (9.5x off clang -O2; Quake has 24x headroom). So "dynamic" should not be the word that defines the project. | L | [log](LOG.md#p2-3) |
 | P2.4 | ✅ | `tools/bench.mjs`, and it no longer needs a ROM (`--synthetic`). Two workloads published separately: ~9.5× slower than clang -O2 on MAME's Z80 core with Pac-Man, ~10× on … | M | [log](LOG.md#p2-4) |
 | P2.5 | ⚪ | Two load modes, over one serialised IR. | M | [log](LOG.md#p2-5) |
+| P2.6 | ⚪ | Revisit the module epilogue: two lines per emitted function (`F[...]=` and a `switch` case), 42.5 of a Win32 program's 223 kB. | S | [log](LOG.md#p2-6) |
 
 ## P2b · Safepoints — the only way a loop that calls nothing is reachable
 
