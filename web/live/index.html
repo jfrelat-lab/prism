@@ -68,7 +68,15 @@
   }
 
   /* ---------------------------------------------------------------- the editor */
-  .left { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
+  /* A column, not a grid: the credit line comes and goes, and a hidden row would shift the editor into it. */
+  .left { display: flex; flex-direction: column; min-height: 0; }
+  .left > .edit { flex: 1 1 auto; }
+  /* Whose code is open, when it is not PRISM's: a Rosetta Code solution's credit (web/live/rosetta.js). */
+  #credit { padding: 5px 14px; font-size: 12px; color: var(--dim); background: var(--panel);
+            border-bottom: 1px solid var(--edge); }
+  #credit[hidden] { display: none; }
+  #credit a { color: inherit; text-decoration: underline; }
+  #credit b { color: var(--fg); font-weight: 500; }
   .tabs { display: flex; gap: 2px; align-items: stretch; padding: 6px 8px 0;
           background: var(--panel); border-bottom: 1px solid var(--edge);
           overflow-x: auto; }
@@ -97,16 +105,17 @@
             color: transparent; caret-color: var(--fg); }
   #editor::selection { background: rgba(108, 182, 255, .3); color: transparent; }
   #editor:focus { outline: none; }
-  #hl .k { color: #c792ea; }            /* keyword, as PRISM's parser reads it */
-  #hl .s { color: #a5d6a7; }            /* string, and an #include's header name */
-  #hl .c { color: #ffcc80; }            /* character constant */
-  #hl .n { color: #f78c6c; }            /* number */
-  #hl .m { color: #7a828f; font-style: italic; }   /* comment */
-  #hl .p { color: #82aaff; }            /* directive */
+  /* The editor's colours and the emitted JavaScript's: one palette for the two. */
+  :is(#hl, #emitted) .k { color: #c792ea; }   /* keyword, as PRISM's parser reads it */
+  :is(#hl, #emitted) .s { color: #a5d6a7; }   /* string, and an #include's header name */
+  :is(#hl, #emitted) .c { color: #ffcc80; }   /* character constant */
+  :is(#hl, #emitted) .n { color: #f78c6c; }   /* number */
+  :is(#hl, #emitted) .m { color: #7a828f; font-style: italic; }   /* comment */
+  :is(#hl, #emitted) .p { color: #82aaff; }   /* directive */
 
   /* ---------------------------------------------------------------- output */
   .right { border-left: 1px solid var(--edge); background: var(--panel);
-           display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-height: 0; }
+           display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; }
   .obar { display: flex; gap: 8px; align-items: center; padding: 7px 12px;
           border-bottom: 1px solid var(--edge); color: var(--dim); }
   .obar .which { display: flex; gap: 2px; }
@@ -114,10 +123,21 @@
   .obar .which button[aria-selected="true"] { border-color: var(--accent); color: var(--fg); }
   #status { margin-left: auto; color: var(--fg); }
   #panes { overflow: auto; min-height: 0; padding: 10px 12px; }
-  #out { white-space: pre-wrap; word-break: break-word; margin: 0; }
-  /* A Rosetta Code example's credit: its authors, its licence, its page (web/live/rosetta.js). */
-  #out .credit { white-space: normal; margin: 2px 0 6px; opacity: .85; }
-  #out .credit a { color: inherit; text-decoration: underline; }
+  /*
+   * THE TERMINAL: what the program writes, and what you type to it at the cursor -- echoed as you
+   * type, sent a line at a time on Enter, as a terminal in its ordinary (cooked) mode does.
+   */
+  #out { white-space: pre-wrap; word-break: break-word; margin: 0; min-height: 100%; outline: none; }
+  #out .typed { color: var(--accent); }
+  #out .cursor { display: none; }
+  #out.live .cursor { display: inline-block; width: .6em; height: 1.15em; vertical-align: text-bottom;
+                      background: var(--fg); opacity: .35; }
+  #out.live:focus .cursor { opacity: 1; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #out.live:focus .cursor { animation: none; } }
+  #out .hint { color: var(--dim); }
+  /* THE BUILD: what the compiler said -- units, time, what it could not emit, its errors. */
+  #build { white-space: pre-wrap; word-break: break-word; margin: 0; }
   /* A program that needs a display runs in the shelf's player, framed here (see live.js). */
   #screen { height: 100%; min-height: 360px; }
   #screen iframe { width: 100%; height: 100%; min-height: 360px; border: 0; display: block; }
@@ -127,9 +147,7 @@
   .note.warn { color: var(--warn); }
   .note.err { color: var(--err); }
   .note.ok { color: var(--ok); }
-  .stdin { display: flex; gap: 8px; align-items: center; padding: 7px 12px;
-           border-top: 1px solid var(--edge); }
-  .stdin input { flex: 1; }
+
 
   /* ---------------------------------------------------------------- the example picker */
   #pick #pickName { color: var(--fg); }
@@ -183,6 +201,7 @@
 <main>
   <div class="left">
     <div class="tabs" id="tabs"></div>
+    <div id="credit" hidden></div>
     <div class="edit">
       <pre id="hl" aria-hidden="true"></pre>
       <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"
@@ -193,21 +212,18 @@
   <div class="right">
     <div class="obar">
       <span class="which">
-        <button id="tabOut" aria-selected="true">Output</button>
+        <button id="tabOut" aria-selected="true">Terminal</button>
+        <button id="tabBuild">Build</button>
         <button id="tabEmitted">Emitted JS</button>
         <button id="tabScreen" hidden>Screen</button>
       </span>
       <span id="status">idle</span>
     </div>
     <div id="panes">
-      <pre id="out"></pre>
+      <pre id="out" tabindex="0" aria-label="Terminal: the program's output, and its input while it runs"></pre>
+      <pre id="build" hidden></pre>
       <pre id="emitted" hidden></pre>
       <div id="screen" hidden></div>
-    </div>
-    <div class="stdin">
-      <label for="stdin">stdin</label>
-      <input id="stdin" type="text" spellcheck="false"
-             placeholder="typed here while the program runs — Enter sends the line">
     </div>
   </div>
 </main>

@@ -95,7 +95,9 @@ async function run({ files, argv, control, stdinText, language }) {
   installStdio(prog.M, {
     readChar: () => {
       const c = keyboard.read();
-      return c === 13 ? 10 : c;
+      // Ctrl+D, which the terminal sends as 4 on an empty line: end of file, as a terminal's line
+      // discipline reports it -- fgets returns NULL and a `while (fgets(...))` loop ends.
+      return c === 4 ? -1 : c === 13 ? 10 : c;
     },
     stdinPending: () => keyboard.pending() > 0,
   });

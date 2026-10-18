@@ -7,7 +7,7 @@
 import { makeControl, controlViews, makeKeyboard, wake, SLOT } from '../../src/env/webhost.js';
 import { ENV_TARGET, detectEnv } from './envs.js';
 import { cBlocks, fetchCSection, pageUrl, historyUrl, LICENCE } from './rosetta.js';
-import { highlight } from './highlight.js';
+import { highlight, highlightJS } from './highlight.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -123,11 +123,11 @@ int main(void)
 `,
 
   'prism/stdin.c': `/*
- * STDIN, from the field below the output pane.
+ * STDIN, typed into the terminal at its cursor.
  *
  * The program blocks in fgets and the page is still painting, because the two share memory rather
  * than messages: this worker is inside main() and its event loop is gone, so a keystroke posted to
- * it would never be delivered. Type a line, press Enter, and it arrives.
+ * it would never be delivered. Type a line, press Enter, and it arrives; Ctrl+D is end of file.
  */
 #include <stdio.h>
 #include <string.h>
@@ -319,7 +319,9 @@ int main(int argc, char **argv)
  *
  * RegisterClass, CreateWindow, a GetMessage loop, and a window procedure that paints only when
  * Windows says so (WM_PAINT). A timer (SetTimer, WM_TIMER) moves the bars and invalidates the
- * window, which is what makes the next WM_PAINT come. PRISM's Win32 is C of its own (src/env/win32*.c),
+ * window, which is what makes the next WM_PAINT come -- WITHOUT an erase (FALSE): the paint covers
+ * the whole window itself, background first, so the window is never seen blank between the two.
+ * Erasing first (TRUE) is the classic GDI flicker, on Windows as here. PRISM's Win32 is C of its own (src/env/win32*.c),
  * compiled with this file; the desktop around the window is this page's.
  */
 #include <windows.h>
@@ -335,6 +337,8 @@ static void paint(HWND hwnd)
     RECT r;
     int i;
 
+    GetClientRect(hwnd, &r);
+    FillRect(dc, &r, (HBRUSH)(COLOR_WINDOW + 1));
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, RGB(0, 0, 128));
     TextOut(dc, 16, 12, TEXT("GDI, from C compiled in the page"), 32);
@@ -354,7 +358,7 @@ static void paint(HWND hwnd)
 static LRESULT CALLBACK proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg) {
-    case WM_TIMER:   tick++; InvalidateRect(hwnd, NULL, TRUE); return 0;
+    case WM_TIMER:   tick++; InvalidateRect(hwnd, NULL, FALSE); return 0;
     case WM_PAINT:   paint(hwnd); return 0;
     case WM_DESTROY: KillTimer(hwnd, 1); PostQuitMessage(0); return 0;
     }
@@ -474,23 +478,85 @@ $('editor').addEventListener('keydown', (e) => {
   stash(); save(); paint();
 });
 
-// ---------------------------------------------------------------- the output
-const out = $('out');
-function say(text, cls = '') {
-  const el = document.createElement('span');
-  if (cls) el.className = `note ${cls}`;
-  el.textContent = text;
-  out.append(el);
-  $('panes').scrollTop = $('panes').scrollHeight;
+// ---------------------------------------------------------------- the terminal and the build
+/*
+ * TWO PANES FOR TWO SPEAKERS. The terminal is the program's: what it writes, and what you type to it.
+ * The build is PRISM's: units, time, what could not be emitted, the errors. Mixed, a program's first
+ * line of output sat under a compiler report and a typed line could not be told from either.
+ */
+const out = $('out'), build = $('build');
+const scrollDown = () => { $('panes').scrollTop = $('panes').scrollHeight; };
+function note(el, text, cls) {
+  const n = document.createElement('span');
+  if (cls) n.className = `note ${cls}`;
+  n.textContent = text;
+  return n;
 }
+/** A line in the BUILD pane. */
+function say(text, cls = '') { build.append(note(build, text, cls)); }
+/** A line of the terminal's own (an exit status, a stop), dim, before the cursor. */
+function term(text, cls = '') { if (text) lastOut = text.slice(-1); out.insertBefore(note(out, text, cls), typedEl); scrollDown(); }
+
+/*
+ * THE TERMINAL'S LINE DISCIPLINE, the ordinary ("cooked") one: what you type is echoed at the cursor
+ * and editable with Backspace, and the program receives it a line at a time, on Enter -- through the
+ * same shared queue a game's keyboard uses (Enter as 13, which the worker turns into the 10 fgets looks
+ * for). Ctrl+D on an empty line is end of file, Ctrl+C stops the program.
+ */
+const typedEl = document.createElement('span'), cursorEl = document.createElement('span');
+typedEl.className = 'typed'; cursorEl.className = 'cursor';
+let typed = '';
+function clearTerminal() { out.replaceChildren(typedEl, cursorEl); typed = ''; typedEl.textContent = ''; lastOut = '\n'; }
 /*
  * The program's own bytes, exactly. Not a line at a time: a program that prints without a newline --
  * a prompt, a progress dot -- has printed something, and holding it back until the line ends means
- * the prompt appears only after you have answered it.
+ * the prompt appears only after you have answered it. Inserted BEFORE the line being typed, so its
+ * output and your input do not interleave mid-word.
  */
-const emit = (text) => { out.append(document.createTextNode(text)); $('panes').scrollTop = $('panes').scrollHeight; };
+let lastOut = '\n';        // the last character the terminal shows, so a status starts on its own line
+const emit = (text) => { if (text) lastOut = text.slice(-1); out.insertBefore(document.createTextNode(text), typedEl); scrollDown(); };
+const accepting = () => !!(worker && keyboard);
+function sendLine(text) {
+  for (const ch of text) keyboard.push(0, ch.charCodeAt(0) & 0xff);
+  keyboard.push(0x1c, 13);
+  wake(views.ctrl);
+}
+out.addEventListener('keydown', (e) => {
+  if (!accepting()) return;
+  if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) { e.preventDefault(); stop(false); return; }
+  if (e.ctrlKey && (e.key === 'd' || e.key === 'D')) {
+    e.preventDefault();
+    if (!typed) { keyboard.push(0, 4); wake(views.ctrl); term('^D\n', 'hint'); }
+    return;
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey) return;     // the browser's own shortcuts (copy, reload)
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    emit(typed + '\n');                                              // the echo stays, as typed
+    sendLine(typed);
+    typed = '';
+  } else if (e.key === 'Backspace') {
+    e.preventDefault();
+    typed = typed.slice(0, -1);
+  } else if (e.key.length === 1) {
+    e.preventDefault();
+    typed += e.key;
+  } else return;
+  typedEl.textContent = typed;
+  scrollDown();
+});
+out.addEventListener('paste', (e) => {
+  if (!accepting()) return;
+  e.preventDefault();
+  const lines = (typed + e.clipboardData.getData('text')).split(/\r?\n/);
+  typed = lines.pop();
+  for (const l of lines) { emit(l + '\n'); sendLine(l); }
+  typedEl.textContent = typed;
+  scrollDown();
+});
+clearTerminal();
 
-const PANES = { tabOut: 'out', tabEmitted: 'emitted', tabScreen: 'screen' };
+const PANES = { tabOut: 'out', tabBuild: 'build', tabEmitted: 'emitted', tabScreen: 'screen' };
 const showTab = (id) => {
   for (const [tab, pane] of Object.entries(PANES)) {
     $(tab).setAttribute('aria-selected', String(tab === id));
@@ -525,6 +591,7 @@ function runOnScreen(env) {
   box.append(frame);
   say(`${env} program: built and run on ${MACHINE_NAME[t.machine] ?? t.machine}, in the Screen tab ` +
       `(its build log is in the frame's panel)\n`, 'ok');
+  term(`running in the Screen tab, on ${MACHINE_NAME[t.machine] ?? t.machine}\n`, 'hint');
   $('status').textContent = `running (${env})`;
   $('run').disabled = true; $('stopBtn').disabled = false;
 }
@@ -540,13 +607,12 @@ $('run').onclick = () => {
   }
   stash(); save();
   stop(true);
-  out.textContent = '';
-  if (creditStill()) { showCredit(lastCredit); say('\n'); }
+  clearTerminal(); build.textContent = '';
   $('emitted').textContent = '';
   const env = detectEnv(files.filter((f) => /\.(c|cpp|cc|cxx|h|hpp)$/i.test(f.name)).map((f) => f.source));
   if (env !== 'console') { runOnScreen(env); return; }
   $('tabScreen').hidden = true;
-  if (!$('screen').hidden) showTab('tabOut');
+  showTab('tabOut');
   $('status').textContent = 'compiling';
 
   const control = makeControl();
@@ -569,26 +635,33 @@ $('run').onclick = () => {
       }
       say('\n');
     }
-    else if (m.type === 'emitted') $('emitted').textContent = m.source;
-    else if (m.type === 'threw') say(`\nthe program threw: ${m.message}\n`, 'err');
-    else if (m.type === 'diag') { say(`\n${m.message}\n`, 'err'); $('status').textContent = 'failed'; }
+    else if (m.type === 'emitted') $('emitted').innerHTML = highlightJS(m.source);
+    else if (m.type === 'threw') term(`\nthe program threw: ${m.message}\n`, 'err');
+    // The build failed: its errors are the build pane's, and that is where to look.
+    else if (m.type === 'diag') { say(`\n${m.message}\n`, 'err'); $('status').textContent = 'failed'; showTab('tabBuild'); }
     else if (m.type === 'done') {
-      say(`\n[exit ${m.code}${m.ms !== undefined ? ` after ${(m.ms / 1000).toFixed(2)} s` : ''}]\n`,
-          m.code ? 'warn' : 'ok');
+      term(`${lastOut === '\n' ? '' : '\n'}[exit ${m.code}${m.ms !== undefined ? ` after ${(m.ms / 1000).toFixed(2)} s` : ''}]\n`, m.code ? 'warn' : 'hint');
       $('status').textContent = m.code ? `exit ${m.code}` : 'exited';
-      $('run').disabled = false; $('stopBtn').disabled = true;
+      ended();
     }
   };
   worker.onerror = (e) => {
     say(`worker error: ${e.message}\n`, 'err');
     $('status').textContent = 'failed';
-    $('run').disabled = false; $('stopBtn').disabled = true;
+    ended();
   };
   worker.postMessage({ type: 'start', files, control, argv: tokenise($('argv').value), language: $('language').value });
 
   $('run').disabled = true; $('stopBtn').disabled = false;
-  $('stdin').focus();
+  out.classList.add('live');
+  out.focus();
 };
+/** The program is gone: the terminal stops taking keys, and its cursor goes. */
+function ended() {
+  $('run').disabled = false; $('stopBtn').disabled = true;
+  out.classList.remove('live');
+  typed = ''; typedEl.textContent = '';
+}
 
 $('stopBtn').onclick = () => stop(false);
 function stop(quiet) {
@@ -602,23 +675,13 @@ function stop(quiet) {
      * survive: there is no scheduler to preempt the guest, so the thread is taken away from it --
      * which is honest, and different from the program having decided to stop.
      */
-    say('\n[stopped — the worker was terminated]\n', 'warn');
+    term('\n[stopped — the worker was terminated]\n', 'warn');
     $('status').textContent = 'stopped';
   }
-  $('run').disabled = false; $('stopBtn').disabled = true;
+  worker = null; keyboard = null;
+  ended();
 }
 
-/*
- * stdin: a line at a time, through the same shared queue a game's keyboard uses. Enter is 13 here,
- * as a PC's BIOS buffer holds it; the worker turns it into the 10 that `fgets` looks for.
- */
-$('stdin').addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter' || !keyboard) return;
-  for (const ch of e.target.value) keyboard.push(0, ch.charCodeAt(0) & 0xff);
-  keyboard.push(0x1c, 13);
-  wake(views.ctrl);
-  e.target.value = '';
-});
 
 // ---------------------------------------------------------------- examples
 /*
@@ -723,12 +786,12 @@ async function loadExample(value, label) {
   const untouched = files.length === 1 &&
     (Object.values(EXAMPLES).some(src => src === files[0].source) || files[0].source === lastLoaded);
   if (!untouched && !confirm('Replace what is open with the example? Your files will be lost.')) return;
-  // The program running is the one being replaced: it stops with its source.
-  if (worker || $('screen').firstChild) stop(true);
+  // Another program: everything the last one left goes with it, as Reset does.
+  resetRun();
   let name, source;
   if (value.startsWith('rosetta:')) {
     const e = rosetta[+value.slice(8)];
-    out.textContent = '';
+    $('status').textContent = 'loading';
     say(`loading "${e.task}" from rosettacode.org (revision ${e.revid})...\n`);
     try {
       const blocks = cBlocks(await fetchCSection(e.task, e.revid));
@@ -743,19 +806,16 @@ async function loadExample(value, label) {
        */
       say(`could not load it from rosettacode.org (${err.message}). The site may be blocked for this ` +
           `page (an ad or tracker blocker) or asking for a browser check; the task is at ${pageUrl(e.task)}\n`, 'err');
+      $('status').textContent = 'not loaded';
+      showTab('tabBuild');
       return;
     }
     name = 'main.c';
-    /*
-     * THE CREDIT, every time one is loaded: the code is shown as Rosetta Code has it, and it is theirs,
-     * under the GNU FDL 1.3, written by the people its page history names.
-     */
-    out.textContent = '';
-    lastCredit = e;
-    showCredit(e);
-    say(`\nPRISM ran this solution${e.env === 'console' ? ' and printed what cc prints' : ` on ${e.env.replace(/-main$/, '')}`} when it was measured (${'Run'} to try it).\n`);
+    build.textContent = '';
+    setCredit(e);
+    $('status').textContent = 'idle';
   } else {
-    lastCredit = null;
+    setCredit(null);
     name = value.replace(/^prism\//, '');
     source = EXAMPLES[value];
   }
@@ -767,29 +827,46 @@ async function loadExample(value, label) {
 }
 
 /*
- * THE CREDIT, every time Rosetta Code's code is loaded or run: it is shown as Rosetta Code has it,
- * and it is theirs, under the GNU FDL 1.3, written by the people its page history names.
+ * THE CREDIT, above the code for as long as it is open: a Rosetta Code solution is shown as Rosetta
+ * Code has it, and it is theirs, under the GNU FDL 1.3, written by the people its page history names.
  */
-let lastCredit = null;
-function showCredit(e) {
-    say(`Rosetta Code, "${e.task}"${e.sub ? ` -- ${e.sub}` : ''}, C solution ${e.block + 1}, revision ${e.revid}\n`, 'ok');
-    const credit = document.createElement('div');
-    credit.className = 'credit';
-    credit.innerHTML = `by its authors (<a target="_blank" rel="noopener" href="${historyUrl(e.task)}">page history</a>), ` +
-      `under the <a target="_blank" rel="noopener" href="${LICENCE.url}">${LICENCE.name}</a>; ` +
-      `<a target="_blank" rel="noopener" href="${pageUrl(e.task)}">the task on rosettacode.org</a>. ` +
-      `Not part of PRISM: loaded from the site, shown unchanged.`;
-    out.append(credit);
+function setCredit(e) {
+  const c = $('credit');
+  c.hidden = !e;
+  if (!e) { c.replaceChildren(); return; }
+  const esc = (t) => t.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  c.innerHTML = `<b>Rosetta Code, ${esc(e.task)}</b>${e.sub ? ` (${esc(e.sub)})` : ''}, C solution ${e.block + 1}, revision ${e.revid}: ` +
+    `by its authors (<a target="_blank" rel="noopener" href="${historyUrl(e.task)}">page history</a>), ` +
+    `under the <a target="_blank" rel="noopener" href="${LICENCE.url}">${LICENCE.name}</a>; ` +
+    `<a target="_blank" rel="noopener" href="${pageUrl(e.task)}">the task</a>. Loaded from rosettacode.org, shown unchanged; ` +
+    `PRISM ran it ${e.env === 'console' ? 'and printed what cc prints' : `on ${e.env.replace(/-main$/, '')}`} when it was measured.`;
 }
-/** At each run, while what is open is still that solution. */
-const creditStill = () => lastCredit && files.length === 1 && files[0].source === lastLoaded;
+
+/** Back to nothing running and nothing shown: what another example, and Reset, start from. */
+function resetRun() {
+  stop(true);
+  clearTerminal();
+  build.textContent = '';
+  $('emitted').textContent = '';
+  $('tabScreen').hidden = true;
+  showTab('tabOut');
+  $('status').textContent = 'idle';
+  $('argv').value = 'prog';
+  $('language').value = '';
+}
 
 $('reset').onclick = () => {
-  files = [{ name: 'main.c', source: EXAMPLES['prism/hello.c'] }];
+  resetRun();
+  setCredit(null);
+  lastLoaded = EXAMPLES['prism/hello.c'];
+  files = [{ name: 'main.c', source: lastLoaded }];
   active = 0;
+  $('pickName').textContent = 'prism/hello.c';
   save(); renderTabs(); showFile();
 };
 
 files = load();
+// The button names what is open: the example it still is, or nothing to imply it is one.
+$('pickName').textContent = (files.length === 1 && Object.keys(EXAMPLES).find((k) => EXAMPLES[k] === files[0].source)) || 'choose...';
 renderTabs();
 showFile();

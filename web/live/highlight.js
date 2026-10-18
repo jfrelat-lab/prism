@@ -52,3 +52,28 @@ export function highlight(text, { cxx = false } = {}) {
   // A trailing newline in a <pre> is not a line: one more keeps the last line as tall as the textarea's.
   return html + esc(text.slice(at)) + '\n';
 }
+
+/*
+ * THE EMITTED JAVASCRIPT. There is no JS lexer in PRISM to ask, and none is needed for this text: it
+ * is PRISM's own emitter's output, regular and free of the cases that make JavaScript hard to tokenize
+ * by hand (no regular-expression literals, no ASI-dependent forms). Comments, strings, numbers and
+ * keywords are told apart in one pass. A large build is megabytes: the first LIMIT characters are
+ * coloured and the rest is shown as it is, so the tab opens at once.
+ */
+const JS_WORDS = new Set(['var', 'let', 'const', 'function', 'return', 'if', 'else', 'for', 'while', 'do',
+  'switch', 'case', 'default', 'break', 'continue', 'new', 'typeof', 'instanceof', 'in', 'of', 'this',
+  'throw', 'try', 'catch', 'finally', 'true', 'false', 'null', 'undefined', 'class', 'extends', 'export',
+  'import', 'from', 'async', 'await', 'yield', 'delete', 'void']);
+const JS_TOKEN = /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\[\s\S])*`)|(\b(?:0x[\da-fA-F]+n?|\d+(?:\.\d+)?(?:e[-+]?\d+)?n?)\b)|([A-Za-z_$][\w$]*)/g;
+const LIMIT = 300_000;
+export function highlightJS(text) {
+  const head = text.length > LIMIT ? text.slice(0, text.lastIndexOf('\n', LIMIT) + 1 || LIMIT) : text;
+  let html = '', at = 0;
+  for (const m of head.matchAll(JS_TOKEN)) {
+    const cls = m[1] ? 'm' : m[2] ? 's' : m[3] ? 'n' : JS_WORDS.has(m[4]) ? 'k' : null;
+    if (!cls) continue;
+    html += esc(head.slice(at, m.index)) + `<span class="${cls}">${esc(m[0])}</span>`;
+    at = m.index + m[0].length;
+  }
+  return html + esc(head.slice(at)) + esc(text.slice(head.length));
+}
