@@ -386,6 +386,76 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
     return (int)msg.wParam;
 }
+`,  'prism/x11-fire.c': `/*
+ * Xlib: the fire from PSX Doom, drawn the way X11 Doom drew its frames.
+ *
+ * An 8-bit XImage over a buffer the program owns, a 256-entry colormap filled with XStoreColors,
+ * and each frame handed over with XPutImage. That is the slice of Xlib PRISM implements
+ * (src/env/x11.js), measured on Doom's i_video.c: it shims the library, not the protocol, so
+ * there are no lines or rectangles from the server here -- every pixel is the program's.
+ * Each cell takes the heat of the one below, cooled a little and blown sideways at random.
+ * Space puts the fire out or lights it again; Escape quits.
+ */
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <stdlib.h>
+
+#define W 320
+#define H 120
+#define HOT 36
+
+static unsigned char fire[W * H];
+
+static void spread(void)
+{
+    int x, y;
+    for (x = 0; x < W; x++)
+        for (y = 1; y < H; y++) {
+            int src = y * W + x, r = rand() & 3, dst = src - W - r + 1;
+            int heat = fire[src] - (r & 1);
+            if (dst >= 0) fire[dst] = (unsigned char)(heat < 0 ? 0 : heat);
+        }
+}
+
+int main(void)
+{
+    Display *dpy = XOpenDisplay(NULL);
+    int screen = DefaultScreen(dpy), x, i, lit = 1;
+    Visual *vis = DefaultVisual(dpy, screen);
+    Window win = XCreateSimpleWindow(dpy, RootWindow(dpy, screen), 0, 0, W, H, 0, 0, 0);
+    Colormap cmap = XCreateColormap(dpy, win, vis, AllocAll);
+    GC gc = XCreateGC(dpy, win, 0, NULL);
+    XColor colors[HOT + 1];
+    XImage *img = XCreateImage(dpy, vis, 8, ZPixmap, 0, (char *)fire, W, H, 8, W);
+    XEvent ev;
+
+    /* Black, then red, orange and yellow, to white: the ramp a flame's colours climb. */
+    for (i = 0; i <= HOT; i++) {
+        int t = i * 765 / HOT;
+        colors[i].pixel = i;
+        colors[i].red = (unsigned short)((t < 255 ? t : 255) * 257);
+        colors[i].green = (unsigned short)((t < 255 ? 0 : t < 510 ? t - 255 : 255) * 257);
+        colors[i].blue = (unsigned short)((t < 510 ? 0 : t - 510) * 257);
+        colors[i].flags = DoRed | DoGreen | DoBlue;
+    }
+    XStoreColors(dpy, cmap, colors, HOT + 1);
+    XSetWindowColormap(dpy, win, cmap);
+    XStoreName(dpy, win, "Fire");
+    XSelectInput(dpy, win, KeyPressMask);
+    XMapWindow(dpy, win);
+
+    for (;;) {
+        while (XPending(dpy)) {
+            XNextEvent(dpy, &ev);
+            if (ev.type != KeyPress) continue;
+            if (XLookupKeysym(&ev.xkey, 0) == XK_Escape) { XCloseDisplay(dpy); return 0; }
+            if (XLookupKeysym(&ev.xkey, 0) == XK_space) lit = !lit;
+        }
+        for (x = 0; x < W; x++) fire[(H - 1) * W + x] = lit ? HOT : 0;
+        spread();
+        XPutImage(dpy, win, gc, img, 0, 0, 0, 0, W, H);
+    }
+}
 `,
 };
 
