@@ -321,6 +321,14 @@ for (const s of shipped) {
 }
 
 /*
+ * The README's moving pictures, served from here as the thumbnails are rather than committed: a
+ * game's frames are not this repository's to hold. dist/site-media/ is filled by hand -- frames a
+ * page captured from its canvas, or screenshots of Live C, made into a GIF by tools/gif.mjs.
+ */
+const MEDIA = join(ROOT, 'dist/site-media');
+if (existsSync(MEDIA)) for (const f of readdirSync(MEDIA)) if (/\.(gif|png|webp)$/.test(f)) total += copy(join(MEDIA, f), `media/${f}`);
+
+/*
  * THE CORRESPONDING SOURCE, shipped beside the builds. A bundle is object code, and the GPL v2 asks
  * whoever passes it on to pass on its source too, not to point at someone else's copy (that is v3);
  * upstreams also go away (Raven's site has). So every source tree a shipped build was made from goes

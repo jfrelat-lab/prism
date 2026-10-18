@@ -281,7 +281,8 @@
   body.player .playeronly { display: inline-block; }
   body.player #machines, body.player header a[href^="./"]:not(.playeronly), body.player aside,
   body.player #panel, body.player #vmSpec, body.player #vmState, body.player .vmtop label:not(.keepin) { display: none !important; }
-  body.player main { grid-template-columns: 1fr !important; }
+  /* One row too: the narrow layout's second row was the side panel's, hidden here, and kept 2/5 of the height. */
+  body.player main { grid-template-columns: 1fr !important; grid-template-rows: minmax(0, 1fr) !important; }
   /* A desktop in the player holds the one program it was opened for. */
   body.player .desktop .shortcut[aria-selected="false"] { display: none; }
   body.player #vmName { font-weight: 600; }
