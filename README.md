@@ -8,6 +8,10 @@ Quake, Doom, ScummVM, Keen Dreams — and runs them in a browser tab or in Node.
 
 No WebAssembly, no build step, no dependencies. The compiler runs in the page.
 
+**Try it: [prism-compiler.pages.dev](https://prism-compiler.pages.dev)** — the games, compiled and
+playing in the tab, and [Live C](https://prism-compiler.pages.dev/web/live/): type C or C++ (console,
+GLUT, SDL, X11 or Win32) and run it, or load one of Rosetta Code's solutions.
+
 ```
  C / C++ / asm source ─▶ preprocessor ─▶ parser + sema ─▶ JavaScript source ─▶ the engine's own JIT ─▶ run
                          (gcc -E exact)   (i386 or 16-bit       (readable, one function
