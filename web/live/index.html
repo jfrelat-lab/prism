@@ -97,6 +97,14 @@
    * coloured text sits exactly under the editable one.
    */
   .edit { position: relative; min-height: 0; background: var(--bg); }
+  /* A Rosetta Code solution on its way: over the editor, which waits with the controls around it. */
+  #loading { position: absolute; inset: 0; z-index: 3; display: flex; align-items: center; justify-content: center;
+             gap: 10px; background: color-mix(in srgb, var(--bg) 82%, transparent); color: var(--fg); }
+  #loading[hidden] { display: none; }
+  #loading .spin { width: 14px; height: 14px; border: 2px solid var(--edge); border-top-color: var(--accent);
+                   border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #loading .spin { animation-duration: 3s; } }
   #editor, #hl { position: absolute; inset: 0; margin: 0; border: none; padding: 12px 14px;
                  font: 400 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
                  tab-size: 4; white-space: pre; overflow: auto; }
@@ -207,6 +215,10 @@
       <pre id="hl" aria-hidden="true"></pre>
       <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"
                 wrap="off"></textarea>
+      <div id="loading" hidden role="status" aria-live="polite">
+        <span class="spin" aria-hidden="true"></span><span id="loadingText">loading</span>
+        <button id="loadingCancel" type="button">Cancel</button>
+      </div>
     </div>
   </div>
 

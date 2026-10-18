@@ -987,6 +987,32 @@ document.addEventListener('mousedown', (e) => { if (!$('picker').hidden && !e.ta
 window.addEventListener('blur', () => { if (!$('picker').hidden) closePicker(); });
 function choose(it) { closePicker(); loadExample(it.value, it.label); }
 
+/*
+ * WHILE A SOLUTION LOADS, the page waits for it: two requests to rosettacode.org, seconds on a slow
+ * day. Nothing that would act on the files -- Run, Reset, another example, the editor -- is live in
+ * the meantime, the editor says what it is waiting for, and Cancel (or 20 seconds) gives up.
+ */
+const BUSY = ['run', 'reset', 'pick', 'argv', 'language'];
+function busy(text) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(new Error('no answer in 20 s')), 20000);
+  const ticket = { signal: ctl.signal, cancelled: false, done() {
+    clearTimeout(timer);
+    for (const id of BUSY) $(id).disabled = false;
+    $('stopBtn').disabled = true;
+    $('editor').readOnly = false;
+    $('tabs').inert = false;
+    $('loading').hidden = true;
+  } };
+  for (const id of BUSY) $(id).disabled = true;
+  $('editor').readOnly = true;
+  $('tabs').inert = true;
+  $('loadingText').textContent = text;
+  $('loading').hidden = false;
+  $('loadingCancel').onclick = () => { ticket.cancelled = true; ctl.abort(); };
+  $('loadingCancel').focus();
+  return ticket;
+}
+
 let lastLoaded = null;     // the source an example put in the editor, so swapping it again needs no question
 /*
  * The example what is open came from, kept with the page's files: Reset goes back to IT, as it was
@@ -1015,12 +1041,15 @@ async function loadExample(value, label, { ask = true } = {}) {
     const e = rosetta[+value.slice(8)];
     $('status').textContent = 'loading';
     say(`loading "${e.task}" from rosettacode.org (revision ${e.revid})...\n`);
+    const ticket = busy(`loading “${e.task}” from rosettacode.org`);
     try {
-      const blocks = cBlocks(await fetchCSection(e.task, e.revid));
+      const blocks = cBlocks(await fetchCSection(e.task, e.revid, { signal: ticket.signal }));
       const b = blocks[e.block];
       if (!b) throw new Error(`its C section has ${blocks.length} solutions, not ${e.block + 1}`);
       source = b.code;
     } catch (err) {
+      ticket.done();
+      if (ticket.cancelled) { say('cancelled\n'); $('status').textContent = 'idle'; return; }
       /*
        * A blocked request reads as a CORS error in the console whatever blocked it: an extension that
        * filters rosettacode.org, or Cloudflare's bot check answering with a page that carries no CORS
@@ -1032,6 +1061,7 @@ async function loadExample(value, label, { ask = true } = {}) {
       showTab('tabBuild');
       return;
     }
+    ticket.done();
     name = 'main.c';
     build.textContent = '';
     setCredit(e);

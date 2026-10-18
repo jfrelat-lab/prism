@@ -30,8 +30,8 @@ export function cBlocks(wikitext) {
 }
 
 /** The task's C section at one revision, as wikitext: two small requests, from a page (CORS). */
-export async function fetchCSection(task, revid) {
-  const q = (params) => fetch(`${API}?${new URLSearchParams({ format: 'json', formatversion: '2', origin: '*', ...params })}`)
+export async function fetchCSection(task, revid, { signal } = {}) {
+  const q = (params) => fetch(`${API}?${new URLSearchParams({ format: 'json', formatversion: '2', origin: '*', ...params })}`, { signal })
     .then((r) => { if (!r.ok) throw new Error(`rosettacode.org answered ${r.status}`); return r.json(); });
   const at = revid ? { oldid: String(revid) } : { page: task };
   const s = await q({ action: 'parse', prop: 'sections', ...at });
