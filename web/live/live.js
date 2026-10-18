@@ -556,13 +556,21 @@ out.addEventListener('paste', (e) => {
 });
 clearTerminal();
 
-const PANES = { tabOut: 'out', tabBuild: 'build', tabEmitted: 'emitted', tabScreen: 'screen' };
+/*
+ * ONE OUTPUT, as a machine has one screen: the terminal for a program that only reads and writes text,
+ * the program's display for one that opens a window (GLUT, SDL, X11, Win32), in the same pane. Which
+ * of the two it shows is the run's, `outputIs`; the tabs only choose between output, build and JS.
+ */
+const PANES = { tabOut: 'output', tabBuild: 'build', tabEmitted: 'emitted' };
+let outputIs = 'out';                 // 'out' (the terminal) or 'screen' (the display's frame)
 const showTab = (id) => {
   for (const [tab, pane] of Object.entries(PANES)) {
     $(tab).setAttribute('aria-selected', String(tab === id));
-    $(pane).hidden = tab !== id;
+    if (pane === 'output') { $('out').hidden = tab !== id || outputIs !== 'out'; $('screen').hidden = tab !== id || outputIs !== 'screen'; }
+    else $(pane).hidden = tab !== id;
   }
 };
+const setOutput = (which) => { outputIs = which; showTab('tabOut'); };
 for (const id of Object.keys(PANES)) $(id).onclick = () => showTab(id);
 
 /*
@@ -574,8 +582,7 @@ for (const id of Object.keys(PANES)) $(id).onclick = () => showTab(id);
 const MACHINE_NAME = { linux: 'the Linux machine', win: 'the Windows desktop' };
 function runOnScreen(env) {
   const t = ENV_TARGET[env];
-  $('tabScreen').hidden = false;
-  showTab('tabScreen');
+  setOutput('screen');
   const box = $('screen');
   box.replaceChildren();
   const frame = document.createElement('iframe');
@@ -589,9 +596,8 @@ function runOnScreen(env) {
   };
   window.addEventListener('message', onReady);
   box.append(frame);
-  say(`${env} program: built and run on ${MACHINE_NAME[t.machine] ?? t.machine}, in the Screen tab ` +
-      `(its build log is in the frame's panel)\n`, 'ok');
-  term(`running in the Screen tab, on ${MACHINE_NAME[t.machine] ?? t.machine}\n`, 'hint');
+  say(`${env} program: built and run on ${MACHINE_NAME[t.machine] ?? t.machine}, shown in Output ` +
+      `(its own build log is in the panel inside it)\n`, 'ok');
   $('status').textContent = `running (${env})`;
   $('run').disabled = true; $('stopBtn').disabled = false;
 }
@@ -611,8 +617,7 @@ $('run').onclick = () => {
   $('emitted').textContent = '';
   const env = detectEnv(files.filter((f) => /\.(c|cpp|cc|cxx|h|hpp)$/i.test(f.name)).map((f) => f.source));
   if (env !== 'console') { runOnScreen(env); return; }
-  $('tabScreen').hidden = true;
-  showTab('tabOut');
+  setOutput('out');
   $('status').textContent = 'compiling';
 
   const control = makeControl();
@@ -767,7 +772,7 @@ $('pickSearch').addEventListener('keydown', (e) => {
   $('pickList').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
 });
 document.addEventListener('mousedown', (e) => { if (!$('picker').hidden && !e.target.closest('#picker, #pick')) closePicker(); });
-// A click in the Screen frame never reaches this document; the window losing focus to it does.
+// A click in the program's display (its frame, in Output) never reaches this document; the window losing focus to it does.
 window.addEventListener('blur', () => { if (!$('picker').hidden) closePicker(); });
 function choose(it) { closePicker(); loadExample(it.value, it.label); }
 
@@ -848,8 +853,7 @@ function resetRun() {
   clearTerminal();
   build.textContent = '';
   $('emitted').textContent = '';
-  $('tabScreen').hidden = true;
-  showTab('tabOut');
+  setOutput('out');
   $('status').textContent = 'idle';
   $('argv').value = 'prog';
   $('language').value = '';
