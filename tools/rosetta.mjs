@@ -4,6 +4,7 @@
 //   node tools/rosetta.mjs --fetch-only    only the download
 //   node tools/rosetta.mjs --tasks=100     the first N tasks (alphabetical), for a quick look
 //   node tools/rosetta.mjs --task="Hello world/Text"
+//   node tools/rosetta.mjs --redo=runs     again, only the tasks whose blocks the survey left in that status
 //   node tools/rosetta.mjs --no-native     skip the comparison with the host's cc
 //
 // THE LICENCE DECIDES THE SHAPE. Rosetta Code's content, code included, is under the GNU FDL
@@ -202,7 +203,20 @@ function child(cmd, args, ms, { json = false } = {}) {
 }
 async function native(file) {
   const exe = file.replace(/\.c$/, '.native');
-  const c = await child('cc', ['-w', '-O0', '-o', exe, file, '-lm'], 60000);
+  /*
+   * -ffp-contract=off: the Mac's clang fuses a*b+c into one FMA by default, one rounding instead of
+   * two, and the reference then differs from every non-fusing compiler -- i386 gcc with SSE, and
+   * PRISM, which rounds each operation. Measured on Mandelbrot set (ASCII), all in float: clang's
+   * default printed '&' where SSE gcc, gcc -ffloat-store and PRISM all print '|'.
+   */
+  const CC = ['-w', '-O0', '-ffp-contract=off'];
+  let c = await child('cc', [...CC, '-o', exe, file, '-lm'], 60000);
+  /*
+   * K&R C -- `main(k){...}`, a call before its declaration -- is a hard error in today's clang, the
+   * Mac's cc, though every compiler of its day took it and PRISM does. Refused, the block had no
+   * reference output and could not be offered (Mandelbrot set, ASCII). Its own dialect, then.
+   */
+  if (c.code !== 0) c = await child('cc', [...CC, '-std=gnu89', '-o', exe, file, '-lm'], 60000);
   if (c.code !== 0) return { built: false };
   const r = await child(exe, [], 10000);
   return { built: true, timedOut: r.timedOut, code: r.code, stdout: r.stdout };
@@ -217,7 +231,13 @@ const JOBS = +(arg('jobs') ?? Math.max(1, availableParallelism() - 2));
 
 const all = await taskList();
 const only = arg('task');
-const tasks = only ? [only] : all.slice(0, arg('tasks') ? +arg('tasks') : all.length);
+// --redo=runs,output-differs: the tasks with a block the last survey left in one of those statuses.
+const redo = arg('redo') ? (() => {
+  const want = new Set(arg('redo').split(','));
+  const survey = JSON.parse(readFileSync(join(OUT, 'index.json'), 'utf8'));
+  return [...new Set(survey.results.filter((r) => want.has(r.status)).map((r) => r.task))];
+})() : null;
+const tasks = only ? [only] : redo ?? all.slice(0, arg('tasks') ? +arg('tasks') : all.length);
 console.log(`${all.length} tasks in Category:C; ${tasks.length} to look at`);
 
 // The download first, one request at a time; then the runs, several at once.
@@ -281,7 +301,17 @@ for (const r of results.filter((x) => x.status === 'compile-error' || x.status =
   errs[k] = (errs[k] ?? 0) + 1;
 }
 // A partial run (--task, --tasks) must not replace the survey a page reads.
-const INDEX = join(OUT, only || arg('tasks') || flag('envs-only') ? 'index-partial.json' : 'index.json');
+const partial = !!(only || redo || arg('tasks') || flag('envs-only'));
+const INDEX = join(OUT, partial ? 'index-partial.json' : 'index.json');
+/*
+ * A partial run ADDS to the partial index: its rows replace the same blocks' and leave the rest, so
+ * a --redo after an --envs-only keeps the graphical builds tools/rosetta-index.mjs reads from there.
+ */
+if (partial && existsSync(INDEX)) {
+  const key = (r) => `${r.task}\0${r.block}`, mine = new Set(results.map(key));
+  results.push(...JSON.parse(readFileSync(INDEX, 'utf8')).results.filter((r) => !mine.has(key(r))));
+  results.sort((a, b) => a.task.localeCompare(b.task) || a.block - b.block);
+}
 writeFileSync(INDEX, JSON.stringify({
   note: 'PRISM\'s measurements on Rosetta Code\'s C solutions. No Rosetta Code content: a solution is under the GNU FDL and is read from rosettacode.org, with its authors.',
   date: new Date().toISOString(), native: NATIVE, tasks: tasks.length, blocks: results.length, byStatus, byStatusSelf, byEnv, results,

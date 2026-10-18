@@ -8,6 +8,8 @@
 //   glut    the GL framebuffer at frame N (installGlut's own frame schedule, gate-gears' path)
 //   sdl     SDL 1.2's surface at its Nth SDL_Flip/SDL_UpdateRect
 //   sdl2    SDL 2's last presented texture at its Nth SDL_RenderPresent
+//   x11     the window's pixels once the client has drawn into it and come back for events (the
+//           core drawing requests, src/env/x11-draw.js), 50 event calls in
 //   win32   a DIB section's picture when the program draws into one; otherwise whether it reached
 //           its message loop -- GDI's text and shapes are accepted without a raster behind them
 //           (src/env/win32.c), so a window that only draws with GDI has nothing to show here
@@ -69,6 +71,22 @@ if (process.argv[2] === '--one') {
       if (tex) writeRgbPng(png, { bytes: M.u8.subarray(tex.pixels, tex.pixels + tex.pitch * tex.h), width: tex.w, height: tex.h, bpp: tex.bpp, pitch: tex.pitch });
       out({ phase: 'frame', frame: frames, width: tex?.w ?? 0, height: tex?.h ?? 0 });
     };
+  } else if (env === 'x11') {
+    // A client that has drawn and come back for events many times over is showing its picture.
+    for (const name of ['XNextEvent', 'XPending']) {
+      const inner = M.rt[name];
+      M.rt[name] = function (...a) {
+        if (++frames === 50) {
+          const d = M.x11.window();
+          if (d?.addr) {
+            const bgra = M.u8.slice(d.addr, d.addr + d.w * d.h * 4);
+            writeRgbPng(png, { bytes: bgra, width: d.w, height: d.h });
+            out({ phase: 'frame', frame: frames, width: d.w, height: d.h, ...stats(bgra, d.w * d.h) });
+          }
+        }
+        return inner.apply(this, a);
+      };
+    }
   } else if (env.startsWith('win32')) {
     // A program that reaches its message loop has a window; after a hundred calls it is idling there.
     let polls = 0;
