@@ -588,7 +588,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       ms: compileMs, units: units.length, lines: units.reduce((n, u) => n + u.source.split('\n').length, 0),
       functions: Object.keys(prog.F).length, bytes: prog.src.length,
       failures: prog.failures.map((f) => `${f.fn ? `${f.fn}: ` : ''}${f.message}`),
-      source: prog.src,
+      source: prog.src, srcUnits: prog.srcUnits,
     });
   }
 

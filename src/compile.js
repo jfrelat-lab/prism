@@ -1203,7 +1203,8 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
    * the compiled routine directly, exactly as a call to any other defined function does.
    */
   const pieces = [], emitted = [];
-  const auxPieces = [];
+  const pieceFiles = [];           // the unit each of `pieces` came from, for srcUnits below
+  const auxPieces = [], auxFiles = [];
   const auxSeen = new Set();
   for (const p of parsed) {
     for (const aux of p.unit.aux ?? []) {
@@ -1215,6 +1216,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       if (!f || f.defined) continue;
       try {
         auxPieces.push(compileAux(aux, jsIdent(f.name)));
+        auxFiles.push(p.file);
         f.defined = true;
         auxSeen.add(aux.name);
         emitted.push(f.name);
@@ -1413,10 +1415,12 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
         pieces.push(`function ${jsIdent(link)}(){ throw new Error(${JSON.stringify('unimplemented: ' + d.name)}); }`);
       }
       emitted.push(link);
+      pieceFiles.push(p.file);
     }
   }
 
   pieces.push(...auxPieces);
+  pieceFiles.push(...auxFiles);
 
   finalizeHeap(M);
   /*
@@ -1437,8 +1441,19 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
     'const _w16=(a,v)=>{if(_iw(a)){M.win.w8(a,v&255);M.win.w8(a+1,(v>>>8)&255);}else D.setUint16(a,v&65535,1);};',
     'const _w32=(a,v)=>{if(_iw(a)){for(let k=0;k<4;k++)M.win.w8(a+k,(v>>>(8*k))&255);}else D.setInt32(a,v,1);};',
   ].join('\n') + '\n' : '';
-  const src = `"use strict";\nreturn function(M,F,D${paged ? ',xr,xw' : ''}){\n` + WIN + pieces.join('\n') + '\n' +
-    moduleEpilogue(emitted) + '};';
+  const head = `"use strict";\nreturn function(M,F,D${paged ? ',xr,xw' : ''}){\n` + WIN;
+  const src = head + pieces.join('\n') + '\n' + moduleEpilogue(emitted) + '};';
+  /*
+   * Which stretch of `src` each unit's functions occupy: [file, start, end] runs, in order. Units are
+   * emitted one after another, so a unit is one run (its #pragma aux routines, emitted last, are a
+   * second). Live C uses it to show a program's own functions apart from a C shim compiled with it.
+   */
+  const srcUnits = [];
+  for (let i = 0, at = head.length; i < pieces.length; at += pieces[i].length + 1, i++) {
+    const last = srcUnits[srcUnits.length - 1];
+    if (last?.[0] === pieceFiles[i]) last[2] = at + pieces[i].length;
+    else srcUnits.push([pieceFiles[i], at, at + pieces[i].length]);
+  }
 
   let factory;
   try {
@@ -1490,7 +1505,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
   const funcTypes = new Map([...perModule.get(MAIN).funcs].map(([n, f]) => [n, f.type]));
   // Where each of the main module's globals lives: what an assembly file's `extern` names resolve to.
   const globalAddrs = Object.fromEntries([...perModule.get(MAIN).globals].map(([n, g]) => [n, g.addr]));
-  return { M, F, src, mod, failures, duplicates, undefined: undefined_, undefinedVars,
+  return { M, F, src, srcUnits, mod, failures, duplicates, undefined: undefined_, undefinedVars,
            externPlaced, funcTypes, globalAddrs, run: makeRunner(M, F, mod, model),
            // What a static bundle needs beyond the above to be loaded again (snapshotProgram).
            link: { emitted, builtinRefs: [...builtinRefs], model, shared, paged: !!paged, window: !!window, safepoints: !!safepoints } };

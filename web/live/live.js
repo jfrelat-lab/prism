@@ -599,7 +599,7 @@ function runOnScreen(env) {
     if (e.source !== frame.contentWindow) return;
     const m = e.data;
     if (m?.type === 'prism-live-ready') frame.contentWindow.postMessage({ type: 'prism-live', files, env, argv }, location.origin);
-    else if (m?.type === 'prism-live-built') { reportBuild(m); $('emitted').innerHTML = highlightJS(m.source); }
+    else if (m?.type === 'prism-live-built') { reportBuild(m); showEmitted(m.source, m.srcUnits, files.map((f) => f.name)); }
     else if (m?.type === 'prism-live-failed') { say(`\n${m.message}\n`, 'err'); $('status').textContent = 'failed'; showTab('tabBuild'); }
   };
   window.addEventListener('message', onFrame);
@@ -621,6 +621,40 @@ function reportBuild(m) {
     for (const f of m.failures.slice(0, 8)) say(`  ${f}\n`, 'warn');
   }
   say('\n');
+}
+
+/*
+ * The emitted JavaScript, the program's own functions first. A Win32 program is compiled with the
+ * shim's C (src/env/win32*.c, ENV_TARGET's `generated`): 3,500 lines of it around a 70-line file. Each
+ * unit that is not one of the editor's files is folded under its name, and coloured only when opened;
+ * so is the module's epilogue, the table that publishes every function on F. Without `units` (the
+ * console worker, whose program is only the editor's files) the source is shown whole.
+ */
+function showEmitted(source, units, own) {
+  const pane = $('emitted');
+  if (!units?.length) { pane.innerHTML = highlightJS(source); return; }
+  const mine = new Set(own);
+  const fold = (title, text) => {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = title;
+    const code = document.createElement('div');
+    d.append(s, code);
+    d.addEventListener('toggle', () => { if (d.open && !code.innerHTML) code.innerHTML = highlightJS(text); });
+    return d;
+  };
+  const kb = (n) => `${(n / 1024).toFixed(1)} kB`;
+  const fns = (text) => (text.match(/^function /gm) ?? []).length;
+  const top = document.createElement('div');
+  let head = source.slice(0, units[0][1]);
+  for (const [file, a, b] of units) if (mine.has(file)) head += source.slice(a, b) + '\n';
+  top.innerHTML = highlightJS(head);
+  const folds = units.filter(([file]) => !mine.has(file)).map(([file, a, b]) => {
+    const text = source.slice(a, b);
+    return fold(`${file} — ${fns(text)} functions, ${kb(text.length)}`, text);
+  });
+  const tail = source.slice(units[units.length - 1][2]);
+  pane.replaceChildren(top, ...folds, fold(`module epilogue — every function published on F, ${kb(tail.length)}`, tail));
 }
 
 // ---------------------------------------------------------------- run
