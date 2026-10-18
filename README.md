@@ -155,6 +155,27 @@ layout types. The gates keep a fixed date, UTC and US positions. See
 **No game data is fetched or stored by this repository.** The page reads only the files you
 give it, or a directory you name with `--data`.
 
+## Deterministic by construction
+
+A comparison proves something only if it gives the same answer every time it is made. PRISM is
+built so that it does:
+
+- **The same source compiles to the same JavaScript, byte for byte.** `__DATE__` and `__TIME__`
+  are fixed (`Jan  1 1996`, `00:00:00`) rather than the wall clock, as `SOURCE_DATE_EPOCH` fixes
+  them for gcc. A precompiled bundle is keyed by a hash of the compiler and the program, so it is
+  rebuilt exactly when one of them changes.
+- **The same run produces the same frames.** Headless, time is a virtual clock: it advances by what
+  the program asks for (a delay, a frame), never by how fast the host happens to be. A gate can ask
+  for frame 1,500 of a demo, or of MAME's attract mode, and get the same pixels every time. That is
+  what makes "bit-identical to a native build" a claim anyone can re-check, not a screenshot.
+- **So a difference is a defect, never noise.** Gates compare exactly (to the bit, or within a
+  tolerance that is stated and justified, such as the x87's extra precision in Debian's libGLU), and
+  the goldens they commit replay without the reference toolchain.
+
+Only the page relaxes this, where a person is watching: Live C stamps `__DATE__` with the present,
+and a game in the browser runs on the real clock. The gates keep a fixed date, UTC and US key
+positions.
+
 ## How it is tested
 
 PRISM is checked against other compilers and other machines, never against its own expectations.
@@ -203,9 +224,7 @@ parts, and their licences, are listed in [THIRD-PARTY.md](THIRD-PARTY.md).
 
 ## How it was built
 
-PRISM was written with [Claude Code](https://claude.com/claude-code), Anthropic's coding agent,
-directed by Julien Frelat; the commit messages say so. The method is the one above: every claim
-about C, about a library or about a picture is checked against an independent implementation.
+PRISM was written with [Claude Code](https://claude.com/claude-code).
 
 ## License
 
