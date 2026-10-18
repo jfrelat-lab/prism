@@ -48,6 +48,13 @@
 
   main { max-width: 1080px; margin: 0 auto; padding: 0 24px 48px; }
   .hero { padding: 52px 0 24px; }
+  /* The first screen shows a game, not only words: the README's Quake III, on the export (media/ is its). */
+  .hero.with-shot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 36px; align-items: center; }
+  .hero .shot { margin: 0; }
+  .hero .shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .hero .shot figcaption { margin-top: 8px; color: var(--dim); font-size: 13px; }
+  @media (max-width: 900px) { .hero.with-shot { grid-template-columns: 1fr; gap: 20px; } }
+  header nav a.star { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
   .hero h1 { margin: 0 0 14px; font-size: clamp(27px, 4.2vw, 42px); line-height: 1.15; color: var(--head); text-wrap: balance; }
   .hero p { max-width: 720px; margin: 0 0 12px; }
   .pipeline { display: block; width: fit-content; max-width: 100%; overflow-x: auto; margin: 14px 0 22px;
@@ -175,11 +182,13 @@
     <a href="https://github.com/jfrelat-lab/prism/blob/main/docs/TESTING.md">How it is tested</a>
     <a href="https://github.com/jfrelat-lab/prism/tree/main/docs">Documentation</a>
     <a href="https://github.com/jfrelat-lab/prism">Source</a>
+    <a class="star" href="https://github.com/jfrelat-lab/prism" title="PRISM on GitHub: a star helps others find it">★ Star on GitHub</a>
   </nav>
 </header>
 
 <main>
   <section class="hero">
+    <div>
     <h1>C and C++ compiled to JavaScript, by a compiler that runs in the page.</h1>
     <p>PRISM compiles the <b>unmodified source</b> of games and emulators from the DOS, Windows 95 and
       early Linux years — MAME, Quake, Doom, ScummVM, Keen Dreams — and runs them in a browser tab.
@@ -195,6 +204,11 @@
       <a class="btn" href="https://github.com/jfrelat-lab/prism" data-nosite>Source on GitHub</a>
       <a class="btn" href="https://github.com/jfrelat-lab/prism/blob/main/docs/ARCHITECTURE.md" data-nosite>How it works</a>
     </div>
+    </div>
+    <figure class="shot" data-site hidden>
+      <a href="#play"><img src="media/quake3.gif" width="480" height="360" alt="Quake III Arena compiled by PRISM: bots on The Longest Yard, in this browser tab"></a>
+      <figcaption>Quake III Arena, its 1.32 source compiled to JavaScript, drawn through WebGL.</figcaption>
+    </figure>
   </section>
 
   <section id="play" data-site hidden>
@@ -326,6 +340,7 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
   PRISM is free software under the <a href="https://github.com/jfrelat-lab/prism/blob/main/LICENSE">MIT licence</a>;
   <a href="https://github.com/jfrelat-lab/prism/blob/main/THIRD-PARTY.md">some parts</a> keep their upstream licence.
   Written with <a href="https://claude.com/claude-code">Claude Code</a>.
+  If PRISM interests you, <a href="https://github.com/jfrelat-lab/prism">a star on GitHub</a> helps others find it.
 </footer>
 
 <script>
@@ -344,6 +359,7 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
     if (!site?.programs?.length) return;
     showShelf();
     for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
+    document.querySelector('.hero').classList.add('with-shot');
     for (const el of document.querySelectorAll('[data-nosite]')) el.hidden = true;
     const mine = await library(site.gallery ?? []);
     catalogue([...site.programs.map((p) => ({ ...p, avail: 'play' })),
