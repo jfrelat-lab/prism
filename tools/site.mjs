@@ -16,6 +16,7 @@
 // The output holds game data and is never committed (.gitignore). No file it writes is over 25 MiB, the
 // largest a common static host accepts: a bundle over it is refused, a data file over it goes in parts.
 import { readFileSync, writeFileSync, mkdirSync, rmSync, cpSync, existsSync, statSync, readdirSync, copyFileSync } from 'node:fs';
+import { gzipSync } from 'node:zlib';
 import { join, dirname, resolve, normalize } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
@@ -399,8 +400,14 @@ for (const f of [...scriptFiles]) {
 }
 if ([...scriptFiles].includes('tools/oracle.mjs')) scriptFiles.add('tools/oracle/Dockerfile');
 const prismFile = join(SRC_CACHE, 'build-scripts.tar.gz');
-const scriptsTar = spawnSync('tar', ['-czf', prismFile, '-C', ROOT, ...[...scriptFiles].sort()]);
+/*
+ * The same scripts make the same archive, byte for byte: tar's -z wrote the time of compression into
+ * the gzip header, so every export changed build-scripts.tar.gz's checksum while its content stood
+ * still, and an export no longer matched the release it links to. zlib's header carries no time.
+ */
+const scriptsTar = spawnSync('tar', ['-cf', '-', '-C', ROOT, ...[...scriptFiles].sort()], { maxBuffer: 1 << 30 });
 if (scriptsTar.status !== 0) throw new Error(`sources/build-scripts.tar.gz: tar failed: ${scriptsTar.stderr}`);
+writeFileSync(prismFile, gzipSync(scriptsTar.stdout, { level: 9 }));
 const prismBytes = RELEASE ? statSync(prismFile).size : copy(prismFile, 'sources/build-scripts.tar.gz');
 if (!RELEASE) total += prismBytes;
 const prismArchive = { href: hrefOf('build-scripts.tar.gz'), name: 'build-scripts.tar.gz', file: prismFile, bytes: prismBytes,
