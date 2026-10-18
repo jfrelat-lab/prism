@@ -55,3 +55,19 @@ export function detectEnv(sources) {
   if (hit === 'win32' && !/\bWinMain\s*\(/.test(text)) return 'win32-main';
   return hit;
 }
+
+/*
+ * __DATE__ and __TIME__ for a program typed into Live C: NOW, in local time, as gcc stamps them. The
+ * compiler fixes them (src/compile.js: Jan  1 1996, 00:00:00) so that a build is reproducible, which
+ * is what every gate and every precompiled bundle needs -- and what a program compiled here, now, for
+ * the person who wrote it, does not: its banner printed 1996.
+ */
+export function nowDefines(d = new Date()) {
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const two = (n) => String(n).padStart(2, '0');
+  return {
+    // "Mmm dd yyyy", the day padded with a SPACE (C11 6.10.8.1), as gcc's "Oct  8 2026".
+    __DATE__: `"${MONTHS[d.getMonth()]} ${String(d.getDate()).padStart(2, ' ')} ${d.getFullYear()}"`,
+    __TIME__: `"${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}"`,
+  };
+}

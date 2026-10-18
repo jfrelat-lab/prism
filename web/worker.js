@@ -12,6 +12,7 @@ import { compileProgram, bindLateBuiltins, loadSnapshot } from '../src/compile.j
 import { toolchainCompile } from '../src/toolchain.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 import { endpoints, at } from './endpoints.js';
+import { nowDefines } from './live/envs.js';
 import { cxxForTarget } from '../src/cxx/index.js';
 /*
  * The registry and the assembler, both pure JS. The planar branch below builds its devices from the
@@ -517,7 +518,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
   try {
     if (bundle) prog = loadSnapshot(bundle, { shared: true });
     else prog = compileProgram(units, {
-      defines: program.defines || {},
+      // A program typed into Live C is compiled now, for now: today's __DATE__ and __TIME__ (envs.js).
+      defines: ownSources ? { ...nowDefines(), ...(program.defines || {}) } : program.defines || {},
       /* What each module makes visible to the main program, read from its own .def by the server. */
       exports: program.moduleExports || {},
       resolve,
@@ -2086,6 +2088,13 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     const y = new Date(secs * 1000).getFullYear();
     const std = Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset());
     return new Date(secs * 1000).getTimezoneOffset() < std;
+  };
+  /* %Z: the zone's short name as the browser knows it, standard or summer ("CET", "CEST"). */
+  prog.M.tzName = (dst) => {
+    const y = new Date().getFullYear(), jan = new Date(y, 0, 1), jul = new Date(y, 6, 1);
+    const summer = jan.getTimezoneOffset() > jul.getTimezoneOffset() ? jul : jan;
+    const at = dst ? summer : (summer === jul ? jan : jul);
+    return new Intl.DateTimeFormat('en-GB', { timeZoneName: 'short' }).formatToParts(at).find((x) => x.type === 'timeZoneName')?.value ?? 'UTC';
   };
 
   /*

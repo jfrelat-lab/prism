@@ -14,6 +14,8 @@
 //     sending does not need this worker's loop, only the page's.
 
 import { compileProgram } from '../../src/compile.js';
+import { installRealClock } from '../../src/runtime/runtime.js';
+import { nowDefines } from './envs.js';
 import { installStdio } from '../../src/env/stdio.js';
 import { controlViews, makeKeyboard, SLOT, STATE } from '../../src/env/webhost.js';
 
@@ -63,6 +65,7 @@ async function run({ files, argv, control, stdinText, language }) {
   const t0 = performance.now();
   const prog = compileProgram(units, {
     includes,
+    defines: nowDefines(),       // today's __DATE__ and __TIME__, not the compiler's fixed pair
     memory: 64 * 1024 * 1024,
     collect: true,               // report every gap in one build rather than dying on the first
     // The language choice of the page: by file name (absent), or every unit as C or as C++.
@@ -92,6 +95,27 @@ async function run({ files, argv, control, stdinText, language }) {
    * arrives as 13 because that is what a PC's BIOS buffer holds; a C program reading a line wants
    * 10, and `fgets` looks for nothing else.
    */
+  /*
+   * The visitor's clock, date and time zone, as the shelf gives a program (web/worker.js): time(),
+   * localtime() and clock() read now and here, not the fixed day the gates run on. At normal speed
+   * -- this page has no speed control, and an unset one would read as "unlimited".
+   */
+  installRealClock(prog.M, { speed: () => 100 });
+  prog.M.wallClock = () => Date.now() / 1000;
+  prog.M.utcOffset = (secs) => -new Date(secs * 1000).getTimezoneOffset() * 60;
+  prog.M.isDst = (secs) => {
+    const y = new Date(secs * 1000).getFullYear();
+    const std = Math.max(new Date(y, 0, 1).getTimezoneOffset(), new Date(y, 6, 1).getTimezoneOffset());
+    return new Date(secs * 1000).getTimezoneOffset() < std;
+  };
+  /* %Z: the zone's short name as the browser knows it, standard or summer ("CET", "CEST"). */
+  prog.M.tzName = (dst) => {
+    const y = new Date().getFullYear(), jan = new Date(y, 0, 1), jul = new Date(y, 6, 1);
+    const summer = jan.getTimezoneOffset() > jul.getTimezoneOffset() ? jul : jan;
+    const at = dst ? summer : (summer === jul ? jan : jul);
+    return new Intl.DateTimeFormat('en-GB', { timeZoneName: 'short' }).formatToParts(at).find((x) => x.type === 'timeZoneName')?.value ?? 'UTC';
+  };
+
   installStdio(prog.M, {
     readChar: () => {
       const c = keyboard.read();

@@ -214,6 +214,7 @@ export function makeMachine(mod = new Module()) {
   M.wallClock = null;                       // () => seconds since 1970, or null for the fixed date
   M.utcOffset = () => 0;                    // seconds east of UTC at a given time
   M.isDst = () => false;
+  M.tzName = () => 'UTC';                   // strftime's %Z, given tm_isdst
   M.rt = makeLibc(M);
   return M;
 }
@@ -936,7 +937,7 @@ function makeLibc(M) {
             p2(date.getUTCFullYear() % 100);
           case 'X': return `${p2(date.getUTCHours())}:${p2(date.getUTCMinutes())}:` +
             p2(date.getUTCSeconds());
-          case 'Z': return 'UTC';
+          case 'Z': return M.tzName(g(8) > 0);     // tm_isdst, the struct's ninth int
           case '%': return '%';
           default: return '%' + c;      // left as written, which is what a C library may also do
         }
