@@ -555,11 +555,16 @@ BOOL WINAPI ShowWindow(HWND w, int cmd)
     /* Shown means activated: there is no other window here to take the focus away. */
     if (prism_win32_visible && !prism_win32_minimized) prism_win32_activate(1);
     /*
-     * ...and a window that becomes visible is invalid, background and all, so its first WM_PAINT
-     * comes without the program asking. Without it a window that paints only on WM_PAINT -- every
-     * window written the textbook way -- was never drawn: shown, and black.
+     * ...and a window that becomes visible is invalid, so its first WM_PAINT comes without asking --
+     * but only for a class with a BACKGROUND BRUSH, which is counting on Windows to paint it. Without
+     * it a window written the textbook way (Petzold's) was shown and never drawn: black.
+     *
+     * Not for every window, though Windows does it for every window: WinQuake's WndProc answers
+     * WM_PAINT with SCR_UpdateWholeScreen, and an invented paint changed what it draws (gate-pixels,
+     * 152 rows; tools/gate-vgafont.mjs holds PuTTY to no paint). Those classes all register
+     * hbrBackground = NULL -- they draw everything themselves -- so the brush is the line.
      */
-    if (!was && prism_win32_visible) { prism_dirty_hwnd = w; prism_invalidate(NULL, 1); }
+    if (!was && prism_win32_visible && prism_win32_bg) { prism_dirty_hwnd = w; prism_invalidate(NULL, 1); }
     return was;
 }
 int WINAPI SetWindowText(HWND w, LPCSTR text)
@@ -832,6 +837,9 @@ BOOL WINAPI PeekMessage(LPMSG msg, HWND w, UINT min, UINT max, UINT flags)
 BOOL WINAPI GetMessage(LPMSG msg, HWND w, UINT min, UINT max)
 {
     (void)w; (void)min; (void)max;
+    /* An empty queue is where timers come due and input arrives, as in MsgWaitForMultipleObjects:
+       GetMessage is how most programs wait, and without this their WM_TIMER never came. */
+    if (msgq_head == msgq_tail) prism_win32_pump();
     if (msgq_head == msgq_tail) {
         if (prism_dirty_any) {
             if (msg) { memset(msg, 0, sizeof(*msg)); msg->message = WM_PAINT;

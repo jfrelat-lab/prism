@@ -154,9 +154,8 @@ DWORD WINAPI GetCharacterPlacementW(HDC dc, LPCWSTR s, int n, int m, GCP_RESULTS
  * 16 rows, one byte per row, most significant bit leftmost. `prism_vga_font` stays null if that
  * environment was not installed, and then text draws as background: blank, not garbage.
  *
- * Pixels are four bytes, R G B A, because that is what a PNG writer and a canvas both want and it
- * spares everyone a palette. COLORREF is 0x00bbggrr, which is why the channels come out of it in
- * that order.
+ * Pixels are four bytes, B G R A -- the page's 32-bit format, as every host publishes -- which spares
+ * everyone a palette. COLORREF is 0x00bbggrr, so the channels are taken out of it in reverse.
  */
 const unsigned char *prism_vga_font = 0;
 
@@ -186,9 +185,11 @@ static void prism_pixel(int x, int y, COLORREF c)
     unsigned char *p;
     if (!prism_gdi_surface || x < 0 || y < 0 || x >= prism_gdi_w || y >= prism_gdi_h) return;
     p = prism_gdi_surface + y * prism_gdi_pitch + x * 4;
-    p[0] = (unsigned char)(c & 0xFF);            /* COLORREF is 0x00bbggrr */
+    /* B, G, R, A: the page's 32-bit format (PIXFMT 32), as every host publishes it. COLORREF is
+       0x00bbggrr. Written R first, every colour came out with red and blue exchanged. */
+    p[0] = (unsigned char)((c >> 16) & 0xFF);
     p[1] = (unsigned char)((c >> 8) & 0xFF);
-    p[2] = (unsigned char)((c >> 16) & 0xFF);
+    p[2] = (unsigned char)(c & 0xFF);
     p[3] = 0xFF;
 }
 

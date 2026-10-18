@@ -30,6 +30,7 @@ import { spawnSync, spawn } from 'node:child_process';
 import { availableParallelism } from 'node:os';
 import { createHash } from 'node:crypto';
 import { ENV_TARGET } from './rosetta-envs.mjs';
+import { cBlocks } from '../web/live/rosetta.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SELF = fileURLToPath(import.meta.url);
@@ -144,20 +145,8 @@ async function cSection(title) {
 }
 
 // ---------------------------------------------------------------- blocks and their environment
-/** Each C code block of a section, with the subsection it sits under and the library notes before it. */
-function blocks(wikitext) {
-  const out = [];
-  let sub = '', libs = [];
-  const re = /^(={3,})\s*(.*?)\s*\1\s*$|\{\{\s*libheader\s*\|\s*([^}|]+)|<(syntaxhighlight|lang)\b([^>]*)>([\s\S]*?)<\/\4>/gm;
-  for (const m of wikitext.matchAll(re)) {
-    if (m[1]) { sub = m[2].replace(/\{\{[^}]*\}\}/g, '').trim(); libs = []; continue; }
-    if (m[3]) { libs.push(m[3].trim()); continue; }
-    const lang = (/lang\s*=\s*"?([\w+#-]+)/.exec(m[5])?.[1] ?? (m[4] === 'lang' ? m[5].trim().split(/\s/)[0] : '')).toLowerCase();
-    if (lang !== 'c') continue;   // output listings and other languages' snippets are not programs
-    out.push({ sub, libs: [...libs], code: m[6].replace(/^\n/, '') });
-  }
-  return out;
-}
+// The reading of a C section is web/live/rosetta.js's, so Live C numbers blocks as this survey does.
+const blocks = cBlocks;
 
 /*
  * The environment a block asks for, from its own includes first -- the code is the most reliable
