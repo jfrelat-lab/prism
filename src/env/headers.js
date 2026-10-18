@@ -1519,6 +1519,8 @@ int XFreeColormap(Display *d, Colormap c);
 #define VisualDepthMask    0x8
 #define VisualClassMask    0x10
 
+Window XCreateSimpleWindow(Display *d, Window parent, int x, int y, unsigned int w, unsigned int h,
+                           unsigned int border_width, unsigned long border, unsigned long background);
 Window XCreateWindow(Display *d, Window parent, int x, int y, unsigned int w, unsigned int h,
                      unsigned int border, int depth, unsigned int c_class, Visual *visual,
                      unsigned long mask, XSetWindowAttributes *attrs);

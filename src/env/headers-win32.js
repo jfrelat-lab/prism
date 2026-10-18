@@ -581,6 +581,11 @@ typedef enum {
 #define _PRISM_WINDOWS_H
 /* For wchar_t, which LPWSTR is made of. A program that includes only <windows.h> must still get it. */
 #include <stddef.h>
+/* TEXT is winnt.h's, which windows.h always includes: a program that never names <tchar.h> uses it
+   (Rosetta Code's Win32 Hello world). Narrow, as UNICODE is not defined here; tchar.h's is the same. */
+#ifndef TEXT
+#define TEXT(x) x
+#endif
 
 /* ---- calling conventions. On a flat 32-bit target these are all the same call. */
 #define WINAPI
@@ -767,6 +772,14 @@ typedef struct tagWNDCLASSW {
     HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground;
     LPCWSTR lpszMenuName, lpszClassName;
 } WNDCLASSW, *LPWNDCLASSW;
+/* The Ex form: the same class with its size first and a small icon last. */
+typedef struct tagWNDCLASSEXA {
+    UINT cbSize; UINT style; WNDPROC lpfnWndProc; int cbClsExtra, cbWndExtra;
+    HINSTANCE hInstance; HICON hIcon; HCURSOR hCursor; HBRUSH hbrBackground;
+    LPCSTR lpszMenuName, lpszClassName; HICON hIconSm;
+} WNDCLASSEX, WNDCLASSEXA, *LPWNDCLASSEX;
+ATOM WINAPI RegisterClassEx(const WNDCLASSEX *c);
+ATOM WINAPI RegisterClassExA(const WNDCLASSEXA *c);
 ATOM WINAPI RegisterClassA(const WNDCLASSA *c);
 ATOM WINAPI RegisterClassW(const WNDCLASSW *c);
 LRESULT WINAPI DefWindowProcA(HWND h, UINT m, WPARAM w, LPARAM l);
@@ -2096,6 +2109,7 @@ void WINAPI GetLocalTime(LPSYSTEMTIME t);
 DWORD WINAPI GetTickCount(void);
 void WINAPI GetSystemTime(LPSYSTEMTIME t);
 BOOL WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME ft);
+BOOL WINAPI FileTimeToSystemTime(const FILETIME *ft, LPSYSTEMTIME st);
 BOOL WINAPI IsProcessorFeaturePresent(DWORD feature);
 
 #define MAX_DEFAULTCHAR 2
@@ -2273,6 +2287,8 @@ BOOL WINAPI FreeLibrary(HMODULE);
 FARPROC WINAPI GetProcAddress(HMODULE, LPCSTR);
 HMODULE WINAPI GetModuleHandle(LPCSTR);
 DWORD WINAPI GetModuleFileName(HMODULE, LPSTR, DWORD);
+DWORD WINAPI GetModuleFileNameA(HMODULE, LPSTR, DWORD);
+DWORD WINAPI GetModuleFileNameW(HMODULE, LPWSTR, DWORD);
 DWORD WINAPI GetLastError(void);
 void WINAPI SetLastError(DWORD);
 void WINAPI ExitProcess(UINT);

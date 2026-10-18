@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn } from 'node:child_process';
 import { availableParallelism } from 'node:os';
 import { createHash } from 'node:crypto';
+import { ENV_TARGET } from './rosetta-envs.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SELF = fileURLToPath(import.meta.url);
@@ -60,16 +61,6 @@ if (process.argv[2] === '--one') {
  * (src/target.js), with the environment PRISM has for it. Step 1 is the BUILD only: compiled and
  * linked, or which units failed and which functions nothing defines. Running it needs a screen.
  */
-const ENV_TARGET = {
-  glut: { env: ['stdio', 'tz', 'gl', 'glut', 'glu'] },
-  gl: { env: ['stdio', 'tz', 'gl', 'glut', 'glu'] },
-  sdl: { env: ['stdio', 'tz', 'sdl12'] },
-  sdl2: { env: ['stdio', 'tz', 'sdl2'] },
-  x11: { env: ['stdio', 'tz', 'x11'] },
-  // The Win32 shim is C compiled with the program, as Hexen II and WinQuake have it: win32.c is the
-  // window and expects win32-net.c's pump beside it (targets/hexen2.json).
-  win32: { env: ['stdio', 'tz', 'wsock', 'vgafont'], generated: ['src/env/wide.c', 'src/env/inttypes.c', 'src/env/win32-app.c', 'src/env/win32-net.c', 'src/env/win32.c'] },
-};
 if (process.argv[2] === '--build') {
   const { buildTarget } = await import('../src/target.js');
   const [, , , env, file] = process.argv;
@@ -250,7 +241,8 @@ for (const [i, title] of tasks.entries()) {
   process.stdout.write(`\rtasks ${i + 1}/${tasks.length} (${fetched} fetched now, the rest cached)`);
   const bs = entry.wikitext ? blocks(entry.wikitext) : [];
   bs.forEach((b, n) => {
-    const env = envOf(b);
+    let env = envOf(b);
+    if (env === 'win32' && !/\bWinMain\s*\(/.test(b.code)) env = 'win32-main';
     const row = { task: title, revid: entry.revid, block: n, sub: b.sub, env, input: inputOf(b.code), lines: b.code.split('\n').length };
     if (!hasMain(b.code)) { results.push({ ...row, status: 'fragment' }); return; }
     // PRISM runs console programs here; the others are counted by what they need, not attempted.

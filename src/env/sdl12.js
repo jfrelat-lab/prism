@@ -378,6 +378,21 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
       state.opengl = false;
       state.surface = makeSurface(w | 0, h | 0, depth | 0 || 8);
       state.pixels = surfacePixels(state.surface);
+      /*
+       * An 8-bit display starts with SDL's own palette, not black: SDL_SetVideoMode fills it with
+       * SDL_DitherColors (SDL_video.c), 3 bits of red, 3 of green, 2 of blue by the index's bits. A
+       * program that never sets colours draws in those -- Rosetta Code's Image noise writes 0 and 255,
+       * black and white there, and came out all black here.
+       */
+      if (state.depth === 8) {
+        for (let i = 0; i < 256; i++) {
+          let r = i & 0xe0; r |= (r >> 3) | (r >> 6);
+          let g = (i << 3) & 0xe0; g |= (g >> 3) | (g >> 6);
+          let b = i & 0x3; b |= b << 2; b |= b << 4;
+          state.palette[i * 3] = r; state.palette[i * 3 + 1] = g; state.palette[i * 3 + 2] = b;
+        }
+        if (state.onPalette) state.onPalette(state.palette);
+      }
       return state.surface;
     },
     SDL_GL_SetAttribute: () => 0,

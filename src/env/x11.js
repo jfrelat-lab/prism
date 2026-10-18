@@ -231,6 +231,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     },
 
     XCreateWindow: () => WINDOW,
+    // The convenience form: a window with a border and a background, the same one window here.
+    XCreateSimpleWindow: () => WINDOW,
 
     XCreateImage: (_dpy, _vis, depth, _fmt, _off, data, w, h, _pad, bpl) => {
       const img = M.rt.malloc(IMG_SIZE);

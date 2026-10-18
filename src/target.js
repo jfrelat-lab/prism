@@ -356,7 +356,9 @@ export function targetUnits(target, root) {
   for (const g of target.generated ?? []) {
     const p = resolvePath(root, g);
     if (!existsSync(p)) throw new Error(`target '${target.name}': generated unit missing: ${p}`);
-    units.push({ file: p, source: readFileSync(p, 'latin1') });
+    // unitDefines reach a generated unit too, keyed by the path the target lists it under.
+    const over = perUnit[g.toLowerCase()];
+    units.push({ file: p, source: readFileSync(p, 'latin1'), ...(over ? { defines: over } : {}) });
   }
   return { units, dir, asm };
 }
@@ -479,7 +481,10 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     } else {
       const rec = recordingResolver(resolve);
       program = compileWith(rec);
-      const plain = (list) => (list ?? []).map((x) => Object.fromEntries(Object.entries(x).filter(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v))));
+      // Plain values, and arrays of them: an undefined symbol's `units` is a list of names, and
+      // dropped it made the cached report unreadable (build.mjs joins it).
+      const keep = (v) => v === null || ['string', 'number', 'boolean'].includes(typeof v);
+      const plain = (list) => (list ?? []).map((x) => Object.fromEntries(Object.entries(x).filter(([, v]) => keep(v) || (Array.isArray(v) && v.every(keep)))));
       let snap = null;
       try { snap = snapshotProgram(program); } catch { /* a build a snapshot does not record: not kept */ }
       if (snap) storeCached(root, key, snap, { failures: plain(program.failures), duplicates: plain(program.duplicates), undefined: plain(program.undefined), undefinedVars: plain(program.undefinedVars) }, rec.seen);

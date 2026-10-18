@@ -216,6 +216,7 @@ export const BUILTINS = new Map(Object.entries({
   XDestroyWindow: { ret: I, params: [P, P] },
   XFreeColormap: { ret: I, params: [P, P] },
   XCreateWindow: { ret: U, params: [P, U, I, I, U, U, U, I, U, P, U, P] },
+  XCreateSimpleWindow: { ret: U, params: [P, U, I, I, U, U, U, U, U] },
   XCreateImage: { ret: P, params: [P, P, U, I, I, P, U, U, I, I] },
   XPutImage: { ret: I, params: [P, U, P, P, I, I, I, I, U, U] },
   XStoreColors: { ret: I, params: [P, U, P, I] },

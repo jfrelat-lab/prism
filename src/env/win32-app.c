@@ -590,8 +590,84 @@ void WINAPI GetSystemTime(LPSYSTEMTIME t)
     t->wSecond = (WORD)tm->tm_sec;
     t->wMilliseconds = 0;
 }
+/*
+ * FILETIME is 100-nanosecond intervals since 1601-01-01 UTC, and these two convert both ways by the
+ * proleptic Gregorian calendar (days from civil, Howard Hinnant's algorithm). SystemTimeToFileTime
+ * used to answer 0 -- the year 1601 -- for every date.
+ */
+static long long prism_days_from_civil(long long y, unsigned m, unsigned d)
+{
+    long long era;
+    unsigned yoe, doy, doe;
+    y -= m <= 2;
+    era = (y >= 0 ? y : y - 399) / 400;
+    yoe = (unsigned)(y - era * 400);
+    doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (long long)doe - 719468;   /* days since 1970-01-01 */
+}
+#define PRISM_FT_1970 11644473600LL                   /* seconds from 1601 to 1970 */
 BOOL WINAPI SystemTimeToFileTime(const SYSTEMTIME *st, LPFILETIME ft)
-{ (void)st; if (ft) { ft->dwLowDateTime = 0; ft->dwHighDateTime = 0; } return 1; }
+{
+    unsigned long long t;
+    if (!st || !ft || st->wMonth < 1 || st->wMonth > 12 || st->wDay < 1 || st->wDay > 31) return 0;
+    t = (unsigned long long)(prism_days_from_civil(st->wYear, st->wMonth, st->wDay) * 86400LL
+        + st->wHour * 3600LL + st->wMinute * 60LL + st->wSecond + PRISM_FT_1970);
+    t = t * 10000000ULL + st->wMilliseconds * 10000ULL;
+    ft->dwLowDateTime = (DWORD)t;
+    ft->dwHighDateTime = (DWORD)(t >> 32);
+    return 1;
+}
+BOOL WINAPI FileTimeToSystemTime(const FILETIME *ft, LPSYSTEMTIME st)
+{
+    unsigned long long t;
+    long long secs, days, z, era, doe, yoe, y, doy, mp;
+    if (!ft || !st) return 0;
+    t = ((unsigned long long)ft->dwHighDateTime << 32) | ft->dwLowDateTime;
+    st->wMilliseconds = (WORD)((t / 10000ULL) % 1000ULL);
+    secs = (long long)(t / 10000000ULL) - PRISM_FT_1970;
+    days = secs >= 0 ? secs / 86400 : -((-secs + 86399) / 86400);
+    secs -= days * 86400;
+    st->wHour = (WORD)(secs / 3600); st->wMinute = (WORD)(secs / 60 % 60); st->wSecond = (WORD)(secs % 60);
+    st->wDayOfWeek = (WORD)(((days % 7) + 11) % 7);  /* 1970-01-01 was a Thursday */
+    z = days + 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = z - era * 146097;
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    st->wDay = (WORD)(doy - (153 * mp + 2) / 5 + 1);
+    st->wMonth = (WORD)(mp < 10 ? mp + 3 : mp - 9);
+    st->wYear = (WORD)(y + (st->wMonth <= 2));
+    return 1;
+}
+
+/* The program's own file name: PRISM runs one program and calls it prog (its argv[0]). */
+DWORD WINAPI GetModuleFileNameA(HMODULE m, LPSTR buf, DWORD n)
+{
+    static const char name[] = "C:\\prog.exe";
+    DWORD len = sizeof(name) - 1;
+    (void)m;
+    if (!buf || !n) return 0;
+    if (len >= n) len = n - 1;
+    memcpy(buf, name, len); buf[len] = 0;
+    return len;
+}
+DWORD WINAPI GetModuleFileName(HMODULE m, LPSTR buf, DWORD n) { return GetModuleFileNameA(m, buf, n); }
+DWORD WINAPI GetModuleFileNameW(HMODULE m, LPWSTR buf, DWORD n)
+{
+    char tmp[64];
+    DWORD len = GetModuleFileNameA(m, tmp, sizeof(tmp)), i;
+    if (!buf || !n) return 0;
+    if (len >= n) len = n - 1;
+    for (i = 0; i < len; i++) buf[i] = (unsigned char)tmp[i];
+    buf[len] = 0;
+    return len;
+}
+
+/* A console's colours: there is no console to colour, and the text still comes out. */
+BOOL WINAPI SetConsoleTextAttribute(HANDLE h, WORD a) { (void)h; (void)a; return 1; }
 
 /*
  * The millisecond clock, from the host's. PuTTY schedules everything off it -- the cursor blink, the

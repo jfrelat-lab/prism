@@ -548,6 +548,17 @@ static const char *prism_narrow(const wchar_t *w)
 }
 
 ATOM WINAPI RegisterClassA(const WNDCLASSA *c) { return RegisterClass(c); }
+ATOM WINAPI RegisterClassExA(const WNDCLASSEXA *c)
+{
+    WNDCLASSA a;
+    if (!c) return 0;
+    a.style = c->style; a.lpfnWndProc = c->lpfnWndProc;
+    a.cbClsExtra = c->cbClsExtra; a.cbWndExtra = c->cbWndExtra;
+    a.hInstance = c->hInstance; a.hIcon = c->hIcon; a.hCursor = c->hCursor;
+    a.hbrBackground = c->hbrBackground; a.lpszMenuName = c->lpszMenuName; a.lpszClassName = c->lpszClassName;
+    return RegisterClass(&a);
+}
+ATOM WINAPI RegisterClassEx(const WNDCLASSEX *c) { return RegisterClassExA(c); }
 ATOM WINAPI RegisterClassW(const WNDCLASSW *c)
 {
     WNDCLASSA a;

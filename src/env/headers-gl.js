@@ -962,6 +962,7 @@ void glVertex2d(GLdouble x, GLdouble y);
 void glVertex2dv(const GLdouble *v);
 void glVertex2f(GLfloat x, GLfloat y);
 void glVertex2fv(const GLfloat *v);
+void glVertex2d(GLdouble x, GLdouble y);
 void glVertex2i(GLint x, GLint y);
 void glVertex2iv(const GLint *v);
 void glVertex2s(GLshort x, GLshort y);
@@ -1139,6 +1140,8 @@ export const GLUT_H = `#ifndef _PRISM_GLUT_H
 #include <GL/glu.h>
 #define GLUT_RGB 0
 #define GLUT_RGBA 0
+#define GLUT_INDEX 1
+#define GLUT_SINGLE 0
 #define GLUT_DOUBLE 2
 #define GLUT_DEPTH 16
 #define GLUT_ELAPSED_TIME 700
@@ -1205,10 +1208,21 @@ void glutPostRedisplay(void);
 int glutGet(int what);
 void glutSwapBuffers(void);
 void glutMainLoop(void);
+/* GLUT's geometric objects: the cube (the teapot's patch data is not here yet). */
+void glutWireCube(double size);
+void glutSolidCube(double size);
 #endif
 `;
 
-export const GL_HEADERS = { 'GL/gl.h': GL_H, 'GL/glu.h': GLU_H, 'GL/glut.h': GLUT_H, 'GL/glext.h': GLEXT_H };
+/*
+ * freeglut's headers name the same API (its extensions aside), and code written on Windows spells
+ * the directory `gl/`: Rosetta Code's rotating cube includes <gl/freeglut.h>.
+ */
+export const GL_HEADERS = {
+  'GL/gl.h': GL_H, 'GL/glu.h': GLU_H, 'GL/glut.h': GLUT_H, 'GL/glext.h': GLEXT_H,
+  'GL/freeglut.h': GLUT_H, 'GL/freeglut_std.h': GLUT_H,
+  'gl/gl.h': GL_H, 'gl/glu.h': GLU_H, 'gl/glut.h': GLUT_H, 'gl/freeglut.h': GLUT_H,
+};
 
 /*
  * GLX, for an X client that draws with GL. GLX_ values are GLX 1.x's and are held to Mesa's
