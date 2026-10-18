@@ -137,7 +137,11 @@
             display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 6px; padding: 8px;
             background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
             box-shadow: 0 12px 32px rgba(0, 0, 0, .45); }
-  #pickSearch { width: 100%; }
+  /* `display: grid` above outranks the hidden attribute's own display: none, so it is said again. */
+  #picker[hidden] { display: none; }
+  .pickhead { display: flex; gap: 6px; }
+  #pickSearch { flex: 1; min-width: 0; }
+  #pickClose { padding: 0 9px; }
   #pickChips { display: flex; flex-wrap: wrap; gap: 4px; }
   #pickChips button { font-size: 12px; padding: 2px 9px; border-radius: 999px; }
   #pickChips button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
@@ -209,7 +213,10 @@
 </main>
 
 <div id="picker" role="dialog" aria-label="Examples" hidden>
-  <input id="pickSearch" type="search" spellcheck="false" placeholder="search: mandelbrot, sort, window...">
+  <div class="pickhead">
+    <input id="pickSearch" type="search" spellcheck="false" placeholder="search: mandelbrot, sort, window...">
+    <button id="pickClose" type="button" title="close (Esc)" aria-label="Close">&times;</button>
+  </div>
   <div id="pickChips" role="group" aria-label="Show"></div>
   <div id="pickList" role="listbox"></div>
   <div id="pickFoot"></div>

@@ -688,6 +688,9 @@ function openPicker() {
 }
 function closePicker() { $('picker').hidden = true; $('pick').setAttribute('aria-expanded', 'false'); }
 $('pick').onclick = () => ($('picker').hidden ? openPicker() : closePicker());
+$('pickClose').onclick = () => { closePicker(); $('pick').focus(); };
+// Esc closes wherever the focus is in the panel, not only in the search field.
+$('picker').addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePicker(); $('pick').focus(); } });
 $('pickSearch').addEventListener('input', () => { cursor = 0; renderPicker(); });
 $('pickChips').addEventListener('click', (e) => { const f = e.target.closest('[data-f]')?.dataset.f; if (f) { filter = f; cursor = 0; renderPicker(); $('pickSearch').focus(); } });
 $('pickList').addEventListener('click', (e) => { const i = e.target.closest('[data-i]')?.dataset.i; if (i !== undefined) choose(shown[+i]); });
@@ -701,6 +704,8 @@ $('pickSearch').addEventListener('keydown', (e) => {
   $('pickList').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
 });
 document.addEventListener('mousedown', (e) => { if (!$('picker').hidden && !e.target.closest('#picker, #pick')) closePicker(); });
+// A click in the Screen frame never reaches this document; the window losing focus to it does.
+window.addEventListener('blur', () => { if (!$('picker').hidden) closePicker(); });
 function choose(it) { closePicker(); loadExample(it.value, it.label); }
 
 let lastLoaded = null;     // the source an example put in the editor, so swapping it again needs no question
