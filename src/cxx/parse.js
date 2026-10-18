@@ -33,7 +33,7 @@ const CV = new Set(['const', 'volatile', '__const', '__const__', '__volatile', '
   '__restrict', '__restrict__']);
 const STORAGE = new Set(['static', 'extern', 'typedef', 'register', 'auto', 'mutable']);
 const FUNCSPEC = new Set(['inline', '__inline', '__inline__', 'virtual', 'explicit', 'friend']);
-const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'class', 'struct', 'union', 'enum',
+export const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'class', 'struct', 'union', 'enum',
   'public', 'private', 'protected', 'operator', 'template', 'typename', 'this', 'new', 'delete',
   'true', 'false', 'sizeof', 'return', 'if', 'else', 'while', 'do', 'for', 'switch', 'case', 'default',
   'break', 'continue', 'goto', 'namespace', 'using', 'try', 'catch', 'throw', 'static_cast',

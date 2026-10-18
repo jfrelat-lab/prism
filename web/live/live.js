@@ -7,6 +7,7 @@
 import { makeControl, controlViews, makeKeyboard, wake, SLOT } from '../../src/env/webhost.js';
 import { ENV_TARGET, detectEnv } from './envs.js';
 import { cBlocks, fetchCSection, pageUrl, historyUrl, LICENCE } from './rosetta.js';
+import { highlight } from './highlight.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -441,9 +442,25 @@ function renderTabs() {
 
 /** What is in the editor belongs to the file that is open. */
 const stash = () => { if (files[active]) files[active].source = $('editor').value; };
-const showFile = () => { $('editor').value = files[active]?.source ?? ''; };
+const showFile = () => { $('editor').value = files[active]?.source ?? ''; paint(); };
 
-$('editor').addEventListener('input', () => { stash(); save(); });
+/*
+ * The colours under the text (web/live/highlight.js): repainted at the next frame after a change,
+ * once however fast the typing, and kept at the textarea's scroll position.
+ */
+let painting = 0;
+function paint() {
+  if (painting) return;
+  painting = requestAnimationFrame(() => {
+    painting = 0;
+    const ed = $('editor'), hl = $('hl');
+    hl.innerHTML = highlight(ed.value, { cxx: /\.(cpp|cc|cxx|hpp)$/i.test(files[active]?.name ?? '') });
+    hl.scrollTop = ed.scrollTop; hl.scrollLeft = ed.scrollLeft;
+  });
+}
+$('editor').addEventListener('scroll', () => { const ed = $('editor'), hl = $('hl'); hl.scrollTop = ed.scrollTop; hl.scrollLeft = ed.scrollLeft; });
+
+$('editor').addEventListener('input', () => { stash(); save(); paint(); });
 /*
  * Tab indents rather than leaving the field. In a page whose whole subject is C, moving the focus is
  * never what Tab was for -- and the alternative is retyping four spaces by hand for ever.
@@ -454,7 +471,7 @@ $('editor').addEventListener('keydown', (e) => {
   const el = e.target, at = el.selectionStart;
   el.value = el.value.slice(0, at) + '\t' + el.value.slice(el.selectionEnd);
   el.selectionStart = el.selectionEnd = at + 1;
-  stash(); save();
+  stash(); save(); paint();
 });
 
 // ---------------------------------------------------------------- the output
@@ -648,6 +665,8 @@ sel.onchange = async () => {
     sel.selectedIndex = -1;
     return;
   }
+  // The program running is the one being replaced: it stops with its source.
+  if (worker || $('screen').firstChild) stop(true);
   let name, source;
   if (value.startsWith('rosetta:')) {
     const e = rosetta[+value.slice(8)];
@@ -659,7 +678,13 @@ sel.onchange = async () => {
       if (!b) throw new Error(`its C section has ${blocks.length} solutions, not ${e.block + 1}`);
       source = b.code;
     } catch (err) {
-      say(`could not load it: ${err.message}\n`, 'err');
+      /*
+       * A blocked request reads as a CORS error in the console whatever blocked it: an extension that
+       * filters rosettacode.org, or Cloudflare's bot check answering with a page that carries no CORS
+       * header. Neither is the task's fault, and the task is one click away.
+       */
+      say(`could not load it from rosettacode.org (${err.message}). The site may be blocked for this ` +
+          `page (an ad or tracker blocker) or asking for a browser check; the task is at ${pageUrl(e.task)}\n`, 'err');
       sel.selectedIndex = -1;
       return;
     }

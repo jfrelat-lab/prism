@@ -81,18 +81,28 @@
   .tabs .add { border-style: dashed; }
 
   /*
-   * A textarea, and not a syntax-highlighting editor.
-   *
-   * Highlighting means either a library from a CDN or a second, approximate C lexer beside the real
-   * one -- and PRISM already HAS a C lexer, whose answers matter. A wrong colour from a toy lexer in
-   * the page that compiles C for a living is worse than no colour at all. Tab inserts a tab, the
-   * caret goes where you clicked, and everything else is the browser's.
+   * A textarea, still: Tab inserts a tab, the caret goes where you clicked, and everything else is
+   * the browser's. The colours are a <pre> UNDER it, painted from PRISM's own lexer
+   * (web/live/highlight.js) -- not a library from a CDN, and not a second, approximate C lexer, whose
+   * wrong colour in the page that compiles C for a living would be worse than none. The textarea's
+   * text is transparent and its caret is not; the two share font, padding and scroll position, so the
+   * coloured text sits exactly under the editable one.
    */
-  #editor { width: 100%; height: 100%; resize: none; border: none; border-radius: 0;
-            background: var(--bg); color: var(--fg); padding: 12px 14px;
-            font: 400 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
-            tab-size: 4; white-space: pre; overflow: auto; }
+  .edit { position: relative; min-height: 0; background: var(--bg); }
+  #editor, #hl { position: absolute; inset: 0; margin: 0; border: none; padding: 12px 14px;
+                 font: 400 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+                 tab-size: 4; white-space: pre; overflow: auto; }
+  #hl { color: var(--fg); pointer-events: none; overflow: hidden; }
+  #editor { width: 100%; height: 100%; resize: none; border-radius: 0; background: transparent;
+            color: transparent; caret-color: var(--fg); }
+  #editor::selection { background: rgba(108, 182, 255, .3); color: transparent; }
   #editor:focus { outline: none; }
+  #hl .k { color: #c792ea; }            /* keyword, as PRISM's parser reads it */
+  #hl .s { color: #a5d6a7; }            /* string, and an #include's header name */
+  #hl .c { color: #ffcc80; }            /* character constant */
+  #hl .n { color: #f78c6c; }            /* number */
+  #hl .m { color: #7a828f; font-style: italic; }   /* comment */
+  #hl .p { color: #82aaff; }            /* directive */
 
   /* ---------------------------------------------------------------- output */
   .right { border-left: 1px solid var(--edge); background: var(--panel);
@@ -147,8 +157,11 @@
 <main>
   <div class="left">
     <div class="tabs" id="tabs"></div>
-    <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"
-              wrap="off"></textarea>
+    <div class="edit">
+      <pre id="hl" aria-hidden="true"></pre>
+      <textarea id="editor" spellcheck="false" autocomplete="off" autocapitalize="off"
+                wrap="off"></textarea>
+    </div>
   </div>
 
   <div class="right">

@@ -66,9 +66,15 @@ const isDigit = (c) => c >= '0' && c <= '9';
  * Newlines are NOT dropped: the directive layer needs line structure, so each token carries `bol`.
  * @returns {tokens: Token[], errors: string[]}
  */
-export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true } = {}) {
+export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true, spans = false } = {}) {
   const tokens = [];
   const errors = [];
+  /*
+   * `spans`: each token also says where it is in `text` (at, end), and the comments are listed as
+   * [start, end] -- what Live C colours its editor with, so the colours are this lexer's answers and
+   * not a second, approximate one's. Off, nothing changes: the preprocessor never asks.
+   */
+  const comments = spans ? [] : null;
   let i = 0, ws = false, bol = true;
   const N = text.length;
   const lineAt = (off) => (lineOf ? lineOf[Math.min(off, lineOf.length - 1)] : 1);
@@ -76,6 +82,7 @@ export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true
   const push = (k, v, start, raw = null) => {
     const t = tok(k, v, { ws, bol, loc: { file, line: lineAt(start) } });
     if (raw !== null && raw !== v) t.raw = raw;
+    if (spans) { t.at = start; t.end = start + (raw ?? v).length; }
     tokens.push(t);
     ws = false; bol = false;
   };
@@ -93,7 +100,8 @@ export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true
     if (c === ' ' || c === '\t' || c === '\f' || c === '\v') { i++; ws = true; continue; }
     if (c === '/' && text[i + 1] === '*') {
       const end = text.indexOf('*/', i + 2);
-      if (end < 0) { errors.push(`${file}:${lineAt(i)}: unterminated comment`); i = N; break; }
+      if (end < 0) { errors.push(`${file}:${lineAt(i)}: unterminated comment`); comments?.push([i, N]); i = N; break; }
+      comments?.push([i, end + 2]);
       /*
        * A comment becomes ONE SPACE (5.1.1.2p1 phase 3), and the newlines inside it go with it. So a
        * comment never starts a line and never ends one, however many lines it spans, and `bol` is
@@ -115,7 +123,9 @@ export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true
       i = end + 2; ws = true; continue;
     }
     if (c === '/' && text[i + 1] === '/') {
+      const from = i;
       while (i < N && text[i] !== '\n') i++;
+      comments?.push([from, i]);
       ws = true; continue;
     }
 
@@ -170,7 +180,7 @@ export function lex(text, { file = '<input>', lineOf = null, keepNewlines = true
   }
 
   tokens.push(tok(EOF, '', { bol: true }));
-  return { tokens, errors };
+  return spans ? { tokens, errors, comments } : { tokens, errors };
 }
 
 function scanQuoted(text, i, quote, file, lineAt, errors) {
