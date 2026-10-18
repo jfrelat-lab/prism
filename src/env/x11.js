@@ -17,11 +17,11 @@
 
 import { keyNames } from './scancodes.js';
 import { SLOT } from './webhost.js';
+import { installX11Draw } from './x11-draw.js';
 
 const DISPLAY = 0x7200_0001;      // the token XOpenDisplay hands back
 const WINDOW = 0x7200_0002;
 const COLORMAP = 0x7200_0003;
-const GC_TOKEN = 0x7200_0004;
 
 /**
  * `publish` is the same control block everything else uses. An XImage's pixel buffer lives in guest
@@ -41,6 +41,8 @@ const GC_TOKEN = 0x7200_0004;
  */
 const XKEY_KEYCODE = 52;
 const XEXPOSE_COUNT = 36;
+// XAnyEvent.window, and XExposeEvent's width and height (x and y at 20 and 24 stay 0).
+const XANY_WINDOW = 16, XEXPOSE_WIDTH = 28, XEXPOSE_HEIGHT = 32;
 /*
  * The pointer fields, from the same struct: `int x, y` at 32 and 36, `unsigned int state` at 48, and
  * at 52 either `keycode` (a key event) or `button` (a button event). XMotionEvent has a `char is_hint`
@@ -50,7 +52,14 @@ const XEV_X = 32, XEV_Y = 36, XEV_X_ROOT = 40, XEV_Y_ROOT = 44, XEV_STATE = 48, 
 /* X numbers its buttons 1 left, 2 MIDDLE, 3 right, and its state mask starts at bit 8. */
 const X_BUTTON_MASK = [0, 1 << 8, 1 << 9, 1 << 10];
 
-export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null, keys = keyNames() } = {}) {
+/*
+ * `font` is the VGA ROM's 8x16 glyphs, for the core drawing requests (src/env/x11-draw.js); without it
+ * the server has no core font, as before. `windowed` makes the page the window manager: the window
+ * gets a frame, a title and a place, and can be dragged and closed (the SLOT.WIN_* channel the Win32
+ * host uses). A game on the shelf leaves it off and fills the screen.
+ */
+export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null, keys = keyNames(),
+                                font = null, windowed = false, onTitle = null } = {}) {
   let peeked = null, errorHandler = 0;
   const pointerCtl = [2, 1, 4];
   const dv = () => M.mod.dv;
@@ -70,6 +79,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
                    * "subtract the centre" arithmetic works out to the delta they wanted.
                    */
                   pointer: { x: 0, y: 0 }, buttons: 0,
+                  // The top-level window's geometry, and the WM protocols it asked for (WM_DELETE_WINDOW).
+                  win: { x: 0, y: 0, w: 0, h: 0 }, protocols: [],
                   dgaMouse: false };         // XF86DGADirectMouse: motion is reported as deltas
 
   /*
@@ -89,19 +100,15 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
   const api = {
     XOpenDisplay: () => DISPLAY,
     XCloseDisplay: () => 0,
-    XSync: () => 0,
-    XFlush: () => 0,
+    // The requests so far are on the screen: a frame, for a client that draws with requests.
+    XSync: () => { if (present()) onFrame?.(); return 0; },
+    XFlush: () => { if (present()) onFrame?.(); return 0; },
     XSynchronize: () => 0,
     XDefaultScreen: () => 0,
     XRootWindow: () => WINDOW,
     XCreateColormap: () => COLORMAP,
-    XCreateGC: () => GC_TOKEN,
-    XFreeGC: () => 0,
-    XCreatePixmap: () => WINDOW,
-    XFreePixmap: () => 0,
     XCreatePixmapCursor: () => 0,
     XDefineCursor: () => 0,
-    XFillRectangle: () => 0,
     XGrabPointer: () => 0,
     XUngrabPointer: () => 0,
     // GLQuake's GLX layer (gl_vidlinuxglx.c) grabs the keyboard and places its window; there is one
@@ -126,7 +133,7 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       return 0;
     },
     XSelectInput: () => 0,
-    XStoreName: () => 0,
+    XStoreName: (_d, _w, name) => { if (name) setTitle(M.mod.cstr(name)); return 0; },
 
     /*
      * ICCCM: what a client tells a WINDOW MANAGER about itself. Quake's SUN driver sets every one of
@@ -148,7 +155,10 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     ScreenOfDisplay: () => 1,
     WidthOfScreen: () => 640,
     HeightOfScreen: () => 480,
-    XSetWMProtocols: () => 1,
+    XSetWMProtocols: (_d, _w, atoms, n) => {
+      state.protocols = Array.from({ length: n | 0 }, (_, i) => dv().getUint32(atoms + i * 4, true));
+      return 1;
+    },
     XConfigureWindow: () => 0,
     XUndefineCursor: () => 0,
     // Zeroed storage the caller owns, which is the whole contract. Quake writes flags into it and
@@ -159,7 +169,6 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XFree: (p) => { if (p) M.rt.free(p); return 1; },
     // The cut buffer: empty, as on a display nobody has copied anything to.
     XFetchBytes: (_d, n) => { if (n) dv().setInt32(n, 0, true); return 0; },
-    XLoadQueryFont: () => 0,   // no core fonts on this server (see <X11/Xlib.h>)
     XFreeFont: () => 1,
     /*
      * The window's NAME, which is the one part of this a page can act on: XTextProperty's first
@@ -169,13 +178,13 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XSetWMProperties: (_d, _w, namePtr) => {
       if (!namePtr) return 0;
       const str = M.mod.dv.getInt32(namePtr, true);
-      if (str) state.windowName = M.mod.cstr(str);
+      if (str) setTitle(M.mod.cstr(str));
       return 0;
     },
     XSetWindowColormap: () => 0,
     XAutoRepeatOn: () => 0,
     XAutoRepeatOff: () => 0,
-    XMapWindow: () => { events.push({ type: 12 /* Expose */, count: 0 }); return 0; },
+    XMapWindow: (_d, w) => { draw.map(w); events.push({ type: 12 /* Expose */, count: 0 }); return 0; },
     XVisualIDFromVisual: () => 1,
     XDefaultVisual: () => 1,
     XDestroyWindow: () => 0,
@@ -230,11 +239,29 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       return 1;
     },
 
-    XCreateWindow: () => WINDOW,
+    /*
+     * ONE top-level window, whatever is asked: its size and background are kept (x11-draw.js gives it
+     * pixels when something draws into it) and its place, for a page that frames it. XCreateWindow's
+     * background is XSetWindowAttributes.background_pixel when CWBackPixel says it was set.
+     */
+    XCreateWindow: (_d, _parent, x, y, w, h, _border, _depth, _class, _visual, mask, attrs) =>
+      makeWindow(x, y, w, h, attrs && (mask & (1 << 1)) ? dv().getUint32(attrs + 4, true) : 0),
     // The convenience form: a window with a border and a background, the same one window here.
-    XCreateSimpleWindow: () => WINDOW,
+    XCreateSimpleWindow: (_d, _parent, x, y, w, h, _bw, _border, background) => makeWindow(x, y, w, h, background),
 
     XCreateImage: (_dpy, _vis, depth, _fmt, _off, data, w, h, _pad, bpl) => {
+      // Deeper than 8 bits is a TrueColor image, 32 bits a pixel; only such a client draws with one.
+      if ((depth | 0) > 8) {
+        const img = M.rt.calloc(1, IMG_SIZE);
+        dv().setInt32(img + IMG_WIDTH, w | 0, true);
+        dv().setInt32(img + IMG_HEIGHT, h | 0, true);
+        dv().setInt32(img + IMG_DATA, data | 0, true);
+        dv().setInt32(img + IMG_DEPTH, depth | 0, true);
+        dv().setInt32(img + IMG_BYTES_PER_LINE, (bpl | 0) || (w | 0) * 4, true);
+        dv().setInt32(img + IMG_BITS_PER_PIXEL, 32, true);
+        dv().setInt32(img + IMG_FORMAT, 2, true);
+        return img;
+      }
       const img = M.rt.malloc(IMG_SIZE);
       M.u8.fill(0, img, img + IMG_SIZE);
       dv().setInt32(img + IMG_WIDTH, w | 0, true);
@@ -253,10 +280,25 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * The frame. Doom has already drawn into the image's own buffer, so there is nothing to copy —
      * publishing the address is the whole operation, and the page reads guest memory from there.
      */
-    XPutImage: (_dpy, _drawable, _gc, img) => {
+    XPutImage: (_dpy, drawable, _gc, img, sx, sy, dx, dy, pw, ph) => {
       const data = dv().getInt32(img + IMG_DATA, true);
       const w = dv().getInt32(img + IMG_WIDTH, true);
       const h = dv().getInt32(img + IMG_HEIGHT, true);
+      const bpp = dv().getInt32(img + IMG_BITS_PER_PIXEL, true);
+      /*
+       * Into the pixels of a drawable that has some -- a pixmap, or a window something has DRAWN into
+       * -- the image is converted there. Only an 8-bit frame that is the whole window keeps the path
+       * Doom has always taken: the page reads the image's own buffer, through the palette.
+       */
+      const target = draw.window(drawable);
+      const whole = bpp === 8 && (!target?.window || (pw >>> 0) >= target.w && (ph >>> 0) >= target.h);
+      if (target && (target.addr || !target.window || bpp !== 8) && !(whole && target.window)) {
+        draw.putImage(drawable, data, w, h, dv().getInt32(img + IMG_BYTES_PER_LINE, true), bpp,
+          sx | 0, sy | 0, dx | 0, dy | 0, pw >>> 0, ph >>> 0, state.palette);
+        if (present()) onFrame?.();
+        return 0;
+      }
+      surfaceMode = false;
       state.imageData = data; state.width = w; state.height = h;
       publishGeometry();
       if (publish) Atomics.add(publish.ctrl, SLOT.FRAME, 1);
@@ -304,7 +346,13 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * Input. A keycode here is a PC scan code, because that is what the host has and what
      * XKeycodeToKeysym is asked to translate; the mapping to X keysyms lives below.
      */
-    XPending: () => (peeked ? 1 : 0) + events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0),
+    XPending: () => {
+      pollManager();
+      const n = (peeked ? 1 : 0) + events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0);
+      // A client that draws and polls has finished a frame when nothing is waiting for it.
+      if (!n && present()) onFrame?.();
+      return n;
+    },
     // Every mode counts the same queue: there is no connection to flush or read from.
     XEventsQueued: (dpy) => M.rt.XPending(dpy),
     /*
@@ -345,7 +393,10 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
 
     XNextEvent: (_dpy, ev) => {
       if (peeked) { M.u8.set(peeked, ev); peeked = null; return 0; }
+      pollManager();
+      if (present()) onFrame?.();
       M.u8.fill(0, ev, ev + 96);
+      dv().setUint32(ev + XANY_WINDOW, WINDOW, true);
       /*
        * The POINTER first, and before the keyboard, because a game reads its mouse every frame and
        * its keys occasionally: leaving motion behind a queue of keystrokes would make aiming lag
@@ -376,10 +427,25 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
         // An Expose when there is nothing else: XNextEvent BLOCKS on a real system, and a client that
         // waits for one must eventually get it. Returning a harmless redraw request is the closest
         // truthful answer available without a server to wait for.
-        ?? { type: 12, count: 0 };
+        ?? idleExpose();
       if (e.type === 12) {
         dv().setInt32(ev, 12, true);                    // Expose
         dv().setInt32(ev + XEXPOSE_COUNT, 0, true);
+        dv().setInt32(ev + XEXPOSE_WIDTH, state.win.w, true);
+        dv().setInt32(ev + XEXPOSE_HEIGHT, state.win.h, true);
+        return 0;
+      }
+      if (e.type === 22) {                              // ConfigureNotify, after a drag
+        dv().setInt32(ev, 22, true);
+        dv().setUint32(ev + 20, WINDOW, true);          // xconfigure.window
+        for (const [k, o] of [['x', 24], ['y', 28], ['w', 32], ['h', 36]]) dv().setInt32(ev + o, state.win[k], true);
+        return 0;
+      }
+      if (e.type === 33) {                              // ClientMessage: WM_PROTOCOLS / WM_DELETE_WINDOW
+        dv().setInt32(ev, 33, true);
+        dv().setUint32(ev + 20, M.rt.XInternAtom(0, scratchString('WM_PROTOCOLS')), true);
+        dv().setInt32(ev + 24, 32, true);
+        dv().setUint32(ev + 28, e.atom, true);
         return 0;
       }
       dv().setInt32(ev, e.down ? 2 : 3, true);          // KeyPress / KeyRelease
@@ -432,7 +498,12 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     const now = mouse.state();
     return now ^ state.buttons;                 // bits that differ; 0 when nothing changed
   }
-  const mousePending = () => !!mouse && (pendingButtonChange() !== 0 || mouseHasMotion());
+  const mousePending = () => !!mouse && (pendingButtonChange() !== 0 || pointerMoved() || mouseHasMotion());
+  /* A page that reports WHERE the pointer is (Live C, no capture): the position is the event. */
+  function pointerMoved() {
+    const at = mouse.position?.();
+    return !!at && (at.x !== state.pointer.x || at.y !== state.pointer.y);
+  }
 
   let carriedDx = 0, carriedDy = 0;
   function mouseHasMotion() {
@@ -455,10 +526,17 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     const changed = pendingButtonChange();
     if (changed) {
       const bit = changed & -changed;             // lowest differing bit, one event at a time
+      const at = mouse.position?.();               // a click lands where the visible pointer is
+      if (at) { state.pointer.x = at.x; state.pointer.y = at.y; }
       const now = mouse.state();
       state.buttons ^= bit;
       const button = bit === 1 ? 1 : bit === 2 ? 3 : 2;   // left, right, middle -> X's 1, 3, 2
       return { type: (now & bit) ? 4 : 5, button, state: stateMask(state.buttons) };  // Press / Release
+    }
+    if (pointerMoved()) {
+      const at = mouse.position();
+      state.pointer.x = at.x; state.pointer.y = at.y;
+      return { type: 6, button: 0, state: stateMask(state.buttons) };                 // MotionNotify
     }
     if (!mouseHasMotion()) return null;
     if (state.dgaMouse) {
@@ -472,8 +550,90 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     return { type: 6, button: 0, state: stateMask(state.buttons) };                   // MotionNotify
   }
 
+  /*
+   * THE DRAWING HALF and what ties it to the page. A client that draws with requests has its frame
+   * in the window's surface; `present` publishes it when something was drawn since the last time,
+   * and says so, so the caller can pace there -- that is the frame boundary for such a client.
+   */
+  const draw = installX11Draw(M, { font });
+  let surfaceMode = false, title = '';
+  Object.assign(api, draw.api);
+  // The top-level window's pixels, for a tool that wants the picture without a page (rosetta-run).
+  state.window = () => draw.window(WINDOW);
+  function present() {
+    if (!draw.takeDirty()) return false;
+    const d = draw.window(WINDOW);
+    if (!publish || !d?.addr) return false;
+    surfaceMode = true;
+    Atomics.store(publish.ctrl, SLOT.WIDTH, d.w);
+    Atomics.store(publish.ctrl, SLOT.HEIGHT, d.h);
+    Atomics.store(publish.ctrl, SLOT.PIXELS, d.addr);
+    Atomics.store(publish.ctrl, SLOT.PIXFMT, 32);
+    Atomics.store(publish.ctrl, SLOT.TEXTMODE, 0);
+    Atomics.add(publish.ctrl, SLOT.FRAME, 1);
+    return true;
+  }
+  function makeWindow(x, y, w, h, background) {
+    Object.assign(state.win, { x: x | 0, y: y | 0, w: w >>> 0, h: h >>> 0 });
+    draw.addWindow(WINDOW, w >>> 0, h >>> 0, background >>> 0);
+    publishWindow();
+    return WINDOW;
+  }
+  function setTitle(name) {
+    state.windowName = name;
+    if (name !== title) { title = name; onTitle?.(name); }
+  }
+  /* The page as window manager: the frame's place and size, then what the person did to it. */
+  let lastDrag = 0;
+  function publishWindow() {
+    if (!publish || !windowed) return;
+    Atomics.store(publish.ctrl, SLOT.WIN_X, state.win.x);
+    Atomics.store(publish.ctrl, SLOT.WIN_Y, state.win.y);
+    Atomics.store(publish.ctrl, SLOT.WIN_W, state.win.w);
+    Atomics.store(publish.ctrl, SLOT.WIN_H, state.win.h);
+    Atomics.store(publish.ctrl, SLOT.WIN_HAS, 1);
+  }
+  function pollManager() {
+    if (!publish || !windowed) return;
+    const gen = Atomics.load(publish.ctrl, SLOT.DRAG_GEN);
+    if (gen !== lastDrag) {
+      lastDrag = gen;
+      state.win.x = Atomics.load(publish.ctrl, SLOT.DRAG_X);
+      state.win.y = Atomics.load(publish.ctrl, SLOT.DRAG_Y);
+      publishWindow();
+      events.push({ type: 22 });
+    }
+    if (Atomics.load(publish.ctrl, SLOT.WIN_CLOSE)) {
+      Atomics.store(publish.ctrl, SLOT.WIN_CLOSE, 0);
+      /*
+       * A window manager ASKS a client that took part in WM_DELETE_WINDOW, and otherwise ends its
+       * connection -- after which Xlib's I/O error handler exits the program. Both, as here.
+       */
+      const del = state.atoms.get('WM_DELETE_WINDOW');
+      if (del && state.protocols.includes(del)) events.push({ type: 33, atom: del });
+      else M.rt.exit(1);
+    }
+  }
+  /*
+   * Nothing to deliver: a real XNextEvent blocks, so this one stands in an Expose -- and, for a client
+   * that draws, waits a frame first, or its redraw-on-Expose loop would spin as fast as it could.
+   */
+  function idleExpose() {
+    if (surfaceMode) onFrame?.();
+    return { type: 12, count: 0 };
+  }
+  let scratch = 0;
+  function scratchString(s) {
+    if (!scratch) scratch = M.rt.malloc(64);
+    for (let i = 0; i < s.length; i++) M.u8[scratch + i] = s.charCodeAt(i);
+    M.u8[scratch + s.length] = 0;
+    return scratch;
+  }
+
   function publishGeometry() {
     if (!publish || !state.imageData) return;
+    if (surfaceMode) return;
+    Atomics.store(publish.ctrl, SLOT.PIXFMT, 0);
     /*
      * The pointer starts at the CENTRE, because that is where these games warp it to and what they
      * subtract from. Starting at 0,0 would make the first MotionNotify report a delta of half the

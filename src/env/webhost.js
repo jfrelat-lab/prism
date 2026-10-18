@@ -130,6 +130,15 @@ export const SLOT = {
    * page is the desktop here, so it is the page's focus that says so.
    */
   FOCUS: 39,       // host → guest: 1 while the page has the focus
+
+  /*
+   * WHERE THE POINTER IS, for a program in a window rather than a game that captured the mouse: Live
+   * C's X clients point and click with a visible cursor. In the window's own pixels; MOUSE_ABS says
+   * the page reports it (no pointer lock, no deltas to reconcile).
+   */
+  MOUSE_ABS: 40,   // host → guest: 1 once MOUSE_X/MOUSE_Y are being written
+  MOUSE_X: 41,
+  MOUSE_Y: 42,
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -312,6 +321,12 @@ export function makeMouse(views) {
       if (dy) Atomics.add(ctrl, SLOT.MOUSE_DY, dy | 0);
     },
     buttons(mask) { Atomics.store(ctrl, SLOT.MOUSE_BUTTONS, mask & 7); },
+    /** Host side: the pointer is at (x, y) in the window's pixels -- the uncaptured, visible-cursor case. */
+    at(x, y) {
+      Atomics.store(ctrl, SLOT.MOUSE_X, x | 0);
+      Atomics.store(ctrl, SLOT.MOUSE_Y, y | 0);
+      Atomics.store(ctrl, SLOT.MOUSE_ABS, 1);
+    },
     /** Host side: whether the page is capturing at all. A program may ask, and must not be lied to. */
     present(on) { Atomics.store(ctrl, SLOT.MOUSE_HAS, on ? 1 : 0); },
 
@@ -325,6 +340,11 @@ export function makeMouse(views) {
     /** Guest side: which buttons are down right now. Level, not edge -- INT 33h AX=0003. */
     state() { return Atomics.load(ctrl, SLOT.MOUSE_BUTTONS) & 7; },
     has() { return Atomics.load(ctrl, SLOT.MOUSE_HAS) === 1; },
+    /** Guest side: where the pointer is, when the page reports a position at all; otherwise null. */
+    position() {
+      if (Atomics.load(ctrl, SLOT.MOUSE_ABS) !== 1) return null;
+      return { x: Atomics.load(ctrl, SLOT.MOUSE_X), y: Atomics.load(ctrl, SLOT.MOUSE_Y) };
+    },
   };
 }
 

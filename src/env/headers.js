@@ -1206,7 +1206,8 @@ const XLIB = `
 #define _PRISM_XLIB_H
 /*
  * Xlib, declared for a host that implements the LIBRARY and not the protocol -- see src/env/x11.js.
- * Every symbol here appears in Doom's i_video.c; nothing is declared on speculation.
+ * Measured, not speculative: the games' platform layers (Doom's i_video.c first), then the core
+ * drawing requests textbook clients make (the section at the end, src/env/x11-draw.js).
  *
  * The struct layouts here and the offsets in x11.js are one thing written twice. Changing either
  * without the other is a silent bug, which is why both say so.
@@ -1665,6 +1666,72 @@ typedef struct {
 } XFontStruct;
 XFontStruct *XLoadQueryFont(Display *d, const char *name);
 int XFreeFont(Display *d, XFontStruct *f);
+
+/*
+ * CORE DRAWING: the requests a textbook X client makes of the server -- Rosetta Code's Xlib
+ * solutions, the Xlib manual's examples. Rasterised by src/env/x11-draw.js on a TrueColor surface;
+ * the one core font is the VGA ROM's 8x16 (ascent 12, descent 4), whatever name is asked for.
+ */
+typedef struct { short x, y; } XPoint;
+typedef struct { short x1, y1, x2, y2; } XSegment;
+typedef struct { short x, y; unsigned short width, height; } XRectangle;
+typedef struct { short x, y; unsigned short width, height; short angle1, angle2; } XArc;
+#define GXand 0x1
+#define GXxor 0x6
+#define GXor 0x7
+#define GXset 0xf
+#define GCLineWidth (1L<<4)
+#define GCFont (1L<<14)
+#define CoordModeOrigin 0
+#define CoordModePrevious 1
+#define Complex 0
+#define Nonconvex 1
+#define Convex 2
+#define LineSolid 0
+#define LineOnOffDash 1
+#define LineDoubleDash 2
+#define CapNotLast 0
+#define CapButt 1
+#define CapRound 2
+#define CapProjecting 3
+#define JoinMiter 0
+#define JoinRound 1
+#define JoinBevel 2
+#define DefaultGC(d, s) XDefaultGC(d, s)
+#define DefaultRootWindow(d) XRootWindow(d, 0)
+#define DefaultDepth(d, s) 24
+#define DefaultColormap(d, s) XCreateColormap(d, XRootWindow(d, s), XDefaultVisual(d, s), AllocNone)
+GC XDefaultGC(Display *d, int screen);
+int XChangeGC(Display *d, GC gc, unsigned long mask, XGCValues *values);
+int XSetForeground(Display *d, GC gc, unsigned long pixel);
+int XSetBackground(Display *d, GC gc, unsigned long pixel);
+int XSetFunction(Display *d, GC gc, int function);
+int XSetLineAttributes(Display *d, GC gc, unsigned int width, int line_style, int cap_style, int join_style);
+int XSetFont(Display *d, GC gc, Font font);
+int XDrawPoint(Display *d, Drawable dr, GC gc, int x, int y);
+int XDrawPoints(Display *d, Drawable dr, GC gc, XPoint *points, int n, int mode);
+int XDrawLine(Display *d, Drawable dr, GC gc, int x1, int y1, int x2, int y2);
+int XDrawLines(Display *d, Drawable dr, GC gc, XPoint *points, int n, int mode);
+int XDrawSegments(Display *d, Drawable dr, GC gc, XSegment *segments, int n);
+int XDrawRectangle(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h);
+int XDrawRectangles(Display *d, Drawable dr, GC gc, XRectangle *rects, int n);
+int XFillRectangles(Display *d, Drawable dr, GC gc, XRectangle *rects, int n);
+int XFillPolygon(Display *d, Drawable dr, GC gc, XPoint *points, int n, int shape, int mode);
+int XDrawArc(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h, int a1, int a2);
+int XFillArc(Display *d, Drawable dr, GC gc, int x, int y, unsigned int w, unsigned int h, int a1, int a2);
+int XDrawString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int n);
+int XDrawImageString(Display *d, Drawable dr, GC gc, int x, int y, const char *s, int n);
+int XClearWindow(Display *d, Window w);
+int XClearArea(Display *d, Window w, int x, int y, unsigned int width, unsigned int height, Bool exposures);
+int XSetWindowBackground(Display *d, Window w, unsigned long pixel);
+int XCopyArea(Display *d, Drawable src, Drawable dst, GC gc, int sx, int sy, unsigned int w, unsigned int h, int dx, int dy);
+Status XAllocColor(Display *d, Colormap c, XColor *color);
+Status XParseColor(Display *d, Colormap c, const char *spec, XColor *color);
+Status XLookupColor(Display *d, Colormap c, const char *spec, XColor *exact, XColor *screen);
+Status XAllocNamedColor(Display *d, Colormap c, const char *spec, XColor *screen, XColor *exact);
+XFontStruct *XQueryFont(Display *d, unsigned long font_id);
+Font XLoadFont(Display *d, const char *name);
+int XTextWidth(XFontStruct *f, const char *s, int n);
 #endif
 `;
 

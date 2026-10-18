@@ -352,6 +352,8 @@ function renderChooser() {
   if (!machine) { box.innerHTML = ''; return; }
   // A desktop machine IS its desktop, running or not: a program opens a window over the icons.
   $('stage').classList.toggle('desktop', machine.kind === 'desktop');
+  // Which window manager frames a program's window: Windows' on the desktop, an X one on Unix.
+  $('stage').dataset.kind = machine.kind;
   if (machine.kind === 'desktop') {
     box.hidden = false;
     box.innerHTML = desktopScreen(machine);
@@ -1147,6 +1149,8 @@ stage.addEventListener('click', () => {
   // Only while something is running: locking the pointer over a machine's prompt would take the
   // mouse away from the page for nothing.
   if (!worker || document.pointerLockElement === stage) return;
+  // Live C's programs are windows you point at, with the cursor visible: see the pointer below.
+  if (LIVE) return;
   const p = stage.requestPointerLock?.();
   /*
    * POINTER LOCK CAN BE REFUSED, and it is refused in some embeddings -- an iframe without
@@ -1213,6 +1217,35 @@ for (const [type, down] of [['mousedown', true], ['mouseup', false]]) {
     mouseButtons = down ? (mouseButtons | bit) : (mouseButtons & ~bit);
     mouse.buttons(mouseButtons);
     e.preventDefault();
+  });
+}
+/*
+ * THE VISIBLE POINTER, for Live C. Its programs are windows -- an X client draws a button and waits
+ * for a click on it -- so the mouse is never captured: the page says where the pointer is over the
+ * picture, in the program's own pixels (the canvas is scaled to the window, so the ratio is exact),
+ * and which buttons are down while it is there.
+ */
+canvas.addEventListener('mousemove', (e) => {
+  if (!LIVE || !mouse) return;
+  const r = canvas.getBoundingClientRect();
+  mouse.at((e.clientX - r.left) * canvas.width / r.width, (e.clientY - r.top) * canvas.height / r.height);
+});
+for (const [type, down] of [['mousedown', true], ['mouseup', false]]) {
+  canvas.addEventListener(type, (e) => {
+    if (!LIVE || !mouse) return;
+    const r = canvas.getBoundingClientRect();
+    mouse.at((e.clientX - r.left) * canvas.width / r.width, (e.clientY - r.top) * canvas.height / r.height);
+    const bit = e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
+    mouseButtons = down ? (mouseButtons | bit) : (mouseButtons & ~bit);
+    /*
+     * The channel is a LEVEL, read once per program frame: a quick click pressed and released between
+     * two reads would never be seen. So a release is held back a few frames -- the press has been read
+     * by then, and the program gets its ButtonPress and its ButtonRelease.
+     */
+    if (down) mouse.buttons(mouseButtons);
+    else { const m = mouse; setTimeout(() => m.buttons(mouseButtons), 60); }   // the state THEN: a new press wins
+    // The click is also what gives this frame the keyboard: Live C's page around it had the focus.
+    if (down) window.focus();
   });
 }
 // A right-click inside a captured screen is the game's, not the browser's context menu.
@@ -1768,6 +1801,8 @@ function finish(state) {
   stop(true);
   $('vmState').textContent = faulted ? 'faulted' : 'exited';
   $('stats').textContent = faulted ? 'faulted' : 'exited';
+  // Live C, around this frame, has its own Run and status: they must hear that the program ended.
+  if (LIVE) parent.postMessage({ type: 'prism-live-exited', faulted }, location.origin);
 }
 
 /**

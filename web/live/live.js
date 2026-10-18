@@ -386,7 +386,99 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
     return (int)msg.wParam;
 }
-`,  'prism/x11-fire.c': `/*
+`,  'prism/x11-clock.c': `/*
+ * Xlib, the textbook way: a clock the X server draws.
+ *
+ * Where x11-fire.c computes every pixel itself, this program only makes REQUESTS -- XFillArc,
+ * XDrawLine, XDrawString with a GC's colour and line width -- and PRISM's Xlib rasterises them
+ * (src/env/x11-draw.js). The face is drawn into a Pixmap and copied to the window with XCopyArea,
+ * double buffering as X programs did it, so a frame is never seen half drawn. The window takes part
+ * in WM_DELETE_WINDOW: the close box asks it to quit rather than killing it.
+ */
+#include <X11/Xlib.h>
+#include <X11/keysym.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+
+#define SIZE 220
+#define C (SIZE / 2)
+
+static unsigned long color(Display *d, const char *name)
+{
+    XColor screen, exact;
+    return XAllocNamedColor(d, DefaultColormap(d, 0), name, &screen, &exact) ? screen.pixel : 0;
+}
+
+/* A hand, from the centre: angle in turns, 0 at twelve o'clock, clockwise. */
+static void hand(Display *d, Pixmap p, GC gc, double turns, int length, int width)
+{
+    double a = turns * 2 * M_PI;
+    XSetLineAttributes(d, gc, width, LineSolid, CapRound, JoinRound);
+    XDrawLine(d, p, gc, C, C, C + (int)(length * sin(a)), C - (int)(length * cos(a)));
+}
+
+int main(void)
+{
+    Display *d = XOpenDisplay(NULL);
+    Window w = XCreateSimpleWindow(d, DefaultRootWindow(d), 40, 30, SIZE, SIZE, 1, 0, color(d, "white"));
+    Pixmap back = XCreatePixmap(d, w, SIZE, SIZE, DefaultDepth(d, 0));
+    GC gc = XCreateGC(d, w, 0, NULL);
+    Atom wm_delete = XInternAtom(d, "WM_DELETE_WINDOW", False);
+    unsigned long face = color(d, "lightgray"), ink = color(d, "navy"), red = color(d, "firebrick");
+    XEvent ev;
+    int i;
+
+    XStoreName(d, w, "Clock");
+    XSetWMProtocols(d, w, &wm_delete, 1);
+    XSelectInput(d, w, ExposureMask | KeyPressMask | StructureNotifyMask);
+    XMapWindow(d, w);
+
+    for (;;) {
+        time_t now = time(NULL);
+        struct tm *t = localtime(&now);
+        char digits[16];
+
+        while (XPending(d)) {
+            XNextEvent(d, &ev);
+            if (ev.type == ClientMessage && (Atom)ev.xclient.data.l[0] == wm_delete) goto done;
+            if (ev.type == KeyPress && XLookupKeysym(&ev.xkey, 0) == XK_Escape) goto done;
+        }
+
+        XSetForeground(d, gc, color(d, "white"));
+        XFillRectangle(d, back, gc, 0, 0, SIZE, SIZE);
+        XSetForeground(d, gc, face);
+        XFillArc(d, back, gc, 10, 10, SIZE - 20, SIZE - 20, 0, 360 * 64);
+        XSetForeground(d, gc, ink);
+        XSetLineAttributes(d, gc, 2, LineSolid, CapButt, JoinMiter);
+        XDrawArc(d, back, gc, 10, 10, SIZE - 20, SIZE - 20, 0, 360 * 64);
+        for (i = 0; i < 12; i++) {             /* the hour marks */
+            double a = i * M_PI / 6;
+            XDrawLine(d, back, gc, C + (int)(88 * sin(a)), C - (int)(88 * cos(a)),
+                                   C + (int)(98 * sin(a)), C - (int)(98 * cos(a)));
+        }
+        hand(d, back, gc, (t->tm_hour % 12 + t->tm_min / 60.0) / 12, 52, 5);
+        hand(d, back, gc, (t->tm_min + t->tm_sec / 60.0) / 60, 78, 3);
+        XSetForeground(d, gc, red);
+        hand(d, back, gc, t->tm_sec / 60.0, 84, 1);
+        XFillArc(d, back, gc, C - 4, C - 4, 8, 8, 0, 360 * 64);
+
+        snprintf(digits, sizeof digits, "%02d:%02d:%02d", t->tm_hour, t->tm_min, t->tm_sec);
+        XSetForeground(d, gc, ink);
+        XDrawString(d, back, gc, C - 4 * (int)strlen(digits), C + 48, digits, (int)strlen(digits));
+
+        XCopyArea(d, back, w, gc, 0, 0, SIZE, SIZE, 0, 0);
+        XFlush(d);
+    }
+done:
+    XFreePixmap(d, back);
+    XFreeGC(d, gc);
+    XCloseDisplay(d);
+    return 0;
+}
+`,
+  'prism/x11-fire.c': `/*
  * Xlib: the fire from PSX Doom, drawn the way X11 Doom drew its frames.
  *
  * An 8-bit XImage over a buffer the program owns, a 256-entry colormap filled with XStoreColors,
@@ -670,6 +762,10 @@ function runOnScreen(env) {
     const m = e.data;
     if (m?.type === 'prism-live-ready') frame.contentWindow.postMessage({ type: 'prism-live', files, env, argv }, location.origin);
     else if (m?.type === 'prism-live-built') { reportBuild(m); showEmitted(m.source, m.srcUnits, files.map((f) => f.name)); }
+    else if (m?.type === 'prism-live-exited') {
+      $('status').textContent = m.faulted ? 'faulted' : 'exited';
+      $('run').disabled = false; $('stopBtn').disabled = true;
+    }
     else if (m?.type === 'prism-live-failed') { say(`\n${m.message}\n`, 'err'); $('status').textContent = 'failed'; showTab('tabBuild'); }
   };
   window.addEventListener('message', onFrame);
@@ -837,7 +933,7 @@ fetch(new URL('./rosetta.json', import.meta.url)).then((r) => (r.ok ? r.json() :
   if (!$('picker').hidden) renderPicker();
 }).catch(() => { /* no list, no group: the page's own examples still work */ });
 
-const FILTERS = [['all', 'All'], ['screen', 'Graphical'], ['OpenGL', 'OpenGL'], ['SDL', 'SDL'], ['Win32', 'Win32'], ['console', 'Console']];
+const FILTERS = [['all', 'All'], ['screen', 'Graphical'], ['OpenGL', 'OpenGL'], ['SDL', 'SDL'], ['Win32', 'Win32'], ['X11', 'X11'], ['console', 'Console']];
 let filter = 'all', cursor = 0, shown = [];
 const matches = (it, words) => (filter === 'all' || (filter === 'screen' ? it.screen : filter === 'console' ? !it.tags.some((t) => ENV_TAGS.has(t)) : it.tags.includes(filter)))
   && words.every((w) => it.label.toLowerCase().includes(w));

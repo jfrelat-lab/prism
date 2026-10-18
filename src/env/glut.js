@@ -91,7 +91,9 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
           // Input the host has gathered since the last turn: `events()` yields
           //   { kind: 'key', ch, down }  { kind: 'special', key, down }
           //   { kind: 'button', button, down, x, y }  { kind: 'motion', x, y, held }
+          let handled = false;
           for (const ev of events ? events() : []) {
+            handled = true;
             const [x, y] = ev.x === undefined ? s.pointer : (s.pointer = [ev.x, ev.y]);
             if (ev.kind === 'key') call(ev.down ? s.cb.keyboard : s.cb.keyboardUp, [ev.ch, x, y]);
             else if (ev.kind === 'special') call(ev.down ? s.cb.special : s.cb.specialUp, [ev.key, x, y]);
@@ -103,6 +105,9 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
           // Single-buffered, an idle callback that draws draws on the front buffer, visible as it is:
           // Rosetta Code's pendulum renders from glutIdleFunc and never posts a redisplay.
           else if (!s.double && s.cb.idle) present();
+          // ...and so does a key or mouse callback that draws straight away: Rosetta Code's
+          // interactive Mandelbrot re-renders from its keyboard handler, with no redisplay posted.
+          else if (!s.double && handled) present();
           /*
            * A window with nothing to do still shows its picture. Real GLUT blocks for an event here;
            * a run that asked for frames by number counts the unchanged window as the next one, or a

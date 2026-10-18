@@ -725,6 +725,14 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       /* The same channel the DOS host reads through INT 33h, delivered here as X events instead. */
       mouse,
       onFrame: () => { reader.endFrame(); pace(); },
+      // The core font, for a client that draws text with requests (src/env/x11-draw.js).
+      font: vgaFont,
+      /*
+       * A program typed into Live C gets a window manager: its window is framed, titled, dragged and
+       * closed as a Win32 one is. A game on the shelf fills the screen, as it always has.
+       */
+      windowed: ownSources,
+      onTitle: (title) => post('window', { title }),
     });
   } else if (platform === 'fxmesa') {
     /*
@@ -1724,7 +1732,12 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       }
       const { dx, dy } = mouse.take(), b = mouse.state();
       const w = prog.M.gl?.state.width ?? 640, h = prog.M.gl?.state.height ?? 480;
-      if (dx || dy) {
+      // Where the page says the pointer is (Live C, no capture); otherwise the motion, accumulated.
+      const at = mouse.position();
+      if (at && (at.x !== pointer.x || at.y !== pointer.y)) {
+        pointer.x = at.x; pointer.y = at.y;
+        ev.push({ kind: 'motion', x: pointer.x, y: pointer.y, held: b !== 0 });
+      } else if (dx || dy) {
         pointer.x = Math.max(0, Math.min(w - 1, pointer.x + dx)); pointer.y = Math.max(0, Math.min(h - 1, pointer.y + dy));
         ev.push({ kind: 'motion', x: pointer.x, y: pointer.y, held: b !== 0 });
       }
@@ -1820,6 +1833,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
         const w = sdl.state.width || 640, h = sdl.state.height || 480;
         pointer.x = Math.max(0, Math.min(w - 1, pointer.x + dx));
         pointer.y = Math.max(0, Math.min(h - 1, pointer.y + dy));
+        const at = mouse.position();       // the page's own position, when it reports one (Live C)
+        if (at) { pointer.x = at.x; pointer.y = at.y; }
         return { x: pointer.x, y: pointer.y, buttons: (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1) };
       },
       warp: (x, y) => { pointer.x = x; pointer.y = y; },

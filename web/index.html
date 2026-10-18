@@ -201,6 +201,11 @@
               font: bold 10px/1 system-ui, sans-serif; width: 18px; height: 16px; padding: 0; }
   #winclose:active { border-style: inset; }
   #winframe #screen { display: block; }
+  /* On a Unix machine the window manager is an X one, drawn as twm drew its frames: plain, black on light. */
+  #stage[data-kind="unix"] #winframe.windowed { border: 1px solid #000; background: #fff; box-shadow: 3px 3px 0 #0006; }
+  #stage[data-kind="unix"] #winframe.windowed #wintitle { background: #fff; color: #000; border-bottom: 1px solid #000;
+              font: bold 12px/1.4 ui-monospace, monospace; }
+  #stage[data-kind="unix"] #winclose { border: 1px solid #000; background: #fff; width: 14px; height: 14px; }
 
   /*
    * Fullscreen: the STAGE goes fullscreen rather than the canvas, because a fullscreened canvas is
