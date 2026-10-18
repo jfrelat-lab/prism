@@ -200,6 +200,47 @@ proves nothing. The references that need a C compiler run in a `linux/386` gcc c
 (`npm run oracle:build`). Gates that compare against one replay committed goldens, so most can run
 without it. [docs/TESTING.md](docs/TESTING.md) has the details.
 
+## FAQ
+
+**Is it an emulator?** No. Nothing x86 is executed: the game's C source is compiled to JavaScript,
+and the machine it was written for (DOS, Win32, X11, SDL, OpenGL...) is supplied as libraries
+underneath it. Its sibling project MIRAGE is the other approach: it recompiles a program's x86
+binary.
+
+**Why JavaScript and not WebAssembly?** Readable output, run by the browser's own JIT: one
+JavaScript function per C function, which is what makes a defect findable by reading. The choice is
+measured, not assumed: [the comparison page](https://prism-compiler.pages.dev/compare) sets PRISM
+against Emscripten, Cheerp and an emulated x86 build, on compile time, run time and size.
+
+**Is it fast enough?** For these games, yes: about 9.5× slower than `clang -O2` with no optimiser
+yet, and Quake's own timedemo reports several hundred frames a second. See [How fast](#how-fast).
+
+**What can I play without any files?** Everything with a **Play** button on
+[the showcase](https://prism-compiler.pages.dev) (its *Play now* filter): programs whose code and data may be passed on --
+the DOOM and Heretic shareware, the Monkey Island, Day of the Tentacle and Sam & Max demos, Beneath
+a Steel Sky, Tux Racer, Cube and more. The others ask for *your files*: give the page your game's folder
+or `.zip` and it plays from there. Your files are read in your browser and sent nowhere.
+
+**What about licences?** PRISM is MIT. This repository holds no game, no game data and no ROM. The
+showcase ships only builds whose code and data may be passed on, each with its licences and the
+exact source it was built from ([prism-sources](https://github.com/jfrelat-lab/prism-sources)
+releases), and says so where a caution applies.
+
+**What does it need from the browser?** `SharedArrayBuffer`, so cross-origin isolation (the site
+sends the headers; any static host can, through `_headers` or `web/coi-sw.js`), and WebGL 2 for the
+3D games. It is developed and checked mostly in Chromium-based browsers.
+
+**Can I compile my own code?** In the page, with [Live C](https://prism-compiler.pages.dev/web/live/):
+console programs and GLUT, SDL, X11 or Win32 windows, several files, C or C++. Locally, a
+`targets/*.json` describes a whole program and `tools/build.mjs` compiles and runs it in Node (see
+[Quick start](#quick-start)).
+
+**What does "written with Claude Code" mean?** The code in this repository was written by Claude
+Code, Anthropic's coding agent; the commit messages carry its name. None of it is taken on trust:
+every claim about C, a library or a picture is held to an independent implementation by a gate (see
+[How it is tested](#how-it-is-tested)), and the runs are [deterministic](#deterministic-by-construction)
+so anyone can check them again.
+
 ## Documentation
 
 Reference documents describe the present state:
