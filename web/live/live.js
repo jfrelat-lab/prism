@@ -988,7 +988,13 @@ window.addEventListener('blur', () => { if (!$('picker').hidden) closePicker(); 
 function choose(it) { closePicker(); loadExample(it.value, it.label); }
 
 let lastLoaded = null;     // the source an example put in the editor, so swapping it again needs no question
-async function loadExample(value, label) {
+/*
+ * The example what is open came from, kept with the page's files: Reset goes back to IT, as it was
+ * loaded -- after a reload too, and for a Rosetta Code solution, which no source comparison could name.
+ */
+const STORE_EXAMPLE = 'prism.live.example';
+let current = null;        // { value, label } of the example last loaded, or null
+async function loadExample(value, label, { ask = true } = {}) {
   stash();
   /*
    * An example REPLACES the project rather than joining it, and that is not laziness: every example
@@ -1001,7 +1007,7 @@ async function loadExample(value, label) {
    */
   const untouched = files.length === 1 &&
     (Object.values(EXAMPLES).some(src => src === files[0].source) || files[0].source === lastLoaded);
-  if (!untouched && !confirm('Replace what is open with the example? Your files will be lost.')) return;
+  if (ask && !untouched && !confirm('Replace what is open with the example? Your files will be lost.')) return;
   // Another program: everything the last one left goes with it, as Reset does.
   resetRun();
   let name, source;
@@ -1036,6 +1042,8 @@ async function loadExample(value, label) {
     source = EXAMPLES[value];
   }
   lastLoaded = source;
+  current = { value, label };
+  try { localStorage.setItem(STORE_EXAMPLE, JSON.stringify({ value, label, source })); } catch {}
   files = [{ name, source }];
   active = 0;
   $('pickName').textContent = label;
@@ -1070,18 +1078,25 @@ function resetRun() {
   $('language').value = '';
 }
 
+/*
+ * RESET: the example that is open, as it was loaded -- "I broke it, give it back". Asked first when
+ * there is something of yours to lose; with no example behind what is open, back to hello.c.
+ */
 $('reset').onclick = () => {
-  resetRun();
-  setCredit(null);
-  lastLoaded = EXAMPLES['prism/hello.c'];
-  files = [{ name: 'main.c', source: lastLoaded }];
-  active = 0;
-  $('pickName').textContent = 'prism/hello.c';
-  save(); renderTabs(); showFile();
+  stash();
+  const target = current ?? { value: 'prism/hello.c', label: 'prism/hello.c' };
+  const untouched = files.length === 1 && lastLoaded !== null && files[0].source === lastLoaded;
+  if (!untouched && !confirm(`Discard your changes and reload ${target.label}?`)) return;
+  loadExample(target.value, target.label, { ask: false });
 };
 
 files = load();
-// The button names what is open: the example it still is, or nothing to imply it is one.
-$('pickName').textContent = (files.length === 1 && Object.keys(EXAMPLES).find((k) => EXAMPLES[k] === files[0].source)) || 'choose...';
+try {
+  const ex = JSON.parse(localStorage.getItem(STORE_EXAMPLE) || 'null');
+  if (ex?.value && ex.label) { current = { value: ex.value, label: ex.label }; lastLoaded = ex.source ?? null; }
+} catch { /* nothing remembered: Reset goes back to hello.c */ }
+// The button names what is open: the example it came from, or nothing to imply it is one.
+$('pickName').textContent = (files.length === 1 && Object.keys(EXAMPLES).find((k) => EXAMPLES[k] === files[0].source)) ||
+  current?.label || 'choose...';
 renderTabs();
 showFile();
