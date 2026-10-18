@@ -275,8 +275,11 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       }
     } catch (e) { log(`the bundle ${bundleAt} did not load (${e.message}): compiling instead`, "warn"); }
   }
-  // A static export ships programs as bundles and no source at all: there is nothing to compile from.
-  if (options.site && !bundle) throw new Error(`this site has no runnable build of ${program.target ?? program.title}`);
+  // A static export ships programs as bundles and no source at all: there is nothing to compile from --
+  // except a program that brings its own sources (Live C's, with no tree), whose environment units
+  // the export does ship under src/.
+  const ownSources = !program.root && Object.keys(program.extraUnits ?? {}).length > 0;
+  if (options.site && !bundle && !ownSources) throw new Error(`this site has no runnable build of ${program.target ?? program.title}`);
   /*
    * With a bundle, no C is fetched: neither the include trees nor the units outside the root, which
    * the emitted code already holds. The program's ASSEMBLY still is -- it is translated and bound
