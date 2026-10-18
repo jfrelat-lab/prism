@@ -136,35 +136,10 @@ COOP/COEP headers (GitHub Pages), `web/coi-sw.js` adds them. The repository's `i
 the project page for GitHub Pages and links to it.
 
 **A static showcase.** `node tools/site.mjs` writes `site/`, a copy of the shelf that needs no
-server, and `index.html` turns into its catalogue. The programs are listed in
-`tools/site-programs.json`:
-
-- the ones it **ships** have code and data that may be passed on (or, for a few, a stated caution);
-- its **gallery** holds the ones whose data is not ours to pass on. The page asks the visitor for
-  their copy, a folder or a `.zip`, and reads it where it is.
-
-Each program ships as a precompiled bundle (`tools/bundle.mjs`, kept between runs in
-`dist/site-bundles/`), with its licences and the **source it was built from**. Every source tree it
-reads is archived as published, beside the build scripts (`sources/`, or a release of
-`jfrelat-lab/prism-sources` with `--sources=release` and `tools/publish-sources.mjs`).
-
-Before putting an export on a host, check it with `tools/site-check.mjs` (file sizes, data that must
-not be there, sources and licences present). Any static host serves it, under any path; the
-COOP/COEP headers come from `_headers`, or from `web/coi-sw.js` where the host sends none.
-`site/` holds game data and is never committed.
-
-- `node tools/serve.mjs --site --games=<dir>` serves the export as a **local library**: the gallery
-  games found in `<dir>` say *your copy* and play from it.
-- `node tools/standalone.mjs <id>` writes **one** program as a folder for anyone's own site, with a
-  page of its own and `HOSTING.txt`.
-- `tools/site-thumbs.mjs` draws the thumbnails.
-
-**The visitor's language, calendar and keyboard.** In the page, a program that can be told a
-language gets the browser's (Beneath a Steel Sky's text in French on a French browser), sees the
-real date and the browser's time zone, and reads typed text in the visitor's keyboard layout. Keys
-stay positions by default, as game controls expect; *keys: your layout* names them by what the
-layout types. The gates keep a fixed date, UTC and US positions. See
-[ARCHITECTURE.md](docs/ARCHITECTURE.md#the-visitors-language-calendar-and-keyboard).
+server: the programs whose code and data may be passed on, each precompiled with its licences and
+the source it was built from, and a gallery that plays the visitor's own copy of the rest. That is
+what [prism-compiler.pages.dev](https://prism-compiler.pages.dev) serves. How it is built, checked and
+hosted, and how the page adapts to the visitor's language and keyboard: [docs/SITE.md](docs/SITE.md).
 
 **No game data is fetched or stored by this repository.** The page reads only the files you
 give it, or a directory you name with `--data`.
@@ -263,6 +238,7 @@ Reference documents describe the present state:
 - [COMPAT.md](docs/COMPAT.md): what runs, how far, and what holds it there.
 - [TESTING.md](docs/TESTING.md): the gates, the oracles, and the measured facts behind the ABIs.
 - [ROADMAP.md](docs/ROADMAP.md): what is open, one line per task.
+- [SITE.md](docs/SITE.md): the static showcase, and hosting PRISM's programs yourself.
 
 The record is [LOG.md](docs/LOG.md): the long form of every roadmap row up to 2026-09-27, with
 the measurements, dead ends and defects found. Later work is recorded in commit messages.
