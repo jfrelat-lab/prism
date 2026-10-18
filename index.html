@@ -50,6 +50,7 @@
   .hero { padding: 52px 0 24px; }
   /* The first screen shows a game, not only words: the README's Quake III, on the export (media/ is its). */
   .hero.with-shot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: 36px; align-items: center; }
+  .hero.with-shot .pipeline { white-space: normal; line-height: 1.7; }   /* half the width: wrap, don't scroll */
   .hero .shot { margin: 0; }
   .hero .shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; }
   .hero .shot figcaption { margin-top: 8px; color: var(--dim); font-size: 13px; }
