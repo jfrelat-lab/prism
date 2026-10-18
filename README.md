@@ -1,6 +1,8 @@
 # PRISM
 
-[![gates](https://github.com/jfrelat-lab/prism/actions/workflows/gates.yml/badge.svg)](https://github.com/jfrelat-lab/prism/actions/workflows/gates.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![gates](https://github.com/jfrelat-lab/prism/actions/workflows/gates.yml/badge.svg)](https://github.com/jfrelat-lab/prism/actions/workflows/gates.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Play in your browser](https://img.shields.io/badge/%E2%96%B6%20play-in%20your%20browser-6cb6ff)](https://prism-compiler.pages.dev)
+
+### Quake, Doom, MAME and ScummVM, compiled from their original C and C++ source and playing in your browser tab.
 
 **A C and C++ compiler that targets JavaScript and is itself written in plain JavaScript. It compiles
 the unmodified source of games and emulators from the DOS, Windows 95 and early Linux era — MAME,
@@ -21,26 +23,31 @@ GLUT, SDL, X11 or Win32) and run it, or load one of Rosetta Code's solutions.
 
 <table>
 <tr>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/doom.png" width="200" alt="DOOM (shareware), compiled by PRISM"></a><br><sub><b>DOOM (shareware)</b><br>Linux · plays now</sub></td>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/monkey.png" width="200" alt="The Secret of Monkey Island (demo), compiled by PRISM"></a><br><sub><b>The Secret of Monkey Island (demo)</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=doom-shareware&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/doom.png" width="200" alt="DOOM (shareware), compiled by PRISM"></a><br><sub><b>DOOM (shareware)</b><br>Linux · ▶ plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=scummvm-monkey-demo&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/monkey.png" width="200" alt="The Secret of Monkey Island (demo), compiled by PRISM"></a><br><sub><b>The Secret of Monkey Island (demo)</b><br>Linux · ▶ plays now</sub></td>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/quake3.png" width="200" alt="Quake III Arena, compiled by PRISM"></a><br><sub><b>Quake III Arena</b><br>Linux · your copy</sub></td>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/tuxracer.png" width="200" alt="Tux Racer, compiled by PRISM"></a><br><sub><b>Tux Racer</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=tuxracer&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/tuxracer.png" width="200" alt="Tux Racer, compiled by PRISM"></a><br><sub><b>Tux Racer</b><br>Linux · ▶ plays now</sub></td>
 </tr>
 <tr>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/bass.png" width="200" alt="Beneath a Steel Sky, compiled by PRISM"></a><br><sub><b>Beneath a Steel Sky</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=scummvm&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/bass.png" width="200" alt="Beneath a Steel Sky, compiled by PRISM"></a><br><sub><b>Beneath a Steel Sky</b><br>Linux · ▶ plays now</sub></td>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/mame-dkong.png" width="200" alt="Donkey Kong, compiled by PRISM"></a><br><sub><b>Donkey Kong</b><br>DOS · your copy</sub></td>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/cube.png" width="200" alt="Cube, compiled by PRISM"></a><br><sub><b>Cube</b><br>Linux · plays now</sub></td>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/dott.png" width="200" alt="Day of the Tentacle (demo), compiled by PRISM"></a><br><sub><b>Day of the Tentacle (demo)</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=cube&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/cube.png" width="200" alt="Cube, compiled by PRISM"></a><br><sub><b>Cube</b><br>Linux · ▶ plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=scummvm-dott-demo&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/dott.png" width="200" alt="Day of the Tentacle (demo), compiled by PRISM"></a><br><sub><b>Day of the Tentacle (demo)</b><br>Linux · ▶ plays now</sub></td>
 </tr>
 <tr>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/sdlpop.png" width="200" alt="Prince of Persia (SDLPoP), compiled by PRISM"></a><br><sub><b>Prince of Persia (SDLPoP)</b><br>Linux · your copy</sub></td>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/heretic.png" width="200" alt="Heretic (shareware), compiled by PRISM"></a><br><sub><b>Heretic (shareware)</b><br>DOS · plays now</sub></td>
-<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/chromium-bsu.png" width="200" alt="Chromium B.S.U., compiled by PRISM"></a><br><sub><b>Chromium B.S.U.</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=dos&amp;program=heretic-shareware&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/heretic.png" width="200" alt="Heretic (shareware), compiled by PRISM"></a><br><sub><b>Heretic (shareware)</b><br>DOS · ▶ plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/web/?machine=linux&amp;program=chromium-bsu&amp;run=1&amp;player=1"><img src="https://prism-compiler.pages.dev/thumbs/chromium-bsu.png" width="200" alt="Chromium B.S.U., compiled by PRISM"></a><br><sub><b>Chromium B.S.U.</b><br>Linux · ▶ plays now</sub></td>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/hexen2.png" width="200" alt="Hexen II, compiled by PRISM"></a><br><sub><b>Hexen II</b><br>Windows · your copy</sub></td>
 </tr>
 </table>
 
-<sub>Every picture is a frame PRISM drew from the game's unmodified source; click to open the showcase.</sub>
+<sub>Every picture is a frame PRISM drew from the game's unmodified source. ▶ starts the game; the others open the showcase, which asks for your copy.</sub>
+
+- **MAME**: 15 of 15 games bit-identical to a native gcc build over 1,500 frames.
+- **ScummVM**: 3,000 of 3,000 frames and every audio buffer equal to native, for each of 20 game demos.
+- **Quake**: the same pixels on four platform layers (DOS, X11, svgalib, Win32); GLQuake within 1 pixel of 307,200 of Mesa.
+- **Live C**: type C or C++ and run it, or load one of 787 Rosetta Code solutions; the 775 console ones print what a native build prints.
 
 ```
  C / C++ / asm source ─▶ preprocessor ─▶ parser + sema ─▶ JavaScript source ─▶ the engine's own JIT ─▶ run
