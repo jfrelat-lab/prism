@@ -20,6 +20,7 @@ import { scancodeForEvent, extendedForEvent } from '../src/env/scancodes.js';
 import { makePipe } from '../src/env/pipe.js';
 import { endpoints, at } from './endpoints.js';
 import { unpackArchive } from './unpack.js';
+import { ENV_TARGET } from './live/envs.js';
 import { VRAM_TEXT, TEXT_COLS, TEXT_ROWS } from '../src/link/module.js';
 
 const $ = (id) => document.getElementById(id);
@@ -1820,6 +1821,42 @@ try { showPanel(localStorage.getItem('prism.panel') === '1'); } catch { showPane
 
 requestAnimationFrame(frame);
 
+/*
+ * LIVE C'S SCREEN (?live=1, in Live C's frame). A program typed there that needs a display -- GLUT,
+ * SDL, X11, Win32 -- runs HERE, on the machine its includes name (web/live/envs.js), because this
+ * page already has every display, keyboard and sound path; Live C keeps the editor. The sources
+ * arrive by postMessage from the same origin, and go to the worker as a program with no tree: its
+ * units inline (extraUnits), the environment's own units fetched from src/ (outsideRoot).
+ */
+const LIVE = new URLSearchParams(location.search).get('live') === '1';
+document.body.classList.toggle('live', LIVE);
+function runLive({ files, env, argv = [] }) {
+  const t = ENV_TARGET[env];
+  const m = t && machines.find((x) => x.id === t.machine);
+  if (!m) { log(`Live C: no machine for the '${env}' environment`, 'error'); return; }
+  const UNIT = /\.(c|cpp|cc|cxx)$/i;
+  const generated = t.generated ?? [];
+  const desc = {
+    title: 'Live C', host: t.host, env: t.env, root: null, includeDirs: [],
+    units: generated, outsideRoot: generated,
+    unitDefines: Object.fromEntries(Object.entries(t.unitDefines ?? {}).map(([k, v]) => [k.toLowerCase(), v])),
+    extraUnits: Object.fromEntries(files.filter((f) => UNIT.test(f.name)).map((f) => [f.name, f.source])),
+    extraHeaders: Object.fromEntries(files.filter((f) => !UNIT.test(f.name)).map((f) => [f.name, f.source])),
+    memory: 64 * 1024 * 1024,
+  };
+  m.programs = [{ program: 'live', desc, name: 'Live C', file: m.kind === 'desktop' ? 'PROG.EXE' : 'prog', present: true, target: null }];
+  pick(m, 0);
+  if (argv.length) $('args').value = argv.join(' ');
+  startRun();
+}
+
 discover()
   .then(applyQuery)
+  .then(() => {
+    if (!LIVE) return;
+    window.addEventListener('message', (e) => {
+      if (e.origin === location.origin && e.data?.type === 'prism-live') runLive(e.data);
+    });
+    parent.postMessage({ type: 'prism-live-ready' }, location.origin);
+  })
   .catch(e => log(`could not read the shelf (web/machines.json): ${e.message}`, 'error'));

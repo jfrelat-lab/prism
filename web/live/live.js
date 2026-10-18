@@ -5,6 +5,7 @@
 // a worker, and shows what comes back.
 
 import { makeControl, controlViews, makeKeyboard, wake, SLOT } from '../../src/env/webhost.js';
+import { ENV_TARGET, detectEnv } from './envs.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -286,13 +287,43 @@ function say(text, cls = '') {
  */
 const emit = (text) => { out.append(document.createTextNode(text)); $('panes').scrollTop = $('panes').scrollHeight; };
 
-for (const [id, other] of [['tabOut', 'tabEmitted'], ['tabEmitted', 'tabOut']]) {
-  $(id).onclick = () => {
-    $(id).setAttribute('aria-selected', 'true');
-    $(other).setAttribute('aria-selected', 'false');
-    $('out').hidden = id !== 'tabOut';
-    $('emitted').hidden = id !== 'tabEmitted';
+const PANES = { tabOut: 'out', tabEmitted: 'emitted', tabScreen: 'screen' };
+const showTab = (id) => {
+  for (const [tab, pane] of Object.entries(PANES)) {
+    $(tab).setAttribute('aria-selected', String(tab === id));
+    $(pane).hidden = tab !== id;
+  }
+};
+for (const id of Object.keys(PANES)) $(id).onclick = () => showTab(id);
+
+/*
+ * A PROGRAM THAT NEEDS A DISPLAY. Its includes say which (web/live/envs.js): GLUT, SDL, X11 or Win32.
+ * It runs in the shelf's player -- the page that already draws every one of those, takes the keys
+ * and plays the sound -- loaded fresh in a frame for each run and handed the files by postMessage.
+ * Live C keeps the editor and the console programs; Stop removes the frame, and its worker with it.
+ */
+const MACHINE_NAME = { linux: 'the Linux machine', win: 'the Windows desktop' };
+function runOnScreen(env) {
+  const t = ENV_TARGET[env];
+  $('tabScreen').hidden = false;
+  showTab('tabScreen');
+  const box = $('screen');
+  box.replaceChildren();
+  const frame = document.createElement('iframe');
+  frame.title = 'the program\'s screen';
+  frame.src = new URL('../?live=1&player=1', import.meta.url).href;
+  const argv = tokenise($('argv').value).slice(1);
+  const onReady = (e) => {
+    if (e.source !== frame.contentWindow || e.data?.type !== 'prism-live-ready') return;
+    window.removeEventListener('message', onReady);
+    frame.contentWindow.postMessage({ type: 'prism-live', files, env, argv }, location.origin);
   };
+  window.addEventListener('message', onReady);
+  box.append(frame);
+  say(`${env} program: built and run on ${MACHINE_NAME[t.machine] ?? t.machine}, in the Screen tab ` +
+      `(its build log is in the frame's panel)\n`, 'ok');
+  $('status').textContent = `running (${env})`;
+  $('run').disabled = true; $('stopBtn').disabled = false;
 }
 
 // ---------------------------------------------------------------- run
@@ -308,6 +339,10 @@ $('run').onclick = () => {
   stop(true);
   out.textContent = '';
   $('emitted').textContent = '';
+  const env = detectEnv(files.filter((f) => /\.(c|cpp|cc|cxx|h|hpp)$/i.test(f.name)).map((f) => f.source));
+  if (env !== 'console') { runOnScreen(env); return; }
+  $('tabScreen').hidden = true;
+  if (!$('screen').hidden) showTab('tabOut');
   $('status').textContent = 'compiling';
 
   const control = makeControl();
@@ -353,6 +388,8 @@ $('run').onclick = () => {
 
 $('stopBtn').onclick = () => stop(false);
 function stop(quiet) {
+  // A display program runs in the frame: taking the frame away takes its worker with it.
+  $('screen').replaceChildren();
   if (views) { Atomics.store(views.ctrl, SLOT.STOP, 1); wake(views.ctrl); }
   if (worker) { const w = worker; worker = null; setTimeout(() => w.terminate(), 100); }
   if (!quiet) {

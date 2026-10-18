@@ -50,7 +50,9 @@ BOOL WINAPI DeleteDC(HDC dc) { (void)dc; return 1; }
  *
  * One brush for all device contexts, like the surface: this program has one window.
  */
-static HBRUSH prism_brush;
+/* A new DC's brush is WHITE_BRUSH (and its pen BLACK_PEN): an unset one was black, and filled every
+   Rectangle solid. */
+static HBRUSH prism_brush = (HBRUSH)(ULONG_PTR)(PRISM_BRUSH_TAG | 0x00FFFFFF);
 static COLORREF brush_colour(HBRUSH b);
 
 HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj)
@@ -162,8 +164,10 @@ int prism_gdi_w, prism_gdi_h, prism_gdi_pitch;
 unsigned char *prism_gdi_surface;
 int prism_gdi_draws;                    /* how many glyph cells have been written, for a harness */
 
-static COLORREF prism_fg = 0x00c0c0c0;  /* light grey on black, until the program says otherwise */
-static COLORREF prism_bk = 0x00000000;
+/* A new DC writes black text on white (SetTextColor, SetBkColor): Windows' defaults. Light grey on
+   black was a terminal's, and a program that never set colours wrote grey on its white window. */
+static COLORREF prism_fg = 0x00000000;
+static COLORREF prism_bk = 0x00FFFFFF;
 
 static void prism_surface_ensure(void)
 {
@@ -270,10 +274,14 @@ COLORREF WINAPI SetBkColor(HDC dc, COLORREF c) { COLORREF o = prism_bk; (void)dc
 BOOL WINAPI LineTo(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; return 1; }
 BOOL WINAPI MoveToEx(HDC dc, int x, int y, POINT *old) { (void)dc; (void)x; (void)y; (void)old; return 1; }
 BOOL WINAPI Polyline(HDC dc, const POINT *p, int n) { (void)dc; (void)p; (void)n; return 1; }
+/* The outline in the pen (BLACK_PEN, one pixel: pens are not modelled), the inside in the brush. */
 BOOL WINAPI Rectangle(HDC dc, int l, int t, int r, int b)
 {
     (void)dc;
-    prism_fill(l, t, r, b, brush_colour(prism_brush));
+    if (r - l < 2 || b - t < 2) { prism_fill(l, t, r, b, 0); return 1; }
+    prism_fill(l, t, r, t + 1, 0); prism_fill(l, b - 1, r, b, 0);
+    prism_fill(l, t, l + 1, b, 0); prism_fill(r - 1, t, r, b, 0);
+    prism_fill(l + 1, t + 1, r - 1, b - 1, brush_colour(prism_brush));
     return 1;
 }
 COLORREF WINAPI SetPixel(HDC dc, int x, int y, COLORREF c) { (void)dc; prism_pixel(x, y, c); return c; }
@@ -283,6 +291,8 @@ COLORREF WINAPI GetPixel(HDC dc, int x, int y) { (void)dc; (void)x; (void)y; ret
    background, which is what an unrecognised brush would most nearly be. */
 static COLORREF brush_colour(HBRUSH b)
 {
+    /* A class's hbrBackground is usually a SYSTEM colour, COLOR_x + 1 (what Windows documents). */
+    if ((ULONG_PTR)b >= 1 && (ULONG_PTR)b <= 31) return GetSysColor((int)(ULONG_PTR)b - 1);
     return ((ULONG_PTR)b & PRISM_BRUSH_TAG) ? (COLORREF)((ULONG_PTR)b & 0x00FFFFFF) : prism_bk;
 }
 
@@ -292,6 +302,8 @@ int WINAPI FillRect(HDC dc, const RECT *r, HBRUSH b)
     if (r) prism_fill(r->left, r->top, r->right, r->bottom, brush_colour(b));
     return 1;
 }
+/* BeginPaint's background erase (src/env/win32.c), now that there is a raster to erase. */
+void prism_win32_erase(HDC dc, const RECT *r, HBRUSH b) { FillRect(dc, r, b); }
 int WINAPI DrawText(HDC dc, LPCSTR s, int n, RECT *r, UINT f)
 {
     (void)f;
@@ -306,7 +318,7 @@ BOOL WINAPI DrawIconEx(HDC dc, int x, int y, HICON i, int cx, int cy, UINT s, HB
 BOOL WINAPI DestroyIcon(HICON i) { (void)i; return 1; }
 
 /* ---- colours */
-COLORREF WINAPI GetSysColor(int i) { (void)i; return 0x00C0C0C0; }
+/* GetSysColor is win32.c's: the system colours are storage there (rw_dib.c sets and restores them). */
 HBRUSH WINAPI GetSysColorBrush(int i) { return CreateSolidBrush(GetSysColor(i)); }
 
 /* ---- windows */
@@ -516,7 +528,13 @@ HWND WINAPI CreateWindowExA(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style,
 { return CreateWindowEx(ex, cls, name, style, x, y, w, h, parent, menu, inst, param); }
 
 BOOL WINAPI DeleteObject(HGDIOBJ o) { (void)o; return 1; }
-HGDIOBJ WINAPI GetStockObject(int i) { return NEW_HANDLE(HGDIOBJ); }
+/* The stock brushes are colours (WHITE_BRUSH 0 to BLACK_BRUSH 4); the other stock objects, handles. */
+HGDIOBJ WINAPI GetStockObject(int i)
+{
+    static const COLORREF stock[5] = { 0x00FFFFFF, 0x00C0C0C0, 0x00808080, 0x00404040, 0x00000000 };
+    if (i >= 0 && i < 5) return (HGDIOBJ)CreateSolidBrush(stock[i]);
+    return NEW_HANDLE(HGDIOBJ);
+}
 
 /*
  * A dialogue template lives in a .rc resource, and PRISM compiles no resources -- so there is no

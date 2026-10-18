@@ -1075,9 +1075,12 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
    */
   sharedGlobals.set('errno', { addr: mod.defineGlobal('errno', T.INT).addr, type: T.INT });
   const duplicates = [];
-  // Names some unit declared __attribute__((weak)): a second definition of one gives way.
+  // Names some unit declared __attribute__((weak)), program-wide and per unit: see below.
   const weakNames = new Set();
-  for (const p of parsed) for (const d of p.unit.decls) if (d.n === 'vardecl' && d.weak && d.type?.k === 'func' && d.storage !== 'static') weakNames.add(d.name);
+  for (const p of parsed) {
+    p.weak = new Set();
+    for (const d of p.unit.decls) if (d.n === 'vardecl' && d.weak && d.type?.k === 'func' && d.storage !== 'static') { weakNames.add(d.name); p.weak.add(d.name); }
+  }
   for (const p of parsed) {
     p.globals = new Map();
     p.funcs = new Map();
@@ -1150,10 +1153,21 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
          * unit is lowered to marks a class template's members so (src/cxx), because two units that
          * both see such a member's body both define it -- and a unit that does not see it calls it.
          */
-        if (!isInternal && fn.defined && weakNames.has(link)) { d.weakDuplicate = true; continue; }
-        if (!isInternal && fn.defined) {
+        /*
+         * ...and a weak definition gives way to a STRONG one whichever comes first, as an ELF linker
+         * has it: a unit that defines a name without declaring it weak replaces a weak definition
+         * already placed. Two weak ones are the COMDAT case above. Before this the first definition
+         * stood whatever it was, so a default meant to be overridden won when its unit came first --
+         * src/env/win32.c's no-op erase hook against win32-gui.c's real one.
+         */
+        const weakHere = p.weak.has(d.name);
+        if (!isInternal && fn.defined && fn.weakDef && !weakHere) {
+          fn.weakDef.weakDuplicate = true;
+        } else if (!isInternal && fn.defined && weakNames.has(link)) { d.weakDuplicate = true; continue; }
+        else if (!isInternal && fn.defined) {
           duplicates.push({ name: d.name, unit: basename(p.file), module: p.module ?? MAIN });
         }
+        if (!isInternal) fn.weakDef = weakHere ? d : null;
         // A DEFINITION, not just a prototype: the distinction decides whether a call reaches the
         // program's own code or a runtime builtin of the same name.
         fn.defined = true;

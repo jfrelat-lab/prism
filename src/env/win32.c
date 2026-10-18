@@ -238,10 +238,22 @@ BOOL WINAPI SetThreadPriority(HANDLE h, int p) { (void)h; (void)p; return TRUE; 
  */
 #define MAX_CLASSES 8
 #define MAX_WINDOWS 8
-static struct { char name[64]; WNDPROC proc; int used; } classes[MAX_CLASSES];
+static struct { char name[64]; WNDPROC proc; HBRUSH bg; int used; } classes[MAX_CLASSES];
 static struct { HWND hwnd; WNDPROC proc; int used; } windows[MAX_WINDOWS];
 static WNDPROC wndproc = NULL;          /* the most recent, for messages with no window */
 
+/* The main window's class background brush: what BeginPaint erases with (see prism_win32_erase). */
+static HBRUSH prism_win32_bg;
+static void prism_invalidate(const RECT *r, int erase);
+static HWND prism_dirty_hwnd;
+static HBRUSH bg_for_class(const char *name)
+{
+    int i;
+    if (!name) return 0;
+    for (i = 0; i < MAX_CLASSES; i++)
+        if (classes[i].used && !strcmp(classes[i].name, name)) return classes[i].bg;
+    return 0;
+}
 static WNDPROC proc_for_class(const char *name)
 {
     int i;
@@ -297,6 +309,7 @@ ATOM WINAPI RegisterClass(const WNDCLASS *wc)
         strncpy(classes[i].name, wc->lpszClassName ? wc->lpszClassName : "", sizeof(classes[i].name) - 1);
         classes[i].name[sizeof(classes[i].name) - 1] = 0;
         classes[i].proc = wc->lpfnWndProc;
+        classes[i].bg = wc->hbrBackground;
         classes[i].used = 1;
         break;
     }
@@ -461,6 +474,7 @@ HWND WINAPI CreateWindowEx(DWORD exStyle, LPCSTR cls, LPCSTR name, DWORD style,
         if (x != CW_USEDEFAULT) prism_win32_x = x;
         if (y != CW_USEDEFAULT) prism_win32_y = y;
         if (name) strncpy(prism_win32_title, name, sizeof(prism_win32_title) - 1);
+        prism_win32_bg = bg_for_class(cls);
     }
     msg_window = hwnd;
     return hwnd;
@@ -530,7 +544,7 @@ void prism_win32_activate(int active)
 
 BOOL WINAPI ShowWindow(HWND w, int cmd)
 {
-    (void)w;
+    int was = prism_win32_visible;
     switch (cmd) {
     case SW_HIDE:            prism_win32_visible = 0; break;
     case SW_MINIMIZE:
@@ -540,7 +554,13 @@ BOOL WINAPI ShowWindow(HWND w, int cmd)
     }
     /* Shown means activated: there is no other window here to take the focus away. */
     if (prism_win32_visible && !prism_win32_minimized) prism_win32_activate(1);
-    return TRUE;
+    /*
+     * ...and a window that becomes visible is invalid, background and all, so its first WM_PAINT
+     * comes without the program asking. Without it a window that paints only on WM_PAINT -- every
+     * window written the textbook way -- was never drawn: shown, and black.
+     */
+    if (!was && prism_win32_visible) { prism_dirty_hwnd = w; prism_invalidate(NULL, 1); }
+    return was;
 }
 int WINAPI SetWindowText(HWND w, LPCSTR text)
 {
@@ -638,7 +658,6 @@ DWORD WINAPI GetClassLong(HWND w, int index) { (void)w; (void)index; return 0; }
 static RECT prism_dirty;
 static int prism_dirty_any;
 static int prism_dirty_erase;
-static HWND prism_dirty_hwnd;          /* whose region it is; the WM_PAINT goes there */
 
 static void prism_invalidate(const RECT *r, int erase)
 {
@@ -916,16 +935,27 @@ int WINAPI ReleaseDC(HWND w, HDC dc) { (void)w; (void)dc; return 1; }
  * afterwards: without it the region stays dirty, GetMessage keeps handing out WM_PAINT, and the
  * program repaints for ever instead of waiting for the next real event.
  */
+/*
+ * Erasing the background: WM_ERASEBKGND as DefWindowProc answers it, FillRect with the class brush.
+ * FillRect is win32-gui.c's, which a build without GDI (WinQuake, Hexen II) does not link -- so this
+ * is a WEAK no-op that win32-gui.c's definition replaces.
+ */
+void prism_win32_erase(HDC dc, const RECT *r, HBRUSH b) __attribute__((weak));
+void prism_win32_erase(HDC dc, const RECT *r, HBRUSH b) { (void)dc; (void)r; (void)b; }
+
 HDC WINAPI BeginPaint(HWND w, LPPAINTSTRUCT ps)
 {
+    RECT all;
     (void)w;
+    all.left = all.top = 0; all.right = prism_win32_w; all.bottom = prism_win32_h;
+    if (prism_dirty_erase && prism_win32_bg) prism_win32_erase(HANDLE_OF(HDC), prism_dirty_any ? &prism_dirty : &all, prism_win32_bg);
     if (ps) {
         memset(ps, 0, sizeof(*ps));
         ps->hdc = HANDLE_OF(HDC);
-        ps->fErase = prism_dirty_erase ? TRUE : FALSE;
+        /* fErase says the program must erase: not when the class brush already has. */
+        ps->fErase = prism_dirty_erase && !prism_win32_bg ? TRUE : FALSE;
         if (prism_dirty_any) ps->rcPaint = prism_dirty;
-        else { ps->rcPaint.left = ps->rcPaint.top = 0;
-               ps->rcPaint.right = prism_win32_w; ps->rcPaint.bottom = prism_win32_h; }
+        else ps->rcPaint = all;
     }
     prism_dirty_any = 0;
     prism_dirty_erase = 0;
@@ -1093,11 +1123,23 @@ HPALETTE  WINAPI SelectPalette(HDC dc, HPALETTE pal, BOOL force)
 UINT      WINAPI RealizePalette(HDC dc) { (void)dc; return 0; }
 
 /*
- * System colours. There is no desktop, so these are inert -- but rw_dib.c SAVES them, changes them
- * and restores them around its palette, so the pair has to behave like storage or the restore
- * writes back nonsense.
+ * System colours. rw_dib.c SAVES them, changes them and restores them around its palette, so the
+ * pair has to behave like storage or the restore writes back nonsense. They START as Windows'
+ * classic scheme ("Windows Standard"), 0x00bbggrr: a white window with black text on a grey face, a
+ * teal desktop, a navy caption. All zero, a window class with the documented background
+ * (COLOR_WINDOW + 1) was painted black.
  */
-static COLORREF prism_sys_colors[NUM_SYS_COLORS];
+static COLORREF prism_sys_colors[NUM_SYS_COLORS] = {
+    0x00C0C0C0, 0x00808000, 0x00800000, 0x00808080, 0x00C0C0C0,   /* scrollbar, background, active
+                                                                      caption, inactive caption, menu */
+    0x00FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x00FFFFFF,   /* window, frame, menu text,
+                                                                      window text, caption text */
+    0x00C0C0C0, 0x00C0C0C0, 0x00808080, 0x00800000, 0x00FFFFFF,   /* active, inactive border, app
+                                                                      workspace, highlight, its text */
+    0x00C0C0C0, 0x00808080, 0x00808080, 0x00000000, 0x00C0C0C0,   /* button face, shadow, grey text,
+                                                                      button text, inactive caption text */
+    0x00FFFFFF,                                                    /* button highlight */
+};
 DWORD WINAPI GetSysColor(int index)
 {
     if (index < 0 || index >= NUM_SYS_COLORS) return 0;
