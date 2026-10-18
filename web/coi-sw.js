@@ -12,6 +12,13 @@ self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
+  /*
+   * Only this origin's own answers are given the isolation headers. Another site's -- Live C fetches
+   * Rosetta Code's solutions from rosettacode.org -- are left to the browser: rewritten here, a CORS
+   * response came back rebuilt by this worker and stamped CORP same-origin, which claims the other
+   * site said "only I may read this". It did not, and nothing here is entitled to say it for it.
+   */
+  if (new URL(req.url).origin !== self.location.origin) return;
   // A request the browser makes against the cache only, from another origin, cannot be re-fetched.
   if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
   e.respondWith(fetch(req).then((res) => {
