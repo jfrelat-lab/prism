@@ -621,12 +621,20 @@ $('stdin').addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------- examples
-const sel = $('examples');
-const group = (label) => { const g = document.createElement('optgroup'); g.label = label; sel.append(g); return g; };
-const option = (g, value, text) => { const o = document.createElement('option'); o.value = value; o.textContent = text; g.append(o); };
-const prismGroup = group('prism/');
-for (const name of Object.keys(EXAMPLES)) option(prismGroup, name, name);
-sel.selectedIndex = -1;
+/*
+ * THE PICKER: a search, filters and tags, because 749 names in a <select> are not a choice. The tags
+ * are what Run will do -- the environment web/live/envs.js reads from the includes, the one that
+ * decides whether the program gets a screen -- plus C++ and stdin, so the two groups read the same way.
+ */
+const ENV_TAG = { glut: 'OpenGL', gl: 'OpenGL', sdl: 'SDL', sdl2: 'SDL', x11: 'X11', win32: 'Win32', 'win32-main': 'Win32' };
+const ENV_TAGS = new Set(Object.values(ENV_TAG));     // the tags that name an environment
+const SCREEN = new Set(['glut', 'gl', 'sdl', 'sdl2', 'x11', 'win32']);   // a window, not a console
+const items = [];          // { value, label, group, tags, screen }
+for (const [name, src] of Object.entries(EXAMPLES)) {
+  const env = detectEnv([src]);
+  const tags = [ENV_TAG[env], /\.cpp$/.test(name) && 'C++', /\b(scanf|fgets|getchar)\s*\(/.test(src) && 'stdin'].filter(Boolean);
+  items.push({ value: name, label: name, group: 'prism', tags, screen: SCREEN.has(env) });
+}
 
 /*
  * ROSETTA CODE'S, listed from web/live/rosetta.json: the solutions PRISM ran right (tools/rosetta.mjs,
@@ -637,18 +645,66 @@ let rosetta = [];
 fetch(new URL('./rosetta.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((d) => {
   if (!d?.entries?.length) return;
   rosetta = d.entries;
-  const g = group(`rosetta/ (${rosetta.length}, from rosettacode.org)`);
   const count = rosetta.reduce((m, e) => m.set(e.task, (m.get(e.task) ?? 0) + 1), new Map());
   rosetta.forEach((e, i) => {
     const which = count.get(e.task) > 1 ? ` (${e.sub || `#${e.block + 1}`})` : '';
-    const where = e.env === 'console' ? '' : ` [${e.env.replace(/-main$/, '')}]`;
-    option(g, `rosetta:${i}`, `rosetta/${e.task}${which}${where}`);
+    items.push({ value: `rosetta:${i}`, label: `rosetta/${e.task}${which}`, group: 'rosetta',
+      tags: [ENV_TAG[e.env]].filter(Boolean), screen: SCREEN.has(e.env) });
   });
+  if (!$('picker').hidden) renderPicker();
 }).catch(() => { /* no list, no group: the page's own examples still work */ });
 
+const FILTERS = [['all', 'All'], ['screen', 'Graphical'], ['OpenGL', 'OpenGL'], ['SDL', 'SDL'], ['Win32', 'Win32'], ['console', 'Console']];
+let filter = 'all', cursor = 0, shown = [];
+const matches = (it, words) => (filter === 'all' || (filter === 'screen' ? it.screen : filter === 'console' ? !it.tags.some((t) => ENV_TAGS.has(t)) : it.tags.includes(filter)))
+  && words.every((w) => it.label.toLowerCase().includes(w));
+const escHtml = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function renderPicker() {
+  const words = $('pickSearch').value.toLowerCase().split(/\s+/).filter(Boolean);
+  shown = items.filter((it) => matches(it, words));
+  cursor = Math.min(cursor, Math.max(0, shown.length - 1));
+  $('pickChips').innerHTML = FILTERS.map(([k, t]) => `<button type="button" data-f="${k}" aria-pressed="${k === filter}">${t}</button>`).join('');
+  let html = '', last = null;
+  shown.forEach((it, i) => {
+    if (it.group !== last) {
+      last = it.group;
+      const n = shown.filter((x) => x.group === it.group).length;
+      html += `<div class="pg">${it.group === 'prism' ? 'prism/ -- PRISM’s own' : 'rosetta/ -- loaded from rosettacode.org, GNU FDL'} <span>${n}</span></div>`;
+    }
+    html += `<div class="pi" role="option" data-i="${i}" aria-selected="${i === cursor}"><span>${escHtml(it.label)}</span>` +
+      `<span class="tags">${it.tags.map((t) => `<span class="tag t-${t.replace(/\W/g, '')}">${t}</span>`).join('')}</span></div>`;
+  });
+  $('pickList').innerHTML = html || '<div class="pg">nothing matches</div>';
+  $('pickFoot').textContent = `${shown.length} of ${items.length} -- Enter opens, Esc closes`;
+}
+function openPicker() {
+  const b = $('pick').getBoundingClientRect(), p = $('picker');
+  p.style.top = `${b.bottom + 4}px`;
+  p.style.left = `${Math.max(8, Math.min(b.left, innerWidth - 480))}px`;
+  p.hidden = false; $('pick').setAttribute('aria-expanded', 'true');
+  renderPicker();
+  $('pickSearch').focus(); $('pickSearch').select();
+}
+function closePicker() { $('picker').hidden = true; $('pick').setAttribute('aria-expanded', 'false'); }
+$('pick').onclick = () => ($('picker').hidden ? openPicker() : closePicker());
+$('pickSearch').addEventListener('input', () => { cursor = 0; renderPicker(); });
+$('pickChips').addEventListener('click', (e) => { const f = e.target.closest('[data-f]')?.dataset.f; if (f) { filter = f; cursor = 0; renderPicker(); $('pickSearch').focus(); } });
+$('pickList').addEventListener('click', (e) => { const i = e.target.closest('[data-i]')?.dataset.i; if (i !== undefined) choose(shown[+i]); });
+$('pickSearch').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closePicker(); $('pick').focus(); return; }
+  if (e.key === 'Enter') { e.preventDefault(); if (shown[cursor]) choose(shown[cursor]); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  cursor = Math.max(0, Math.min(shown.length - 1, cursor + (e.key === 'ArrowDown' ? 1 : -1)));
+  renderPicker();
+  $('pickList').querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+});
+document.addEventListener('mousedown', (e) => { if (!$('picker').hidden && !e.target.closest('#picker, #pick')) closePicker(); });
+function choose(it) { closePicker(); loadExample(it.value, it.label); }
+
 let lastLoaded = null;     // the source an example put in the editor, so swapping it again needs no question
-sel.onchange = async () => {
-  const value = sel.value;
+async function loadExample(value, label) {
   stash();
   /*
    * An example REPLACES the project rather than joining it, and that is not laziness: every example
@@ -661,10 +717,7 @@ sel.onchange = async () => {
    */
   const untouched = files.length === 1 &&
     (Object.values(EXAMPLES).some(src => src === files[0].source) || files[0].source === lastLoaded);
-  if (!untouched && !confirm('Replace what is open with the example? Your files will be lost.')) {
-    sel.selectedIndex = -1;
-    return;
-  }
+  if (!untouched && !confirm('Replace what is open with the example? Your files will be lost.')) return;
   // The program running is the one being replaced: it stops with its source.
   if (worker || $('screen').firstChild) stop(true);
   let name, source;
@@ -685,7 +738,6 @@ sel.onchange = async () => {
        */
       say(`could not load it from rosettacode.org (${err.message}). The site may be blocked for this ` +
           `page (an ad or tracker blocker) or asking for a browser check; the task is at ${pageUrl(e.task)}\n`, 'err');
-      sel.selectedIndex = -1;
       return;
     }
     name = 'main.c';
@@ -705,8 +757,9 @@ sel.onchange = async () => {
   lastLoaded = source;
   files = [{ name, source }];
   active = 0;
+  $('pickName').textContent = label;
   save(); renderTabs(); showFile();
-};
+}
 
 /*
  * THE CREDIT, every time Rosetta Code's code is loaded or run: it is shown as Rosetta Code has it,

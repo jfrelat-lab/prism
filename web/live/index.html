@@ -130,6 +130,30 @@
   .stdin { display: flex; gap: 8px; align-items: center; padding: 7px 12px;
            border-top: 1px solid var(--edge); }
   .stdin input { flex: 1; }
+
+  /* ---------------------------------------------------------------- the example picker */
+  #pick #pickName { color: var(--fg); }
+  #picker { position: fixed; z-index: 50; width: min(470px, calc(100vw - 16px)); max-height: 70vh;
+            display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 6px; padding: 8px;
+            background: var(--panel); border: 1px solid var(--edge); border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, .45); }
+  #pickSearch { width: 100%; }
+  #pickChips { display: flex; flex-wrap: wrap; gap: 4px; }
+  #pickChips button { font-size: 12px; padding: 2px 9px; border-radius: 999px; }
+  #pickChips button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #pickList { overflow: auto; min-height: 0; border-top: 1px solid var(--edge); }
+  #pickList .pg { position: sticky; top: 0; background: var(--panel); color: var(--dim); font-size: 11px;
+                  letter-spacing: .06em; padding: 6px 6px 3px; }
+  #pickList .pg span { float: right; }
+  #pickList .pi { display: flex; justify-content: space-between; align-items: center; gap: 8px;
+                  padding: 3px 6px; border-radius: 4px; cursor: pointer; }
+  #pickList .pi > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pickList .pi:hover, #pickList .pi[aria-selected="true"] { background: var(--panel-2); }
+  .tags { display: flex; gap: 4px; flex: none; }
+  .tag { font-size: 10.5px; line-height: 1.5; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; }
+  .tag.t-OpenGL { color: #82aaff; } .tag.t-SDL { color: #ffcc80; } .tag.t-Win32 { color: #7ee2a8; }
+  .tag.t-X11 { color: #f78c6c; } .tag.t-C { color: #c792ea; } .tag.t-stdin { color: var(--dim); }
+  #pickFoot { color: var(--dim); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -139,9 +163,7 @@
   <button id="run">Run</button>
   <button id="stopBtn" disabled>Stop</button>
   <label>argv <input id="argv" type="text" spellcheck="false" value="prog"></label>
-  <label>example
-    <select id="examples"></select>
-  </label>
+  <button id="pick" aria-haspopup="dialog" aria-expanded="false" title="PRISM's examples and Rosetta Code's, with what each needs">example: <span id="pickName">prism/hello.c</span> &#9662;</button>
   <label title="how each compiled file is read: by its name (.c is C; .cpp, .cc and .cxx are C++), or all of them as one language">language
     <select id="language">
       <option value="">by file name</option>
@@ -185,6 +207,13 @@
     </div>
   </div>
 </main>
+
+<div id="picker" role="dialog" aria-label="Examples" hidden>
+  <input id="pickSearch" type="search" spellcheck="false" placeholder="search: mandelbrot, sort, window...">
+  <div id="pickChips" role="group" aria-label="Show"></div>
+  <div id="pickList" role="listbox"></div>
+  <div id="pickFoot"></div>
+</div>
 
 <script type="module" src="./live.js"></script>
 <script>
