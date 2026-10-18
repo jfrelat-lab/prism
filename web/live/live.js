@@ -580,6 +580,7 @@ for (const id of Object.keys(PANES)) $(id).onclick = () => showTab(id);
  * Live C keeps the editor and the console programs; Stop removes the frame, and its worker with it.
  */
 const MACHINE_NAME = { linux: 'the Linux machine', win: 'the Windows desktop' };
+let frameListener = null;    // the running frame's messages; gone with the frame
 function runOnScreen(env) {
   const t = ENV_TARGET[env];
   setOutput('screen');
@@ -589,17 +590,37 @@ function runOnScreen(env) {
   frame.title = 'the program\'s screen';
   frame.src = new URL('../?live=1&player=1', import.meta.url).href;
   const argv = tokenise($('argv').value).slice(1);
-  const onReady = (e) => {
-    if (e.source !== frame.contentWindow || e.data?.type !== 'prism-live-ready') return;
-    window.removeEventListener('message', onReady);
-    frame.contentWindow.postMessage({ type: 'prism-live', files, env, argv }, location.origin);
+  /*
+   * The frame says it is ready, then sends back what its worker made of the files: the build summary
+   * and the emitted JavaScript (or the failure), for this page's Build and Emitted JS panes -- the
+   * frame's own panel has them too, but this is where Live C keeps them.
+   */
+  const onFrame = (e) => {
+    if (e.source !== frame.contentWindow) return;
+    const m = e.data;
+    if (m?.type === 'prism-live-ready') frame.contentWindow.postMessage({ type: 'prism-live', files, env, argv }, location.origin);
+    else if (m?.type === 'prism-live-built') { reportBuild(m); $('emitted').innerHTML = highlightJS(m.source); }
+    else if (m?.type === 'prism-live-failed') { say(`\n${m.message}\n`, 'err'); $('status').textContent = 'failed'; showTab('tabBuild'); }
   };
-  window.addEventListener('message', onReady);
+  window.addEventListener('message', onFrame);
+  frameListener = onFrame;
   box.append(frame);
-  say(`${env} program: built and run on ${MACHINE_NAME[t.machine] ?? t.machine}, shown in Output ` +
-      `(its own build log is in the panel inside it)\n`, 'ok');
+  say(`${env} program: built and run on ${MACHINE_NAME[t.machine] ?? t.machine}, shown in Output\n`, 'ok');
   $('status').textContent = `running (${env})`;
   $('run').disabled = true; $('stopBtn').disabled = false;
+}
+
+/** A build's summary in the Build pane: the console worker's, or the display frame's. */
+function reportBuild(m) {
+  say(`compiled ${m.units} unit${m.units === 1 ? '' : 's'}, ${m.lines.toLocaleString('en')} ` +
+      `lines in ${m.ms.toFixed(0)} ms — ${m.functions} functions, ` +
+      `${(m.bytes / 1024).toFixed(1)} kB of JavaScript\n`, 'ok');
+  if (m.failures.length) {
+    say(`${m.failures.length} function${m.failures.length === 1 ? '' : 's'} could not be ` +
+        `emitted; each throws if it is called:\n`, 'warn');
+    for (const f of m.failures.slice(0, 8)) say(`  ${f}\n`, 'warn');
+  }
+  say('\n');
 }
 
 // ---------------------------------------------------------------- run
@@ -628,18 +649,7 @@ $('run').onclick = () => {
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'out') emit(m.text);
-    else if (m.type === 'built') {
-      $('status').textContent = 'running';
-      say(`compiled ${m.units} unit${m.units === 1 ? '' : 's'}, ${m.lines.toLocaleString('en')} ` +
-          `lines in ${m.ms.toFixed(0)} ms — ${m.functions} functions, ` +
-          `${(m.bytes / 1024).toFixed(1)} kB of JavaScript\n`, 'ok');
-      if (m.failures.length) {
-        say(`${m.failures.length} function${m.failures.length === 1 ? '' : 's'} could not be ` +
-            `emitted; each throws if it is called:\n`, 'warn');
-        for (const f of m.failures.slice(0, 8)) say(`  ${f}\n`, 'warn');
-      }
-      say('\n');
-    }
+    else if (m.type === 'built') { $('status').textContent = 'running'; reportBuild(m); }
     else if (m.type === 'emitted') $('emitted').innerHTML = highlightJS(m.source);
     else if (m.type === 'threw') term(`\nthe program threw: ${m.message}\n`, 'err');
     // The build failed: its errors are the build pane's, and that is where to look.
@@ -672,6 +682,7 @@ $('stopBtn').onclick = () => stop(false);
 function stop(quiet) {
   // A display program runs in the frame: taking the frame away takes its worker with it.
   $('screen').replaceChildren();
+  if (frameListener) { window.removeEventListener('message', frameListener); frameListener = null; }
   if (views) { Atomics.store(views.ctrl, SLOT.STOP, 1); wake(views.ctrl); }
   if (worker) { const w = worker; worker = null; setTimeout(() => w.terminate(), 100); }
   if (!quiet) {

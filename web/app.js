@@ -1453,7 +1453,12 @@ async function startRun(typedAs = null) {
       guest = new Uint8Array(m.image);
       log(`guest memory: ${(guest.length / 1048576).toFixed(0)} MB shared with the page`);
     }
-    else if (m.type === 'failed') log(`build failed: ${m.message}`, 'error');
+    else if (m.type === 'failed') {
+      log(`build failed: ${m.message}`, 'error');
+      if (LIVE) parent.postMessage({ type: 'prism-live-failed', message: m.message }, location.origin);
+    }
+    // Live C's build and emitted JavaScript, passed on to the editor's page that framed this one.
+    else if (m.type === 'live-built') { if (LIVE) parent.postMessage({ ...m, type: 'prism-live-built' }, location.origin); }
     // A WebGL frame (PIXFMT 2): the latest one is kept for paint(); one it never drew is let go.
     else if (m.type === 'frame') { glFrame?.close(); glFrame = m.bitmap; }
     else if (m.type === 'diag' && m.glframe !== undefined) ((window.PRISM_DIAG ??= {}).glframes ??= {})[m.glframe] = m;

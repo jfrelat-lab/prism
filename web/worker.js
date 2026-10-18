@@ -578,6 +578,19 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     if (bundle.about?.notEmitted?.length) log(`${bundle.about.notEmitted.length} functions were not emitted when it was built; they throw if called: ${bundle.about.notEmitted.slice(0, 6).join(" ")}`, "warn");
   } else log(`compiled in ${compileMs.toFixed(0)} ms: ${Object.keys(prog.F).length} functions, ` +
     `${(prog.src.length / 1024 / 1024).toFixed(2)} MB of JavaScript`);
+  /*
+   * Live C's program (its own sources, no tree): the editor's page shows the build and the emitted
+   * JavaScript in its own panes, and they are made here, inside its Output frame -- so they are sent
+   * out, the way the console worker sends them (web/live/worker.js 'built' and 'emitted').
+   */
+  if (ownSources && !bundle) {
+    post('live-built', {
+      ms: compileMs, units: units.length, lines: units.reduce((n, u) => n + u.source.split('\n').length, 0),
+      functions: Object.keys(prog.F).length, bytes: prog.src.length,
+      failures: prog.failures.map((f) => `${f.fn ? `${f.fn}: ` : ''}${f.message}`),
+      source: prog.src,
+    });
+  }
 
   /*
    * SYMBOLS THE BUILD NEVER RESOLVED, said at the start rather than discovered by crashing.
