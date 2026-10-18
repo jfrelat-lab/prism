@@ -12,6 +12,29 @@ No WebAssembly, no build step, no dependencies. The compiler runs in the page.
 playing in the tab, and [Live C](https://prism-compiler.pages.dev/web/live/): type C or C++ (console,
 GLUT, SDL, X11 or Win32) and run it, or load one of Rosetta Code's solutions.
 
+<table>
+<tr>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/doom.png" width="200" alt="DOOM (shareware), compiled by PRISM"></a><br><sub><b>DOOM (shareware)</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/monkey.png" width="200" alt="The Secret of Monkey Island (demo), compiled by PRISM"></a><br><sub><b>The Secret of Monkey Island (demo)</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/quake3.png" width="200" alt="Quake III Arena, compiled by PRISM"></a><br><sub><b>Quake III Arena</b><br>Linux · your copy</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/tuxracer.png" width="200" alt="Tux Racer, compiled by PRISM"></a><br><sub><b>Tux Racer</b><br>Linux · plays now</sub></td>
+</tr>
+<tr>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/bass.png" width="200" alt="Beneath a Steel Sky, compiled by PRISM"></a><br><sub><b>Beneath a Steel Sky</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/mame-dkong.png" width="200" alt="Donkey Kong, compiled by PRISM"></a><br><sub><b>Donkey Kong</b><br>DOS · your copy</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/cube.png" width="200" alt="Cube, compiled by PRISM"></a><br><sub><b>Cube</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/dott.png" width="200" alt="Day of the Tentacle (demo), compiled by PRISM"></a><br><sub><b>Day of the Tentacle (demo)</b><br>Linux · plays now</sub></td>
+</tr>
+<tr>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/sdlpop.png" width="200" alt="Prince of Persia (SDLPoP), compiled by PRISM"></a><br><sub><b>Prince of Persia (SDLPoP)</b><br>Linux · your copy</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/heretic.png" width="200" alt="Heretic (shareware), compiled by PRISM"></a><br><sub><b>Heretic (shareware)</b><br>DOS · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/chromium-bsu.png" width="200" alt="Chromium B.S.U., compiled by PRISM"></a><br><sub><b>Chromium B.S.U.</b><br>Linux · plays now</sub></td>
+<td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/hexen2.png" width="200" alt="Hexen II, compiled by PRISM"></a><br><sub><b>Hexen II</b><br>Windows · your copy</sub></td>
+</tr>
+</table>
+
+<sub>Every picture is a frame PRISM drew from the game's unmodified source; click to open the showcase.</sub>
+
 ```
  C / C++ / asm source ─▶ preprocessor ─▶ parser + sema ─▶ JavaScript source ─▶ the engine's own JIT ─▶ run
                          (gcc -E exact)   (i386 or 16-bit       (readable, one function
