@@ -14,6 +14,13 @@ GLUT, SDL, X11 or Win32) and run it, or load one of Rosetta Code's solutions.
 
 <table>
 <tr>
+<td align="center" width="50%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/media/quake3.gif" alt="Quake III Arena compiled by PRISM, bots on The Longest Yard, in a browser tab"></a><br><sub><b>Quake III Arena</b>, its 1.32 source compiled in the page, drawn through WebGL</sub></td>
+<td align="center" width="50%"><a href="https://prism-compiler.pages.dev/web/live/"><img src="https://prism-compiler.pages.dev/media/livec.gif" alt="Live C: an Xlib clock compiled and run in the page, its emitted JavaScript, a Rosetta Code solution loading"></a><br><sub><b>Live C</b>: an Xlib program compiled and run in the page, the JavaScript it became, Rosetta Code's solutions</sub></td>
+</tr>
+</table>
+
+<table>
+<tr>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/doom.png" width="200" alt="DOOM (shareware), compiled by PRISM"></a><br><sub><b>DOOM (shareware)</b><br>Linux · plays now</sub></td>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/monkey.png" width="200" alt="The Secret of Monkey Island (demo), compiled by PRISM"></a><br><sub><b>The Secret of Monkey Island (demo)</b><br>Linux · plays now</sub></td>
 <td align="center" width="25%"><a href="https://prism-compiler.pages.dev/"><img src="https://prism-compiler.pages.dev/thumbs/quake3.png" width="200" alt="Quake III Arena, compiled by PRISM"></a><br><sub><b>Quake III Arena</b><br>Linux · your copy</sub></td>
