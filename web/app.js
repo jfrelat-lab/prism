@@ -770,14 +770,25 @@ const dataCache = new Map();               // root + under -> { name: Uint8Array
  * One data root, fetched once. Progress goes to the machine's own screen, because that is where you
  * are looking: a 50 MB pak takes a moment and a page that simply sits there looks broken.
  */
+/*
+ * Whether a data root is LISTED here. Not just `r.ok`: a static host with no 404 page answers a
+ * missing file with its index page and a 200 -- Cloudflare Pages does, treating the site as a
+ * single-page app -- and that reached r.json() as "Unexpected token '<'", on every game whose files
+ * the visitor was meant to bring. A listing is JSON; anything else is no listing.
+ */
+async function fetchListing(root) {
+  const r = await fetch(api.dataList(root));
+  return r.ok && /json/.test(r.headers.get('content-type') ?? '') ? r : null;
+}
+
 async function loadData(root, say, under = '', hint = '', marker = '', pick = {}) {
   // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
   const key = `${root}\0${under}\0${pick.only ?? ''}`;
   if (dataCache.has(key)) return dataCache.get(key);
-  const r = await fetch(api.dataList(root));
+  const r = await fetchListing(root);
   // A static export ships some programs' builds without their data: the visitor brings it.
-  if (!r.ok && site) { const own = await pickData(root, under, hint, say, marker, pick); dataCache.set(key, own); return own; }
-  if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
+  if (!r && site) { const own = await pickData(root, under, hint, say, marker, pick); dataCache.set(key, own); return own; }
+  if (!r) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const listing = await r.json();
   const files = listing.files.filter((f) => f.startsWith(under));
   // A static export ships a file over its host's size limit in parts (tools/site.mjs): joined here.
@@ -979,8 +990,8 @@ const escapeHtml = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
  */
 let lazyNames = [];
 async function listData(root, under = '') {
-  const r = await fetch(api.dataList(root));
-  if (!r.ok) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
+  const r = await fetchListing(root);
+  if (!r) throw new Error(`no data directory '${root}' — start serve.mjs with --games=<dir>`);
   const { files } = await r.json();
   const names = files.filter((f) => f.startsWith(under));
   if (!names.length) throw new Error(`the data directory '${root}/${under}' is empty`);
@@ -1378,7 +1389,7 @@ async function startRun(typedAs = null) {
   if (program.needsData?.dir) {
     const busy = worker;                              // nothing may have started in the meantime
     try {
-      const lazyHere = program.needsData.lazy && !(site && !(await fetch(api.dataList(program.needsData.dir))).ok);
+      const lazyHere = program.needsData.lazy && !(site && !(await fetchListing(program.needsData.dir)));
       if (lazyHere) lazyNames = await listData(program.needsData.dir, program.needsData.under ?? '');
       else if (program.needsData.lazy) {
         /*

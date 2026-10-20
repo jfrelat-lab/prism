@@ -65,6 +65,14 @@ if (existsSync(join(ROOT, 'dist/bench-compare/results.json'))) copyFileSync(join
 // The licence texts THIRD-PARTY.md points to: the LGPL routines ship in src/, so their licence does too.
 cpSync(join(ROOT, 'LICENSES'), join(OUT, 'LICENSES'), { recursive: true });
 write('_headers', '/*\n  Cross-Origin-Opener-Policy: same-origin\n  Cross-Origin-Embedder-Policy: require-corp\n  Cross-Origin-Resource-Policy: same-origin\n');
+/*
+ * A real 404. Without a 404.html, Cloudflare Pages takes the site for a single-page app and answers
+ * every missing path with index.html and a 200: the page then read a game's absent data listing as
+ * HTML ("Unexpected token '<'") instead of asking the visitor for their files.
+ */
+write('404.html', '<!doctype html>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+  '<title>Not found — PRISM</title>\n<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0e1116;color:#e6edf3;' +
+  'font:16px/1.5 system-ui,sans-serif}a{color:#6cb6ff}</style>\n<p>Nothing here. <a href="/">Back to PRISM</a>.</p>\n');
 
 /*
  * TECHNOLOGY TAGS, read off the target rather than written by hand: its languages (the units' own
