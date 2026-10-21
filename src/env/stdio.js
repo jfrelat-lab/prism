@@ -50,6 +50,16 @@ export function installStdio(M, {
 } = {}) {
   const u8 = () => M.u8;
   const enc = new TextEncoder();
+  /*
+   * THE CURRENT DIRECTORY, as a key prefix of the store ('' is its root). chdir was a no-op and getcwd
+   * said "/", so a relative name was looked up from the root -- and found by the "ends with" match
+   * below in whichever directory came first. Tux Racer chdir()s into a course and opens elev.rgb and
+   * terrain.rgb: every course has both, the store's order is the order its files ARRIVED in, and the
+   * game read two different courses' bitmaps ("terrain bitmap must have same dimensions as
+   * elevation bitmap") or, worse, a wrong course whole. Its course list (Tcl's `cd courses; glob *`)
+   * listed the root, so no preview was ever bound.
+   */
+  let cwd = '';
   // errno is the program's own global (a tentative definition in errno.h): set it where it lives.
   const setErrno = (v) => { const e = M.mod.symbols.get('errno'); if (e) M.mod.dv.setInt32(e.addr, v, true); };
 
@@ -81,6 +91,8 @@ export function installStdio(M, {
    */
   function norm(name) {
     let p = String(name).replace(/\\/g, '/').toLowerCase();
+    // Relative to the current directory, unless absolute or a DOS drive path.
+    if (cwd && !p.startsWith('/') && !/^[a-z]:/.test(p)) p = `${cwd}/${p}`;
     while (p.startsWith('./')) p = p.slice(2);
     /*
      * ...and a leading SLASH, for the same reason. This store is one flat relative namespace -- the
@@ -97,6 +109,15 @@ export function installStdio(M, {
     while (p.startsWith('/')) p = p.slice(1);
     // `.` alone is the directory every key is relative to: opendir(".") lists the whole store.
     if (p === '.') return '';
+    // `.` and `..` components resolved, for a name built from the current directory ("courses/..").
+    if (/(^|\/)\.\.?(\/|$)/.test(p)) {
+      const out = [];
+      for (const part of p.split('/')) {
+        if (part === '.' || part === '') continue;
+        if (part === '..') out.pop(); else out.push(part);
+      }
+      return out.join('/');
+    }
     return p.replace(/\/\.\//g, '/');
   }
 
@@ -141,6 +162,21 @@ export function installStdio(M, {
   // a POSIX program may reasonably assume it exists, and an absent one is a stranger answer than a
   // short one.
   const environment = { HOME: '/', USER: 'prism', TMPDIR: '/', PATH: '/bin:/usr/bin', ...env };
+  let passwdEntry = 0;
+  const passwd = () => {
+    if (passwdEntry) return passwdEntry;
+    const str = (t) => M.mod.intern([...enc.encode(t), 0]);
+    const p = M.rt.malloc(28);
+    const dv = M.mod.dv;
+    dv.setUint32(p, str(environment.USER), true);        // pw_name
+    dv.setUint32(p + 4, str('x'), true);                  // pw_passwd
+    dv.setUint32(p + 8, 0, true);                         // pw_uid
+    dv.setUint32(p + 12, 0, true);                        // pw_gid
+    dv.setUint32(p + 16, str(environment.USER), true);   // pw_gecos
+    dv.setUint32(p + 20, str(environment.HOME), true);   // pw_dir
+    dv.setUint32(p + 24, str('/bin/sh'), true);           // pw_shell
+    return (passwdEntry = p);
+  };
   const interned = new Map();
 
   const small = (M.abi?.ptr ?? 4) === 2;
@@ -783,9 +819,12 @@ export function installStdio(M, {
    * directory exists exactly when some file's path runs through it. SDLPoP asks stat() whether
    * data/KID is a folder before reading the sprites inside it.
    */
-  const isDirectory = (name) => {
-    const prefix = norm(name).replace(/\/+$/, '');
+  const isDirectory = (name) => isDirKey(norm(name));
+  // The same question for a path already normalised (a store key), which must not meet norm() again.
+  const isDirKey = (key) => {
+    const prefix = key.replace(/\/+$/, '');
     if (!prefix || prefix === '.') return store.size > 0;
+    if (directories.has(prefix)) return true;
     for (const k of store.keys()) if (k.startsWith(`${prefix}/`)) return true;
     return false;
   };
@@ -810,11 +849,14 @@ export function installStdio(M, {
      */
     access: (namePtr) => {
       const name = M.mod.cstr(namePtr);
-      return find(name, { guess: false }) === null && !isDirectory(name) ? -1 : 0;
+      // ENOENT on a miss, as stat below: callers tell "absent" from "unreadable" by errno.
+      return find(name, { guess: false }) === null && !isDirectory(name) ? (setErrno(2), -1) : 0;
     },
     getcwd: (buf, size) => {
-      if ((size | 0) < 2) return 0;
-      M.u8[buf] = 47; M.u8[buf + 1] = 0;             // "/"
+      const bytes = enc.encode(`/${cwd}`);
+      if ((size | 0) < bytes.length + 1) return 0;
+      M.u8.set(bytes, buf);
+      M.u8[buf + bytes.length] = 0;
       return buf;
     },
     stat: (namePtr, st) => {
@@ -824,7 +866,11 @@ export function installStdio(M, {
       if (exact !== null) return fillStat(st, store.get(exact));
       if (isDirectory(name)) return fillStat(st, null, true);
       const k = find(name);
-      return k === null ? -1 : fillStat(st, store.get(k));
+      /*
+       * ENOENT, not whatever errno held: Tux Racer's file_exists() takes any other errno for a real
+       * failure, and reported its first-run "no ~/.tuxracer/options yet" as "couldn't stat".
+       */
+      return k === null ? (setErrno(2), -1) : fillStat(st, store.get(k));
     },
     lstat: (namePtr, st) => api.stat(namePtr, st),
     fstat: (fd, st) => { const h = fileOf(fd); return h ? fillStat(st, h.bytes) : -1; },
@@ -896,7 +942,17 @@ export function installStdio(M, {
     _mkdir: (p) => { directories.add(norm(M.mod.cstr(p))); return 0; },
     _rmdir: () => 0,
     rmdir: () => 0,
-    chdir: () => 0,
+    /*
+     * Into a directory the store has, which then resolves relative names. A directory it does not
+     * have keeps the earlier answer -- success, nothing changed -- because programs here chdir to
+     * install paths of their own machine (a DOS game to the C:\ it was installed in) and carry on;
+     * refusing would be truer and would stop them.
+     */
+    chdir: (pathPtr) => {
+      const key = norm(M.mod.cstr(pathPtr)).replace(/\/+$/, '');
+      if (!key || isDirKey(key)) cwd = key;
+      return 0;
+    },
     readlink: () => -1,
     ioctl: () => -1,
     /*
@@ -1020,9 +1076,15 @@ export function installStdio(M, {
     // No terminal: isatty() says 0, and these fail the way they do on a descriptor that is not one.
     tcgetattr: () => (setErrno(25), -1),
     tcsetattr: () => (setErrno(25), -1),
-    // No user database.
-    getpwuid: () => 0,
-    getpwnam: () => 0,
+    /*
+     * ONE USER, the one the environment already names: $USER with $HOME as its home, uid and gid 0
+     * as getuid says. "No user database" answered NULL, and a program that finds its home this way
+     * rather than through $HOME -- Tux Racer's game_config.c, for ~/.tuxracer -- printed
+     * "getpwuid: No such file or directory" and went without its configuration.
+     * struct passwd is glibc's i386 layout, 7 fields of 4 bytes (see pwd.h in headers.js).
+     */
+    getpwuid: (uid) => ((uid | 0) === 0 ? passwd() : 0),
+    getpwnam: (namePtr) => (namePtr && M.mod.cstr(namePtr) === environment.USER ? passwd() : 0),
     // ctime is asctime of localtime (C 7.23.3.2).
     ctime: (tp) => M.rt.asctime(api.localtime(tp)),
     /*
