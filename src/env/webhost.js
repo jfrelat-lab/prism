@@ -139,6 +139,8 @@ export const SLOT = {
   MOUSE_ABS: 40,   // host → guest: 1 once MOUSE_X/MOUSE_Y are being written
   MOUSE_X: 41,
   MOUSE_Y: 42,
+  /* host → guest, a test only: 1 asks the GL host to lose its WebGL context (gl.js rebuilds it). */
+  GL_LOSE: 43,
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };

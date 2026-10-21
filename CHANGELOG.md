@@ -15,6 +15,9 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
   prints *getpwuid: No such file or directory*, and a first run's missing settings file is no longer
   reported as an error. It can also create `~/.tuxracer` and write its settings and saved game there
   for the session (they were refused: *couldn't open ... for writing*).
+- **A lost WebGL context no longer ends the game.** When the GPU took the context away (a driver
+  reset, memory pressure), a 3D program stopped on a black screen while its sound played on; the page
+  now builds a new context and the next frame draws again (seen in Tux Racer, mid-race).
 - **Data files that fail to download are retried**, then reported by name, instead of reaching the
   game as an error page.
 - **Live C opens an example from a link**: `?example=prism/pointers.c&run=1&tab=emitted` loads it,

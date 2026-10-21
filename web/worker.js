@@ -216,10 +216,14 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
    * rasteriser's frame is in memory anyway, and takes the old route: B,G,R,A into a buffer in guest
    * memory, top row first.
    */
+  // The GPU took the WebGL context away; gl.js has built a new one, and the next frame draws again.
+  const glLost = () => log('WebGL context lost: a new one was created and the picture goes on', 'warn');
   const glPublisher = (name, prog) => {
     let out = 0, outW = 0, outH = 0, mode = 0, since = performance.now(), count = 0;
     return (gl) => {
       count++;
+      // A test of that recovery, asked by the page through the control block (PRISM.loseGL()).
+      if (Atomics.exchange(ctrl, SLOT.GL_LOSE, 0)) gl.loseContext?.();
       const now = performance.now();
       if (now - since >= 5000) { log(`${count} frames in ${((now - since) / 1000).toFixed(1)} s = ${(count * 1000 / (now - since)).toFixed(1)} fps (${gl.backend})`); since = now; count = 0; }
       const { width: w, height: h } = gl.state, bitmap = gl.backend === 'webgl';
@@ -749,7 +753,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     installPortMachine(prog.M);
     installSvgalib(prog.M, { keyboard: { next: () => keyboard.nextEvent() }, mouse });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
-    installGL(prog.M, { backend });
+    installGL(prog.M, { backend, onLost: glLost });
     const publish = glPublisher('fxMesa', prog);
     installFxMesa(prog.M, {
       onSwap: (_n, gl) => {
@@ -777,7 +781,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       mouse,
     });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
-    installGL(prog.M, { backend });
+    installGL(prog.M, { backend, onLost: glLost });
     const publish = glPublisher('GLX', prog);
     installGlx(prog.M, {
       onSwap: (_n, gl) => {
@@ -1039,7 +1043,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
     if ((program.env ?? []).includes('wsock')) installWsock(prog.M);
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
-    installGL(prog.M, { backend });
+    installGL(prog.M, { backend, onLost: glLost });
     const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
     const key = prog.F.prism_win32_key, mouseIn = prog.F.prism_win32_mouse, activate = prog.F.prism_win32_activate;
     const win = { x: sym('prism_win32_x'), y: sym('prism_win32_y'), w: sym('prism_win32_w'), h: sym('prism_win32_h'), title: sym('prism_win32_title') };
@@ -1754,7 +1758,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     const check = options.glcheck ? options.glcheck.split(',').map(Number) : null;
     const env = buildEnv(prog.M, program.env ?? [], {
       stdio: { files, readChar: () => keyboard.read() },
-      gl: { backend },
+      gl: { backend, onLost: glLost },
       glut: {
         now: check ? null : () => performance.now() - t0,
         frames: check,
@@ -1785,7 +1789,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     const env = buildEnv(prog.M, program.env ?? [], {
       // exactPaths: no basename guess, for data laid out as a real filesystem (see src/env/stdio.js).
       stdio: { files, readChar: () => keyboard.read(), exactPaths: !!program.needsData?.exactPaths },
-      gl: { backend },
+      gl: { backend, onLost: glLost },
       sdl12: {
         onPalette: (palette) => { pal.set(palette); Atomics.add(ctrl, SLOT.PALGEN, 1); },
         /*

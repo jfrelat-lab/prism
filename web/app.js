@@ -1564,7 +1564,9 @@ async function startRun(typedAs = null) {
   // `data` is here because "the program cannot find its file" and "the page never loaded it" look
   // identical from the outside, and that is exactly the question this seam exists to answer.
   window.PRISM = { views, program, argv, get guest() { return guest; }, paint, keyboard, mouse, SLOT, STATE,
-                   get data() { return dataFiles; } };
+                   get data() { return dataFiles; },
+                   // A test of the GL host's recovery: the GPU taking the WebGL context away.
+                   loseGL: () => Atomics.store(views.ctrl, SLOT.GL_LOSE, 1) };
 
   $('run').disabled = true; $('stopBtn').disabled = false;
   // The screen belongs to the program from here: the machine's own chooser gives way to the canvas,

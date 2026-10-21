@@ -118,7 +118,7 @@ function baseFormat(internal) {
  * uses texture objects on "1.1" and display lists otherwise -- so a gate can ask for either, as
  * MESA_GL_VERSION_OVERRIDE does on the reference side.
  */
-export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM' } = {}) {
+export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM', onLost = null } = {}) {
   // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
   // exports (src/env/dl.js), as opengl32.dll does for GetProcAddress (src/env/opengl32.c).
   M.glNames = new Set([...GL_H.matchAll(/\b(gl[A-Z]\w*)\s*\(/g)].map((m) => m[1]));
@@ -178,6 +178,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     s.viewport = [0, 0, w, h];
     gpuCache = null;
     if (backend === 'webgl') { webgl = makeWebGL(w, h, s.stencilBits > 0); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) t.dirty = true; }
+  }
+  /*
+   * A LOST CONTEXT, rebuilt the way a resize builds one: everything the GPU held is a copy of state
+   * kept here (the textures are re-sent from their pixels, marked dirty), so a new context draws the
+   * next frame as the old one would have. Without this, the GPU dropping the context left the window
+   * black for good while the program -- its sound, its clock -- went on (Tux Racer, mid-race).
+   */
+  function recoverIfLost() {
+    if (!webgl?.lost) return;
+    webgl = makeWebGL(s.width, s.height, s.stencilBits > 0);
+    webgl.viewport(...s.viewport);
+    for (const t of s.textures.values()) t.dirty = true;
+    gpuCache = null;
+    onLost?.();
   }
 
   // --- per-vertex work
@@ -1101,7 +1115,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     onFrame,
     get backend() { return webgl ? 'webgl' : 'soft'; },
     /** The WebGL frame as an ImageBitmap (makeWebGL's present); null on the software rasteriser. */
-    present() { return webgl ? webgl.present() : null; },
+    present() { recoverIfLost(); return webgl ? webgl.present() : null; },
+    /** For a test of the recovery: lose the context now (the next frame rebuilds it). */
+    loseContext() { webgl?.lose(); },
     /** Stencil bits for the next resize: the window system's visual (glut.js on GLUT_STENCIL). */
     set stencilBits(n) { s.stencilBits = n; },
   };
@@ -1124,6 +1140,10 @@ function makeWebGL(w, h, stencilBuffer = false) {
   // alpha the program's fragments left (gears' lit faces are below 1) showed the page through them.
   const g = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: false, preserveDrawingBuffer: true });
   if (!g) throw new Error('gl: this browser has no WebGL2 for an OffscreenCanvas');
+  // The GPU can take the context away (a driver reset, memory pressure): noticed here, rebuilt by
+  // installGL at the next frame. preventDefault is what lets a context be restored at all.
+  let lost = false;
+  canvas.addEventListener?.('webglcontextlost', (e) => { e.preventDefault(); lost = true; });   // ?. for gate-webgl-stream's stand-in
   /*
    * The program draws into a framebuffer of its own, not the canvas's: WebGL2 cannot read a depth
    * buffer back, and Cube reads the one under its crosshair every frame. So the depth (and stencil)
@@ -1372,6 +1392,9 @@ void main() {
     },
     /** The framebuffer, bottom row first, as GL's own is. */
     read() { flush(); const px = new Uint8Array(w * h * 4); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, px); return px; },
+    get lost() { return lost || !!g.isContextLost?.(); },
+    /** For a test: take the context away, as the GPU would (WEBGL_lose_context). */
+    lose() { g.getExtension('WEBGL_lose_context')?.loseContext(); lost = true; },
   };
 }
 
