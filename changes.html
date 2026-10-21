@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What's new — PRISM</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="What changed on PRISM's showcase and in Live C, newest first.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230e1116'/><path d='M8 2 L14 13 H2 Z' fill='none' stroke='%236cb6ff' stroke-width='1.6'/></svg>">
+<!--
+  The release notes, read from CHANGELOG.md beside this page: one file, the one GitHub shows too.
+  The converter below knows only what that file uses -- headings, list items (nested by two spaces),
+  paragraphs, **bold**, *italic*, `code` and [links](url) -- and escapes everything else.
+-->
+<style>
+  :root {
+    --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594;
+    --head: #edf1f6; --accent: #6cb6ff;
+    --spectrum: linear-gradient(90deg, #ff6b6b, #ffb35c, #ffe066, #7ee2a8, #6cb6ff, #9b8cff, #d38cff);
+  }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+    --bg: #f5f7fa; --panel: #ffffff; --line: #dde2ea; --ink: #2b3440; --dim: #5f6b7a; --head: #0f1720; --accent: #1f6fd1;
+  } }
+  :root[data-theme="dark"] { --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594; --head: #edf1f6; --accent: #6cb6ff; }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: .9em; padding: 1px 5px;
+         border: 1px solid var(--line); border-radius: 4px; background: var(--panel); overflow-wrap: anywhere; }
+  b, strong { color: var(--head); font-weight: 600; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 12px 24px;
+           background: var(--panel); border-bottom: 1px solid var(--line); position: relative; }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--spectrum); opacity: .85; }
+  header .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; }
+  header .logo span { color: var(--accent); }
+  header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
+  header nav a[aria-current] { color: var(--head); }
+  main { max-width: 760px; margin: 0 auto; padding: 0 24px 56px; }
+  h1 { margin: 40px 0 10px; font-size: clamp(26px, 3.6vw, 36px); line-height: 1.15; color: var(--head); text-wrap: balance; }
+  h2 { margin: 40px 0 8px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 19px; color: var(--head);
+       font-variant-numeric: tabular-nums; text-wrap: balance; }
+  h3 { margin: 22px 0 6px; font-size: 16px; color: var(--head); }
+  #notes > p:first-child { color: var(--dim); }
+  ul { margin: 8px 0; padding-left: 22px; } li { margin: 6px 0; } li ul { margin: 4px 0; }
+  .err { color: var(--dim); }
+  footer { border-top: 1px solid var(--line); padding: 18px 24px; color: var(--dim); font-size: 13px; text-align: center; }
+  @media (max-width: 560px) { header { padding: 10px 16px; } header nav { margin-left: 0; } main { padding: 0 16px 40px; } }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="./"><span>◢</span> PRISM</a>
+  <nav>
+    <a href="./#play" data-site hidden>Play</a>
+    <a href="web/live/">Live C</a>
+    <a href="compare.html">Compared</a>
+    <a href="changes.html" aria-current="page">What's new</a>
+    <a href="https://github.com/jfrelat-lab/prism/tree/main/docs">Documentation</a>
+    <a href="https://github.com/jfrelat-lab/prism">Source</a>
+  </nav>
+</header>
+
+<main>
+  <div id="notes"><p class="err">Loading the release notes…</p></div>
+</main>
+
+<footer>PRISM is free software under the <a href="https://github.com/jfrelat-lab/prism/blob/main/LICENSE">MIT licence</a>.
+  These notes are <a href="https://github.com/jfrelat-lab/prism/blob/main/CHANGELOG.md">CHANGELOG.md</a> in the repository.</footer>
+
+<script>
+  fetch('web/site.json', { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).then((site) => {
+    if (site) for (const el of document.querySelectorAll('[data-site]')) el.hidden = false;
+  }).catch(() => {});
+
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // Inline marks, on text already escaped: code first, so nothing inside it is read as a mark.
+  function inline(text) {
+    const codes = [];
+    let s = esc(text).replace(/`([^`]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, t, u) => `<a href="${u}">${t}</a>`)
+         .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+         .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?=[^*\w]|$)/g, '$1<i>$2</i>');
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[+i]}</code>`);
+  }
+  // Blocks: headings, paragraphs, and list items whose continuation lines and nested items are indented.
+  function render(md) {
+    const out = [], lines = md.replace(/\r/g, '').split('\n');
+    let para = [], stack = [];             // open lists, by indentation
+    const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; } };
+    const closeTo = (depth) => { while (stack.length > depth) { out.push('</li></ul>'); stack.pop(); } };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const h = /^(#{1,3})\s+(.*)$/.exec(line);
+      const li = /^(\s*)-\s+(.*)$/.exec(line);
+      if (h) { flushPara(); closeTo(0); const n = h[1].length; out.push(`<h${n}>${inline(h[2])}</h${n}>`); continue; }
+      if (li) {
+        flushPara();
+        const depth = li[1].length / 2 + 1;
+        let text = li[2];
+        while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1]) && !/^\s*-\s/.test(lines[i + 1])) text += ' ' + lines[++i].trim();
+        if (depth > stack.length) { out.push('<ul><li>'); stack.push(depth); }
+        else { closeTo(depth); out.push('</li><li>'); }
+        out.push(inline(text));
+        continue;
+      }
+      if (!line.trim()) { flushPara(); if (!/^\s*-\s/.test(lines[i + 1] ?? '')) closeTo(0); continue; }
+      closeTo(0);
+      para.push(line.trim());
+    }
+    flushPara(); closeTo(0);
+    return out.join('\n');
+  }
+  fetch('CHANGELOG.md', { cache: 'no-cache' }).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.text();
+  }).then((md) => { document.getElementById('notes').innerHTML = render(md); })
+    .catch((e) => {
+      document.getElementById('notes').innerHTML =
+        `<p class="err">The release notes could not be loaded (${esc(e.message)}). They are also on ` +
+        `<a href="https://github.com/jfrelat-lab/prism/blob/main/CHANGELOG.md">GitHub</a>.</p>`;
+    });
+</script>
+</body>
+</html>

@@ -239,6 +239,7 @@ Reference documents describe the present state:
 - [TESTING.md](docs/TESTING.md): the gates, the oracles, and the measured facts behind the ABIs.
 - [ROADMAP.md](docs/ROADMAP.md): what is open, one line per task.
 - [SITE.md](docs/SITE.md): the static showcase, and hosting PRISM's programs yourself.
+- [CHANGELOG.md](CHANGELOG.md): what changed on the live site, newest first (also [on the site](https://prism-compiler.pages.dev/changes.html)).
 
 The record is [LOG.md](docs/LOG.md): the long form of every roadmap row up to 2026-09-27, with
 the measurements, dead ends and defects found. Later work is recorded in commit messages.

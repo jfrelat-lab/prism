@@ -59,7 +59,7 @@ mkdirSync(OUT, { recursive: true });
 
 // The page, its worker and everything they import: the shell runs the same files as under serve.mjs.
 for (const d of ['web', 'src', 'assets']) cpSync(join(ROOT, d), join(OUT, d), { recursive: true });
-for (const f of ['index.html', 'compare.html', 'LICENSE', 'THIRD-PARTY.md']) copyFileSync(join(ROOT, f), join(OUT, f));
+for (const f of ['index.html', 'compare.html', 'changes.html', 'CHANGELOG.md', 'LICENSE', 'THIRD-PARTY.md']) copyFileSync(join(ROOT, f), join(OUT, f));
 // The comparison page's measurements (tools/bench-compare.mjs), when they have been taken here.
 if (existsSync(join(ROOT, 'dist/bench-compare/results.json'))) copyFileSync(join(ROOT, 'dist/bench-compare/results.json'), join(OUT, 'web/bench.json'));
 // The licence texts THIRD-PARTY.md points to: the LGPL routines ship in src/, so their licence does too.
