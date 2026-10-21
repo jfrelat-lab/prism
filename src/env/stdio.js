@@ -1249,9 +1249,13 @@ export function installStdio(M, {
         if (!rest) continue;
         names.add(rest.split('/')[0]);
       }
-      // A directory with no entries is still a directory IF something lives under it; a path that
-      // matches nothing at all is not, and opendir must say so.
-      if (!names.size) return 0;
+      /*
+       * A directory with no entries is still a directory when the program made it (mkdir), and
+       * opens empty. A path that matches nothing is not one, and says so with ENOENT: Tux Racer's
+       * dir_exists() reads errno after a NULL, and the stale value it found made it skip the mkdir
+       * of ~/.tuxracer -- then every write into it failed ("couldn't open ... for writing").
+       */
+      if (!names.size && !directories.has(want)) { setErrno(2); return 0; }
       const h = dirs.length;
       dirs.push({ names: [...names].sort(), i: 0 });
       return DIR_BASE + h;

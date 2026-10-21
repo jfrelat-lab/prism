@@ -13,7 +13,8 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
   bitmap*. Programs now have a real current directory. The course previews show too.
 - **Tux Racer finds its home directory** (`getpwuid` answers with the page's user), so it no longer
   prints *getpwuid: No such file or directory*, and a first run's missing settings file is no longer
-  reported as an error.
+  reported as an error. It can also create `~/.tuxracer` and write its settings and saved game there
+  for the session (they were refused: *couldn't open ... for writing*).
 - **Data files that fail to download are retried**, then reported by name, instead of reaching the
   game as an error page.
 - **Live C opens an example from a link**: `?example=prism/pointers.c&run=1&tab=emitted` loads it,
