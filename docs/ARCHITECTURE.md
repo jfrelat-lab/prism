@@ -138,8 +138,10 @@ host/      bridge to MIRAGE's devices (vga, bios, dos, vfs, keyboard)
 
 ## The six hard parts, and the position taken on each
 
-**1. Memory model — the whole of the performance story.** One `ArrayBuffer`, typed-array views,
-pointers are 32-bit offsets. But **not everything lives in the heap**: a scalar local whose address
+**1. Memory model — the whole of the performance story.** One `ArrayBuffer` (a
+`SharedArrayBuffer` in the page, so it can watch the program's memory), pointers are 32-bit byte
+offsets into it, and every load and store goes through one little-endian `DataView`
+(`D.getInt32(p, 1)`), with a `Uint8Array` beside it for bulk copies. But **not everything lives in the heap**: a scalar local whose address
 is never taken lives in a JS `var` and never touches memory. That single distinction is the
 difference between ~3× and ~30× off native. A shadow stack serves only what genuinely needs one:
 `alloca`, address-taken locals, varargs, `setjmp`, structs passed by value.
@@ -150,13 +152,18 @@ sprites. Gated from day one — see [TESTING.md](TESTING.md).
 
 **3. Function pointers.** A table mapping stable integer addresses to JS functions, so comparison,
 casting to `int` and storage in a struct all work. Doom's `void (*think)()` and MAME's opcode tables
-depend on it. The JIT lever is an inline cache at a hot indirect call site — precisely what MIRAGE
-cannot do from x86.
+depend on it. A function's address is a tagged index into that table (`0x7000_0000 | index`), so it
+can never be mistaken for a data pointer. A lever for later: an inline cache at a hot indirect call
+site — precisely what MIRAGE cannot do from x86.
 
-**4. Type punning, unaligned access, `volatile`.** `*(int*)p` on a pointer not proven aligned
-becomes four byte loads; proven aligned, it becomes one `HEAP32[p>>2]`. The proof comes from `opt/`,
-or failing that from hot specialization behind a guard. Writes into `0xA0000-0xBFFFF` route to
-MIRAGE's VGA device.
+**4. Type punning, unaligned access, `volatile`.** Because every access is a `DataView` call at a
+byte offset, `*(int*)p` is one `D.getInt32(p, 1)` whatever `p`'s alignment, and reading a `float`'s
+bits through a union is the same bytes read with another getter: no special case either way. Not yet
+done: proving a pointer aligned (from the IR's optimiser, P13.2, which does not exist yet) so that
+the access could become a typed-array index, `HEAP32[p >> 2]`. A platform that maps devices into
+memory -- DOS's `0xA0000` window as a planar VGA's four planes, a VESA bank -- compiles with
+**paged** memory (src/env/memmap.js): every access then goes through a one-line address translation,
+`D.setUint8(xw(a), v)`, and a target that does not ask pays nothing.
 
 **5. Bit-exact `float`.** `Math.fround` on every `float` store and operation — Quake's float bit
 tricks depend on it. `double` is native. **`long long` is a `BigInt`, not a pair of i32s** — the plan
