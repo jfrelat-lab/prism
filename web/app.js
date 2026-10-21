@@ -781,6 +781,25 @@ async function fetchListing(root) {
   return r.ok && /json/.test(r.headers.get('content-type') ?? '') ? r : null;
 }
 
+/*
+ * One data file, or an error naming it. A response that is not a 200 used to be read as the file
+ * anyway: a host's error page, or a request lost among the 151 Tux Racer starts in parallel, became
+ * the game's terrain.rgb, and the game failed far from the cause ("terrain bitmap must have same
+ * dimensions as elevation bitmap", its header read from garbage). Retried twice, then refused.
+ */
+async function fetchDataFile(url, name) {
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) return new Uint8Array(await r.arrayBuffer());
+      last = `HTTP ${r.status}`;
+    } catch (e) { last = e.message; }
+    await new Promise((res) => setTimeout(res, 300 * (attempt + 1)));
+  }
+  throw new Error(`could not load the data file ${name} (${last}) -- reload the page to try again`);
+}
+
 async function loadData(root, say, under = '', hint = '', marker = '', pick = {}) {
   // `under`: only that part of the root -- scummvm-demos/ holds eight demos, one of them 12 MB.
   const key = `${root}\0${under}\0${pick.only ?? ''}`;
@@ -802,14 +821,14 @@ async function loadData(root, say, under = '', hint = '', marker = '', pick = {}
     // for another's when two ROM sets share a filename.
     if (chunks[f]) {
       const parts = await Promise.all(Array.from({ length: chunks[f] }, async (_, i) =>
-        new Uint8Array(await (await fetch(api.dataFile(root, `${f}.part${i}`))).arrayBuffer())));
+        fetchDataFile(api.dataFile(root, `${f}.part${i}`), `${f} (part ${i + 1})`)));
       const whole = new Uint8Array(parts.reduce((t, p) => t + p.length, 0));
       let at = 0;
       for (const p of parts) { whole.set(p, at); at += p.length; }
       out[f] = whole;
       return;
     }
-    out[f] = new Uint8Array(await (await fetch(api.dataFile(root, f))).arrayBuffer());
+    out[f] = await fetchDataFile(api.dataFile(root, f), f);
   }));
   dataCache.set(key, out);
   return out;
