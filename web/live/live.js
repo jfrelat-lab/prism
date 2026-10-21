@@ -921,7 +921,7 @@ for (const [name, src] of Object.entries(EXAMPLES)) {
  * one. The source is not here: choosing one fetches it from rosettacode.org, at the measured revision.
  */
 let rosetta = [];
-fetch(new URL('./rosetta.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((d) => {
+const rosettaReady = fetch(new URL('./rosetta.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((d) => {
   if (!d?.entries?.length) return;
   rosetta = d.entries;
   const count = rosetta.reduce((m, e) => m.set(e.task, (m.get(e.task) ?? 0) + 1), new Map());
@@ -1130,3 +1130,24 @@ $('pickName').textContent = (files.length === 1 && Object.keys(EXAMPLES).find((k
   current?.label || 'choose...';
 renderTabs();
 showFile();
+
+/*
+ * A LINK TO AN EXAMPLE: ?example=prism/pointers.c, or a Rosetta Code solution by its picker label
+ * (?example=rosetta/Mandelbrot set (ASCII)); &run=1 runs it, &tab=emitted|build|output shows that
+ * pane. It is the picker's own path, so files of your own are asked about before being replaced. The
+ * query is then dropped from the address bar: a reload keeps what you have since typed, as without it.
+ */
+(async () => {
+  const q = new URLSearchParams(location.search);
+  const want = q.get('example');
+  if (!want) return;
+  if (want.startsWith('rosetta/')) await rosettaReady;
+  const it = items.find((x) => x.label === want || x.value === want);
+  if (!it) { say(`no example named "${want}" -- the picker lists them\n`, 'err'); showTab('tabBuild'); return; }
+  await loadExample(it.value, it.label);
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (current?.value !== it.value) return;          // declined, or it could not be loaded
+  const tab = { emitted: 'tabEmitted', build: 'tabBuild', output: 'tabOut' }[q.get('tab')];
+  if (q.get('run') === '1') $('run').click();
+  if (tab) showTab(tab);
+})();
