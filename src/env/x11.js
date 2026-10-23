@@ -361,7 +361,8 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * peeks after a KeyRelease to see whether a KeyPress of the same key follows (auto-repeat).
      */
     XPeekEvent: (dpy, ev) => {
-      if (!peeked) { peeked = new Uint8Array(96); const tmp = M.rt.calloc(1, 96); M.rt.XNextEvent(dpy, tmp); peeked.set(M.u8.subarray(tmp, tmp + 96)); M.rt.free(tmp); }
+      // Kept only once taken: XNextEvent hands back a kept event first, so it must not see one yet.
+      if (!peeked) { const tmp = M.rt.calloc(1, 96); M.rt.XNextEvent(dpy, tmp); peeked = M.u8.slice(tmp, tmp + 96); M.rt.free(tmp); }
       M.u8.set(peeked, ev);
       return 0;
     },
