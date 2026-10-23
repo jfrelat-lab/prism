@@ -23,15 +23,16 @@ export function repoOf(href) {
 
 const BOOK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.71 1.71.75.75 0 0 1-1.07 1.05A2.5 2.5 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.71A2.5 2.5 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.09a.25.25 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/></svg>';
 
-function repoCard(r, role) {
+function repoCard(r, role, star = false) {
   const api = r.kind === 'github' ? ` data-github="${esc(r.name)}"` : r.kind === 'gitlab' ? ` data-gitlab="${esc(r.host)}" data-path="${esc(r.name)}"` : '';
   const owner = r.kind === 'web' ? r.host : r.name.split('/').slice(0, -1).join('/');
   const repo = r.kind === 'web' ? r.name.slice(r.host.length + 1) || r.host : r.name.split('/').pop();
-  return `<a class="repo" href="${esc(r.href)}"${api}>
-      <span class="repo-head">${BOOK}<span class="repo-name">${r.kind === 'web' && !r.name.includes('/') ? `<b>${esc(r.host)}</b>` : `${esc(owner)} / <b>${esc(repo)}</b>`}</span><span class="repo-role">${esc(role)}</span></span>
+  // The name is the link, stretched over the card; a Star button sits above it (a link cannot hold a link).
+  return `<div class="repo"${api}>
+      <span class="repo-head">${BOOK}<a class="repo-name" href="${esc(r.href)}">${r.kind === 'web' && !r.name.includes('/') ? `<b>${esc(r.host)}</b>` : `${esc(owner)} / <b>${esc(repo)}</b>`}</a><span class="repo-role">${esc(role)}</span></span>
       <span class="repo-desc"></span>
-      <span class="repo-foot"><span class="repo-host">${esc(r.kind === 'web' ? 'website' : r.kind === 'github' ? 'GitHub' : r.host)}</span></span>
-    </a>`;
+      <span class="repo-foot"><span class="repo-host">${esc(r.kind === 'web' ? 'website' : r.kind === 'github' ? 'GitHub' : r.host)}</span>${star ? `<a class="starbtn" href="${esc(r.href)}" title="on GitHub: a star helps others find it">★ Star</a>` : ''}</span>
+    </div>`;
 }
 
 /**
@@ -99,7 +100,8 @@ ${thumb ? `<meta property="og:image" content="${esc(`${origin}/${thumb}`)}">\n<m
   header .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; }
   header .logo span { color: var(--accent); }
   header nav { display: flex; flex-wrap: wrap; gap: 16px; margin-left: auto; font-size: 14px; }
-  header nav a.star { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+  header a.star { font-size: 14px; }
+  header nav a.star, header.solo a.star { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
   header.site { display: none; }
   .from-site header.site { display: flex; }
   .from-site header.solo { display: none; }
@@ -118,14 +120,20 @@ ${thumb ? `<meta property="og:image" content="${esc(`${origin}/${thumb}`)}">\n<m
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
   .play { padding: 9px 22px; border-radius: 6px; border: 0; background: var(--accent); color: var(--accent-ink); font: 600 16px system-ui, sans-serif; cursor: pointer; }
   .play:hover { text-decoration: none; filter: brightness(1.1); }
+  .nudge { margin: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .nudge a { font-weight: 600; }
   .lede { margin: 0; max-width: 68ch; }
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
   h2 { margin: 0 0 10px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
   ul { margin: 0; padding-left: 18px; } p { margin: 0 0 6px; }
   .caution { border-color: var(--warn); }
   .repos { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 12px; }
-  .repo { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--bg); }
-  .repo:hover { text-decoration: none; border-color: var(--accent); }
+  .repo { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--bg); }
+  .repo:hover, .repo:focus-within { border-color: var(--accent); }
+  .repo-name::after { content: ""; position: absolute; inset: 0; border-radius: 6px; }
+  .repo-name:hover { text-decoration: none; }
+  .starbtn { position: relative; z-index: 1; margin-left: auto; padding: 1px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--head); font-weight: 600; }
+  .starbtn:hover { text-decoration: none; border-color: var(--accent); }
   .repo-head { display: flex; align-items: center; gap: 8px; }
   .repo-head svg { width: 16px; height: 16px; fill: var(--dim); flex: none; }
   .repo-name { color: var(--accent); overflow-wrap: anywhere; } .repo-name b { font-weight: 600; }
@@ -142,6 +150,7 @@ ${thumb ? `<meta property="og:image" content="${esc(`${origin}/${thumb}`)}">\n<m
 ${siteHeader}<header class="solo">
   <a class="logo" href="${esc(home)}"><span>◢</span> PRISM</a>
   <span class="by">C and C++ compiled to JavaScript, in the page</span>
+  <a class="star" href="https://github.com/${PRISM_REPO}" title="PRISM on GitHub: a star helps others find it">★ Star on GitHub</a>
 </header>
 <main>
   <button class="stage" type="button" id="stage" aria-label="${esc(label)}: ${esc(p.title)}">${thumb ? `<img src="${esc(at(thumb))}" alt="${esc(p.title)}, as PRISM draws it">` : ''}<span class="go">▶ ${esc(label)}</span></button>
@@ -150,6 +159,7 @@ ${siteHeader}<header class="solo">
     <span class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(p.kind)}</span>
   </div>
   <p class="lede">${esc(p.blurb)}</p>
+  <p class="nudge" id="nudge" hidden>${esc(p.title)} runs on PRISM, a C and C++ compiler written in plain JavaScript. <a href="https://github.com/${PRISM_REPO}">★ Star it on GitHub</a> if you liked seeing it here.</p>
   <div class="actions">
     <button class="play" type="button" id="play">${esc(label)}</button>
   </div>
@@ -160,7 +170,7 @@ ${siteHeader}<header class="solo">
     <h2>Source</h2>
     <div class="repos">
       ${upstream ? repoCard(upstream, 'the program') : ''}
-      ${repoCard(repoOf(`https://github.com/${PRISM_REPO}`), 'the compiler')}
+      ${repoCard(repoOf(`https://github.com/${PRISM_REPO}`), 'the compiler', true)}
     </div>
     <p class="meta">The archives this build was made from, unmodified:</p>
     <ul>${li((p.sources ?? []).map((a) => `<a href="${esc(at(a.href))}" download>${esc(a.name)}</a> <span class="meta">${(a.bytes / 1048576).toFixed(1)} MB</span>`))}</ul>
@@ -186,6 +196,7 @@ ${siteHeader}<header class="solo">
     box.className = 'stage on'; box.id = 'stage'; box.append(f);
     stage.replaceWith(box);
     document.getElementById('play').hidden = true;
+    document.getElementById('nudge').hidden = false;
     box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     f.addEventListener('load', () => f.focus());
   }
