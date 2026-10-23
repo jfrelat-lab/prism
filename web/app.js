@@ -326,8 +326,17 @@ function playerError(text) {
     box = Object.assign(document.createElement('div'), { id: 'playerr', role: 'alert' });
     $('stage').append(box);
   }
-  box.innerHTML = `<p>${escapeHtml(text)}</p><p><a href="${escapeHtml(shelfUrl())}">Open it in the shelf</a> for PRISM's log.</p>`;
+  // The log is what a report needs, and the player has no panel to show it in: it is shown and copied here.
+  box.innerHTML = `<p>${escapeHtml(text)}</p><p><button type="button" data-act="show">Show the log</button> <button type="button" data-act="copy">Copy the log</button></p><pre hidden></pre>`;
+  const pre = box.querySelector('pre');
+  box.querySelector('[data-act=show]').onclick = () => { pre.textContent = logText(); pre.hidden = !pre.hidden; };
+  box.querySelector('[data-act=copy]').onclick = async (e) => {
+    try { await navigator.clipboard.writeText(logText()); e.target.textContent = 'Copied'; }
+    catch { pre.textContent = logText(); pre.hidden = false; getSelection().selectAllChildren(pre); }
+  };
 }
+/** PRISM's log as text, with what a report needs first: the address that reproduces the run, and the browser. */
+const logText = () => [location.href, navigator.userAgent, '', ...[...$('log').querySelectorAll('.line')].map((l) => l.textContent)].join('\n');
 const shelfUrl = () => { const q = new URLSearchParams(location.search); q.delete('player'); q.delete('embed'); return `${location.pathname}?${q}`; };
 
 /** Sit down at a machine, at one of its programs. */

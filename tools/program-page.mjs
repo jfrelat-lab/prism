@@ -191,7 +191,7 @@ ${siteHeader}<header class="solo">
     const f = document.createElement('iframe');
     f.src = PLAYER + '&embed=1';
     f.title = ${JSON.stringify(p.title)};
-    f.allow = 'cross-origin-isolated; fullscreen; autoplay; gamepad';
+    f.allow = 'cross-origin-isolated; fullscreen; autoplay; gamepad; clipboard-write';
     const box = document.createElement('div');
     box.className = 'stage on'; box.id = 'stage'; box.append(f);
     stage.replaceWith(box);

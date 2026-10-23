@@ -2190,6 +2190,9 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     code = r.code;
   } catch (err) {
     log(`the program threw: ${String(err && err.message || err)}`, 'error');
+    // Where it threw: the emitted functions bear their C names, so the frames say which C function it was.
+    if (err?.stack) log(err.stack.split('\n').slice(1, 13).map((f) => f.trim()).join('\n'), 'warn');
+    console.error(err);
     Atomics.store(ctrl, SLOT.EXITCODE, -1);
     setState(STATE.ERROR);
     return;
