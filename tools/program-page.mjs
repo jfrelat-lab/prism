@@ -2,7 +2,7 @@
 // as the index of a standalone folder (tools/standalone.mjs).
 //
 // The page plays the program IN PLACE: Play puts the player (web/?...&player=1&embed=1) in a frame where
-// the picture was, its controls with it; the link under the button still opens the player alone. Its
+// the picture was, its controls with it (Fullscreen among them). Its
 // header depends on how the visitor came: from another page of the showcase, the showcase's own header;
 // straight from a link (a forum post, a search), only the way to PRISM, so the page stands alone.
 // Where its source lives is shown as a repository card; the stars and the description are asked of
@@ -152,7 +152,6 @@ ${siteHeader}<header class="solo">
   <p class="lede">${esc(p.blurb)}</p>
   <div class="actions">
     <button class="play" type="button" id="play">${esc(label)}</button>
-    <a href="${esc(play)}" id="alone">Open the player alone ↗</a>
   </div>
   ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}${p.get ? ` (from <a href="${esc(p.get.href)}">${esc(p.get.label)}</a>)` : ''}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
   <p class="meta">It needs a keyboard, and most games take the mouse too.</p>
