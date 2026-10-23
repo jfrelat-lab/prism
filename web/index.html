@@ -278,6 +278,9 @@
   /* Inside Live C's frame (?live=1) the editor's page is the header: the program's bar and screen only. */
   body.live > header { display: none; }
   body.live { grid-template-rows: minmax(0, 1fr); }
+  /* Inside a game's own page (?embed=1), likewise: that page is the header. */
+  body.embed > header { display: none; }
+  body.embed { grid-template-rows: minmax(0, 1fr); }
   body.player .playeronly { display: inline-block; }
   body.player #machines, body.player header a[href^="./"]:not(.playeronly), body.player aside,
   body.player #panel, body.player #vmSpec, body.player #vmState, body.player .vmtop label:not(.keepin) { display: none !important; }

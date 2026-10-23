@@ -27,6 +27,7 @@ import { prismHash } from '../src/build-cache.js';
 import { createHash } from 'node:crypto';
 import { loadTarget } from '../src/target.js';
 import { targetFile } from '../web/endpoints.js';
+import { programPage } from './program-page.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
@@ -482,91 +483,12 @@ console.log(`\n${shipped.length} programs, ${targets.size} builds (${hits} from 
 
 if (STANDALONE) standalonePage();
 else {
-  for (const p of paged) write(`${p.id}/index.html`, programPage(p, { base: '../', url: `${ORIGIN}/${p.id}/` }));
+  for (const p of paged) write(`${p.id}/index.html`, programPage(p, { run: runOf(p), base: '../', url: `${ORIGIN}/${p.id}/`, origin: ORIGIN }));
   // What a search engine reads to find them: the catalogue, the other pages, one line per program.
   const urls = ['', 'web/live/', 'compare.html', 'changes.html', ...paged.map((p) => `${p.id}/`)];
   write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${ORIGIN}/${u}</loc></url>`).join('\n')}\n</urlset>\n`);
   write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${ORIGIN}/sitemap.xml\n`);
   console.log(`  pages: ${paged.length}, one per program, and sitemap.xml for ${ORIGIN}`);
-}
-
-/*
- * A PROGRAM'S OWN PAGE -- its picture, what it is, Play (the player, web/?...&player=1), its licences
- * and the source of its build. `base` is the way from the page to the export's root; with `url` it is
- * a page of the showcase (a link preview, the way back), without it the standalone folder's index.
- */
-function programPage(p, { base = '', url = null } = {}) {
-  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const at = (h) => (/^[a-z][a-z0-9+.-]*:/i.test(h) ? h : base + h);
-  const run = at(`${runOf(p)}&player=1`);
-  const thumb = typeof p.thumb === 'string' ? p.thumb : null;
-  const li = (items) => items.map((x) => `<li>${x}</li>`).join('');
-  const preview = url ? `
-<link rel="canonical" href="${esc(url)}">
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="PRISM">
-<meta property="og:title" content="${esc(p.title)}, in your browser">
-<meta property="og:description" content="${esc(p.blurb)}">
-<meta property="og:url" content="${esc(url)}">
-${thumb ? `<meta property="og:image" content="${esc(`${ORIGIN}/${thumb}`)}">\n<meta property="og:image:alt" content="${esc(p.title)}, as PRISM draws it">\n` : ''}<meta name="twitter:card" content="${thumb ? 'summary_large_image' : 'summary'}">` : '';
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(p.title)}${url ? ' in your browser — PRISM' : ''}</title>
-<meta name="description" content="${esc(p.blurb)}">${preview}
-<style>
-  :root { --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594; --head: #edf1f6; --accent: #6cb6ff; --accent-ink: #061524; --warn: #c9a227; }
-  @media (prefers-color-scheme: light) { :root { --bg: #f4f6f9; --panel: #fff; --line: #d9dee6; --ink: #2b3440; --dim: #5f6b7a; --head: #0f1720; --accent: #1f6fd1; --accent-ink: #fff; } }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; display: grid; gap: 18px; }
-  .shot { display: block; aspect-ratio: 4 / 3; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  .shot img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; display: block; }
-  h1 { margin: 0; font-size: 28px; color: var(--head); text-wrap: balance; }
-  .meta { color: var(--dim); }
-  .play { justify-self: start; padding: 10px 22px; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font-weight: 600; text-decoration: none; font-size: 16px; }
-  .play:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  a { color: var(--accent); }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
-  h2 { margin: 0 0 6px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
-  ul { margin: 0; padding-left: 18px; } p { margin: 0 0 6px; }
-  .caution { border-color: var(--warn); }
-  footer { color: var(--dim); font-size: 13px; }
-  nav.top { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; font-size: 14px; }
-  nav.top .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; text-decoration: none; margin-right: auto; }
-</style>
-</head>
-<body>
-<main>
-  ${url ? `<nav class="top"><a class="logo" href="${base}">◢ PRISM</a><a href="${base}#play">All programs</a><a href="${base}web/live/">Live C</a></nav>` : ''}
-  ${thumb ? `<a class="shot" href="${esc(run)}" aria-label="Play ${esc(p.title)}"><img src="${esc(at(thumb))}" alt="${esc(p.title)}, as PRISM draws it"></a>` : ''}
-  <div>
-    <h1>${esc(p.title)}</h1>
-    <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(p.kind)}</div>
-  </div>
-  <p>${esc(p.blurb)}</p>
-  <a class="play" href="${esc(run)}">${p.avail === 'play' ? 'Play' : 'Play with your files'}</a>
-  ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}${p.get ? ` (from <a href="${esc(p.get.href)}">${esc(p.get.label)}</a>)` : ''}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
-  <p class="meta">It needs a keyboard, and most games take the mouse too.</p>
-  ${p.caution ? `<section class="caution"><h2>⚠️ Licence</h2><p>${esc(p.caution)}</p></section>` : ''}
-  <section>
-    <h2>Licences</h2>
-    ${p.code?.license ? `<p>Code: ${esc(p.code.license)}</p>` : ''}${p.data?.license ? `<p>Data: ${esc(p.data.license)}</p>` : ''}
-    ${p.licences?.length ? `<ul>${li(p.licences.map((l) => `<a href="${esc(at(l.href))}">${esc(l.name)}</a>`))}</ul>` : ''}
-    ${p.credits ? `<p class="meta">${esc(p.credits)}</p>` : ''}
-  </section>
-  <section>
-    <h2>Source of this build</h2>
-    <ul>${li((p.sources ?? []).map((a) => `<a href="${esc(at(a.href))}" download>${esc(a.name)}</a> <span class="meta">${(a.bytes / 1048576).toFixed(1)} MB</span>`))}</ul>
-    <p class="meta"><a href="${base}sources/README.txt">What these archives are</a> · <a href="${base}sources/SHA256SUMS">checksums</a> · <a href="${esc(p.code?.source ?? p.source)}">the publisher's source</a></p>
-  </section>
-  <footer>Compiled from its unmodified source to JavaScript by <a href="https://github.com/jfrelat-lab/prism">PRISM</a>, and run in this page.</footer>
-</main>
-</body>
-</html>
-`;
 }
 
 /*
@@ -578,7 +500,7 @@ function standalonePage() {
   const p = all[0];
   if (!p) throw new Error(`--standalone=${STANDALONE}: no such program, or it has no build to ship`);
   const run = `${runOf(p)}&player=1`;
-  write('index.html', programPage(p));
+  write('index.html', programPage(p, { run: runOf(p) }));
   // Cross-origin isolation (SharedArrayBuffer) from the server where it can say so; web/coi-sw.js does it otherwise.
   const H = ['Cross-Origin-Opener-Policy: same-origin', 'Cross-Origin-Embedder-Policy: require-corp', 'Cross-Origin-Resource-Policy: same-origin'];
   write('.htaccess', ['# Apache (mod_headers): the headers PRISM needs for SharedArrayBuffer.', '<IfModule mod_headers.c>',

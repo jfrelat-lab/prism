@@ -18,8 +18,10 @@ Each program ships as a precompiled bundle (`tools/bundle.mjs`, kept between run
 reads is archived as published, beside the build scripts (`sources/`, or a release of
 `jfrelat-lab/prism-sources` with `--sources=release` and `tools/publish-sources.mjs`).
 
-- Every program with a build also gets a page of its own, `<id>/index.html`, with a link preview
-  addressed under `--origin` (prism-compiler.pages.dev by default), listed in `sitemap.xml`.
+- Every program with a build also gets a page of its own, `<id>/index.html` (`tools/program-page.mjs`):
+  it plays the program in place (the player in a frame, `&embed=1`), shows its repository with its
+  stars, and has a link preview addressed under `--origin` (prism-compiler.pages.dev by default). The
+  pages are listed in `sitemap.xml`.
 - `tools/site-thumbs.mjs` draws the thumbnails.
 - `dist/site-media/` holds the README's moving pictures and the link-preview card, served as
   `media/`; `tools/gif.mjs` makes a GIF from captured frames.

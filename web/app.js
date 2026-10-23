@@ -313,6 +313,13 @@ function renderMachines() {
  */
 const PLAYER = new URLSearchParams(location.search).get('player') === '1';
 document.body.classList.toggle('player', PLAYER);
+/*
+ * ?embed=1: the player inside a game's own page (tools/program-page.mjs), which is its header: the bar and
+ * the screen only, and a link out of it leaves the frame rather than opening a page inside it.
+ */
+const EMBED = PLAYER && new URLSearchParams(location.search).get('embed') === '1';
+document.body.classList.toggle('embed', EMBED);
+if (EMBED) document.addEventListener('click', (e) => { const a = e.target.closest?.('a[href]'); if (a && !a.target) a.target = '_top'; }, true);
 function playerError(text) {
   let box = $('playerr');
   if (!box) {
@@ -321,7 +328,7 @@ function playerError(text) {
   }
   box.innerHTML = `<p>${escapeHtml(text)}</p><p><a href="${escapeHtml(shelfUrl())}">Open it in the shelf</a> for PRISM's log.</p>`;
 }
-const shelfUrl = () => { const q = new URLSearchParams(location.search); q.delete('player'); return `${location.pathname}?${q}`; };
+const shelfUrl = () => { const q = new URLSearchParams(location.search); q.delete('player'); q.delete('embed'); return `${location.pathname}?${q}`; };
 
 /** Sit down at a machine, at one of its programs. */
 function pick(m, i) {
@@ -1884,6 +1891,7 @@ function publishQuery() {
   for (const k of ['gl', 'glcheck', 'bundle']) if (pageOptions[k]) q.set(k, pageOptions[k]);
   if ($('keys').value === 'typed') q.set('keys', 'typed');
   if (PLAYER) q.set('player', '1');
+  if (EMBED) q.set('embed', '1');
   history.replaceState(null, '', `${location.pathname}?${q}`);
   if (PLAYER) $('toShelf').href = shelfUrl();
 }

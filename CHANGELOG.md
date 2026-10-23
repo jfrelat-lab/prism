@@ -9,8 +9,9 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
 
 - **Every game has a page of its own**, at an address you can share: [/doom/](https://prism-compiler.pages.dev/doom/),
   [/quake3/](https://prism-compiler.pages.dev/quake3/), [/monkey/](https://prism-compiler.pages.dev/monkey/)... with its
-  picture, a Play button, its licences and the source of its build, and a link preview of its own. A
-  card's title on the showcase opens it.
+  picture, its licences, the repository its source comes from (with its stars), and a link preview
+  of its own. **Play runs the game right there**, its controls with it. Opened from a link, the page
+  stands alone; opened from the showcase, it keeps the showcase's header. A card's title opens it.
 
 ## 2026-10-21
 
