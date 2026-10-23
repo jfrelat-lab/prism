@@ -186,7 +186,7 @@ ${siteHeader}<header class="solo">
       <pre id="log">What PRISM says while it runs the program shows here once it is playing.</pre>
     </details>
   </div>
-  ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}${p.get ? ` (from <a href="${esc(p.get.href)}">${esc(p.get.label)}</a>)` : ''}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
+  ${p.avail === 'files' ? `<p class="meta" id="needs">Needs ${esc(p.needs)}${p.get ? ` (from <a href="${esc(p.get.href)}">${esc(p.get.label)}</a>)` : ''}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
   <p class="meta">It needs a keyboard, and most games take the mouse too.</p>
   ${p.caution ? `<section class="caution"><h2>⚠️ Licence</h2><p>${esc(p.caution)}</p></section>` : ''}
   <section>
@@ -230,6 +230,23 @@ ${siteHeader}<header class="solo">
     f.addEventListener('load', () => { f.focus(); mirrorLog(f); });
   }
   stage.addEventListener('click', start);
+  /*
+   * A LOCAL LIBRARY (tools/serve.mjs --site --games=<dir>), as the catalogue reads it: the game is the
+   * visitor's when the root the server holds lists the file that shows a copy is there. Then Play is
+   * "Play your copy". Elsewhere __library.json does not exist and nothing changes.
+   */
+  const DATA = ${JSON.stringify(p.avail === 'files' && p.data?.need ? p.data : null)};
+  if (DATA) (async () => {
+    const lib = await fetch(${JSON.stringify(base)} + '__library.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    if (!lib?.roots?.includes(DATA.root)) return;
+    const list = await fetch(${JSON.stringify(base)} + '__static/data/' + encodeURIComponent(DATA.root) + '.json').then((r) => r.json()).catch(() => null);
+    if (!list?.files?.map((x) => x.toLowerCase()).includes((DATA.under + DATA.need).toLowerCase())) return;
+    for (const el of [document.getElementById('play'), stage.querySelector('.go')]) if (el) el.textContent = (el.classList.contains('go') ? '▶ ' : '') + 'Play your copy';
+    stage.setAttribute('aria-label', 'Play your copy: ' + ${JSON.stringify(p.title)});
+    const needs = document.getElementById('needs');
+    if (needs) needs.textContent = 'Runs on your own copy, from the library folder this server was started with: it is yours, not shipped by this site.';
+  })();
+
   // ?play=1: the catalogue's Play, so the program starts with the page.
   if (QUERY.get('play') === '1') start();
 
