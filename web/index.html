@@ -274,15 +274,13 @@
   main.nopanel { grid-template-columns: 1fr; }
   main.nopanel aside { display: none; }
   /* The player (web/app.js PLAYER): the program's screen and its own controls, nothing of the shelf. */
-  .playeronly { display: none; }
   /* Inside Live C's frame (?live=1) the editor's page is the header: the program's bar and screen only. */
   body.live > header { display: none; }
   body.live { grid-template-rows: minmax(0, 1fr); }
   /* Inside a game's own page (?embed=1), likewise: that page is the header. */
   body.embed > header { display: none; }
   body.embed { grid-template-rows: minmax(0, 1fr); }
-  body.player .playeronly { display: inline-block; }
-  body.player #machines, body.player header a[href^="./"]:not(.playeronly), body.player aside,
+  body.player #machines, body.player header a[href^="./"], body.player aside,
   body.player #panel, body.player #vmSpec, body.player #vmState, body.player .vmtop label:not(.keepin) { display: none !important; }
   /* One row too: the narrow layout's second row was the side panel's, hidden here, and kept 2/5 of the height. */
   body.player main { grid-template-columns: 1fr !important; grid-template-rows: minmax(0, 1fr) !important; }
@@ -312,7 +310,6 @@
   <span class="sep"></span>
   <a href="./mame/" data-server title="MAME 0.34 game by game: which start, which are held to a native build, a screenshot of each">MAME games &rarr;</a>
   <a href="./live/" title="write C and run it, with no machine and no program">Live C &rarr;</a>
-  <a id="toShelf" class="playeronly" href="./" title="the same program in the shelf: its arguments, PRISM's log, the other machines">Open in the shelf &rarr;</a>
 </header>
 
 <main id="main-panel-host">

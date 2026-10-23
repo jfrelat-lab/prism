@@ -40,7 +40,7 @@ function repoCard(r, role, star = false) {
  * to that root; with `url` (its address on the showcase, under `origin`) it is a showcase page, with a
  * link preview and the showcase's header for a visitor who came from it.
  */
-export function programPage(p, { run, base = '', url = null, origin = '' }) {
+export function programPage(p, { run, base = '', url = null, origin = '', argsHint = null }) {
   const at = (h) => (/^[a-z][a-z0-9+.-]*:/i.test(h) ? h : base + h);
   const play = at(`${run}&player=1`);
   const thumb = typeof p.thumb === 'string' ? p.thumb : null;
@@ -120,6 +120,14 @@ ${thumb ? `<meta property="og:image" content="${esc(`${origin}/${thumb}`)}">\n<m
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
   .play { padding: 9px 22px; border-radius: 6px; border: 0; background: var(--accent); color: var(--accent-ink); font: 600 16px system-ui, sans-serif; cursor: pointer; }
   .play:hover { text-decoration: none; filter: brightness(1.1); }
+  .more { display: grid; gap: 8px; }
+  details { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; }
+  summary { cursor: pointer; color: var(--head); font-weight: 600; font-size: 14px; }
+  details[open] summary { margin-bottom: 8px; }
+  #argsForm { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  #argsForm input { flex: 1 1 260px; min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font: 13px ui-monospace, Menlo, monospace; }
+  #argsForm button { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); background: none; color: var(--accent); font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  #log { margin: 0; max-height: 320px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--dim); }
   .nudge { margin: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
   .nudge a { font-weight: 600; }
   .lede { margin: 0; max-width: 68ch; }
@@ -163,6 +171,21 @@ ${siteHeader}<header class="solo">
   <div class="actions">
     <button class="play" type="button" id="play">${esc(label)}</button>
   </div>
+  <div class="more">
+    <details>
+      <summary>Arguments</summary>
+      <form id="argsForm">
+        <input id="args" name="args" type="text" spellcheck="false" autocomplete="off" value="${esc(p.args ?? '')}" aria-label="Arguments passed to the program">
+        <button type="submit">Run with these</button>
+      </form>
+      ${argsHint ? `<p class="meta">${esc(argsHint)}</p>` : ''}
+      <p class="meta">They go in this page's address, so a link to it starts the program the same way.</p>
+    </details>
+    <details id="logbox">
+      <summary>PRISM's log</summary>
+      <pre id="log">What PRISM says while it runs the program shows here once it is playing.</pre>
+    </details>
+  </div>
   ${p.avail === 'files' ? `<p class="meta">Needs ${esc(p.needs)}${p.get ? ` (from <a href="${esc(p.get.href)}">${esc(p.get.label)}</a>)` : ''}: the page asks for your copy, a folder or a .zip, and reads it where it is; nothing is uploaded.</p>` : ''}
   <p class="meta">It needs a keyboard, and most games take the mouse too.</p>
   ${p.caution ? `<section class="caution"><h2>⚠️ Licence</h2><p>${esc(p.caution)}</p></section>` : ''}
@@ -185,11 +208,17 @@ ${siteHeader}<header class="solo">
 <script>
   // Play here: the player in a frame where the picture was, with its own controls (web/?...&embed=1).
   const PLAYER = ${JSON.stringify(play)};
+  const QUERY = new URLSearchParams(location.search);
   const stage = document.getElementById('stage');
   function start() {
     if (stage.classList.contains('on')) return;
     const f = document.createElement('iframe');
-    f.src = PLAYER + '&embed=1';
+    // The arguments: this page's ?args= when it has one, else the program's own (web/app.js adds the
+    // build's required flags at Run).
+    const u = new URL(PLAYER, location.href);
+    if (QUERY.has('args')) u.searchParams.set('args', QUERY.get('args'));
+    u.searchParams.set('embed', '1');
+    f.src = u.href;
     f.title = ${JSON.stringify(p.title)};
     f.allow = 'cross-origin-isolated; fullscreen; autoplay; gamepad; clipboard-write';
     const box = document.createElement('div');
@@ -198,9 +227,29 @@ ${siteHeader}<header class="solo">
     document.getElementById('play').hidden = true;
     document.getElementById('nudge').hidden = false;
     box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    f.addEventListener('load', () => f.focus());
+    f.addEventListener('load', () => { f.focus(); mirrorLog(f); });
   }
   stage.addEventListener('click', start);
+  // ?play=1: the catalogue's Play, so the program starts with the page.
+  if (QUERY.get('play') === '1') start();
+
+  // Arguments: written into this page's address, which then reloads playing them.
+  const argsIn = document.getElementById('args');
+  if (QUERY.has('args')) { argsIn.value = QUERY.get('args'); argsIn.closest('details').open = true; }
+  document.getElementById('argsForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    QUERY.set('args', argsIn.value.trim()); QUERY.set('play', '1');
+    location.search = QUERY.toString();
+  });
+
+  // PRISM's log: the player's own (#log, same origin), mirrored as it grows.
+  function mirrorLog(f) {
+    const src = f.contentDocument?.getElementById('log'), out = document.getElementById('log');
+    if (!src) return;
+    const copy = () => { out.textContent = [...src.querySelectorAll('.line')].map((l) => l.textContent).join('\\n'); out.scrollTop = out.scrollHeight; };
+    new MutationObserver(copy).observe(src, { childList: true, subtree: true, characterData: true });
+    copy();
+  }
   document.getElementById('play').addEventListener('click', start);
 
   // The repository cards: stars and the rest from the host's API, kept for the visit.

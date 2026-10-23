@@ -337,7 +337,6 @@ function playerError(text) {
 }
 /** PRISM's log as text, with what a report needs first: the address that reproduces the run, and the browser. */
 const logText = () => [location.href, navigator.userAgent, '', ...[...$('log').querySelectorAll('.line')].map((l) => l.textContent)].join('\n');
-const shelfUrl = () => { const q = new URLSearchParams(location.search); q.delete('player'); q.delete('embed'); return `${location.pathname}?${q}`; };
 
 /** Sit down at a machine, at one of its programs. */
 function pick(m, i) {
@@ -1512,6 +1511,9 @@ async function startRun(typedAs = null) {
   // argv[0] is the program's own name, as a C program is entitled to expect -- and the name is the
   // one the MACHINE would have used: QUAKE.EXE on DOS, ./quake on a Unix box. Some programs read it
   // (Quake takes its basedir from argv[0]'s directory), so it is not decoration.
+  // A build's own flags stay whatever the field says (a link's ?args=, something typed): the merge at
+  // Run is the one place that sees the variant's arguments for sure, as they arrive after the page.
+  $('args').value = mergeArgs(entry().variantArgs, $('args').value);
   const argv = [typedAs || entry().file, ...tokenise($('args').value)];
   publishQuery();
 
@@ -1902,7 +1904,6 @@ function publishQuery() {
   if (PLAYER) q.set('player', '1');
   if (EMBED) q.set('embed', '1');
   history.replaceState(null, '', `${location.pathname}?${q}`);
-  if (PLAYER) $('toShelf').href = shelfUrl();
 }
 
 /* Whatever was chosen last time; closed the first time, because the machine's screen is the point. */

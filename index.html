@@ -209,7 +209,7 @@
     </div>
     </div>
     <figure class="shot" data-site hidden>
-      <a href="#play"><img src="media/quake3.gif" width="480" height="360" alt="Quake III Arena compiled by PRISM: bots on The Longest Yard, in this browser tab"></a>
+      <a href="quake3/"><img src="media/quake3.gif" width="480" height="360" alt="Quake III Arena compiled by PRISM: bots on The Longest Yard, in this browser tab"></a>
       <figcaption>Quake III Arena, its 1.32 source compiled to JavaScript, drawn through WebGL.</figcaption>
     </figure>
   </section>
@@ -442,13 +442,15 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
     const shot = typeof p.thumb === 'string' ? `<img src="${esc(p.thumb)}" alt="${esc(p.title)}, as PRISM draws it" loading="lazy">` : esc(p.kind);
     // One button opens the dialog: the source this build came from, the licences, a caution, the credits.
     const lic = `<button class="linkbtn plain" type="button" data-lic="${esc(p.id)}">source &amp; licence</button>`;
-    // A card opens the player (web/ ?player=1): the program alone; the shelf is one link away there.
-    const play = p.run ? `${p.run}&player=1` : '';
+    // A card opens the program's own page (tools/program-page.mjs); its Play button opens it playing
+    // (?play=1), so playing is still one click. Without a page (the shelf's own server), the player.
+    const play = p.page ? `${p.page}?play=1` : p.run ? `${p.run}&player=1` : '';
+    const open = p.page ?? play;
     const go = p.avail === 'play' ? `<a class="run" href="${esc(play)}">Play</a>`
       : p.avail === 'mine' ? `<a class="run mine" href="${esc(play)}" title="runs on the copy in your library folder">Play your copy</a>`
       : p.avail === 'files' ? `<a class="run alt" href="${esc(play)}" title="the page asks for your copy; nothing leaves your browser">Bring your files</a>`
       : `<span class="norun" title="${esc(p.noBuild ?? '')}">Not playable here yet</span>`;
-    const pic = p.avail === 'none' ? `<span class="shot">${shot}</span>` : `<a class="shot" href="${esc(play)}" aria-label="${p.avail === 'files' ? 'Bring your files for' : 'Play'} ${esc(p.title)}">${shot}</a>`;
+    const pic = p.avail === 'none' ? `<span class="shot">${shot}</span>` : `<a class="shot" href="${esc(open)}" aria-label="${p.page ? `${esc(p.title)}: its page` : `${p.avail === 'files' ? 'Bring your files for' : 'Play'} ${esc(p.title)}`}">${shot}</a>`;
     return `<article class="card" data-id="${esc(p.id)}">
         ${pic}
         <div class="body">

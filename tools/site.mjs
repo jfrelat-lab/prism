@@ -483,7 +483,10 @@ console.log(`\n${shipped.length} programs, ${targets.size} builds (${hits} from 
 
 if (STANDALONE) standalonePage();
 else {
-  for (const p of paged) write(`${p.id}/index.html`, programPage(p, { run: runOf(p), base: '../', url: `${ORIGIN}/${p.id}/`, origin: ORIGIN }));
+  for (const p of paged) {
+    const { argsHint } = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${p.program}.json`), 'utf8'));
+    write(`${p.id}/index.html`, programPage(p, { run: runOf(p), base: '../', url: `${ORIGIN}/${p.id}/`, origin: ORIGIN, argsHint }));
+  }
   // What a search engine reads to find them: the catalogue, the other pages, one line per program.
   const urls = ['', 'web/live/', 'compare.html', 'changes.html', ...paged.map((p) => `${p.id}/`)];
   write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${ORIGIN}/${u}</loc></url>`).join('\n')}\n</urlset>\n`);

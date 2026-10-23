@@ -11,7 +11,15 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
   [/quake3/](https://prism-compiler.pages.dev/quake3/), [/monkey/](https://prism-compiler.pages.dev/monkey/)... with its
   picture, its licences, the repository its source comes from (with its stars), and a link preview
   of its own. **Play runs the game right there**, its controls with it. Opened from a link, the page
-  stands alone; opened from the showcase, it keeps the showcase's header. A card's title opens it.
+  stands alone; opened from the showcase, it keeps the showcase's header. The showcase's cards lead
+  there, and their Play starts the game with the page.
+- **Arguments and PRISM's log on the game's page.** Type `+map q3dm17` and Quake III starts on The
+  Longest Yard; the arguments go in the page's address, so the link can be shared. A link's arguments
+  no longer replace the ones a build needs (Quake III stopped on *VM_Compile*).
+- **An error says where it happened**, with the log to show or copy, instead of sending you to the
+  shelf.
+- **Quake III no longer stops when several keys are pressed at once** (*Cannot read properties of
+  null (reading 'set')*): reading the next X event without removing it handed back an empty one.
 
 ## 2026-10-21
 
