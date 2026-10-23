@@ -94,6 +94,7 @@
   .card .shot:hover { text-decoration: none; }
   .card .body { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px 14px; flex: 1; }
   .card h3 { margin: 0; font-size: 16px; color: var(--head); }
+  .card h3 a { color: inherit; }
   .card .meta { color: var(--dim); font-size: 13px; }
   .card .blurb { margin: 0; font-size: 14px; flex: 1; }
   #licdlg { width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 20px 22px; color: var(--ink);
@@ -451,7 +452,7 @@ node tools/site.mjs &amp;&amp; node tools/serve.mjs --site --games=~/games</pre>
     return `<article class="card" data-id="${esc(p.id)}">
         ${pic}
         <div class="body">
-          <h3>${esc(p.title)}${p.avail === 'play' ? '' : p.avail === 'mine' ? ' <span class="tag mine">your copy</span>' : ' <span class="tag">your data</span>'}${p.caution ? ` <button class="warn" type="button" data-lic="${esc(p.id)}" title="a note on its licence" aria-label="A note on its licence">⚠️</button>` : ''}</h3>
+          <h3>${p.page ? `<a href="${esc(p.page)}" title="its own page, to link to">${esc(p.title)}</a>` : esc(p.title)}${p.avail === 'play' ? '' : p.avail === 'mine' ? ' <span class="tag mine">your copy</span>' : ' <span class="tag">your data</span>'}${p.caution ? ` <button class="warn" type="button" data-lic="${esc(p.id)}" title="a note on its licence" aria-label="A note on its licence">⚠️</button>` : ''}</h3>
           <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(MACHINES[p.machine] ?? p.machine)} · ${esc(p.kind)}</div>
           <p class="blurb">${esc(p.blurb)}</p>
           ${p.avail === 'play' && p.get ? `<p class="needs">Data from <a href="${esc(p.get.href)}" rel="noopener">${esc(p.get.label)}</a>, as distributed there</p>` : ''}

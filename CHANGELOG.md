@@ -5,6 +5,13 @@ is updated continuously, so entries are dated rather than versioned; the source 
 comes from are released as [prism-sources](https://github.com/jfrelat-lab/prism-sources/releases).
 Every change is in the [commit history](https://github.com/jfrelat-lab/prism/commits/main).
 
+## 2026-10-23
+
+- **Every game has a page of its own**, at an address you can share: [/doom/](https://prism-compiler.pages.dev/doom/),
+  [/quake3/](https://prism-compiler.pages.dev/quake3/), [/monkey/](https://prism-compiler.pages.dev/monkey/)... with its
+  picture, a Play button, its licences and the source of its build, and a link preview of its own. A
+  card's title on the showcase opens it.
+
 ## 2026-10-21
 
 - **Tux Racer loads the right course.** `chdir` did nothing and relative paths were looked up from the

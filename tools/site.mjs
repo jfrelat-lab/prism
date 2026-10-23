@@ -457,37 +457,65 @@ if (RELEASE) {
 }
 console.log(`  sources: ${archives.size} trees and the build scripts (${scriptFiles.size} files), ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${dirty ? ' (built from uncommitted changes: the README says so)' : ''}`);
 
+const runOf = (p) => `web/?machine=${encodeURIComponent(p.machine)}&program=${encodeURIComponent(p.variant ? p.file ?? p.program : p.program)}${p.args !== undefined ? `&args=${encodeURIComponent(p.args)}` : ''}&run=1`;
+
+/*
+ * A PAGE PER PROGRAM (P13.6): <id>/index.html, the standalone page plus the way back to the catalogue
+ * and a link preview of its own, so a post in a game's community links to that game and a search for
+ * it can find it. Every program with a build gets one; the id is the path, so it must not be a
+ * directory the export already holds.
+ */
+const ORIGIN = (arg('origin') ?? 'https://prism-compiler.pages.dev').replace(/\/+$/, '');
+const paged = STANDALONE ? [] : [...shipped.map((p) => ({ ...p, avail: 'play' })), ...gallery.filter((g) => g.run).map((g) => ({ ...g, avail: 'files' }))];
+for (const p of paged) {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(p.id) || existsSync(join(OUT, p.id))) throw new Error(`${p.id}: cannot be a page's path (not a plain name, or the export already has it)`);
+  (shipped.find((s) => s.id === p.id) ?? gallery.find((g) => g.id === p.id)).page = `${p.id}/`;
+}
+
 write('web/site.json', JSON.stringify({
   generated: new Date().toISOString().slice(0, 10),
   light,
   gallery,
-  programs: shipped.map(({ licenseFiles, ...s }) => ({ ...s, units: targets.get(s.target)?.units ?? null,
-    run: `web/?machine=${encodeURIComponent(s.machine)}&program=${encodeURIComponent(s.variant ? s.file ?? s.program : s.program)}${s.args !== undefined ? `&args=${encodeURIComponent(s.args)}` : ''}&run=1` })),
+  programs: shipped.map(({ licenseFiles, ...s }) => ({ ...s, units: targets.get(s.target)?.units ?? null, run: runOf(s) })),
 }, null, 1));
 console.log(`\n${shipped.length} programs, ${targets.size} builds (${hits} from dist/site-bundles), ${mb(total)} of bundles, assembly and data in ${OUT}`);
 
 if (STANDALONE) standalonePage();
+else {
+  for (const p of paged) write(`${p.id}/index.html`, programPage(p, { base: '../', url: `${ORIGIN}/${p.id}/` }));
+  // What a search engine reads to find them: the catalogue, the other pages, one line per program.
+  const urls = ['', 'web/live/', 'compare.html', 'changes.html', ...paged.map((p) => `${p.id}/`)];
+  write('sitemap.xml', `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.map((u) => `  <url><loc>${ORIGIN}/${u}</loc></url>`).join('\n')}\n</urlset>\n`);
+  write('robots.txt', `User-agent: *\nAllow: /\nSitemap: ${ORIGIN}/sitemap.xml\n`);
+  console.log(`  pages: ${paged.length}, one per program, and sitemap.xml for ${ORIGIN}`);
+}
 
 /*
- * THE STANDALONE PAGE: the one program's own index.html -- its picture, what it is, Play (the player,
- * web/?...&player=1), its licences and the source of its build -- in place of the catalogue, and how
- * to host the folder. Everything in it is relative, so the folder works under any path.
+ * A PROGRAM'S OWN PAGE -- its picture, what it is, Play (the player, web/?...&player=1), its licences
+ * and the source of its build. `base` is the way from the page to the export's root; with `url` it is
+ * a page of the showcase (a link preview, the way back), without it the standalone folder's index.
  */
-function standalonePage() {
-  const all = [...shipped.map((p) => ({ ...p, avail: 'play' })), ...gallery.filter((g) => g.run).map((g) => ({ ...g, avail: 'files' }))];
-  const p = all[0];
-  if (!p) throw new Error(`--standalone=${STANDALONE}: no such program, or it has no build to ship`);
+function programPage(p, { base = '', url = null } = {}) {
   const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const run = `web/?machine=${encodeURIComponent(p.machine)}&program=${encodeURIComponent(p.variant ? p.file ?? p.program : p.program)}${p.args !== undefined ? `&args=${encodeURIComponent(p.args)}` : ''}&run=1&player=1`;
+  const at = (h) => (/^[a-z][a-z0-9+.-]*:/i.test(h) ? h : base + h);
+  const run = at(`${runOf(p)}&player=1`);
   const thumb = typeof p.thumb === 'string' ? p.thumb : null;
   const li = (items) => items.map((x) => `<li>${x}</li>`).join('');
-  write('index.html', `<!doctype html>
+  const preview = url ? `
+<link rel="canonical" href="${esc(url)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="PRISM">
+<meta property="og:title" content="${esc(p.title)}, in your browser">
+<meta property="og:description" content="${esc(p.blurb)}">
+<meta property="og:url" content="${esc(url)}">
+${thumb ? `<meta property="og:image" content="${esc(`${ORIGIN}/${thumb}`)}">\n<meta property="og:image:alt" content="${esc(p.title)}, as PRISM draws it">\n` : ''}<meta name="twitter:card" content="${thumb ? 'summary_large_image' : 'summary'}">` : '';
+  return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(p.title)}</title>
-<meta name="description" content="${esc(p.blurb)}">
+<title>${esc(p.title)}${url ? ' in your browser — PRISM' : ''}</title>
+<meta name="description" content="${esc(p.blurb)}">${preview}
 <style>
   :root { --bg: #0b0d11; --panel: #12161c; --line: #1f2630; --ink: #c3cbd6; --dim: #7a8594; --head: #edf1f6; --accent: #6cb6ff; --accent-ink: #061524; --warn: #c9a227; }
   @media (prefers-color-scheme: light) { :root { --bg: #f4f6f9; --panel: #fff; --line: #d9dee6; --ink: #2b3440; --dim: #5f6b7a; --head: #0f1720; --accent: #1f6fd1; --accent-ink: #fff; } }
@@ -506,11 +534,14 @@ function standalonePage() {
   ul { margin: 0; padding-left: 18px; } p { margin: 0 0 6px; }
   .caution { border-color: var(--warn); }
   footer { color: var(--dim); font-size: 13px; }
+  nav.top { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; font-size: 14px; }
+  nav.top .logo { color: var(--head); font: 700 15px ui-monospace, Menlo, monospace; letter-spacing: .18em; text-decoration: none; margin-right: auto; }
 </style>
 </head>
 <body>
 <main>
-  ${thumb ? `<a class="shot" href="${esc(run)}" aria-label="Play ${esc(p.title)}"><img src="${esc(thumb)}" alt="${esc(p.title)}"></a>` : ''}
+  ${url ? `<nav class="top"><a class="logo" href="${base}">◢ PRISM</a><a href="${base}#play">All programs</a><a href="${base}web/live/">Live C</a></nav>` : ''}
+  ${thumb ? `<a class="shot" href="${esc(run)}" aria-label="Play ${esc(p.title)}"><img src="${esc(at(thumb))}" alt="${esc(p.title)}, as PRISM draws it"></a>` : ''}
   <div>
     <h1>${esc(p.title)}</h1>
     <div class="meta">${esc(p.author)}${p.year ? `, ${esc(p.year)}` : ''} · ${esc(p.kind)}</div>
@@ -523,19 +554,31 @@ function standalonePage() {
   <section>
     <h2>Licences</h2>
     ${p.code?.license ? `<p>Code: ${esc(p.code.license)}</p>` : ''}${p.data?.license ? `<p>Data: ${esc(p.data.license)}</p>` : ''}
-    ${p.licences?.length ? `<ul>${li(p.licences.map((l) => `<a href="${esc(l.href)}">${esc(l.name)}</a>`))}</ul>` : ''}
+    ${p.licences?.length ? `<ul>${li(p.licences.map((l) => `<a href="${esc(at(l.href))}">${esc(l.name)}</a>`))}</ul>` : ''}
     ${p.credits ? `<p class="meta">${esc(p.credits)}</p>` : ''}
   </section>
   <section>
     <h2>Source of this build</h2>
-    <ul>${li((p.sources ?? []).map((a) => `<a href="${esc(a.href)}" download>${esc(a.name)}</a> <span class="meta">${(a.bytes / 1048576).toFixed(1)} MB</span>`))}</ul>
-    <p class="meta"><a href="sources/README.txt">What these archives are</a> · <a href="sources/SHA256SUMS">checksums</a> · <a href="${esc(p.code?.source ?? p.source)}">the publisher's source</a></p>
+    <ul>${li((p.sources ?? []).map((a) => `<a href="${esc(at(a.href))}" download>${esc(a.name)}</a> <span class="meta">${(a.bytes / 1048576).toFixed(1)} MB</span>`))}</ul>
+    <p class="meta"><a href="${base}sources/README.txt">What these archives are</a> · <a href="${base}sources/SHA256SUMS">checksums</a> · <a href="${esc(p.code?.source ?? p.source)}">the publisher's source</a></p>
   </section>
   <footer>Compiled from its unmodified source to JavaScript by <a href="https://github.com/jfrelat-lab/prism">PRISM</a>, and run in this page.</footer>
 </main>
 </body>
 </html>
-`);
+`;
+}
+
+/*
+ * THE STANDALONE FOLDER: the one program's page as its index.html, in place of the catalogue, and how
+ * to host the folder. Everything in it is relative, so the folder works under any path.
+ */
+function standalonePage() {
+  const all = [...shipped.map((p) => ({ ...p, avail: 'play' })), ...gallery.filter((g) => g.run).map((g) => ({ ...g, avail: 'files' }))];
+  const p = all[0];
+  if (!p) throw new Error(`--standalone=${STANDALONE}: no such program, or it has no build to ship`);
+  const run = `${runOf(p)}&player=1`;
+  write('index.html', programPage(p));
   // Cross-origin isolation (SharedArrayBuffer) from the server where it can say so; web/coi-sw.js does it otherwise.
   const H = ['Cross-Origin-Opener-Policy: same-origin', 'Cross-Origin-Embedder-Policy: require-corp', 'Cross-Origin-Resource-Policy: same-origin'];
   write('.htaccess', ['# Apache (mod_headers): the headers PRISM needs for SharedArrayBuffer.', '<IfModule mod_headers.c>',
