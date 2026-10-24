@@ -156,15 +156,16 @@ export function surfaceApi(M, state, { setErr, intern, cstr }) {
     return encode(f, r, g, b, a);
   };
 
-  function createSurface(w, h, format) {
+  function createSurface(w, h, format, from = null) {
     const fmt = makeFormat(format);
     if (!fmt) return 0;
     const lay = LAYOUT[format >>> 0];
     if (lay[1] === 1) dv().setUint32(fmt + F_PALETTE, makePalette(256), true);
     w |= 0; h |= 0;
-    const pitch = (w * lay[1] + 3) & ~3;               // SDL pads a surface row to four bytes
-    const pixels = M.rt.malloc(Math.max(pitch * h, 1));
-    M.u8.fill(0, pixels, pixels + pitch * h);
+    // SDL pads a surface row to four bytes; a surface over the program's pixels has the program's pitch.
+    const pitch = from ? from.pitch | 0 : (w * lay[1] + 3) & ~3;
+    const pixels = from ? from.pixels : M.rt.malloc(Math.max(pitch * h, 1));
+    if (!from) M.u8.fill(0, pixels, pixels + pitch * h);
     const p = M.rt.malloc(S_SIZE), d = dv();
     M.u8.fill(0, p, p + S_SIZE);
     d.setUint32(p + S_FORMAT, fmt, true);
@@ -174,7 +175,8 @@ export function surfaceApi(M, state, { setErr, intern, cstr }) {
     d.setInt32(p + S_CLIP + 8, w, true); d.setInt32(p + S_CLIP + 12, h, true);
     d.setInt32(p + S_REFCOUNT, 1, true);
     // A surface with an alpha channel is set up for blending from the start.
-    side.set(p, { colorKey: null, blend: lay[5] ? BLEND.BLEND : BLEND.NONE, alphaMod: 255 });
+    side.set(p, { colorKey: null, blend: lay[5] ? BLEND.BLEND : BLEND.NONE, alphaMod: 255, prealloc: !!from });
+    if (from) d.setUint32(p, 0x00000001, true);       // SDL_PREALLOC, in flags: the pixels are not SDL's to free
     state.surfaces.set(p, { w, h, pitch, pixels, bpp: lay[1] });
     return p;
   }
@@ -326,10 +328,15 @@ export function surfaceApi(M, state, { setErr, intern, cstr }) {
       if (!format) { setErr('Unknown pixel format'); return 0; }
       return createSurface(w, h, format);
     },
+    SDL_CreateRGBSurfaceFrom: (pixels, w, h, depth, pitch, r, g, b, a) => {
+      const format = formatFromMasks(depth | 0, r, g, b, a);
+      if (!format) { setErr('Unknown pixel format'); return 0; }
+      return createSurface(w, h, format, { pixels, pitch });
+    },
     SDL_FreeSurface: (p) => {
       if (!state.surfaces.has(p)) return;
       const d = dv(), fmt = d.getUint32(p + S_FORMAT, true);
-      M.rt.free(d.getUint32(p + S_PIXELS, true));
+      if (!side.get(p)?.prealloc) M.rt.free(d.getUint32(p + S_PIXELS, true));
       state.formats.delete(fmt);
       M.rt.free(fmt);
       M.rt.free(p);
@@ -453,7 +460,7 @@ export function surfaceBuiltins(T) {
   const P = T.ptr(T.CHAR), I = T.INT, U = T.UINT, V = T.VOID, B = T.UCHAR;
   const f = (ret, ...params) => ({ ret, params });
   return {
-    SDL_CreateRGBSurface: f(P, U, I, I, I, U, U, U, U), SDL_FreeSurface: f(V, P),
+    SDL_CreateRGBSurface: f(P, U, I, I, I, U, U, U, U), SDL_CreateRGBSurfaceFrom: f(P, P, I, I, I, I, U, U, U, U), SDL_FreeSurface: f(V, P),
     SDL_FillRect: f(I, P, P, U), SDL_UpperBlit: f(I, P, P, P, P), SDL_UpperBlitScaled: f(I, P, P, P, P),
     SDL_SetClipRect: f(I, P, P), SDL_LockSurface: f(I, P), SDL_UnlockSurface: f(V, P),
     SDL_SetColorKey: f(I, P, I, U), SDL_GetColorKey: f(I, P, P), SDL_GetSurfaceBlendMode: f(I, P, P), SDL_SetSurfaceBlendMode: f(I, P, I), SDL_SetSurfaceAlphaMod: f(I, P, B),

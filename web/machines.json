@@ -64,6 +64,7 @@
         { "program": "jumpnbump-sdl2", "file": "jumpnbump.sdl2", "date": "Sep 16  2025" },
         { "program": "opentyrian", "file": "opentyrian", "date": "Aug 15  2026" },
         { "program": "sdlpop", "file": "prince", "date": "Jan  9  2022" },
+        { "program": "neverball", "name": "Neverball", "file": "neverball", "date": "Apr 15  2014" },
         { "program": "gears", "file": "gears", "date": "Sep 30  2026" },
         { "program": "tuxracer", "file": "tuxracer", "date": "Jan  2  2001" },
         { "program": "chromium-bsu", "file": "chromium-bsu", "date": "Sep  6  2016" },

@@ -39,6 +39,8 @@ const CAP = {
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
 const KNOWN_CAPS = new Set([0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
 const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
+// The size of one component of an array, by its type (GL_BYTE .. GL_FLOAT, GL_DOUBLE).
+const TYPE_BYTES = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x1405: 4, 0x1406: 4, 0x140a: 8 };
 /*
  * What glGetString(GL_EXTENSIONS) names: GL_EXT_compiled_vertex_array always, and those a TARGET asks
  * for (its env's gl.extensions) from the ones implemented here, entry points under their ARB names.
@@ -692,7 +694,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       case 0x0006: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, i + 1); break;
       // A quad is cut along its 1-3 diagonal, as Mesa's index generation (gallium u_indices) cuts it:
       // the spec leaves the choice to the implementation, and it decides how four colours interpolate.
-      case 0x0007: for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3); tri(i + 1, i + 2, i + 3, i + 3); } break;
+      // From ARRAYS (glDrawArrays, glDrawElements) Mesa cuts along 0-2 instead: those go through
+      // gallium's u_indices as (0,1,2),(0,2,3); immediate mode is converted by vbo_exec to (0,1,3),(1,2,3).
+      case 0x0007:
+        if (s.fromArrays) for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 2, i + 3); tri(i, i + 2, i + 3, i + 3); }
+        else for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3); tri(i + 1, i + 2, i + 3, i + 3); }
+        break;
       case 0x0008: for (let i = 0; i + 3 < v.length; i += 2) { tri(i, i + 1, i + 3, i + 3); tri(i, i + 3, i + 2, i + 3); } break;
       case 0x0009: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, 0); break;
       case 0x0000: for (const p of v) point(p); break;
@@ -926,6 +933,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (pname === LIGHT_MODEL.AMBIENT) s.sceneAmbient = v;
       else if (pname === LIGHT_MODEL.TWO_SIDE) s.twoSide = v[0] !== 0;
       else if (pname === LIGHT_MODEL.LOCAL_VIEWER) { if (v[0] !== 0) throw new Error('gl: GL_LIGHT_MODEL_LOCAL_VIEWER is not implemented'); }
+      /*
+       * GL_SEPARATE_SPECULAR_COLOR (GL 1.2): the specular term added AFTER texturing instead of
+       * before. Kept; not yet drawn so -- the specular is in the one colour as with GL_SINGLE_COLOR,
+       * which a lit TEXTURED face shows as a highlight modulated by its texel.
+       */
+      else if (pname === 0x81f8) s.colourControl = v[0];
       else throw new Error(`gl: glLightModel pname 0x${pname.toString(16)}`);
     },
     glLightModelf: (pname, v) => exec.glLightModelfv(pname, [v]),
@@ -960,6 +973,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glClientActiveTextureARB: (unit) => { s.clientUnit = unit - 0x84c0; },
     glColor3fv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
     glColor4ubv: (v) => { s.colour = [v[0] / 255, v[1] / 255, v[2] / 255, v[3] / 255]; },
+    glColor4ub: (r, g, b, a) => { s.colour = [(r & 255) / 255, (g & 255) / 255, (b & 255) / 255, (a & 255) / 255]; },
     glEnableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = true; },
     glDisableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = false; },
     glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ...inBuffer(ptr) }); },
@@ -969,16 +983,32 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     glArrayElement: (i) => {
       // Component k of element i of array a: called per vertex of every glDrawElements, so no allocation.
+      /*
+       * Every type GL 1.1 allows an array (2.8): bytes, shorts and ints, signed or not, floats and
+       * doubles. A colour or a normal of an integer type is NORMALIZED (2.13, Table 2.6: the largest
+       * value is 1.0, a signed one maps -max-1..max onto -1..1); a position or a texture coordinate
+       * is the number itself. Neverball's interface sends GL_SHORT positions, read as floats before.
+       */
       const d = dv(), u8 = M.u8;
-      const at = (a, k) => {
-        if (a.type === 0x1401) return u8[a.ptr + i * (a.stride || a.size) + k] / 255;   // GL_UNSIGNED_BYTE
-        return d.getFloat32(a.ptr + i * (a.stride || a.size * 4) + 4 * k, true);       // GL_FLOAT
+      const at = (a, k, norm) => {
+        const n = TYPE_BYTES[a.type], p = a.ptr + i * (a.stride || a.size * n) + n * k;
+        switch (a.type) {
+          case 0x1406: return d.getFloat32(p, true);
+          case 0x1401: return norm ? u8[p] / 255 : u8[p];
+          case 0x1400: { const v = d.getInt8(p); return norm ? (2 * v + 1) / 255 : v; }
+          case 0x1402: { const v = d.getInt16(p, true); return norm ? (2 * v + 1) / 65535 : v; }
+          case 0x1403: { const v = d.getUint16(p, true); return norm ? v / 65535 : v; }
+          case 0x1404: { const v = d.getInt32(p, true); return norm ? (2 * v + 1) / 4294967295 : v; }
+          case 0x1405: { const v = d.getUint32(p, true); return norm ? v / 4294967295 : v; }
+          case 0x140a: return d.getFloat64(p, true);
+          default: throw new Error(`gl: array type 0x${a.type.toString(16)}`);
+        }
       };
       const { vertex: va, color: ca, tex: ta, normal: na } = s.arrays;
-      if (na.on) s.normal = [at(na, 0), at(na, 1), at(na, 2)];
-      if (ca.on) s.colour = [at(ca, 0), at(ca, 1), at(ca, 2), ca.size > 3 ? at(ca, 3) : 1];
-      if (ta.on) s.tex = [at(ta, 0), at(ta, 1)];
-      if (va.on) vertex(at(va, 0), at(va, 1), va.size > 2 ? at(va, 2) : 0);
+      if (na.on) s.normal = [at(na, 0, true), at(na, 1, true), at(na, 2, true)];
+      if (ca.on) s.colour = [at(ca, 0, true), at(ca, 1, true), at(ca, 2, true), ca.size > 3 ? at(ca, 3, true) : 1];
+      if (ta.on) s.tex = [at(ta, 0, false), ta.size > 1 ? at(ta, 1, false) : 0];
+      if (va.on) vertex(at(va, 0, false), at(va, 1, false), va.size > 2 ? at(va, 2, false) : 0);
     },
     // GL_EXT_compiled_vertex_array: a lock is a promise the program makes, which nothing here relies on.
     glLockArraysEXT: () => {},
@@ -1134,7 +1164,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (s.recording) throw new Error('gl: glDrawArrays inside a display list is not implemented');
       exec.glBegin(mode);
       for (let i = 0; i < count; i++) exec.glArrayElement(first + i);
-      exec.glEnd();
+      s.fromArrays = true; exec.glEnd(); s.fromArrays = false;
     },
     glDrawElements: (mode, count, type, ptr) => {
       if (s.elementBuffer) ptr += s.buffers.get(s.elementBuffer).ptr;
@@ -1157,9 +1187,18 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         exec.glArrayElement(ix);
         if (s.verts.length > before) { drawStamp[ix] = gen; drawSeen[ix] = s.verts.at(-1); }   // no vertex array, no vertex
       }
-      exec.glEnd();
+      s.fromArrays = true; exec.glEnd(); s.fromArrays = false;
     },
     glIsTexture: (id) => (id && s.textures.has(id) ? 1 : 0),
+    glIsEnabled: (cap) => (s.caps.has(cap) ? 1 : 0),
+    // The front or back material's property, as glMaterialfv left it (GL_COLOR_MATERIAL included).
+    glGetMaterialfv: (face, pname, out) => {
+      const m = face === BACK ? s.backMaterial : s.material;
+      const v = pname === PNAME.AMBIENT ? m.ambient : pname === PNAME.DIFFUSE ? m.diffuse : pname === PNAME.SPECULAR ? m.specular
+        : pname === PNAME.EMISSION ? m.emission : pname === PNAME.SHININESS ? [m.shininess] : null;
+      if (!v) throw new Error(`gl: glGetMaterialfv pname 0x${pname.toString(16)}`);
+      v.forEach((x, k) => dv().setFloat32(out + 4 * k, x, true));
+    },
     glGenBuffersARB: (n, out) => {
       for (let k = 0; k < n; k++) {
         while (s.buffers.has(s.nextBuffer)) s.nextBuffer++;
@@ -1541,6 +1580,7 @@ export function glBuiltins(T) {
     glEnableClientState: f(V, U), glDisableClientState: f(V, U), glVertexPointer: f(V, I, U, I, P),
     glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I), glLockArraysEXT: f(V, I, I), glUnlockArraysEXT: f(V),
     // ARB_vertex_buffer_object, ARB_multitexture, ARB_point_parameters: by their ARB names, as GetProcAddress hands them out.
+    glColor4ub: f(V, U, U, U, U), glIsEnabled: f(U, U), glGetMaterialfv: f(V, U, U, P),
     glGenBuffersARB: f(V, I, P), glBindBufferARB: f(V, U, U), glBufferDataARB: f(V, U, I, P, U), glBufferSubDataARB: f(V, U, I, I, P),
     glDeleteBuffersARB: f(V, I, P), glIsBufferARB: f(U, U), glActiveTextureARB: f(V, U), glClientActiveTextureARB: f(V, U),
     glPointParameterfARB: f(V, U, F), glPointParameterfvARB: f(V, U, P),

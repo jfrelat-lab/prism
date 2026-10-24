@@ -36,6 +36,20 @@ void SDL_free(void *mem);
 void *SDL_memset(void *dst, int c, size_t len);
 size_t SDL_strlen(const char *str);
 size_t SDL_strlcpy(char *dst, const char *src, size_t maxlen);
+/* SDL's own allocator and string functions are the C library's here, as on Linux. */
+#include <stdlib.h>
+#include <string.h>
+#define SDL_malloc malloc
+#define SDL_calloc calloc
+#define SDL_realloc realloc
+#define SDL_strchr strchr
+#define SDL_strcmp strcmp
+#define SDL_memcpy memcpy
+#define SDL_stack_alloc(type, count) (type *)SDL_malloc(sizeof(type) * (count))
+#define SDL_stack_free(data) SDL_free(data)
+/* A release build: SDL_ASSERT_LEVEL 1, at which SDL_assert evaluates nothing. */
+#define SDL_assert(condition) ((void)sizeof(condition))
+#define SDL_assert_release(condition) ((void)sizeof(condition))
 int SDL_vsnprintf(char *text, size_t maxlen, const char *fmt, va_list ap);
 #endif
 `;
@@ -48,6 +62,7 @@ const SDL_ENDIAN = `
 #define SDL_LIL_ENDIAN 1234
 #define SDL_BIG_ENDIAN 4321
 #define SDL_BYTEORDER  SDL_LIL_ENDIAN
+#define SDL_Swap16(x) ((Uint16)((((Uint16)(x)) << 8) | (((Uint16)(x)) >> 8)))
 #define SDL_SwapLE16(x) (x)
 #define SDL_SwapLE32(x) (x)
 #define SDL_SwapBE16(x) ((Uint16)((((Uint16)(x)) << 8) | (((Uint16)(x)) >> 8)))
@@ -121,6 +136,42 @@ const SDL_KEYCODE = `
 #define SDLK_TAB '\\t'
 #define SDLK_SPACE ' '
 #define SDLK_LEFTBRACKET '['
+#define SDLK_DELETE 127
+#define SDLK_0 '0'
+#define SDLK_1 '1'
+#define SDLK_2 '2'
+#define SDLK_3 '3'
+#define SDLK_4 '4'
+#define SDLK_5 '5'
+#define SDLK_6 '6'
+#define SDLK_7 '7'
+#define SDLK_8 '8'
+#define SDLK_9 '9'
+#define SDLK_MINUS '-'
+#define SDLK_EQUALS '='
+#define SDLK_PLUS '+'
+#define SDLK_F1 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F1)
+#define SDLK_F2 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F2)
+#define SDLK_F3 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F3)
+#define SDLK_F4 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F4)
+#define SDLK_F5 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F5)
+#define SDLK_F6 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F6)
+#define SDLK_F7 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F7)
+#define SDLK_F8 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F8)
+#define SDLK_F9 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F9)
+#define SDLK_F10 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F10)
+#define SDLK_F11 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F11)
+#define SDLK_F12 SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_F12)
+#define SDLK_RIGHT SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_RIGHT)
+#define SDLK_LEFT SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_LEFT)
+#define SDLK_DOWN SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_DOWN)
+#define SDLK_UP SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_UP)
+#define SDLK_LCTRL SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_LCTRL)
+#define SDLK_LSHIFT SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_LSHIFT)
+#define SDLK_LALT SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_LALT)
+#define SDLK_RCTRL SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_RCTRL)
+#define SDLK_RSHIFT SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_RSHIFT)
+#define SDLK_RALT SDL_SCANCODE_TO_KEYCODE(SDL_SCANCODE_RALT)
 #define SDLK_RIGHTBRACKET ']'
 #define SDLK_a 'a'
 #define SDLK_b 'b'
@@ -232,8 +283,32 @@ typedef enum {
     SDL_BLENDMODE_NONE = 0x00000000, SDL_BLENDMODE_BLEND = 0x00000001,
     SDL_BLENDMODE_ADD = 0x00000002, SDL_BLENDMODE_MOD = 0x00000004
 } SDL_BlendMode;
-/* A stream of bytes as SDL reads one. Opaque here: it is made by SDL and handed back to SDL. */
-typedef struct SDL_RWops SDL_RWops;
+/*
+ * A stream of bytes as SDL reads one: SDL_rwops.h's structure, Linux's union, so that a program can
+ * make its own (SDL_AllocRW) as Neverball's fs_rwops.c does. The streams SDL itself makes are
+ * src/env/sdl2.js's; the functions below call a program's own through its pointers.
+ */
+#define RW_SEEK_SET 0
+#define RW_SEEK_CUR 1
+#define RW_SEEK_END 2
+#define SDL_RWOPS_UNKNOWN 0U
+typedef struct SDL_RWops {
+    Sint64 (*size)(struct SDL_RWops *context);
+    Sint64 (*seek)(struct SDL_RWops *context, Sint64 offset, int whence);
+    size_t (*read)(struct SDL_RWops *context, void *ptr, size_t size, size_t maxnum);
+    size_t (*write)(struct SDL_RWops *context, const void *ptr, size_t size, size_t num);
+    int (*close)(struct SDL_RWops *context);
+    Uint32 type;
+    union {
+        struct { SDL_bool autoclose; void *fp; } stdio;
+        struct { Uint8 *base; Uint8 *here; Uint8 *stop; } mem;
+        struct { void *data1; void *data2; } unknown;
+    } hidden;
+} SDL_RWops;
+SDL_RWops *SDL_AllocRW(void);
+void SDL_FreeRW(SDL_RWops *area);
+Sint64 SDL_RWsize(SDL_RWops *context);
+Sint64 SDL_RWseek(SDL_RWops *context, Sint64 offset, int whence);
 SDL_RWops *SDL_RWFromConstMem(const void *mem, int size);
 SDL_RWops *SDL_RWFromMem(void *mem, int size);
 int SDL_RWclose(SDL_RWops *context);
@@ -427,6 +502,18 @@ int SDL_RenderSetIntegerScale(SDL_Renderer *renderer, SDL_bool enable);
 int SDL_SetRenderTarget(SDL_Renderer *renderer, SDL_Texture *texture);
 Uint32 SDL_GetWindowFlags(SDL_Window *window);
 void SDL_GL_GetDrawableSize(SDL_Window *window, int *w, int *h);
+typedef struct {
+    Uint32 format;
+    int w;
+    int h;
+    int refresh_rate;
+    void *driverdata;
+} SDL_DisplayMode;
+int SDL_GetDesktopDisplayMode(int displayIndex, SDL_DisplayMode *mode);
+const char *SDL_GetDisplayName(int displayIndex);
+Uint32 SDL_GetWindowID(SDL_Window *window);
+void SDL_SetWindowGrab(SDL_Window *window, SDL_bool grabbed);
+void SDL_WarpMouseInWindow(SDL_Window *window, int x, int y);
 #define SDL_WINDOW_FULLSCREEN_DESKTOP 0x00001001
 #define SDL_WINDOW_HIDDEN     0x00000008
 #define SDL_WINDOW_RESIZABLE  0x00000020
@@ -665,6 +752,16 @@ const SDL_MAIN = `
 typedef struct SDL_version { Uint8 major, minor, patch; } SDL_version;
 #define SDL_VERSION(x) { (x)->major = SDL_MAJOR_VERSION; (x)->minor = SDL_MINOR_VERSION; (x)->patch = SDL_PATCHLEVEL; }
 void SDL_GetVersion(SDL_version *ver);
+Uint32 SDL_WasInit(Uint32 flags);
+int SDL_SetError(const char *fmt, ...);
+#define SDL_OutOfMemory() SDL_SetError("Out of memory")
+#define SDL_QUERY -1
+#define SDL_IGNORE 0
+#define SDL_DISABLE 0
+#define SDL_ENABLE 1
+Uint8 SDL_EventState(Uint32 type, int state);
+const char *SDL_GetKeyName(SDL_Keycode key);
+SDL_Keycode SDL_GetKeyFromName(const char *name);
 typedef int SDL_TimerID;
 typedef Uint32 (*SDL_TimerCallback)(Uint32 interval, void *param);
 SDL_TimerID SDL_AddTimer(Uint32 interval, SDL_TimerCallback callback, void *param);
@@ -703,6 +800,11 @@ export const SDL2_HEADERS = {
   'SDL_image.h': SDL_IMAGE,
   'SDL2/SDL_image.h': SDL_IMAGE,
   'SDL.h': SDL_MAIN,
+  // A library built against SDL 2 (SDL2_ttf) brackets its declarations with these; on Linux they are empty.
+  'SDL_rwops.h': '#include <SDL.h>\n',
+  'SDL_thread.h': '#include <SDL.h>\n',
+  'begin_code.h': '#ifndef DECLSPEC\n#define DECLSPEC\n#endif\n#ifndef SDLCALL\n#define SDLCALL\n#endif\n',
+  'close_code.h': '',
   'SDL2/SDL.h': SDL_MAIN,
   'SDL_stdinc.h': SDL_STDINC,
   // SDL 1.2's name for the same file, which SDL2 keeps as a compatibility alias and OpenTyrian

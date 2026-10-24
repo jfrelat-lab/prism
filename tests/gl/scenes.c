@@ -32,6 +32,8 @@
  *                 replaced by glBufferSubData), indices in an element buffer, offsets not zero
  *   points        points of size 1 to 8, then a receding row whose size falls with distance
  *   point-sprite  textured points under GL_POINT_SPRITE and GL_COORD_REPLACE, blended, receding
+ *   array-types   a 2D panel as Neverball's interface draws one: GL_SHORT positions, GL_UNSIGNED_BYTE
+ *                 colours (normalized), GL_FLOAT texture coordinates, interleaved, under glOrtho
  *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
@@ -297,6 +299,29 @@ static void display(void) {
     glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
     glBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, 0);
     glDeleteBuffersARB(3, b);
+  } else if (!strcmp(scene, "array-types")) {
+    struct v { GLubyte c[4]; GLfloat u[2]; GLshort p[2]; } q[8];
+    static const GLshort P[8][2] = { {20,20}, {150,20}, {150,110}, {20,110}, {170,130}, {300,130}, {300,220}, {170,220} };
+    static const GLubyte K[8][4] = { {255,0,0,255}, {0,255,0,255}, {0,0,255,255}, {255,255,255,255}, {255,128,0,255}, {0,128,255,255}, {128,0,255,255}, {40,40,40,255} };
+    for (int i = 0; i < 8; i++) { memcpy(q[i].c, K[i], 4); q[i].u[0] = (i & 1) ^ ((i >> 1) & 1); q[i].u[1] = (i >> 1) & 1; q[i].p[0] = P[i][0]; q[i].p[1] = P[i][1]; }
+    checker(16, 0);
+    glBindTexture(GL_TEXTURE_2D, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, 4, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glDisable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY); glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glColorPointer(4, GL_UNSIGNED_BYTE, sizeof q[0], q[0].c);
+    glTexCoordPointer(2, GL_FLOAT, sizeof q[0], q[0].u);
+    glVertexPointer(2, GL_SHORT, sizeof q[0], q[0].p);
+    glDrawArrays(GL_QUADS, 0, 4);
+    glEnable(GL_TEXTURE_2D);
+    glDrawArrays(GL_QUADS, 4, 4);
+    glDisable(GL_TEXTURE_2D);
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY); glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW);
   } else if (!strcmp(scene, "points") || !strcmp(scene, "point-sprite")) {
     int sprite = !strcmp(scene, "point-sprite");
     static const GLfloat atten[3] = { 0, 0, 0.02f };

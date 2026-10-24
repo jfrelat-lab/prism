@@ -1,0 +1,527 @@
+{
+  "name": "neverball",
+  "title": "NEVERBALL (Robert Kooima and the Neverball team; 1.6.0, 2014: C on SDL 2, OpenGL, SDL2_ttf over FreeType, libvorbisfile, libpng, libjpeg)",
+  "dir": "corpus/neverball-1.6.0",
+  "fetch": "curl -sL https://neverball.org/neverball-1.6.0.tar.gz | tar -xz -C corpus (sha256 73fe63cc...a88fa0; SHA-512 and size as NetBSD pkgsrc's games/neverball/distinfo); libpng 1.6.16 (https://download.sourceforge.net/libpng/libpng-1.6.16.tar.gz, sha256 02f96b6b...2073ad); libjpeg 6b and zlib 1.1.3 as for chromium-bsu; SDL2_ttf 2.0.12 (https://www.libsdl.org/projects/SDL_ttf/release/SDL2_ttf-2.0.12.tar.gz, sha256 87286054...356f6e), libogg 1.3.2 and libvorbis 1.3.4 (downloads.xiph.org/releases/, sha256 e19ee347...a654692 and eee09a0a...a1ecb, as Xiph's SHA256SUMS list them), FreeType 2.3.11 as for chromium-bsu",
+  "_build": "The Makefile's BALL_OBJS with its defaults (ENABLE_FS=stdio as for mapc, tilt_null, hmd_null, ENABLE_NLS=0), its -std=c99 and release flags. Libraries as their own builds list them: SDL2_ttf's SDL_ttf.c; libvorbis's libvorbis_la_SOURCES and libvorbisfile_la_SOURCES (lib/Makefile.am); libogg's src/ (its configure's ogg/config_types.h, run in the oracle, in corpus/libogg-1.3.2-generated); FreeType with chromium-bsu's configuration (its generated ftconfig.h/ftmodule.h and per-unit defines); libpng, libjpeg and zlib as for mapc. GL extensions asked of gl.js: the three glext_init asserts (ARB_multitexture, ARB_vertex_buffer_object, ARB_point_parameters) and ARB_point_sprite, which part.c uses. libvorbis is compiled without __i386__ (its units only): os.h then takes its C rounding for vorbis_ftoi instead of x87's fistl, as an x86-64 build does -- the choice mapc's levels were held to. SDL_ttf.c without the i386 macro too, as FreeType's own units: ftconfig.h's FT_MulFix inline is then FreeType's C rather than its x87 assembly (FT_MulFix_i386), with the same rounding.",
+  "units": {
+    "list": [
+      "share/lang.c",
+      "share/st_common.c",
+      "share/vec3.c",
+      "share/base_image.c",
+      "share/image.c",
+      "share/solid_base.c",
+      "share/solid_vary.c",
+      "share/solid_draw.c",
+      "share/solid_all.c",
+      "share/mtrl.c",
+      "share/part.c",
+      "share/geom.c",
+      "share/ball.c",
+      "share/gui.c",
+      "share/font.c",
+      "share/theme.c",
+      "share/base_config.c",
+      "share/config.c",
+      "share/video.c",
+      "share/glext.c",
+      "share/binary.c",
+      "share/state.c",
+      "share/audio.c",
+      "share/text.c",
+      "share/common.c",
+      "share/list.c",
+      "share/queue.c",
+      "share/cmd.c",
+      "share/array.c",
+      "share/dir.c",
+      "share/fbo.c",
+      "share/glsl.c",
+      "share/fs_common.c",
+      "share/fs_png.c",
+      "share/fs_jpg.c",
+      "share/fs_rwops.c",
+      "share/fs_ov.c",
+      "share/log.c",
+      "ball/hud.c",
+      "ball/game_common.c",
+      "ball/game_client.c",
+      "ball/game_server.c",
+      "ball/game_proxy.c",
+      "ball/game_draw.c",
+      "ball/score.c",
+      "ball/level.c",
+      "ball/progress.c",
+      "ball/set.c",
+      "ball/demo.c",
+      "ball/demo_dir.c",
+      "ball/util.c",
+      "ball/st_conf.c",
+      "ball/st_demo.c",
+      "ball/st_save.c",
+      "ball/st_goal.c",
+      "ball/st_fail.c",
+      "ball/st_done.c",
+      "ball/st_level.c",
+      "ball/st_over.c",
+      "ball/st_play.c",
+      "ball/st_set.c",
+      "ball/st_start.c",
+      "ball/st_title.c",
+      "ball/st_help.c",
+      "ball/st_name.c",
+      "ball/st_shared.c",
+      "ball/st_pause.c",
+      "ball/st_ball.c",
+      "ball/main.c",
+      "share/solid_sim_sol.c",
+      "share/fs_stdio.c",
+      "share/tilt_null.c",
+      "share/hmd_null.c",
+      "../SDL2_ttf-2.0.12/SDL_ttf.c",
+      "../libvorbis-1.3.4/lib/mdct.c",
+      "../libvorbis-1.3.4/lib/smallft.c",
+      "../libvorbis-1.3.4/lib/block.c",
+      "../libvorbis-1.3.4/lib/envelope.c",
+      "../libvorbis-1.3.4/lib/window.c",
+      "../libvorbis-1.3.4/lib/lsp.c",
+      "../libvorbis-1.3.4/lib/lpc.c",
+      "../libvorbis-1.3.4/lib/analysis.c",
+      "../libvorbis-1.3.4/lib/synthesis.c",
+      "../libvorbis-1.3.4/lib/psy.c",
+      "../libvorbis-1.3.4/lib/info.c",
+      "../libvorbis-1.3.4/lib/floor1.c",
+      "../libvorbis-1.3.4/lib/floor0.c",
+      "../libvorbis-1.3.4/lib/res0.c",
+      "../libvorbis-1.3.4/lib/mapping0.c",
+      "../libvorbis-1.3.4/lib/registry.c",
+      "../libvorbis-1.3.4/lib/codebook.c",
+      "../libvorbis-1.3.4/lib/sharedbook.c",
+      "../libvorbis-1.3.4/lib/lookup.c",
+      "../libvorbis-1.3.4/lib/bitrate.c",
+      "../libvorbis-1.3.4/lib/vorbisfile.c",
+      "../libogg-1.3.2/src/bitwise.c",
+      "../libogg-1.3.2/src/framing.c",
+      "../freetype-2.3.11/builds/unix/ftsystem.c",
+      "../freetype-2.3.11/src/base/ftdebug.c",
+      "../freetype-2.3.11/src/base/ftinit.c",
+      "../freetype-2.3.11/src/base/ftbase.c",
+      "../freetype-2.3.11/src/base/ftbbox.c",
+      "../freetype-2.3.11/src/base/ftbdf.c",
+      "../freetype-2.3.11/src/base/ftbitmap.c",
+      "../freetype-2.3.11/src/base/ftcid.c",
+      "../freetype-2.3.11/src/base/ftfstype.c",
+      "../freetype-2.3.11/src/base/ftgasp.c",
+      "../freetype-2.3.11/src/base/ftglyph.c",
+      "../freetype-2.3.11/src/base/ftgxval.c",
+      "../freetype-2.3.11/src/base/ftlcdfil.c",
+      "../freetype-2.3.11/src/base/ftmm.c",
+      "../freetype-2.3.11/src/base/ftotval.c",
+      "../freetype-2.3.11/src/base/ftpatent.c",
+      "../freetype-2.3.11/src/base/ftpfr.c",
+      "../freetype-2.3.11/src/base/ftstroke.c",
+      "../freetype-2.3.11/src/base/ftsynth.c",
+      "../freetype-2.3.11/src/base/fttype1.c",
+      "../freetype-2.3.11/src/base/ftwinfnt.c",
+      "../freetype-2.3.11/src/base/ftxf86.c",
+      "../freetype-2.3.11/src/truetype/truetype.c",
+      "../freetype-2.3.11/src/type1/type1.c",
+      "../freetype-2.3.11/src/cff/cff.c",
+      "../freetype-2.3.11/src/cid/type1cid.c",
+      "../freetype-2.3.11/src/pfr/pfr.c",
+      "../freetype-2.3.11/src/type42/type42.c",
+      "../freetype-2.3.11/src/winfonts/winfnt.c",
+      "../freetype-2.3.11/src/pcf/pcf.c",
+      "../freetype-2.3.11/src/bdf/bdf.c",
+      "../freetype-2.3.11/src/sfnt/sfnt.c",
+      "../freetype-2.3.11/src/autofit/autofit.c",
+      "../freetype-2.3.11/src/pshinter/pshinter.c",
+      "../freetype-2.3.11/src/raster/raster.c",
+      "../freetype-2.3.11/src/smooth/smooth.c",
+      "../freetype-2.3.11/src/cache/ftcache.c",
+      "../freetype-2.3.11/src/gzip/ftgzip.c",
+      "../freetype-2.3.11/src/lzw/ftlzw.c",
+      "../freetype-2.3.11/src/psaux/psaux.c",
+      "../freetype-2.3.11/src/psnames/psmodule.c",
+      "../libpng-1.6.16/png.c",
+      "../libpng-1.6.16/pngset.c",
+      "../libpng-1.6.16/pngget.c",
+      "../libpng-1.6.16/pngrutil.c",
+      "../libpng-1.6.16/pngtrans.c",
+      "../libpng-1.6.16/pngwutil.c",
+      "../libpng-1.6.16/pngread.c",
+      "../libpng-1.6.16/pngrio.c",
+      "../libpng-1.6.16/pngwio.c",
+      "../libpng-1.6.16/pngwrite.c",
+      "../libpng-1.6.16/pngrtran.c",
+      "../libpng-1.6.16/pngwtran.c",
+      "../libpng-1.6.16/pngmem.c",
+      "../libpng-1.6.16/pngerror.c",
+      "../libpng-1.6.16/pngpread.c",
+      "../jpeg-6b/jcomapi.c",
+      "../jpeg-6b/jutils.c",
+      "../jpeg-6b/jerror.c",
+      "../jpeg-6b/jmemmgr.c",
+      "../jpeg-6b/jmemnobs.c",
+      "../jpeg-6b/jdapimin.c",
+      "../jpeg-6b/jdapistd.c",
+      "../jpeg-6b/jdtrans.c",
+      "../jpeg-6b/jdatasrc.c",
+      "../jpeg-6b/jdmaster.c",
+      "../jpeg-6b/jdinput.c",
+      "../jpeg-6b/jdmarker.c",
+      "../jpeg-6b/jdhuff.c",
+      "../jpeg-6b/jdphuff.c",
+      "../jpeg-6b/jdmainct.c",
+      "../jpeg-6b/jdcoefct.c",
+      "../jpeg-6b/jdpostct.c",
+      "../jpeg-6b/jddctmgr.c",
+      "../jpeg-6b/jidctfst.c",
+      "../jpeg-6b/jidctflt.c",
+      "../jpeg-6b/jidctint.c",
+      "../jpeg-6b/jidctred.c",
+      "../jpeg-6b/jdsample.c",
+      "../jpeg-6b/jdcolor.c",
+      "../jpeg-6b/jquant1.c",
+      "../jpeg-6b/jquant2.c",
+      "../jpeg-6b/jdmerge.c",
+      "../zlib-1.1.3/adler32.c",
+      "../zlib-1.1.3/compress.c",
+      "../zlib-1.1.3/crc32.c",
+      "../zlib-1.1.3/gzio.c",
+      "../zlib-1.1.3/uncompr.c",
+      "../zlib-1.1.3/deflate.c",
+      "../zlib-1.1.3/trees.c",
+      "../zlib-1.1.3/zutil.c",
+      "../zlib-1.1.3/inflate.c",
+      "../zlib-1.1.3/infblock.c",
+      "../zlib-1.1.3/inftrees.c",
+      "../zlib-1.1.3/infcodes.c",
+      "../zlib-1.1.3/infutil.c",
+      "../zlib-1.1.3/inffast.c"
+    ]
+  },
+  "include": [
+    "share",
+    "../neverball-1.6.0-generated",
+    "../SDL2_ttf-2.0.12",
+    "../libvorbis-1.3.4/include",
+    "../libvorbis-1.3.4/lib",
+    "../libogg-1.3.2-generated",
+    "../libogg-1.3.2/include",
+    "../chromium-bsu-generated",
+    "../freetype-2.3.11/include",
+    "../libpng-1.6.16-generated",
+    "../libpng-1.6.16",
+    "../jpeg-6b-generated",
+    "../jpeg-6b",
+    "../zlib-1.1.3"
+  ],
+  "defines": {
+    "__linux__": "1",
+    "NDEBUG": "1",
+    "CONFIG_USER": "\".neverball\"",
+    "CONFIG_DATA": "\"./data\"",
+    "CONFIG_LOCALE": "\"./locale\"",
+    "ENABLE_NLS": "0",
+    "_REENTRANT": "1",
+    "FT_CONFIG_OPTION_SYSTEM_ZLIB": "1",
+    "FT_CONFIG_CONFIG_H": "<ftconfig.h>",
+    "FT_CONFIG_MODULES_H": "<ftmodule.h>"
+  },
+  "unitDefines": {
+    "../freetype-2.3.11/builds/unix/ftsystem.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftdebug.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftinit.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftbase.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftbbox.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftbdf.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftbitmap.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftcid.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftfstype.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftgasp.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftglyph.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftgxval.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftlcdfil.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftmm.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftotval.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftpatent.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftpfr.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftstroke.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftsynth.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/fttype1.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftwinfnt.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/base/ftxf86.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/truetype/truetype.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/type1/type1.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/cff/cff.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/cid/type1cid.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/pfr/pfr.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/type42/type42.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/winfonts/winfnt.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/pcf/pcf.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/bdf/bdf.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/sfnt/sfnt.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/autofit/autofit.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/pshinter/pshinter.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/raster/raster.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/smooth/smooth.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/cache/ftcache.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/gzip/ftgzip.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/lzw/ftlzw.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/psaux/psaux.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../freetype-2.3.11/src/psnames/psmodule.c": {
+      "FT2_BUILD_LIBRARY": "1",
+      "i386": null,
+      "__STRICT_ANSI__": "1"
+    },
+    "../libvorbis-1.3.4/lib/mdct.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/smallft.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/block.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/envelope.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/window.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/lsp.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/lpc.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/analysis.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/synthesis.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/psy.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/info.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/floor1.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/floor0.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/res0.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/mapping0.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/registry.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/codebook.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/sharedbook.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/lookup.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/bitrate.c": {
+      "__i386__": null
+    },
+    "../libvorbis-1.3.4/lib/vorbisfile.c": {
+      "__i386__": null
+    },
+    "../sdl2_ttf-2.0.12/sdl_ttf.c": {
+      "i386": null
+    }
+  },
+  "env": {
+    "stdio": {},
+    "tz": {},
+    "environ": {},
+    "getopt": {},
+    "sdl2": {},
+    "gl": {
+      "extensions": [
+        "GL_ARB_multitexture",
+        "GL_ARB_vertex_buffer_object",
+        "GL_ARB_point_parameters",
+        "GL_ARB_point_sprite"
+      ]
+    },
+    "sdl2gl": {}
+  },
+  "host": "sdl2",
+  "compile": {
+    "memory": 256,
+    "collect": true
+  }
+}

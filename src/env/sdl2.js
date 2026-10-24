@@ -51,6 +51,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     audio: null,             // { callback, userdata, spec, silence }
     events: [],
     error: 0,
+    initFlags: 0, ignored: new Set(), keyNames: {}, displayName: null,
     quit: false,
   };
   M.sdl = state;
@@ -71,6 +72,13 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
    * a number the program only hands back; what it names is kept on this side.
    */
   const streams = new Map();
+  /*
+   * A stream the PROGRAM made (SDL_AllocRW, then its own size, seek, read, write and close): every
+   * pointer that is not one of these handles. Its functions are at the head of SDL_RWops.
+   */
+  const own = (rw) => rw !== 0 && !streams.has(rw);
+  const RW_SIZE = 0, RW_SEEK = 4, RW_READ = 8, RW_WRITE = 12, RW_CLOSE = 16;
+  const fn = (rw, at) => dv().getUint32(rw + at, true);
   const streamBytes = (st) => (st.data ? st.data : M.u8.subarray(st.mem, st.mem + st.size));
   const closeStream = (rw) => {
     const st = streams.get(rw);
@@ -122,7 +130,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
 
   const api = {
     // ---------------------------------------------------------------- core
-    SDL_Init: () => 0,
+    SDL_Init: (flags) => { state.initFlags |= flags >>> 0; return 0; },
     SDL_InitSubSystem: () => 0,
     SDL_QuitSubSystem: () => 0,
     SDL_Quit: () => 0,
@@ -136,6 +144,32 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     // A millisecond counter is the resolution this clock has; the frequency says so.
     SDL_GetPerformanceCounter: () => { pump(); return BigInt(state.clock.now()); },
     SDL_GetPerformanceFrequency: () => 1000n,
+    // What was initialised: every subsystem is always there, so it is whatever was asked for.
+    SDL_WasInit: (flags) => (flags ? flags & state.initFlags : state.initFlags) >>> 0,
+    prism_SDL_SetErrorText: (text) => { state.error = intern(cstr(text)); },
+    // One display, the page: a 1024x768 desktop at 60 Hz, 32-bit.
+    SDL_GetDesktopDisplayMode: (_i, mode) => {
+      const d = dv();
+      d.setUint32(mode, 0x16161804, true); d.setInt32(mode + 4, 1024, true); d.setInt32(mode + 8, 768, true);
+      d.setInt32(mode + 12, 60, true); d.setUint32(mode + 16, 0, true);
+      return 0;
+    },
+    SDL_GetDisplayName: () => (state.displayName ??= intern('PRISM')),
+    SDL_GetWindowID: (w) => (w ? 1 : 0),
+    // The pointer belongs to the page, which captures it on a click; nothing to grab or move here.
+    SDL_SetWindowGrab: () => {},
+    SDL_WarpMouseInWindow: () => {},
+    // Which kinds of event are delivered: all, and a query answers so; an IGNORE is kept and honoured.
+    SDL_EventState: (type, st) => {
+      const was = state.ignored.has(type >>> 0) ? 0 : 1;
+      if (st === 0) state.ignored.add(type >>> 0); else if (st === 1) state.ignored.delete(type >>> 0);
+      return was;
+    },
+    SDL_GetKeyName: (key) => {
+      const name = keyName(key >>> 0);
+      return (state.keyNames[name] ??= intern(name));
+    },
+    SDL_GetKeyFromName: (p) => keyFromName(cstr(p)),
     SDL_GetVersion: (ver) => { M.u8[ver] = 2; M.u8[ver + 1] = 0; M.u8[ver + 2] = 22; },   // headers-sdl2.js's own
     SDL_free: (p) => M.rt.free(p),
     SDL_memset: (p, c, n) => M.rt.memset(p, c, n),
@@ -429,6 +463,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return rw;
     },
     SDL_RWread: (rw, ptr, size, maxnum) => {
+      if (own(rw)) return M.icall(fn(rw, RW_READ), [rw, ptr, size, maxnum]) >>> 0;
       const st = streams.get(rw);
       if (!st || !(size >>> 0)) return 0;
       const n = Math.min(maxnum >>> 0, Math.floor((st.size - st.pos) / (size >>> 0)));
@@ -438,6 +473,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return n;
     },
     SDL_RWwrite: (rw, ptr, size, num) => {
+      if (own(rw)) return M.icall(fn(rw, RW_WRITE), [rw, ptr, size, num]) >>> 0;
       const st = streams.get(rw), bytes = (size >>> 0) * (num >>> 0);
       if (!st || !st.writable || !bytes) return 0;
       if (st.data) {
@@ -451,8 +487,19 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       st.pos += bytes;
       return num >>> 0;
     },
-    SDL_RWtell: (rw) => BigInt(streams.get(rw)?.pos ?? -1),
-    SDL_RWclose: (rw) => closeStream(rw),
+    SDL_RWtell: (rw) => (own(rw) ? BigInt(M.icall(fn(rw, RW_SEEK), [rw, 0n, 1])) : BigInt(streams.get(rw)?.pos ?? -1)),
+    SDL_RWclose: (rw) => (own(rw) ? M.icall(fn(rw, RW_CLOSE), [rw]) | 0 : closeStream(rw)),
+    // An offset from the start, the position or the end (RW_SEEK_SET, CUR, END); -1 outside the stream.
+    SDL_RWseek: (rw, offset, whence) => {
+      if (own(rw)) return BigInt(M.icall(fn(rw, RW_SEEK), [rw, BigInt(offset), whence]));
+      const st = streams.get(rw);
+      if (!st) return -1n;
+      const to = Number(offset) + (whence === 1 ? st.pos : whence === 2 ? st.size : 0);
+      if (to < 0) return -1n;
+      st.pos = to;
+      return BigInt(to);
+    },
+    SDL_RWsize: (rw) => (own(rw) ? BigInt(M.icall(fn(rw, RW_SIZE), [rw])) : BigInt(streams.get(rw)?.size ?? -1)),
 
     // ---------------------------------------------------------------- audio
     /*
@@ -674,6 +721,10 @@ export function sdl2Builtins(T) {
     SDL_BuildAudioCVT: f(I, P, I, I, I, I, I, I), SDL_ConvertAudio: f(I, P),
     /* What SDLPoP adds; prototypes read from the real SDL 2 headers in the oracle container. */
     SDL_GetPerformanceCounter: f(T.ULLONG), SDL_GetPerformanceFrequency: f(T.ULLONG),
+    SDL_WasInit: f(U, U), prism_SDL_SetErrorText: f(V, P), SDL_GetDesktopDisplayMode: f(I, I, P), SDL_GetDisplayName: f(P, I),
+    SDL_GetWindowID: f(U, P), SDL_SetWindowGrab: f(V, P, I), SDL_WarpMouseInWindow: f(V, P, I, I), SDL_EventState: f(U, U, I),
+    SDL_GetKeyName: f(P, I), SDL_GetKeyFromName: f(I, P),
+    SDL_RWseek: f(T.LLONG, P, T.LLONG, I), SDL_RWsize: f(T.LLONG, P),
     SDL_GetVersion: f(V, P), SDL_free: f(V, P), SDL_memset: f(P, P, I, U), SDL_strlen: f(U, P),
     SDL_AddTimer: f(I, U, P, P), SDL_RemoveTimer: f(I, I),
     SDL_GetRendererInfo: f(I, P, P), SDL_GetRendererOutputSize: f(I, P, P, P),
@@ -693,3 +744,52 @@ export function sdl2Builtins(T) {
     ...surfaceBuiltins(T), ...imageBuiltins(T),
   };
 }
+
+/*
+ * KEY NAMES, as SDL_GetKeyName gives them (SDL_keyboard.c): a key with SDLK_SCANCODE_MASK by its
+ * scancode's name, the few control characters by theirs, a letter in capitals, any other character
+ * as itself. Neverball keeps its keys in its configuration by these names.
+ */
+const SCANCODE_NAMES = {
+  58: 'F1', 59: 'F2', 60: 'F3', 61: 'F4', 62: 'F5', 63: 'F6', 64: 'F7', 65: 'F8', 66: 'F9', 67: 'F10', 68: 'F11', 69: 'F12',
+  73: 'Insert', 74: 'Home', 75: 'PageUp', 76: 'Delete', 77: 'End', 78: 'PageDown', 79: 'Right', 80: 'Left', 81: 'Down', 82: 'Up',
+  224: 'Left Ctrl', 225: 'Left Shift', 226: 'Left Alt', 227: 'Left GUI', 228: 'Right Ctrl', 229: 'Right Shift', 230: 'Right Alt', 231: 'Right GUI',
+};
+const CHAR_NAMES = { 13: 'Return', 27: 'Escape', 8: 'Backspace', 9: 'Tab', 32: 'Space', 127: 'Delete' };
+function keyName(key) {
+  if (key & 0x40000000) return SCANCODE_NAMES[key & ~0x40000000] ?? '';
+  if (CHAR_NAMES[key]) return CHAR_NAMES[key];
+  if (key >= 0x61 && key <= 0x7a) return String.fromCharCode(key - 32);
+  return key ? String.fromCharCode(key) : '';
+}
+function keyFromName(name) {
+  if (!name) return 0;
+  const low = name.toLowerCase();
+  for (const [code, n] of Object.entries(SCANCODE_NAMES)) if (n.toLowerCase() === low) return (0x40000000 | +code) >>> 0;
+  for (const [code, n] of Object.entries(CHAR_NAMES)) if (n.toLowerCase() === low) return +code;
+  if (name.length === 1) return name.toLowerCase().charCodeAt(0);
+  return 0;
+}
+
+/*
+ * The two that are C: SDL_SetError is variadic, so it formats through SDL_vsnprintf and hands the
+ * text over; SDL_AllocRW's structure is the program's to fill, so it is the program's memory.
+ */
+export const SDL2_VARS = `
+#include <stdarg.h>
+#include <stdlib.h>
+#include <SDL.h>
+void prism_SDL_SetErrorText(const char *text);
+int SDL_SetError(const char *fmt, ...)
+{
+    static char text[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    SDL_vsnprintf(text, sizeof text, fmt, ap);
+    va_end(ap);
+    prism_SDL_SetErrorText(text);
+    return -1;
+}
+SDL_RWops *SDL_AllocRW(void) { return (SDL_RWops *)calloc(1, sizeof (SDL_RWops)); }
+void SDL_FreeRW(SDL_RWops *area) { free(area); }
+`;

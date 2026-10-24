@@ -1617,6 +1617,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       // An SDL_WINDOW_OPENGL program (sdl2gl) draws through gl.js: WebGL2 when the worker has it.
       gl: { backend: options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl', onLost: glLost },
     });
+    // Environment functions whose address the program took (SDL_GL_GetProcAddress hands GL's out).
+    bindLateBuiltins(prog);
     const sdl = prog.M.sdl;
     if (!sdl) {
       throw new Error("host 'sdl2' needs the sdl2 environment — it is what supplies the texture " +

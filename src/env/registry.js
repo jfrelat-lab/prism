@@ -41,7 +41,7 @@ import { installX11 } from './x11.js';
 import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
-import { installSDL2, sdl2Builtins } from './sdl2.js';
+import { installSDL2, sdl2Builtins, SDL2_VARS } from './sdl2.js';
 import { installSDL2GL, sdl2glBuiltins, SDL2GL_VARS } from './sdl2gl.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
 import { SDL12_HEADERS } from './headers-sdl12.js';
@@ -199,6 +199,7 @@ export const ENV = {
     },
     headers: { ...SDL2_HEADERS, ...MIXER_HEADERS },
     builtins: { ...sdl2Builtins(T), ...mixerBuiltins(T) },
+    vars: SDL2_VARS,
   },
 
   // OpenGL for SDL 2 (src/env/sdl2gl.js): a target names it beside sdl2 and gl to get it.

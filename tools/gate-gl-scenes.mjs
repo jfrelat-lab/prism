@@ -17,7 +17,8 @@ import { writeRgbPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ALL = ['tex-nearest', 'tex-linear', 'mip-nn', 'mip-ln', 'mip-ll', 'lightmap', 'alpha', 'blend', 'fog', 'clip', 'depth',
-  'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect'];
+  'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect',
+  'vbo', 'points', 'point-sprite', 'array-types'];
 const args = process.argv.slice(2);
 const pngDir = args.find((a) => a.startsWith('--png='))?.slice(6);
 const SCENES = args.filter((a) => !a.startsWith('--')).length ? args.filter((a) => !a.startsWith('--')) : ALL;

@@ -985,6 +985,42 @@ void glVertex4s(GLshort x, GLshort y, GLshort z, GLshort w);
 void glVertex4sv(const GLshort *v);
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr);
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+/*
+ * GL 1.2 and 1.3 TOKENS, as Mesa's gl.h has them (gate-gl-abi holds every value here to it): a program
+ * written for GL 1.3 names them unconditionally even on a path it does not take. Neverball's shadow
+ * pipeline is texture_env_combine over three units, which it does not choose with one unit; its
+ * separate specular colour is asked for whatever the path.
+ */
+#define GL_LIGHT_MODEL_COLOR_CONTROL 0x81F8
+#define GL_SINGLE_COLOR 0x81F9
+#define GL_SEPARATE_SPECULAR_COLOR 0x81FA
+#define GL_TEXTURE0 0x84C0
+#define GL_TEXTURE1 0x84C1
+#define GL_TEXTURE2 0x84C2
+#define GL_ACTIVE_TEXTURE 0x84E0
+#define GL_CLIENT_ACTIVE_TEXTURE 0x84E1
+#define GL_MAX_TEXTURE_UNITS 0x84E2
+#define GL_COMBINE 0x8570
+#define GL_COMBINE_RGB 0x8571
+#define GL_COMBINE_ALPHA 0x8572
+#define GL_RGB_SCALE 0x8573
+#define GL_ADD_SIGNED 0x8574
+#define GL_INTERPOLATE 0x8575
+#define GL_CONSTANT 0x8576
+#define GL_PRIMARY_COLOR 0x8577
+#define GL_PREVIOUS 0x8578
+#define GL_SOURCE0_RGB 0x8580
+#define GL_SOURCE1_RGB 0x8581
+#define GL_SOURCE2_RGB 0x8582
+#define GL_SOURCE0_ALPHA 0x8588
+#define GL_SOURCE1_ALPHA 0x8589
+#define GL_SOURCE2_ALPHA 0x858A
+#define GL_OPERAND0_RGB 0x8590
+#define GL_OPERAND1_RGB 0x8591
+#define GL_OPERAND2_RGB 0x8592
+#define GL_OPERAND0_ALPHA 0x8598
+#define GL_OPERAND1_ALPHA 0x8599
+#define GL_OPERAND2_ALPHA 0x859A
 #endif
 `;
 

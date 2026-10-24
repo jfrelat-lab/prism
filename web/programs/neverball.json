@@ -1,0 +1,33 @@
+{
+  "title": "NEVERBALL",
+  "subtitle": "Robert Kooima and the Neverball team, 2014 — 1.6.0 on SDL 2 and OpenGL, its levels compiled from their .map sources by its own mapc, built by PRISM",
+  "target": "neverball",
+  "host": "sdl2",
+  "fps": 60,
+  "memory": 268435456,
+  "needsData": {
+    "dir": "neverball",
+    "exactPaths": true,
+    "hint": "the release's data/ without its .map sources, and the .sol levels tools/neverball-sols.mjs compiles from them",
+    "marker": "data/map-easy/easy.sol"
+  },
+  "controls": [
+    [
+      "mouse",
+      "tilt the floor"
+    ],
+    [
+      "Esc",
+      "pause, menu"
+    ],
+    [
+      "Enter",
+      "choose"
+    ],
+    [
+      "F1",
+      "help"
+    ]
+  ],
+  "_why": "The first SDL 2 program here that draws through OpenGL (src/env/sdl2gl.js), on the three extensions gl.js gained for it: vertex buffer objects, point parameters and sprites, and a multitexture of one unit -- so Neverball takes its single-unit pipeline, without the ball's shadow."
+}
