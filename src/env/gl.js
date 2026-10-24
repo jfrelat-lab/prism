@@ -193,7 +193,31 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const top = () => { const st = s.stacks[s.mode]; return st[st.length - 1]; };
   const setTop = (m) => { const st = s.stacks[s.mode]; st[st.length - 1] = m; };
   const texture = () => s.textures.get(s.bound);
+  /*
+   * Component k of element i of array a, as glArrayElement reads it -- defined once, not per element.
+   * Every type GL 1.1 allows an array (2.8): bytes, shorts and ints, signed or not, floats and
+   * doubles. A colour or a normal of an integer type is NORMALIZED (2.13, Table 2.6: the largest
+   * value is 1.0, a signed one maps -max-1..max onto -1..1); a position or a texture coordinate
+   * is the number itself. Neverball's interface sends GL_SHORT positions, read as floats before.
+   */
+  function arrayAt(a, i, k, norm) {
+    // The component size and the element step are the array's own (layout(), when it was given).
+    const p = a.ptr + i * a.step + a.n * k, d = dv();
+    if (a.type === 0x1406) return d.getFloat32(p, true);
+    switch (a.type) {
+      case 0x1401: return norm ? M.u8[p] / 255 : M.u8[p];
+      case 0x1400: { const v = d.getInt8(p); return norm ? (2 * v + 1) / 255 : v; }
+      case 0x1402: { const v = d.getInt16(p, true); return norm ? (2 * v + 1) / 65535 : v; }
+      case 0x1403: { const v = d.getUint16(p, true); return norm ? v / 65535 : v; }
+      case 0x1404: { const v = d.getInt32(p, true); return norm ? (2 * v + 1) / 4294967295 : v; }
+      case 0x1405: { const v = d.getUint32(p, true); return norm ? v / 4294967295 : v; }
+      case 0x140a: return d.getFloat64(p, true);
+      default: throw new Error(`gl: array type 0x${a.type.toString(16)}`);
+    }
+  }
   // An array pointer: into the bound array buffer, or the program's memory as it stands.
+  // What an array's elements take: its component size and its step, worked out once per gl*Pointer.
+  const layout = (type, size, stride) => ({ n: TYPE_BYTES[type], step: stride || size * TYPE_BYTES[type] });
   const inBuffer = (ptr) => (s.arrayBuffer
     ? { ptr: s.buffers.get(s.arrayBuffer).ptr + ptr, buffer: s.arrayBuffer, offset: ptr }
     : { ptr, buffer: 0, offset: 0 });
@@ -223,6 +247,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
 
   // --- per-vertex work
+  /*
+   * WORK THAT DEPENDS ON STATE, NOT ON THE VERTEX, done once per state: the normal matrix of the
+   * current modelview, a directional light's normalized direction and half vector. The matrices and
+   * a light's position are always REPLACED, never written in place (setTop, glLightfv), so the object
+   * itself says whether the cached value is still the one. Same arithmetic, so the same bits.
+   */
+  let nmOf = null, nmVal = null;
+  const normalMatrixOf = (mv) => (mv === nmOf ? nmVal : (nmOf = mv, nmVal = normalMatrix(mv)));
+  const lightDir = new WeakMap();      // light position array -> { dir, hv }
   function litColour(m, eyeNormal, eye) {
     const out = [0, 0, 0, m.diffuse[3]];
     for (let k = 0; k < 3; k++) out[k] = m.emission[k] + s.sceneAmbient[k] * m.ambient[k];
@@ -233,7 +266,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // vector from the vertex to it, and it falls off as 1 / (kc + kl d + kq d^2) -- all of the
       // light's contribution, ambient included.
       let dir, att = 1;
-      if (L.position[3] === 0) dir = norm3(L.position);
+      let hvFixed = null;
+      if (L.position[3] === 0) {
+        let c = lightDir.get(L.position);
+        if (!c) { const d0 = norm3(L.position); c = { dir: d0, hv: norm3([d0[0], d0[1], d0[2] + 1]) }; lightDir.set(L.position, c); }
+        dir = c.dir; hvFixed = c.hv;
+      }
       else {
         const v = [L.position[0] - eye[0] / eye[3], L.position[1] - eye[1] / eye[3], L.position[2] - eye[2] / eye[3]];
         const d = Math.hypot(v[0], v[1], v[2]), [kc, kl, kq] = L.attenuation ?? [1, 0, 0];
@@ -243,13 +281,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const ndl = Math.max(0, eyeNormal[0] * dir[0] + eyeNormal[1] * dir[1] + eyeNormal[2] * dir[2]);
       let spec = 0;
       if (ndl > 0 && (m.specular[0] || m.specular[1] || m.specular[2])) {
-        const hv = norm3([dir[0], dir[1], dir[2] + 1]);
+        const hv = hvFixed ?? norm3([dir[0], dir[1], dir[2] + 1]);
         const ndh = Math.max(0, eyeNormal[0] * hv[0] + eyeNormal[1] * hv[1] + eyeNormal[2] * hv[2]);
         spec = m.shininess ? ndh ** m.shininess : (ndh > 0 ? 1 : 0);
       }
       for (let k = 0; k < 3; k++) out[k] += att * (L.ambient[k] * m.ambient[k] + ndl * L.diffuse[k] * m.diffuse[k] + spec * L.specular[k] * m.specular[k]);
     }
-    return out.map(clamp01);
+    out[0] = clamp01(out[0]); out[1] = clamp01(out[1]); out[2] = clamp01(out[2]); out[3] = clamp01(out[3]);
+    return out;
   }
   function vertex(x, y, z) {
     const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
@@ -272,7 +311,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
           else if (mode === PNAME.EMISSION) m.emission = s.colour;
         }
       }
-      const nm = normalMatrix(mv), n = s.normal;
+      const nm = normalMatrixOf(mv), n = s.normal;
       let en = [nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]];
       if (s.caps.has(CAP.NORMALIZE)) en = norm3(en);
       colour = litColour(s.material, en, eye);
@@ -285,7 +324,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const genS = s.caps.has(0x0c60), genT = s.caps.has(0x0c61);
     if ((genS && s.texGen[0].mode === 0x2402) || (genT && s.texGen[1].mode === 0x2402)) {
       // GL_SPHERE_MAP (GL 1.1, 2.10.4): the eye-space reflection of the view direction about the normal.
-      const nm = normalMatrix(mv), n = s.normal;
+      const nm = normalMatrixOf(mv), n = s.normal;
       const en = norm3([nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]]);
       const w = eye[3] || 1, u = norm3([eye[0] / w, eye[1] / w, eye[2] / w]);
       const d = 2 * (en[0] * u[0] + en[1] * u[1] + en[2] * u[2]);
@@ -317,8 +356,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     eye: a.eye && a.eye.map((v, k) => v + (b.eye[k] - v) * t),
   });
   function clipNear(poly) {
+    let inside = true;
+    for (let i = 0; i < poly.length; i++) if (poly[i].clip[2] + poly[i].clip[3] < 0) { inside = false; break; }
+    if (inside) return poly;
     const d = (v) => v.clip[2] + v.clip[3];
-    if (poly.every((v) => d(v) >= 0)) return poly;
     s.stats.clipped++;
     const out = [];
     for (let i = 0; i < poly.length; i++) {
@@ -627,9 +668,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       let A = null, B = null, C = null, area;
       if (webgl) {
         const [vx, vy, vw, vh] = s.viewport;
-        const wx = (v) => (v.clip[0] / v.clip[3] + 1) * vw / 2 + vx, wy = (v) => (v.clip[1] / v.clip[3] + 1) * vh / 2 + vy;
-        const ax = wx(p0), ay = wy(p0);
-        area = (wx(p1) - ax) * (wy(p2) - ay) - (wx(p2) - ax) * (wy(p1) - ay);
+        const ax = (p0.clip[0] / p0.clip[3] + 1) * vw / 2 + vx, ay = (p0.clip[1] / p0.clip[3] + 1) * vh / 2 + vy;
+        const bx = (p1.clip[0] / p1.clip[3] + 1) * vw / 2 + vx, by = (p1.clip[1] / p1.clip[3] + 1) * vh / 2 + vy;
+        const cx = (p2.clip[0] / p2.clip[3] + 1) * vw / 2 + vx, cy = (p2.clip[1] / p2.clip[3] + 1) * vh / 2 + vy;
+        area = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
       } else {
         A = toWindow(p0); B = toWindow(p1); C = toWindow(p2);
         area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
@@ -976,39 +1018,18 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glColor4ub: (r, g, b, a) => { s.colour = [(r & 255) / 255, (g & 255) / 255, (b & 255) / 255, (a & 255) / 255]; },
     glEnableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = true; },
     glDisableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = false; },
-    glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ...inBuffer(ptr) }); },
-    glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ...inBuffer(ptr) }); },
-    glTexCoordPointer: (size, type, stride, ptr) => { if (!s.clientUnit) Object.assign(s.arrays.tex, { size, type, stride, ...inBuffer(ptr) }); },
-    glNormalPointer: (type, stride, ptr) => { Object.assign(s.arrays.normal, { size: 3, type, stride, ...inBuffer(ptr) }); },
+    glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
+    glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
+    glTexCoordPointer: (size, type, stride, ptr) => { if (!s.clientUnit) Object.assign(s.arrays.tex, { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
+    glNormalPointer: (type, stride, ptr) => { Object.assign(s.arrays.normal, { size: 3, type, stride, ...layout(type, 3, stride), ...inBuffer(ptr) }); },
+    // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     glArrayElement: (i) => {
-      // Component k of element i of array a: called per vertex of every glDrawElements, so no allocation.
-      /*
-       * Every type GL 1.1 allows an array (2.8): bytes, shorts and ints, signed or not, floats and
-       * doubles. A colour or a normal of an integer type is NORMALIZED (2.13, Table 2.6: the largest
-       * value is 1.0, a signed one maps -max-1..max onto -1..1); a position or a texture coordinate
-       * is the number itself. Neverball's interface sends GL_SHORT positions, read as floats before.
-       */
-      const d = dv(), u8 = M.u8;
-      const at = (a, k, norm) => {
-        const n = TYPE_BYTES[a.type], p = a.ptr + i * (a.stride || a.size * n) + n * k;
-        switch (a.type) {
-          case 0x1406: return d.getFloat32(p, true);
-          case 0x1401: return norm ? u8[p] / 255 : u8[p];
-          case 0x1400: { const v = d.getInt8(p); return norm ? (2 * v + 1) / 255 : v; }
-          case 0x1402: { const v = d.getInt16(p, true); return norm ? (2 * v + 1) / 65535 : v; }
-          case 0x1403: { const v = d.getUint16(p, true); return norm ? v / 65535 : v; }
-          case 0x1404: { const v = d.getInt32(p, true); return norm ? (2 * v + 1) / 4294967295 : v; }
-          case 0x1405: { const v = d.getUint32(p, true); return norm ? v / 4294967295 : v; }
-          case 0x140a: return d.getFloat64(p, true);
-          default: throw new Error(`gl: array type 0x${a.type.toString(16)}`);
-        }
-      };
       const { vertex: va, color: ca, tex: ta, normal: na } = s.arrays;
-      if (na.on) s.normal = [at(na, 0, true), at(na, 1, true), at(na, 2, true)];
-      if (ca.on) s.colour = [at(ca, 0, true), at(ca, 1, true), at(ca, 2, true), ca.size > 3 ? at(ca, 3, true) : 1];
-      if (ta.on) s.tex = [at(ta, 0, false), ta.size > 1 ? at(ta, 1, false) : 0];
-      if (va.on) vertex(at(va, 0, false), at(va, 1, false), va.size > 2 ? at(va, 2, false) : 0);
+      if (na.on) s.normal = [arrayAt(na, i, 0, true), arrayAt(na, i, 1, true), arrayAt(na, i, 2, true)];
+      if (ca.on) s.colour = [arrayAt(ca, i, 0, true), arrayAt(ca, i, 1, true), arrayAt(ca, i, 2, true), ca.size > 3 ? arrayAt(ca, i, 3, true) : 1];
+      if (ta.on) s.tex = [arrayAt(ta, i, 0, false), ta.size > 1 ? arrayAt(ta, i, 1, false) : 0];
+      if (va.on) vertex(arrayAt(va, i, 0, false), arrayAt(va, i, 1, false), va.size > 2 ? arrayAt(va, i, 2, false) : 0);
     },
     // GL_EXT_compiled_vertex_array: a lock is a promise the program makes, which nothing here relies on.
     glLockArraysEXT: () => {},
