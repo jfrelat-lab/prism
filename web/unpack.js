@@ -115,10 +115,157 @@ export async function unzip(zip) {
   return files;
 }
 
+// ---- LHA: Quake 1.06's RESOURCE.1 is a self-extracting LHA 2.13 archive (Yoshi's SFX) ----
+
+/*
+ * CRC-16 as LHA keeps it per file: the reflected 0x8005 polynomial (0xA001), starting from zero. A
+ * decoder that slips by one bit is caught here rather than by the program that reads the file.
+ */
+const CRC16 = (() => {
+  const t = new Uint16Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? (c >>> 1) ^ 0xa001 : c >>> 1; t[n] = c; }
+  return t;
+})();
+const crc16 = (b) => { let c = 0; for (let i = 0; i < b.length; i++) c = CRC16[(c ^ b[i]) & 0xff] ^ (c >>> 8); return c; };
+
+/*
+ * -lh5-, -lh6-, -lh7- (LHA 2.x): LZSS over an 8, 32 or 64 KiB window, its literals-and-lengths and
+ * its distances Huffman-coded, the trees sent anew every block. As Haruhiko Okumura's ar002 and LHa
+ * for UNIX's slide.c/huf.c write it, read here as CANONICAL codes, which is what make_table builds:
+ * codes assigned by length, then by symbol, bits most significant first.
+ *   a block:      16 bits of symbol count, then the three trees
+ *   the T tree:   5 bits of count, each length in 3 bits, 7 meaning "count the 1s that follow"; after
+ *                 the third length, 2 bits of zero lengths. Count 0: one symbol, sent in 5 bits.
+ *   the C tree:   9 bits of count (510 symbols), each length through the T tree: 0 is one zero
+ *                 length, 1 is 3 + 4 bits of them, 2 is 20 + 9 bits of them, n > 2 is length n - 2.
+ *   the P tree:   as the T tree with 4 or 5 bits of count and no zero run; a distance is its code
+ *                 n, then n - 1 more bits under a leading 1 (n = 0 is distance 0).
+ * A symbol under 256 is a byte; 256 + k copies k + 3 bytes from distance + 1 back.
+ */
+function lhDecode(src, size, dicbit) {
+  const NC = 510, NT = 19, np = dicbit + 1, pbit = dicbit === 13 ? 4 : 5;
+  const out = new Uint8Array(size);
+  let pos = 0, buf = 0, have = 0;
+  const bits = (n) => {
+    if (n === 0) return 0;
+    while (have < n) { buf = (buf << 8 | (pos < src.length ? src[pos] : 0)) >>> 0; pos++; have += 8; }
+    have -= n;
+    return (buf >>> have) & ((1 << n) - 1);
+  };
+  // A canonical code from its lengths: per length, how many codes and the symbols in code order.
+  const tree = (lens) => {
+    const count = new Uint16Array(17), syms = [];
+    for (const l of lens) count[l]++;
+    count[0] = 0;
+    for (let l = 1; l <= 16; l++) for (let s = 0; s < lens.length; s++) if (lens[s] === l) syms.push(s);
+    return { count, syms };
+  };
+  const decode = (t) => {
+    if (t.only !== undefined) return t.only;
+    let code = 0, first = 0, index = 0;
+    for (let l = 1; l <= 16; l++) {
+      code |= bits(1);
+      const n = t.count[l];
+      if (code - first < n) return t.syms[index + code - first];
+      index += n; first = (first + n) << 1; code <<= 1;
+    }
+    throw new Error('LHA: a Huffman code longer than 16 bits');
+  };
+  const ptLens = (nn, nbit, special) => {
+    const n = bits(nbit);
+    if (n === 0) return { only: bits(nbit) };
+    const lens = new Uint8Array(nn);
+    for (let i = 0; i < n;) {
+      let c = bits(3);
+      if (c === 7) while (bits(1)) c++;
+      lens[i++] = c;
+      if (i === special) for (let z = bits(2); z > 0; z--) lens[i++] = 0;
+    }
+    return tree(lens);
+  };
+  const cLens = (t) => {
+    const n = bits(9);
+    if (n === 0) return { only: bits(9) };
+    const lens = new Uint8Array(NC);
+    for (let i = 0; i < n;) {
+      let c = decode(t);
+      if (c <= 2) {
+        const run = c === 0 ? 1 : c === 1 ? bits(4) + 3 : bits(9) + 20;
+        for (let z = 0; z < run; z++) lens[i++] = 0;
+      } else lens[i++] = c - 2;
+    }
+    return tree(lens);
+  };
+  let left = 0, C = null, P = null, o = 0;
+  while (o < size) {
+    if (left === 0) {
+      left = bits(16);
+      const T = ptLens(NT, 5, 3);
+      C = cLens(T);
+      P = ptLens(np, pbit, -1);
+    }
+    left--;
+    const c = decode(C);
+    if (c < 256) { out[o++] = c; continue; }
+    let d = decode(P);
+    if (d > 1) d = (1 << (d - 1)) + bits(d - 1);
+    let from = o - d - 1;
+    if (from < 0) throw new Error('LHA: a match reaches before the start of the file');
+    for (let n = c - 253; n > 0 && o < size; n--) out[o++] = out[from++];
+  }
+  return out;
+}
+
+const LH_DICBIT = { '-lh5-': 13, '-lh6-': 15, '-lh7-': 16 };
+
+/** Where an LHA archive's first header is: at 0, or after a self-extractor's stub. -1 if none. */
+function lhaStart(b) {
+  for (let i = 0; i + 22 < Math.min(b.length, 1 << 16); i++) {
+    if (b[i + 2] !== 0x2d || b[i + 3] !== 0x6c || b[i + 4] !== 0x68 || b[i + 6] !== 0x2d) continue;
+    if (b[i] >= 22 && b[i + 20] <= 1) return i;              // a header's size, and level 0 or 1
+  }
+  return -1;
+}
+
+/**
+ * An LHA archive's files, as { path, bytes }: headers of level 0 and 1 (DOS LHA's), stored (-lh0-)
+ * or -lh5/6/7-, each checked against its CRC-16. Directory entries (-lhd-) are skipped.
+ */
+export function unlha(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const files = [];
+  let at = lhaStart(b);
+  if (at < 0) throw new Error('not an LHA archive');
+  while (at < b.length && b[at] !== 0) {
+    const hs = b[at], level = b[at + 20];
+    const method = String.fromCharCode(...b.subarray(at + 2, at + 7));
+    let csize = dv.getUint32(at + 7, true);
+    const size = dv.getUint32(at + 11, true), nl = b[at + 21];
+    const name = Array.from(b.subarray(at + 22, at + 22 + nl), (x) => String.fromCharCode(x)).join('');
+    const crc = dv.getUint16(at + 22 + nl, true);
+    let data = at + 2 + hs;
+    if (level === 1) {
+      // Extended headers follow the base one, each led by its own size; the compressed size counts them.
+      for (let ext = dv.getUint16(data - 2, true); ext; ext = dv.getUint16(data - 2, true)) { data += ext; csize -= ext; }
+    } else if (level !== 0) throw new Error(`${name}: LHA header level ${level} is not supported (0 and 1)`);
+    const raw = b.subarray(data, data + csize);
+    at = data + csize;
+    if (method === '-lhd-') continue;
+    let bytes;
+    if (method === '-lh0-') bytes = raw.slice();
+    else if (LH_DICBIT[method]) bytes = lhDecode(raw, size, LH_DICBIT[method]);
+    else throw new Error(`${name}: LHA method ${method} is not supported (-lh0-, -lh5-, -lh6-, -lh7-)`);
+    if (crc16(bytes) !== crc) throw new Error(`${name}: CRC-16 mismatch after unpacking (${method})`);
+    files.push({ path: name.replace(/\\/g, '/'), bytes });
+  }
+  return files;
+}
+
 /**
  * id's installer pieces, joined and read: DEICE.EXE beside NAME.1, NAME.2... is a self-extracting
  * PKZIP whose central directory keeps its offsets from the start of the whole .EXE, so `unzip` reads
- * the joined bytes as they stand. Anything else is returned unchanged.
+ * the joined bytes as they stand -- or, from Quake 1.06 on, a self-extracting LHA (RESOURCE.EXE).
+ * Anything else is returned unchanged.
  */
 export async function deice(files) {
   const byName = new Map(files.map((f) => [f.path.toUpperCase(), f]));
@@ -131,7 +278,7 @@ export async function deice(files) {
   for (let n = 1; byName.has(`${stem}.${n}`); n++) pieces.push(byName.get(`${stem}.${n}`).bytes);
   const whole = new Uint8Array(pieces.reduce((a, x) => a + x.length, 0));
   let at = 0; for (const x of pieces) { whole.set(x, at); at += x.length; }
-  return unzip(whole);
+  return lhaStart(whole) >= 0 ? unlha(whole) : unzip(whole);
 }
 
 // ---- .tar.gz: Unix releases of the period (Cube's cube_2005_08_29_unix.tar.gz) ----

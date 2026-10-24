@@ -9,11 +9,15 @@
 // And it has to be able to fail: an imploded entry read with the other window size (flag bit 1
 // flipped) must not come out as the file.
 //
+// LHA, when <games>/quake-shareware/quake106.zip is there: Quake 1.06's installer, its RESOURCE.1 a
+// self-extracting LHA 2.13 archive (-lh5-). Its PAK0.PAK must be the shareware pak in
+// <games>/quake/id1/ byte for byte, and one byte changed in the compressed data must be refused.
+//
 //   node tools/gate-unpack.mjs [--games=~/games]
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { unzip, explode } from '../web/unpack.js';
+import { unzip, explode, unlha, unpackArchive } from '../web/unpack.js';
 import { skip } from './gate-skip.mjs';
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
@@ -54,5 +58,21 @@ try { wrong = explode(hit.data, hit.size, hit.flags ^ 2); } catch { wrong = null
 const loose = readFileSync(join(GAMES, 'scumm', SETS[0][1], hit.name));
 check(!wrong || Buffer.compare(Buffer.from(wrong), loose) !== 0, `control: ${hit.name} exploded with the other window size is not the file`);
 
-console.log(bad ? `\n${bad} check(s) failed` : '\nthe page unpacks stored, deflated and imploded ZIP entries as the files they were made from');
+// LHA: Quake 1.06's shareware installer, against the pak it installs.
+const Q106 = join(GAMES, 'quake-shareware', 'quake106.zip');
+const QPAK = ['pak0.pak', 'PAK0.PAK'].map((n) => join(GAMES, 'quake', 'id1', n)).find(existsSync);
+if (existsSync(Q106) && QPAK) {
+  const zipped = new Uint8Array(readFileSync(Q106));
+  const out = await unpackArchive(zipped);
+  check(Buffer.compare(Buffer.from(out['ID1/PAK0.PAK'] ?? []), readFileSync(QPAK)) === 0,
+    `quake106.zip: RESOURCE.1 (LHA -lh5-) unpacked, ${Object.keys(out).length} files, ID1/PAK0.PAK equal to the shareware pak`);
+  // The control: one byte of PAK0.PAK's compressed data changed, a megabyte in.
+  const res = (await unzip(zipped)).find((x) => x.path.toUpperCase() === 'RESOURCE.1').bytes;
+  res[29005 + 36 + (1 << 20)] ^= 0x10;
+  let refused = false;
+  try { unlha(res); } catch (e) { refused = /CRC|code|match/.test(e.message); }
+  check(refused, 'control: RESOURCE.1 with one compressed byte changed is refused');
+} else console.log('skip quake106.zip: not in <games>/quake-shareware/, or no shareware pak in <games>/quake/id1/ to hold it to');
+
+console.log(bad ? `\n${bad} check(s) failed` : '\nthe page unpacks stored, deflated and imploded ZIP entries, and LHA, as the files they were made from');
 process.exit(bad ? 1 : 0);
