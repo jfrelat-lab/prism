@@ -42,6 +42,7 @@ import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
 import { installSDL2, sdl2Builtins } from './sdl2.js';
+import { installSDL2GL, sdl2glBuiltins, SDL2GL_VARS } from './sdl2gl.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
 import { SDL12_HEADERS } from './headers-sdl12.js';
 import { installSDL12, sdl12Builtins } from './sdl12.js';
@@ -200,6 +201,9 @@ export const ENV = {
     builtins: { ...sdl2Builtins(T), ...mixerBuiltins(T) },
   },
 
+  // OpenGL for SDL 2 (src/env/sdl2gl.js): a target names it beside sdl2 and gl to get it.
+  sdl2gl: { needs: ['sdl2', 'gl'], install: (M) => installSDL2GL(M), vars: SDL2GL_VARS, builtins: sdl2glBuiltins(T) },
+
   /*
    * SDL 1.2, for the ports written against it. See src/env/headers-sdl12.js.
    *
@@ -247,6 +251,9 @@ export const ENV = {
  * `spec` is either a list of names or an object of name -> options; a name may also carry options
  * the caller cannot put in JSON (a `micros` clock, a keyboard queue) through `extra`.
  */
+/** A target's environment names, whether its `env` is a list or an object of name -> options. */
+export function envNames(spec) { return Array.isArray(spec) ? spec : Object.keys(spec ?? {}); }
+
 export function buildEnv(M, spec, extra = {}) {
   const wanted = Array.isArray(spec) ? Object.fromEntries(spec.map(n => [n, {}])) : { ...spec };
   const out = {}, done = new Set();

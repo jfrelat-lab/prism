@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { writeRgbPng } from './png.mjs';
 import { titleCard } from './title-card.mjs';
+import { envNames } from '../src/env/registry.js';
 import { virtualClock } from '../src/env/clock.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -71,7 +72,7 @@ for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.
     const bgrx = new Uint8Array(shot.w * shot.h * 4);
     for (let i = 0; i < shot.w * shot.h; i++) { bgrx[4 * i] = shot.rgba[4 * i + 2]; bgrx[4 * i + 1] = shot.rgba[4 * i + 1]; bgrx[4 * i + 2] = shot.rgba[4 * i]; }
     writeRgbPng(file, { bytes: bgrx, width: shot.w, height: shot.h });
-  } else if (desc.host === 'sdl' && JSON.parse(readFileSync(join(ROOT, 'targets', `${desc.target}.json`), 'utf8')).env?.includes('gl')) {
+  } else if (desc.host === 'sdl' && envNames(JSON.parse(readFileSync(join(ROOT, 'targets', `${desc.target}.json`), 'utf8')).env).includes('gl')) {
     /*
      * An SDL 1.2 OPENGL program (Chromium B.S.U.): frame N at its SDL_GL_SwapBuffers, on a virtual
      * clock, with its data laid out as the page lays it (needsData.mount, exactPaths).

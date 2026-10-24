@@ -19,7 +19,7 @@ import { cxxForTarget } from '../src/cxx/index.js';
  * TARGET'S OWN env list through buildEnv rather than naming them one by one, which is the same rule
  * the DOS branch's comment states and did not follow.
  */
-import { buildEnv, envHeaders, envBuiltins } from '../src/env/registry.js';
+import { buildEnv, envHeaders, envBuiltins, envNames } from '../src/env/registry.js';
 import { installAsm } from '../src/asm/link.js';
 import { asmText } from '../src/asm/gas.js';
 import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from '../src/asm/tasm-link.js';
@@ -534,7 +534,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
        * the translation tables rather than straight at the heap. Same rule as src/target.js, read
        * from the same env list, so Node and the browser cannot disagree about it.
        */
-      paged: program.compile?.paged ?? (program.env ?? []).includes('vgaplanar'),
+      paged: program.compile?.paged ?? envNames(program.env).includes('vgaplanar'),
     memory: program.memory,
       shared: true,                    // the page reads pixels straight out of this image
       /*
@@ -552,7 +552,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       ppSizeof: program.compile?.ppSizeof ?? null,
       lenientPaste: !!program.compile?.lenientPaste,
       cxx: cxxForTarget(program.compile?.cxx, program.caseInsensitive),
-      window: program.compile?.window ?? (program.env ?? []).includes('ega'),
+      window: program.compile?.window ?? envNames(program.env).includes('ega'),
       externData,
       // The environments' builtin signatures, as src/target.js passes them -- so a program compiled
       // in the page links against the same library version it would in Node.
@@ -690,7 +690,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * already linked into the same image -- so this answers dlopen/dlsym out of PRISM's own symbol
      * table, keyed by the soname the program's makefile built and its source asks for.
      */
-    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
+    if (envNames(program.env).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     /*
      * A second PROGRAM, when the descriptor names one.
      *
@@ -716,7 +716,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * buffer (see src/env/dsp.js); Doom writes to it through a separate program. Reading the target's
      * own env list is what keeps this from being a guess about what an X11 program usually wants.
      */
-    if ((program.env ?? []).includes('dsp')) {
+    if (envNames(program.env).includes('dsp')) {
       installDsp(prog.M, { publish: { ctrl, audio } });
     }
     installX11(prog.M, {
@@ -749,7 +749,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * slots of the ones gl.js implements can only be filled once gl.js is installed.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
-    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
+    if (envNames(program.env).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     installPortMachine(prog.M);
     installSvgalib(prog.M, { keyboard: { next: () => keyboard.nextEvent() }, mouse });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
@@ -773,8 +773,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * after X11 because GLX takes the window's size from the program's own XCreateWindow.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
-    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
-    if ((program.env ?? []).includes('dsp')) installDsp(prog.M, { publish: { ctrl, audio } });
+    if (envNames(program.env).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
+    if (envNames(program.env).includes('dsp')) installDsp(prog.M, { publish: { ctrl, audio } });
     installX11(prog.M, {
       keys: keyNames(options.keys),
       keyboard: { pending: () => keyboard.pending(), next: () => keyboard.nextEvent() },
@@ -1041,7 +1041,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * the worker has an OffscreenCanvas. The frame boundary is SwapBuffers.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
-    if ((program.env ?? []).includes('wsock')) installWsock(prog.M);
+    if (envNames(program.env).includes('wsock')) installWsock(prog.M);
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
     installGL(prog.M, { backend, onLost: glLost });
     const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
@@ -1110,7 +1110,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * stop at "no Win32 GDI layer". The frame boundary is BitBlt.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
-    if ((program.env ?? []).includes('wsock')) installWsock(prog.M);
+    if (envNames(program.env).includes('wsock')) installWsock(prog.M);
     bindWin32Modules();
     const sym = (n) => prog.mod.symbols.get(n)?.addr ?? 0;
     const at = {
@@ -1614,6 +1614,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
        * and this one asked 487 million times over 200 frames of OpenTyrian.
        */
       sdl2: { clock: sleepingClock((ms) => { park(ms); }) },
+      // An SDL_WINDOW_OPENGL program (sdl2gl) draws through gl.js: WebGL2 when the worker has it.
+      gl: { backend: options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl', onLost: glLost },
     });
     const sdl = prog.M.sdl;
     if (!sdl) {
@@ -1685,6 +1687,17 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      */
     const innerPoll = prog.M.rt.SDL_PollEvent;
     prog.M.rt.SDL_PollEvent = function (...a) { deliverKeys(); return innerPoll.apply(this, a); };
+
+    // AN OPENGL WINDOW (sdl2gl): the frame gl.js drew, published at every SDL_GL_SwapWindow.
+    if (env.sdl2gl) {
+      const publishGL = glPublisher('SDL 2 OpenGL', prog);
+      env.sdl2gl.onSwap = (gl) => {
+        publishGL(gl);
+        deliverKeys();
+        reader.endFrame();
+        pace();
+      };
+    }
 
     /*
      * SOUND: the buffers the program's SDL audio callback fills go into the ring the page plays, at
@@ -1981,7 +1994,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * client's does. Reading the target's own env list is what keeps this from being a guess about
      * what a text program usually wants.
      */
-    if ((program.env ?? []).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
+    if (envNames(program.env).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     installStdio(prog.M, {
       files,
       readChar: () => {

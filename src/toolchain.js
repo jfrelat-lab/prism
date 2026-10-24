@@ -14,5 +14,5 @@ const BY_ENV = {
 
 /** The compile options implied by a target's environments; the target's own `compile` wins over them. */
 export function toolchainCompile(env = []) {
-  return Object.assign({}, ...env.filter((e) => BY_ENV[e]).map((e) => BY_ENV[e]));
+  return Object.assign({}, ...(Array.isArray(env) ? env : Object.keys(env ?? {})).filter((e) => BY_ENV[e]).map((e) => BY_ENV[e]));
 }

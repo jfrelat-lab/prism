@@ -373,6 +373,40 @@ typedef struct SDL_Texture SDL_Texture;
 #define SDL_WINDOWPOS_CENTERED 0x2FFF0000
 #define SDL_WINDOWPOS_UNDEFINED 0x1FFF0000
 #define SDL_WINDOW_ALLOW_HIGHDPI 0x00002000
+/* OpenGL (src/env/sdl2gl.js, which a target names beside gl): SDL_video.h's values. */
+#define SDL_WINDOW_FULLSCREEN 0x00000001
+#define SDL_WINDOW_OPENGL 0x00000002
+#define SDL_WINDOW_SHOWN 0x00000004
+#define SDL_WINDOW_BORDERLESS 0x00000010
+#define SDL_WINDOWPOS_CENTERED_DISPLAY(X) (0x2FFF0000u | (X))
+#define SDL_WINDOWPOS_UNDEFINED_DISPLAY(X) (0x1FFF0000u | (X))
+typedef void *SDL_GLContext;
+typedef enum {
+    SDL_GL_RED_SIZE, SDL_GL_GREEN_SIZE, SDL_GL_BLUE_SIZE, SDL_GL_ALPHA_SIZE, SDL_GL_BUFFER_SIZE,
+    SDL_GL_DOUBLEBUFFER, SDL_GL_DEPTH_SIZE, SDL_GL_STENCIL_SIZE, SDL_GL_ACCUM_RED_SIZE,
+    SDL_GL_ACCUM_GREEN_SIZE, SDL_GL_ACCUM_BLUE_SIZE, SDL_GL_ACCUM_ALPHA_SIZE, SDL_GL_STEREO,
+    SDL_GL_MULTISAMPLEBUFFERS, SDL_GL_MULTISAMPLESAMPLES, SDL_GL_ACCELERATED_VISUAL,
+    SDL_GL_RETAINED_BACKING, SDL_GL_CONTEXT_MAJOR_VERSION, SDL_GL_CONTEXT_MINOR_VERSION,
+    SDL_GL_CONTEXT_EGL, SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_PROFILE_MASK,
+    SDL_GL_SHARE_WITH_CURRENT_CONTEXT, SDL_GL_FRAMEBUFFER_SRGB_CAPABLE,
+    SDL_GL_CONTEXT_RELEASE_BEHAVIOR, SDL_GL_CONTEXT_RESET_NOTIFICATION, SDL_GL_CONTEXT_NO_ERROR,
+    SDL_GL_FLOATBUFFERS
+} SDL_GLattr;
+int SDL_GL_LoadLibrary(const char *path);
+void *SDL_GL_GetProcAddress(const char *proc);
+void SDL_GL_UnloadLibrary(void);
+SDL_bool SDL_GL_ExtensionSupported(const char *extension);
+void SDL_GL_ResetAttributes(void);
+int SDL_GL_SetAttribute(SDL_GLattr attr, int value);
+int SDL_GL_GetAttribute(SDL_GLattr attr, int *value);
+SDL_GLContext SDL_GL_CreateContext(SDL_Window *window);
+int SDL_GL_MakeCurrent(SDL_Window *window, SDL_GLContext context);
+SDL_Window *SDL_GL_GetCurrentWindow(void);
+SDL_GLContext SDL_GL_GetCurrentContext(void);
+int SDL_GL_SetSwapInterval(int interval);
+int SDL_GL_GetSwapInterval(void);
+void SDL_GL_SwapWindow(SDL_Window *window);
+void SDL_GL_DeleteContext(SDL_GLContext context);
 #define SDL_RENDERER_SOFTWARE 0x00000001
 #define SDL_RENDERER_TARGETTEXTURE 0x00000008
 #define SDL_TEXTUREACCESS_TARGET 2

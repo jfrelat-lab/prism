@@ -21,7 +21,7 @@ import { compileProgram, bindLateBuiltins, loadSnapshot, snapshotProgram } from 
 import { cacheEnabled, buildKey, recordingResolver, loadCached, storeCached } from './build-cache.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
-import { buildEnv, envVars, envHeaders, envBuiltins } from './env/registry.js';
+import { buildEnv, envVars, envHeaders, envBuiltins, envNames } from './env/registry.js';
 import { installAsm } from './asm/link.js';
 import { asmText } from './asm/gas.js';
 import { cxxForTarget } from './cxx/index.js';
@@ -450,9 +450,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
      * tweaked modes leave Chain-4 set, so its window is linear and it would pay for nothing. A
      * target that asks for neither emits, byte for byte, what it emitted before any of this.
      */
-    paged: c.paged ?? (target.env ?? []).includes('vgaplanar'),
+    paged: c.paged ?? envNames(target.env).includes('vgaplanar'),
     // ...and a DEVICE WINDOW for the EGA (env `ega`): every integer access tests for A000h (emit.js).
-    window: c.window ?? (target.env ?? []).includes('ega'),
+    window: c.window ?? envNames(target.env).includes('ega'),
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
   };
   const compileWith = (res) => compileProgram(units, {
