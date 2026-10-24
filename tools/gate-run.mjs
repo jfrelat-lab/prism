@@ -1920,6 +1920,26 @@ int main(void)
 }
 `);
 
+// %n: the characters a scan has consumed so far, assigned but not counted, and white space not
+// skipped before it. Neverball's mapc reads every line of a .map with it.
+C('scanf-percent-n', `#include <stdio.h>
+int main(void)
+{
+    int a = 0, b = 0, n = -1, m = -1, k;
+    char w[16] = "-";
+    k = sscanf("  12 abc 7", "%d%n %s%n", &a, &n, w, &m);
+    printf("%d %d %d %s %d\\n", k, a, n, w, m);
+    k = sscanf("x", "%n", &n);
+    printf("%d %d\\n", k, n);
+    k = sscanf("( 1 2 3 ) tail", "( %d %d %d )%n", &a, &b, &a, &n);
+    printf("%d %d\\n", k, n);
+    n = -1;
+    k = sscanf("abc", "%*s%n", &n);
+    printf("%d %d\\n", k, n);
+    return 0;
+}
+`);
+
 // What a scan returns when the input ENDS, measured on glibc: white space in the format is satisfied
 // by none at all, so running out while skipping it is not a failure; a conversion that finds the
 // input already ended is one, and is EOF when nothing was assigned before it. SDLPoP's ini reader

@@ -592,7 +592,11 @@ export function installStdio(M, {
     afterWrite(h, 1, b === 10);
   }
 
-  function scan(getc, ungetc, fmtPtr, args) {
+  function scan(getc0, ungetc0, fmtPtr, args) {
+    // What has been consumed so far, for %n: a character read and pushed back does not count.
+    let consumed = 0;
+    const getc = () => { const c = getc0(); if (c >= 0) consumed++; return c; };
+    const ungetc = (c) => { consumed--; ungetc0(c); };
     const fmt = M.mod.cstr(fmtPtr);
     const dv = M.mod.dv;
     let ai = 0, assigned = 0;
@@ -651,6 +655,15 @@ export function installStdio(M, {
           } else set.add(body[k]);
         }
         scanset = { negate, set };
+      }
+
+      /*
+       * `%n`: the characters consumed so far, into an int. It reads nothing, skips no white space and
+       * is not counted in the return value (C99 7.19.6.2p12). mapc reads its .map lines with it.
+       */
+      if (conv === 'n') {
+        if (!suppress) dv.setInt32(args[ai++] | 0, consumed, true);
+        continue;
       }
 
       const max = width ? +width : (conv === 'c' ? 1 : Infinity);
