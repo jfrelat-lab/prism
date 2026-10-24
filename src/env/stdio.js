@@ -542,13 +542,24 @@ export function installStdio(M, {
     scanf: (fmtPtr, args) => scan(readChar, () => {}, fmtPtr, args ?? []),
   };
 
+  /*
+   * A file's bytes are a view of the file's length over a buffer that may be larger. The spare room
+   * is used before a new buffer is made: the view used to be cut to the exact length, so the next
+   * write found no room, and writing a file four bytes at a time copied it whole each time --
+   * two thirds of Neverball's mapc went there. Only a buffer grown HERE is extended in place: a
+   * file's first bytes may be a view into memory shared with something else.
+   */
+  const grown = new WeakSet();
   function grow(h, need) {
-    if (h.bytes.length >= need) return;
-    const bigger = new Uint8Array(Math.max(need, h.bytes.length * 2, 64));
-    bigger.set(h.bytes);
-    h.bytes = bigger.subarray(0, need);
+    const b = h.bytes;
+    if (b.length >= need) return;
     // The store must see the same object the handle grows into, or a re-open reads the old bytes.
-    h.bytes = bigger.subarray(0, Math.max(need, h.pos));
+    const len = Math.max(need, h.pos);
+    if (grown.has(b.buffer) && b.byteOffset === 0 && b.buffer.byteLength >= len) { h.bytes = new Uint8Array(b.buffer, 0, len); return; }
+    const bigger = new Uint8Array(Math.max(len, b.length * 2, 64));
+    bigger.set(b);
+    grown.add(bigger.buffer);
+    h.bytes = bigger.subarray(0, len);
   }
 
   function readByte(fp) {
