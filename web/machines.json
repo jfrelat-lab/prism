@@ -51,6 +51,7 @@
       "programs": [
         { "program": "doom", "file": "doom", "date": "Dec 23  1997" },
         { "program": "doom-shareware", "name": "DOOM (shareware)", "file": "doom1", "date": "Dec 23  1997" },
+        { "program": "quake-shareware", "name": "Quake (shareware)", "file": "quake", "date": "Aug  1  1996" },
         { "program": "quake", "variant": "x11", "file": "quake", "date": "Aug  1  1996" },
         { "program": "quake", "variant": "glx", "file": "glquake.glx", "date": "Dec 21  1999" },
         { "program": "quake-svgalib", "file": "quake.svga", "date": "Aug  1  1996" },

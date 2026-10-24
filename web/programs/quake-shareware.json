@@ -1,0 +1,44 @@
+{
+  "title": "Quake (shareware)",
+  "subtitle": "id Software, 1996 · episode one from id's own 1.06 shareware archive, served as published and unpacked in the page (LHA, as its installer did); the X11 build of the GPL source",
+  "target": "quake:x11",
+  "args": "+host_framerate 0.0138",
+  "argsHint": "+host_framerate 0.0138 keeps the world at real speed; `+map e1m1` drops straight into the first level (the shareware episode is e1m1 to e1m8, and start). The mouse needs nothing on X11.",
+  "fps": 72,
+  "memory": 536870912,
+  "needsData": {
+    "dir": "quake-shareware",
+    "archive": "quake106.zip",
+    "pick": [
+      "PAK0.PAK"
+    ],
+    "archiveUnder": "id1/",
+    "hint": "quake106.zip as id published it (idgames, idstuff/quake/): DEICE.EXE and RESOURCE.1, a self-extracting LHA archive, unpacked in the page"
+  },
+  "controls": [
+    [
+      "W A S D",
+      "move"
+    ],
+    [
+      "arrows",
+      "look"
+    ],
+    [
+      "Space",
+      "jump"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Esc",
+      "menu"
+    ],
+    [
+      "~",
+      "console"
+    ]
+  ]
+}

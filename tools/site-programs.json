@@ -1,5 +1,5 @@
 {
-  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Tux Racer's data states no licence; its author's SourceForge project publishes it under the GPL v2 (tools/site-licenses/tuxracer-data.txt). Left out for now: morph3d (no licence in its file), Tyrian 2.1 (its own file_id.diz forbids distribution), SDLPoP, Quake, Keen Dreams (proprietary data, or shareware terms that forbid it). Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Cube's (its readme: \"you may freely distribute the cube archive unmodified on any media\"), a tar.gz unpacked in the page. So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
+  "_doc": "What tools/site.mjs ships: programs whose code AND data may be redistributed by a third party, each with its licences. `program` is a web/programs/*.json descriptor, `machine` the shelf it sits on (web/machines.json), `licenseFiles` what is copied beside it (`path` in the repository, corpus included, or `from: data` for a file under --games). A program is added here only once both licences have been READ on disk, not remembered: 2026-10-13 audit. Tux Racer's data states no licence; its author's SourceForge project publishes it under the GPL v2 (tools/site-licenses/tuxracer-data.txt). Left out for now: morph3d (no licence in its file), Tyrian 2.1 (its own file_id.diz forbids distribution), SDLPoP, Keen Dreams (proprietary data, or shareware terms that forbid it). Quake's shareware is shipped as its ARCHIVE (quake106.zip, its RESOURCE.1 an LHA that web/unpack.js opens): its licence allows passing the archive on whole, and forbids showing the game's screens, so Quake and its gallery siblings have a title card (thumb.card, tools/title-card.mjs), never a screenshot. Doom's shareware is shipped as its ARCHIVE, unmodified, as its terms allow (web/unpack.js); So is Cube's (its readme: \"you may freely distribute the cube archive unmodified on any media\"), a tar.gz unpacked in the page. So is Heretic's: its source is GPL since 2008 (Raven's release on SourceForge is byte-identical to the tree PRISM compiles).",
   "programs": [
     {
       "id": "chromium-bsu",
@@ -85,6 +85,42 @@
         {
           "name": "DOOM source licence (GPL-2.0)",
           "path": "corpus/DOOM/LICENSE.TXT",
+          "for": "code"
+        }
+      ]
+    },
+    {
+      "id": "quake-shareware",
+      "thumb": {
+        "card": "Its licence forbids screenshots"
+      },
+      "program": "quake-shareware",
+      "machine": "linux",
+      "dataFiles": [
+        "quake106.zip"
+      ],
+      "title": "Quake (shareware)",
+      "author": "id Software",
+      "year": 1996,
+      "kind": "First-person shooter",
+      "blurb": "Episode one, Dimension of the Doomed, from id's 1.06 shareware archive, unpacked in the page; played by the X11 build of Quake's GPL source.",
+      "code": {
+        "license": "GPL-2.0 (Quake source release)",
+        "source": "https://github.com/id-Software/Quake"
+      },
+      "data": {
+        "license": "Shareware, id's Limited Use Software License Agreement: the archive as published, whole, compressed, free of charge"
+      },
+      "caution": "Quake's shareware licence forbids showing its screens (sections 3 and 4: \"a screen display or a screenshot\"), so this page shows the game's name, not a picture of it. Playing it here is the visitor running their copy, which the licence allows.",
+      "licenseFiles": [
+        {
+          "name": "Shareware licence (SLICNSE.TXT)",
+          "path": "tools/site-licenses/quake-shareware.txt",
+          "for": "data"
+        },
+        {
+          "name": "Quake source licence (GPL-2.0)",
+          "path": "corpus/Quake/gnu.txt",
           "for": "code"
         }
       ]
@@ -545,7 +581,8 @@
       "source": "https://github.com/id-Software/Quake",
       "thumb": {
         "frames": 300,
-        "target": "quake.json:x11"
+        "target": "quake.json:x11",
+        "card": "Its licence forbids screenshots"
       }
     },
     {
@@ -689,7 +726,8 @@
       "needs": "id1/pak0.pak and pak1.pak from your copy",
       "source": "https://github.com/id-Software/Quake",
       "thumb": {
-        "page": "its window on the Windows desktop, from the page"
+        "page": "its window on the Windows desktop, from the page",
+        "card": "Its licence forbids screenshots"
       }
     },
     {
@@ -706,7 +744,8 @@
       "needs": "id1/pak0.pak and pak1.pak from your copy",
       "source": "https://github.com/id-Software/Quake",
       "thumb": {
-        "page": "E1M1 at 72 fps, from the page"
+        "page": "E1M1 at 72 fps, from the page",
+        "card": "Its licence forbids screenshots"
       }
     },
     {
@@ -723,7 +762,8 @@
       "needs": "id1/pak0.pak and pak1.pak from your copy",
       "source": "https://github.com/id-Software/Quake",
       "thumb": {
-        "page": "its window on the Windows desktop, from the page"
+        "page": "its window on the Windows desktop, from the page",
+        "card": "Its licence forbids screenshots"
       }
     },
     {

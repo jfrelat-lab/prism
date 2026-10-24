@@ -5,6 +5,15 @@ is updated continuously, so entries are dated rather than versioned; the source 
 comes from are released as [prism-sources](https://github.com/jfrelat-lab/prism-sources/releases).
 Every change is in the [commit history](https://github.com/jfrelat-lab/prism/commits/main).
 
+## 2026-10-24
+
+- **Quake plays without your files**: [/quake-shareware/](https://prism-compiler.pages.dev/quake-shareware/),
+  the first episode from id's own 1.06 shareware archive, served as published and unpacked in the
+  page. Its installer is an LHA archive, which the page now reads (checked against the pak it
+  installs, byte for byte). Its licence forbids showing the game's screens, so Quake's cards show its
+  name instead of a picture.
+- **A game's page says "Play your copy"** when the local library holds it, as the showcase does.
+
 ## 2026-10-23
 
 - **Every game has a page of its own**, at an address you can share: [/doom/](https://prism-compiler.pages.dev/doom/),

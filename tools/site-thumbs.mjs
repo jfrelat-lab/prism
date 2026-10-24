@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { writeRgbPng } from './png.mjs';
+import { titleCard } from './title-card.mjs';
 import { virtualClock } from '../src/env/clock.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -27,7 +28,16 @@ const manifest = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'),
 // The programs the export ships, and the gallery of those it only shows: both get a thumbnail.
 const programs = [...manifest.programs, ...(manifest.gallery ?? [])];
 // `thumb.page`: a thumbnail taken in the page by hand, where no headless run reaches the picture.
-for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.args) && (!ONLY || ONLY.includes(p.id)))) {
+for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.args || p.thumb?.card) && (!ONLY || ONLY.includes(p.id)))) {
+  /*
+   * `thumb.card`: no picture of the program, its name instead (tools/title-card.mjs) -- for one whose
+   * licence forbids showing its screens. The string is the line that says why.
+   */
+  if (e.thumb.card) {
+    titleCard(join(OUT, `${e.id}.png`), { title: e.title, sub: `${e.author}, ${e.year}`, note: typeof e.thumb.card === 'string' ? e.thumb.card : '' });
+    console.log(`${e.id}: title card`);
+    continue;
+  }
   const desc = JSON.parse(readFileSync(join(ROOT, 'web/programs', `${e.program}.json`), 'utf8'));
   const file = join(OUT, `${e.id}.png`);
   const frame = e.thumb.frames;
