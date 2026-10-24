@@ -37,8 +37,18 @@ const CAP = {
   POLYGON_OFFSET_FILL: 0x8037, CLIP_PLANE0: 0x3000, STENCIL_TEST: 0x0b90,
 };
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
-const KNOWN_CAPS = new Set([0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57]);
+const KNOWN_CAPS = new Set([0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
 const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
+/*
+ * What glGetString(GL_EXTENSIONS) names: GL_EXT_compiled_vertex_array always, and those a TARGET asks
+ * for (its env's gl.extensions) from the ones implemented here, entry points under their ARB names.
+ * Not advertised by default: a program that sees GL_ARB_multitexture may want what is not here --
+ * Quake II and III take glMultiTexCoord2fARB and two units from it -- and would change its path.
+ */
+const EXTENSIONS = 'GL_EXT_compiled_vertex_array';
+const OPTIONAL_EXTENSIONS = new Set(['GL_ARB_multitexture', 'GL_ARB_vertex_buffer_object', 'GL_ARB_point_parameters', 'GL_ARB_point_sprite']);
+// Capabilities that belong to a texture unit (2D texturing, coordinate generation).
+const UNIT_CAPS = new Set([0x0de1, 0x0c60, 0x0c61, 0x0c62, 0x0c63]);
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
 const LIGHT_MODEL = { LOCAL_VIEWER: 0x0b51, TWO_SIDE: 0x0b52, AMBIENT: 0x0b53 };
@@ -118,7 +128,9 @@ function baseFormat(internal) {
  * uses texture objects on "1.1" and display lists otherwise -- so a gate can ask for either, as
  * MESA_GL_VERSION_OVERRIDE does on the reference side.
  */
-export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM', onLost = null } = {}) {
+export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM', onLost = null, extensions = [] } = {}) {
+  for (const e of extensions) if (!OPTIONAL_EXTENSIONS.has(e)) throw new Error(`gl: extension ${e} is not implemented`);
+  const extensionString = [EXTENSIONS, ...extensions].join(' ');
   // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
   // exports (src/env/dl.js), as opengl32.dll does for GetProcAddress (src/env/opengl32.c).
   M.glNames = new Set([...GL_H.matchAll(/\b(gl[A-Z]\w*)\s*\(/g)].map((m) => m[1]));
@@ -160,6 +172,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     colourMaterial: { face: 0x0408, mode: 0x1602 },    // GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE
     unknownCaps: new Set(),
     scissor: [0, 0, 0, 0], pointSize: 1, lineWidth: 1,
+    // ARB_point_parameters: the size's clamp and its attenuation with eye distance (a + b d + c d^2);
+    // ARB_point_sprite's COORD_REPLACE gives each point's fragments texture coordinates across it.
+    pointMin: 0, pointMax: 64, pointAtten: [1, 0, 0], coordReplace: false,
+    // ARB_multitexture: the selected server and client units. One unit is implemented, and
+    // GL_MAX_TEXTURE_UNITS says so; a program that asks for more falls back on one (Neverball does).
+    activeUnit: 0, clientUnit: 0,
+    // ARB_vertex_buffer_object: a buffer is a block of the program's own memory, so an array pointer
+    // into a bound buffer is an ordinary pointer once its base is added -- the arrays, glDrawArrays
+    // and glDrawElements read it unchanged. id -> { ptr, size }; the two bindings by target.
+    buffers: new Map(), nextBuffer: 1, arrayBuffer: 0, elementBuffer: 0,
     colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
@@ -169,6 +191,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const top = () => { const st = s.stacks[s.mode]; return st[st.length - 1]; };
   const setTop = (m) => { const st = s.stacks[s.mode]; st[st.length - 1] = m; };
   const texture = () => s.textures.get(s.bound);
+  // An array pointer: into the bound array buffer, or the program's memory as it stands.
+  const inBuffer = (ptr) => (s.arrayBuffer
+    ? { ptr: s.buffers.get(s.arrayBuffer).ptr + ptr, buffer: s.arrayBuffer, offset: ptr }
+    : { ptr, buffer: 0, offset: 0 });
 
   /** Size the framebuffer; the window system (glut.js, glx.js) calls this. */
   function resize(w, h) {
@@ -616,6 +642,31 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       else rasterTriangle(A, B, C, flatColour);
     }
   }
+  /*
+   * A POINT: a square of the point size, in window pixels, centred on the vertex -- as two triangles
+   * that the rest of the pipeline treats like any other. ARB_point_parameters scales the size by
+   * 1 / sqrt(a + b d + c d^2), then clamps it -- d the eye DEPTH |z|, as Mesa takes it (the extension
+   * says the distance to the eye; Mesa's fixed function, the reference here, measures along z); with GL_POINT_SPRITE and
+   * COORD_REPLACE its texture coordinates run 0..1 across it, t from the top (ARB_point_sprite).
+   */
+  function point(v) {
+    if (v.clip[3] <= 0 || v.clip[2] < -v.clip[3]) return;      // behind the eye or the near plane
+    const [a, b, c] = s.pointAtten;
+    let size = s.pointSize;
+    if (b || c || a !== 1) {
+      const d = v.eyeZ;
+      size *= Math.sqrt(1 / (a + b * d + c * d * d));
+    }
+    size = Math.min(Math.max(size, s.pointMin, 1), s.pointMax);
+    const [, , vw, vh] = s.viewport, hx = size / vw * v.clip[3], hy = size / vh * v.clip[3];
+    const sprite = s.coordReplace && s.caps.has(0x8861);
+    const at = (dx, dy, u, t) => ({ ...v, clip: [v.clip[0] + dx * hx, v.clip[1] + dy * hy, v.clip[2], v.clip[3]], tex: sprite ? [u, t] : v.tex });
+    const q = [at(-1, -1, 0, 1), at(1, -1, 1, 1), at(1, 1, 1, 0), at(-1, 1, 0, 0)];
+    // Counter-clockwise in the window; reversed under glFrontFace(GL_CW), so culling never takes a point.
+    if (s.frontFace !== CCW) q.reverse();
+    triangle(q[0], q[1], q[2], null);
+    triangle(q[0], q[2], q[3], null);
+  }
   function line(a, b) {
     const seg = clipUserSegment(clipNear([a, b]));
     if (seg.length < 2) return;
@@ -644,7 +695,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       case 0x0007: for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3); tri(i + 1, i + 2, i + 3, i + 3); } break;
       case 0x0008: for (let i = 0; i + 3 < v.length; i += 2) { tri(i, i + 1, i + 3, i + 3); tri(i, i + 3, i + 2, i + 3); } break;
       case 0x0009: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, 0); break;
-      default: throw new Error(`gl: primitive 0x${mode.toString(16)} (points) is not implemented`);
+      case 0x0000: for (const p of v) point(p); break;
+      default: throw new Error(`gl: primitive 0x${mode.toString(16)} is not implemented`);
     }
   }
   /** What the GPU path needs of the fragment state, as one comparable value. */
@@ -701,6 +753,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glClearColor: (r, g, b, a) => { s.clear = [r, g, b, a].map(clamp01); },
     glEnable: (cap) => {
+      if (s.activeUnit && UNIT_CAPS.has(cap)) return;
       // A capability this GL does not implement is said once, by number: enabling it changes nothing
       // here, and a picture that is wrong for that reason should be traceable to it.
       if (!KNOWN_CAPS.has(cap) && !(cap >= 0x4000 && cap < 0x4008) && !(cap >= 0x3000 && cap < 0x3006) && !s.unknownCaps.has(cap)) {
@@ -710,7 +763,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.caps.add(cap);
     },
     glColorMaterial: (face, mode) => { s.colourMaterial = { face, mode }; },
-    glDisable: (cap) => { s.caps.delete(cap); },
+    glDisable: (cap) => { if (s.activeUnit && UNIT_CAPS.has(cap)) return; s.caps.delete(cap); },
     glShadeModel: (m) => { s.shade = m; },
     glCullFace: (m) => { s.cullFace = m; },
     glFrontFace: (m) => { s.frontFace = m; },
@@ -881,6 +934,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glFogi: (p, v) => exec.glFogf(p, v),
     glFogfv: (p, v) => { if (p === FOG.COLOR) s.fog.colour = v.map(clamp01); else exec.glFogf(p, v[0]); },
     glBindTexture: (target, id) => {
+      if (s.activeUnit) return;
       if (target !== CAP.TEXTURE_2D) throw new Error(`gl: texture target 0x${target.toString(16)}`);
       if (!s.textures.has(id)) s.textures.set(id, newTexture());
       s.bound = id;
@@ -894,14 +948,24 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glScissor: (x, y, w, h) => { s.scissor = [x, y, w, h]; },
     glPointSize: (v) => { s.pointSize = v; },
+    glPointParameterfvARB: (p, v) => {
+      if (p === 0x8126) s.pointMin = v[0];                    // GL_POINT_SIZE_MIN
+      else if (p === 0x8127) s.pointMax = v[0];               // GL_POINT_SIZE_MAX
+      else if (p === 0x8128) {}                               // GL_POINT_FADE_THRESHOLD_SIZE: no multisampling to fade into
+      else if (p === 0x8129) s.pointAtten = [v[0], v[1], v[2]];   // GL_POINT_DISTANCE_ATTENUATION
+      else throw new Error(`gl: glPointParameter 0x${p.toString(16)}`);
+    },
+    glPointParameterfARB: (p, v) => exec.glPointParameterfvARB(p, [v]),
+    glActiveTextureARB: (unit) => { s.activeUnit = unit - 0x84c0; },
+    glClientActiveTextureARB: (unit) => { s.clientUnit = unit - 0x84c0; },
     glColor3fv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
     glColor4ubv: (v) => { s.colour = [v[0] / 255, v[1] / 255, v[2] / 255, v[3] / 255]; },
-    glEnableClientState: (cap) => { s.arrays[ARRAY[cap]].on = true; },
-    glDisableClientState: (cap) => { s.arrays[ARRAY[cap]].on = false; },
-    glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ptr }); },
-    glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ptr }); },
-    glTexCoordPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.tex, { size, type, stride, ptr }); },
-    glNormalPointer: (type, stride, ptr) => { Object.assign(s.arrays.normal, { size: 3, type, stride, ptr }); },
+    glEnableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = true; },
+    glDisableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = false; },
+    glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ...inBuffer(ptr) }); },
+    glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ...inBuffer(ptr) }); },
+    glTexCoordPointer: (size, type, stride, ptr) => { if (!s.clientUnit) Object.assign(s.arrays.tex, { size, type, stride, ...inBuffer(ptr) }); },
+    glNormalPointer: (type, stride, ptr) => { Object.assign(s.arrays.normal, { size: 3, type, stride, ...inBuffer(ptr) }); },
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     glArrayElement: (i) => {
       // Component k of element i of array a: called per vertex of every glDrawElements, so no allocation.
@@ -919,7 +983,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // GL_EXT_compiled_vertex_array: a lock is a promise the program makes, which nothing here relies on.
     glLockArraysEXT: () => {},
     glUnlockArraysEXT: () => {},
-    glTexEnvf: (target, p, v) => { if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`); },
+    glTexEnvf: (target, p, v) => {
+      if (target === 0x8861 && p === 0x8862) { s.coordReplace = !!v; return; }   // GL_POINT_SPRITE, GL_COORD_REPLACE
+      if (s.activeUnit) return;
+      if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`);
+    },
     glTexEnvi: (target, p, v) => exec.glTexEnvf(target, p, v),
     glTexParameteri: (target, p, v) => exec.glTexParameterf(target, p, v),
     glTexImage2D: (target, level, internal, w, h, border, format, type, texels) => {
@@ -968,6 +1036,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexGenfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x2500 ? 1 : 4)],
     glClipPlane: (a) => [a[0], Array.from({ length: 4 }, (_, k) => dv().getFloat64(a[1] + 8 * k, true))],
     glTexParameterfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x1004 ? 4 : 1)],
+    glPointParameterfvARB: (a) => [a[0], f32(a[1], a[0] === 0x8129 ? 3 : 1)],
     glTexImage2D: (a) => {
       if (a[7] !== 0x1401) throw new Error(`gl: texel type 0x${a[7].toString(16)} (only GL_UNSIGNED_BYTE)`);
       return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8]) : null];
@@ -998,7 +1067,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glEndList: () => { s.lists.set(s.recordingId, s.recording); s.recording = null; },
     glDeleteLists: (n, range) => { for (let k = 0; k < range; k++) s.lists.delete(n + k); },
     glGetString: (name) => {
-      const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: version, 0x1f03: 'GL_EXT_compiled_vertex_array' }[name];
+      const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: version, 0x1f03: extensionString }[name];
       if (text === undefined) return 0;
       if (!s.strings.has(name)) s.strings.set(name, M.mod.intern([...new TextEncoder().encode(text), 0]));
       return s.strings.get(name);
@@ -1055,7 +1124,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glGetIntegerv: (p, out) => {
       // The pixel store: the two alignments kept, the other modes 0 (glPixelStorei accepts only that).
       const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
-      const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : null;
+      const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [1] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
     },
@@ -1068,6 +1137,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       exec.glEnd();
     },
     glDrawElements: (mode, count, type, ptr) => {
+      if (s.elementBuffer) ptr += s.buffers.get(s.elementBuffer).ptr;
       if (s.recording) throw new Error('gl: glDrawElements inside a display list is not implemented');
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
       if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
@@ -1090,6 +1160,44 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       exec.glEnd();
     },
     glIsTexture: (id) => (id && s.textures.has(id) ? 1 : 0),
+    glGenBuffersARB: (n, out) => {
+      for (let k = 0; k < n; k++) {
+        while (s.buffers.has(s.nextBuffer)) s.nextBuffer++;
+        s.buffers.set(s.nextBuffer, { ptr: 0, size: 0 });
+        dv().setUint32(out + 4 * k, s.nextBuffer++, true);
+      }
+    },
+    glBindBufferARB: (target, id) => {
+      if (id && !s.buffers.has(id)) s.buffers.set(id, { ptr: 0, size: 0 });
+      if (target === 0x8892) s.arrayBuffer = id; else if (target === 0x8893) s.elementBuffer = id;
+      else throw new Error(`gl: buffer target 0x${target.toString(16)}`);
+    },
+    // New storage, filled from `data` or left zero; an array pointing into the old one follows it.
+    glBufferDataARB: (target, size, data) => {
+      const id = target === 0x8892 ? s.arrayBuffer : s.elementBuffer, b = s.buffers.get(id);
+      if (!b) throw new Error('gl: glBufferData with no buffer bound');
+      const old = b.ptr;
+      if (old) M.rt.free(old);
+      b.ptr = size ? M.rt.calloc(1, size) : 0; b.size = size;
+      if (data && size) M.u8.copyWithin(b.ptr, data, data + size);
+      for (const a of Object.values(s.arrays)) if (a.buffer === id) a.ptr = b.ptr + a.offset;
+    },
+    glBufferSubDataARB: (target, offset, size, data) => {
+      const b = s.buffers.get(target === 0x8892 ? s.arrayBuffer : s.elementBuffer);
+      if (!b || offset + size > b.size) throw new Error('gl: glBufferSubData outside the buffer');
+      M.u8.copyWithin(b.ptr + offset, data, data + size);
+    },
+    glDeleteBuffersARB: (n, ids) => {
+      for (let k = 0; k < n; k++) {
+        const id = dv().getUint32(ids + 4 * k, true), b = s.buffers.get(id);
+        if (!b) continue;
+        if (b.ptr) M.rt.free(b.ptr);
+        s.buffers.delete(id);
+        if (s.arrayBuffer === id) s.arrayBuffer = 0;
+        if (s.elementBuffer === id) s.elementBuffer = 0;
+      }
+    },
+    glIsBufferARB: (id) => (id && s.buffers.has(id) ? 1 : 0),
     // Names no texture uses and none handed out before; they become textures when first bound (GL 1.1, 3.8.8).
     glGenTextures: (n, out) => {
       for (let k = 0; k < n; k++) {
@@ -1432,6 +1540,10 @@ export function glBuiltins(T) {
     glScissor: f(V, I, I, I, I), glPointSize: f(V, F), glColor3fv: f(V, P), glColor4ubv: f(V, P),
     glEnableClientState: f(V, U), glDisableClientState: f(V, U), glVertexPointer: f(V, I, U, I, P),
     glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I), glLockArraysEXT: f(V, I, I), glUnlockArraysEXT: f(V),
+    // ARB_vertex_buffer_object, ARB_multitexture, ARB_point_parameters: by their ARB names, as GetProcAddress hands them out.
+    glGenBuffersARB: f(V, I, P), glBindBufferARB: f(V, U, U), glBufferDataARB: f(V, U, I, P, U), glBufferSubDataARB: f(V, U, I, I, P),
+    glDeleteBuffersARB: f(V, I, P), glIsBufferARB: f(U, U), glActiveTextureARB: f(V, U), glClientActiveTextureARB: f(V, U),
+    glPointParameterfARB: f(V, U, F), glPointParameterfvARB: f(V, U, P),
     glDeleteTextures: f(V, I, P), glGenTextures: f(V, I, P), glGetError: f(U),
     glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I),
     glGetString: f(P, U), glFinish: f(V), glFlush: f(V),

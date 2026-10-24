@@ -1131,6 +1131,68 @@ typedef void (*PFNGLUNLOCKARRAYSEXTPROC)(void);
 #define GL_OPERAND1_ALPHA_EXT 0x8599
 #define GL_OPERAND2_ALPHA_EXT 0x859A
 #endif
+/*
+ * Three ARB extensions src/env/gl.js implements, advertised only to a target that asks for them
+ * (its env's gl.extensions): tokens and types always, prototypes under GL_GLEXT_PROTOTYPES as Mesa's
+ * header has them. ARB_multitexture has ONE unit here (GL_MAX_TEXTURE_UNITS_ARB says so).
+ */
+#ifndef GL_ARB_multitexture
+#define GL_ARB_multitexture 1
+#define GL_TEXTURE0_ARB 0x84C0
+#define GL_TEXTURE1_ARB 0x84C1
+#define GL_TEXTURE2_ARB 0x84C2
+#define GL_ACTIVE_TEXTURE_ARB 0x84E0
+#define GL_CLIENT_ACTIVE_TEXTURE_ARB 0x84E1
+#define GL_MAX_TEXTURE_UNITS_ARB 0x84E2
+typedef void (*PFNGLACTIVETEXTUREARBPROC)(GLenum texture);
+typedef void (*PFNGLCLIENTACTIVETEXTUREARBPROC)(GLenum texture);
+#ifdef GL_GLEXT_PROTOTYPES
+void glActiveTextureARB(GLenum texture);
+void glClientActiveTextureARB(GLenum texture);
+#endif
+#endif
+#ifndef GL_ARB_vertex_buffer_object
+#define GL_ARB_vertex_buffer_object 1
+typedef long GLsizeiptrARB;
+typedef long GLintptrARB;
+#define GL_ARRAY_BUFFER_ARB 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER_ARB 0x8893
+#define GL_STREAM_DRAW_ARB 0x88E0
+#define GL_STATIC_DRAW_ARB 0x88E4
+#define GL_DYNAMIC_DRAW_ARB 0x88E8
+typedef void (*PFNGLBINDBUFFERARBPROC)(GLenum target, GLuint buffer);
+typedef void (*PFNGLDELETEBUFFERSARBPROC)(GLsizei n, const GLuint *buffers);
+typedef void (*PFNGLGENBUFFERSARBPROC)(GLsizei n, GLuint *buffers);
+typedef GLboolean (*PFNGLISBUFFERARBPROC)(GLuint buffer);
+typedef void (*PFNGLBUFFERDATAARBPROC)(GLenum target, GLsizeiptrARB size, const void *data, GLenum usage);
+typedef void (*PFNGLBUFFERSUBDATAARBPROC)(GLenum target, GLintptrARB offset, GLsizeiptrARB size, const void *data);
+#ifdef GL_GLEXT_PROTOTYPES
+void glBindBufferARB(GLenum target, GLuint buffer);
+void glDeleteBuffersARB(GLsizei n, const GLuint *buffers);
+void glGenBuffersARB(GLsizei n, GLuint *buffers);
+GLboolean glIsBufferARB(GLuint buffer);
+void glBufferDataARB(GLenum target, GLsizeiptrARB size, const void *data, GLenum usage);
+void glBufferSubDataARB(GLenum target, GLintptrARB offset, GLsizeiptrARB size, const void *data);
+#endif
+#endif
+#ifndef GL_ARB_point_parameters
+#define GL_ARB_point_parameters 1
+#define GL_POINT_SIZE_MIN_ARB 0x8126
+#define GL_POINT_SIZE_MAX_ARB 0x8127
+#define GL_POINT_FADE_THRESHOLD_SIZE_ARB 0x8128
+#define GL_POINT_DISTANCE_ATTENUATION_ARB 0x8129
+typedef void (*PFNGLPOINTPARAMETERFARBPROC)(GLenum pname, GLfloat param);
+typedef void (*PFNGLPOINTPARAMETERFVARBPROC)(GLenum pname, const GLfloat *params);
+#ifdef GL_GLEXT_PROTOTYPES
+void glPointParameterfARB(GLenum pname, GLfloat param);
+void glPointParameterfvARB(GLenum pname, const GLfloat *params);
+#endif
+#endif
+#ifndef GL_ARB_point_sprite
+#define GL_ARB_point_sprite 1
+#define GL_POINT_SPRITE_ARB 0x8861
+#define GL_COORD_REPLACE_ARB 0x8862
+#endif
 #endif
 `;
 

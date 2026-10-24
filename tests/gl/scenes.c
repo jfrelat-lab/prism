@@ -26,13 +26,32 @@
  *   matrix-rect   glMultMatrixd, glRectf and glRecti, and a 2x2 RGB texture whose rows are padded
  *                 to GL_UNPACK_ALIGNMENT (4, then 1)
  *
+ * And what Neverball requires (ARB_vertex_buffer_object, ARB_point_parameters, ARB_point_sprite):
+ *
+ *   vbo           the dome from buffers: positions in one, colours in another (half of them
+ *                 replaced by glBufferSubData), indices in an element buffer, offsets not zero
+ *   points        points of size 1 to 8, then a receding row whose size falls with distance
+ *   point-sprite  textured points under GL_POINT_SPRITE and GL_COORD_REPLACE, blended, receding
+ *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#define GL_GLEXT_PROTOTYPES
 #include <GL/glut.h>
+#include <GL/glext.h>
+/* Mesa's libOpenGL exports these by their core (GL 1.4/1.5) names, the same functions; PRISM by the ARB ones. */
+#ifndef __PRISM__
+#define glGenBuffersARB glGenBuffers
+#define glBindBufferARB glBindBuffer
+#define glBufferDataARB glBufferData
+#define glBufferSubDataARB glBufferSubData
+#define glDeleteBuffersARB glDeleteBuffers
+#define glPointParameterfARB glPointParameterf
+#define glPointParameterfvARB glPointParameterfv
+#endif
 
 static const char *scene = "tex-nearest";
 static unsigned char tex[64 * 64 * 4];
@@ -248,6 +267,72 @@ static void display(void) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glPopMatrix();
     glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T);
+  } else if (!strcmp(scene, "vbo")) {
+    static GLfloat col[17 * 17][4];
+    GLuint b[3];
+    dome();
+    for (int i = 0; i < 17 * 17; i++) { col[i][0] = (i % 17) / 16.0f; col[i][1] = (i / 17) / 16.0f; col[i][2] = 0.5f; col[i][3] = 1; }
+    glGenBuffersARB(3, b);
+    /* Positions after 64 bytes of something else, so the array's offset is not zero. */
+    glBindBufferARB(GL_ARRAY_BUFFER_ARB, b[0]);
+    glBufferDataARB(GL_ARRAY_BUFFER_ARB, 64 + sizeof domeV, NULL, GL_STATIC_DRAW_ARB);
+    glBufferSubDataARB(GL_ARRAY_BUFFER_ARB, 64, sizeof domeV, domeV);
+    glVertexPointer(3, GL_FLOAT, 0, (const void *)64);
+    glBindBufferARB(GL_ARRAY_BUFFER_ARB, b[1]);
+    glBufferDataARB(GL_ARRAY_BUFFER_ARB, sizeof col, col, GL_STATIC_DRAW_ARB);
+    for (int i = 0; i < 17 * 8; i++) { col[i][0] = 1; col[i][1] = 1; col[i][2] = 1; }
+    glBufferSubDataARB(GL_ARRAY_BUFFER_ARB, 0, 17 * 8 * 4 * sizeof (GLfloat), col);
+    glColorPointer(4, GL_FLOAT, 0, 0);
+    glBindBufferARB(GL_ARRAY_BUFFER_ARB, 0);
+    glBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, b[2]);
+    glBufferDataARB(GL_ELEMENT_ARRAY_BUFFER_ARB, sizeof domeI, domeI, GL_STATIC_DRAW_ARB);
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+    glPushMatrix();
+    glTranslatef(0, 0, -4); glRotatef(-40, 1, 0, 0);
+    /* The second half of the triangles, from an offset into the element buffer. */
+    glDrawElements(GL_TRIANGLES, 16 * 16 * 3, GL_UNSIGNED_INT, (const void *)(16 * 16 * 3 * sizeof (GLuint)));
+    glTranslatef(0, 0, 0.01f);
+    glDrawElements(GL_TRIANGLES, 16 * 16 * 3, GL_UNSIGNED_INT, 0);
+    glPopMatrix();
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    glBindBufferARB(GL_ELEMENT_ARRAY_BUFFER_ARB, 0);
+    glDeleteBuffersARB(3, b);
+  } else if (!strcmp(scene, "points") || !strcmp(scene, "point-sprite")) {
+    int sprite = !strcmp(scene, "point-sprite");
+    static const GLfloat atten[3] = { 0, 0, 0.02f };
+    if (sprite) {
+      checker(16, 1);
+      glBindTexture(GL_TEXTURE_2D, 1);
+      glTexImage2D(GL_TEXTURE_2D, 0, 4, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, tex);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glEnable(GL_TEXTURE_2D);
+      glEnable(GL_POINT_SPRITE_ARB);
+      glTexEnvi(GL_POINT_SPRITE_ARB, GL_COORD_REPLACE_ARB, GL_TRUE);
+      glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    } else {
+      for (int k = 1; k <= 8; k++) {
+        glPointSize((GLfloat)k);
+        glBegin(GL_POINTS);
+        glColor3f(1, k / 8.0f, 0.2f);
+        glVertex3f(-3.5f + k * 0.8f, 1.5f, -5);
+        glEnd();
+      }
+    }
+    glPointSize(sprite ? 48 : 24);
+    glPointParameterfARB(GL_POINT_SIZE_MIN_ARB, 2);
+    glPointParameterfARB(GL_POINT_SIZE_MAX_ARB, 48);
+    glPointParameterfvARB(GL_POINT_DISTANCE_ATTENUATION_ARB, atten);
+    glBegin(GL_POINTS);
+    for (int k = 0; k < 8; k++) {
+      glColor4f(0.3f + k * 0.08f, 1, 1, sprite ? 0.8f : 1);
+      glVertex3f(-2.5f + k * 0.7f, -0.8f, -3 - k * 3);
+    }
+    glEnd();
+    static const GLfloat one[3] = { 1, 0, 0 };
+    glPointParameterfvARB(GL_POINT_DISTANCE_ATTENUATION_ARB, one);
+    glPointSize(1);
+    glDisable(GL_POINT_SPRITE_ARB); glDisable(GL_TEXTURE_2D); glDisable(GL_BLEND);
   }
   glutSwapBuffers();
 }
