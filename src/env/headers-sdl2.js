@@ -512,6 +512,8 @@ typedef struct {
 int SDL_GetDesktopDisplayMode(int displayIndex, SDL_DisplayMode *mode);
 const char *SDL_GetDisplayName(int displayIndex);
 Uint32 SDL_GetWindowID(SDL_Window *window);
+SDL_bool SDL_GetRelativeMouseMode(void);
+Uint32 SDL_GetRelativeMouseState(int *x, int *y);
 void SDL_SetWindowGrab(SDL_Window *window, SDL_bool grabbed);
 void SDL_WarpMouseInWindow(SDL_Window *window, int x, int y);
 #define SDL_WINDOW_FULLSCREEN_DESKTOP 0x00001001

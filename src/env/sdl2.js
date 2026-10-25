@@ -52,6 +52,8 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     events: [],
     error: 0,
     initFlags: 0, ignored: new Set(), keyNames: {}, displayName: null,
+    // The pointer as the program sees it: position, SDL button mask (1 left, 2 middle, 4 right), motion not yet read.
+    mouse: { x: 0, y: 0, buttons: 0, relX: 0, relY: 0 }, relative: false, onRelative: null,
     quit: false,
   };
   M.sdl = state;
@@ -287,7 +289,9 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return 0;
     },
     SDL_ShowCursor: () => 0,
-    SDL_SetRelativeMouseMode: () => 0,
+    // Relative mode: the host captures the pointer and reports motion only (state.onRelative).
+    SDL_SetRelativeMouseMode: (on) => { state.relative = !!on; state.onRelative?.(state.relative); return 0; },
+    SDL_GetRelativeMouseMode: () => (state.relative ? 1 : 0),
 
     // ---------------------------------------------------------------- textures: the frame
     SDL_CreateTexture: (_r, format, _access, w, h) => {
@@ -389,10 +393,17 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     },
 
     SDL_GetMouseState: (xp, yp) => {
-      const d = M.mod.dv;
-      if (xp) d.setInt32(xp, 0, true);
-      if (yp) d.setInt32(yp, 0, true);
-      return 0;
+      const d = M.mod.dv, m = state.mouse;
+      if (xp) d.setInt32(xp, m.x, true);
+      if (yp) d.setInt32(yp, m.y, true);
+      return m.buttons >>> 0;
+    },
+    SDL_GetRelativeMouseState: (xp, yp) => {
+      const d = M.mod.dv, m = state.mouse;
+      if (xp) d.setInt32(xp, m.relX, true);
+      if (yp) d.setInt32(yp, m.relY, true);
+      m.relX = 0; m.relY = 0;
+      return m.buttons >>> 0;
     },
     /* No audio thread here, so there is nothing to lock against -- see src/env/sdl12.js. */
     SDL_LockAudio: () => 0,
@@ -621,6 +632,34 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     d.setUint16(24, modState, true);                 // keysym.mod
     state.events.push(e);
   }
+  /*
+   * The pointer, as a window system delivers it: moved to (x, y) by (xrel, yrel), with these buttons
+   * down (SDL's mask). A motion event when it moved and SDL_MOUSEMOTION is not ignored, then one
+   * button event per button that changed -- SDL_mouse.c's order. Layouts are SDL_events.h's.
+   */
+  function pushMouse(x, y, xrel, yrel, buttons) {
+    const m = state.mouse, now = state.clock.now() >>> 0;
+    m.relX += xrel; m.relY += yrel;
+    if ((xrel || yrel || x !== m.x || y !== m.y) && !state.ignored.has(0x400)) {
+      const e = new Uint8Array(56), d = new DataView(e.buffer);
+      d.setUint32(0, 0x400, true); d.setUint32(4, now, true); d.setUint32(8, 1, true);
+      d.setUint32(16, buttons >>> 0, true);
+      d.setInt32(20, x, true); d.setInt32(24, y, true); d.setInt32(28, xrel, true); d.setInt32(32, yrel, true);
+      state.events.push(e);
+    }
+    m.x = x; m.y = y;
+    for (let b = 1; b <= 3; b++) {
+      const bit = 1 << (b - 1), down = (buttons & bit) !== 0;
+      if (down === ((m.buttons & bit) !== 0)) continue;
+      m.buttons = down ? m.buttons | bit : m.buttons & ~bit;
+      if (state.ignored.has(down ? 0x401 : 0x402)) continue;
+      const e = new Uint8Array(56), d = new DataView(e.buffer);
+      d.setUint32(0, down ? 0x401 : 0x402, true); d.setUint32(4, now, true); d.setUint32(8, 1, true);
+      d.setUint8(16, b); d.setUint8(17, down ? 1 : 0); d.setUint8(18, 1);
+      d.setInt32(20, x, true); d.setInt32(24, y, true);
+      state.events.push(e);
+    }
+  }
   /** The same, from a PC set-1 scan code and its 0xE0 prefix, which is what a host's keyboard has. */
   function pushScan(scan, extended, down) {
     const code = (extended ? SET1_EXTENDED : SET1)[scan];
@@ -628,7 +667,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
   }
 
   Object.assign(M.rt, api);
-  return { state, pumpAudio, pushKey, pushScan };
+  return { state, pumpAudio, pushKey, pushScan, pushMouse };
 }
 
 /* PC scan code set 1 -> SDL scancode (the USB usage), for a US keyboard. */
@@ -697,7 +736,7 @@ export function sdl2Builtins(T) {
     SDL_GetDisplayBounds: f(I, I, P),
     SDL_CreateRenderer: f(P, P, I, U), SDL_DestroyRenderer: f(V, P),
     SDL_SetRenderDrawColor: f(I, P, I, I, I, I), SDL_RenderClear: f(I, P),
-    SDL_ShowCursor: f(I, I), SDL_SetRelativeMouseMode: f(I, I),
+    SDL_ShowCursor: f(I, I), SDL_SetRelativeMouseMode: f(I, I), SDL_GetRelativeMouseMode: f(I),
     SDL_CreateTexture: f(P, P, U, I, I, I), SDL_DestroyTexture: f(V, P),
     SDL_QueryTexture: f(I, P, P, P, P, P), SDL_LockTexture: f(I, P, P, P, P),
     SDL_UnlockTexture: f(V, P), SDL_RenderCopy: f(I, P, P, P, P), SDL_RenderPresent: f(V, P),
@@ -706,7 +745,7 @@ export function sdl2Builtins(T) {
     SDL_RenderSetLogicalSize: f(I, P, I, I),
     SDL_UpdateTexture: f(I, P, P, P, I),
     SDL_SetWindowTitle: f(V, P, P), SDL_SetWindowIcon: f(V, P, P),
-    SDL_GetMouseState: f(U, P, P),
+    SDL_GetMouseState: f(U, P, P), SDL_GetRelativeMouseState: f(U, P, P),
     SDL_LockAudio: f(V), SDL_UnlockAudio: f(V),
     SDL_PollEvent: f(I, P), SDL_PushEvent: f(I, P),
     SDL_StartTextInput: f(V), SDL_StopTextInput: f(V),

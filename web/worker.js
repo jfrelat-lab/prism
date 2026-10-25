@@ -205,6 +205,9 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
   const pace = makePacer(ctrl, program.fps || 60);
   const keyboard = makeKeyboard(views);
   const mouse = makeMouse(views);
+  // Each program starts with the page's own choice of pointer: what the last one asked for is not this one's.
+  mouse.want(0);
+  Atomics.store(ctrl, SLOT.MOUSE_ABS, 0);
   const park = makeParker(ctrl);
   const setState = (s) => Atomics.store(ctrl, SLOT.STATE, s);
 
@@ -1635,10 +1638,29 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * event goes through the shim's translation, the 0xE0 prefix with it -- the arrows and the
      * keypad are different keys to SDL.
      */
+    /*
+     * ...and the pointer. A program starts with a visible pointer the page reports (MOUSE_MODE 1);
+     * SDL_SetRelativeMouseMode asks for it captured (2), its motion only. In the window's pixels --
+     * the canvas is the GL framebuffer, scaled -- and the page's buttons (left, right, middle) in SDL's
+     * order (left, middle, right).
+     */
+    const pointer = { x: 0, y: 0 };
+    mouse.want(1);
+    sdl.onRelative = (on) => mouse.want(on ? 2 : 1);
+    const deliverMouse = () => {
+      const { dx, dy } = mouse.take(), b = mouse.state(), at = sdl.relative ? null : mouse.position();
+      const w = sdl.winW || 640, h = sdl.winH || 480;
+      let x, y, xrel = dx, yrel = dy;
+      if (at) { x = Math.max(0, Math.min(w - 1, at.x)); y = Math.max(0, Math.min(h - 1, at.y)); xrel = x - pointer.x; yrel = y - pointer.y; }
+      else { x = Math.max(0, Math.min(w - 1, pointer.x + dx)); y = Math.max(0, Math.min(h - 1, pointer.y + dy)); }
+      pointer.x = x; pointer.y = y;
+      env.sdl2?.pushMouse?.(x, y, xrel, yrel, (b & 1) | ((b & 4) >> 1) | ((b & 2) << 1));
+    };
     const deliverKeys = () => {
       for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
         if (env.sdl2?.pushScan) env.sdl2.pushScan(e.scan, !!e.extended, e.down);
       }
+      deliverMouse();
     };
     const innerPresent = prog.M.rt.SDL_RenderPresent;
     let published = 0, wide = 0, wideW = 0, wideH = 0;

@@ -1194,8 +1194,9 @@ stage.addEventListener('click', () => {
   // Only while something is running: locking the pointer over a machine's prompt would take the
   // mouse away from the page for nothing.
   if (!worker || document.pointerLockElement === stage) return;
-  // Live C's programs are windows you point at, with the cursor visible: see the pointer below.
-  if (LIVE) return;
+  // Live C's programs are windows you point at, with the cursor visible: see the pointer below. So
+  // is a program that asked for a visible pointer (an SDL 2 game's menus, MOUSE_MODE 1).
+  if (visiblePointer()) return;
   const p = stage.requestPointerLock?.();
   /*
    * POINTER LOCK CAN BE REFUSED, and it is refused in some embeddings -- an iframe without
@@ -1235,6 +1236,8 @@ document.addEventListener('pointerlockchange', () => {
   stage.classList.toggle('captured', on);
   if (!on && mouse) mouse.buttons(0);      // a released capture holds no buttons down
   log(on ? 'mouse captured — Esc releases it and reaches the program' : 'mouse released');
+  // A release the program asked for (back to its menus) is not an Esc pressed.
+  if (!on && releasing) { releasing = false; return; }
   if (!on && worker) setTimeout(() => { if (performance.now() - lastEscape > 300) tapEscape(); }, 50);
 });
 
@@ -1270,16 +1273,39 @@ for (const [type, down] of [['mousedown', true], ['mouseup', false]]) {
  * picture, in the program's own pixels (the canvas is scaled to the window, so the ratio is exact),
  * and which buttons are down while it is there.
  */
+/*
+ * WHICH POINTER, as the program asks for it (MOUSE_MODE): visible and reported in its pixels (1),
+ * captured (2), or the page's own choice (0: capture on a click). Followed as it changes -- Neverball
+ * captures for a level and gives the pointer back for its menus -- a capture asked for when no click
+ * has just been made waits for the next one, which is when a browser grants it.
+ */
+let releasing = false;
+const visiblePointer = () => LIVE || mouse?.wanted() === 1;
+setInterval(() => {
+  if (!mouse || !worker) return;
+  const want = mouse.wanted(), locked = document.pointerLockElement === stage;
+  if (want === 1 && locked) { releasing = true; document.exitPointerLock(); }
+  else if (want === 2 && !locked) Promise.resolve(stage.requestPointerLock?.()).catch(() => {});
+}, 100);
+/*
+ * Where in the PROGRAM'S pixels a point of the page is. The canvas is drawn with object-fit: contain,
+ * so the picture is centred inside its box with bands on two sides: the box is not the picture, and
+ * mapping the box onto the picture put every point off by the band (a click landed a row of buttons
+ * away in Neverball's menus).
+ */
+const pointerAt = (e) => {
+  const r = canvas.getBoundingClientRect(), k = Math.min(r.width / canvas.width, r.height / canvas.height) || 1;
+  const left = r.left + (r.width - canvas.width * k) / 2, top = r.top + (r.height - canvas.height * k) / 2;
+  mouse.at((e.clientX - left) / k, (e.clientY - top) / k);
+};
 canvas.addEventListener('mousemove', (e) => {
-  if (!LIVE || !mouse) return;
-  const r = canvas.getBoundingClientRect();
-  mouse.at((e.clientX - r.left) * canvas.width / r.width, (e.clientY - r.top) * canvas.height / r.height);
+  if (!visiblePointer() || !mouse) return;
+  pointerAt(e);
 });
 for (const [type, down] of [['mousedown', true], ['mouseup', false]]) {
   canvas.addEventListener(type, (e) => {
-    if (!LIVE || !mouse) return;
-    const r = canvas.getBoundingClientRect();
-    mouse.at((e.clientX - r.left) * canvas.width / r.width, (e.clientY - r.top) * canvas.height / r.height);
+    if (!visiblePointer() || !mouse) return;
+    pointerAt(e);
     const bit = e.button === 0 ? 1 : e.button === 2 ? 2 : e.button === 1 ? 4 : 0;
     mouseButtons = down ? (mouseButtons | bit) : (mouseButtons & ~bit);
     /*

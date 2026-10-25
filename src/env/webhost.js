@@ -141,6 +141,12 @@ export const SLOT = {
   MOUSE_Y: 42,
   /* host → guest, a test only: 1 asks the GL host to lose its WebGL context (gl.js rebuilds it). */
   GL_LOSE: 43,
+  /*
+   * WHICH POINTER THE PROGRAM WANTS, for one that says (SDL 2's SDL_SetRelativeMouseMode): 0 the
+   * page decides (capture on a click, as for every game before), 1 a visible pointer whose position
+   * and clicks the page reports (a menu), 2 the mouse captured and its motion reported (play).
+   */
+  MOUSE_MODE: 44,  // guest → host
 };
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
@@ -331,6 +337,10 @@ export function makeMouse(views) {
     },
     /** Host side: whether the page is capturing at all. A program may ask, and must not be lied to. */
     present(on) { Atomics.store(ctrl, SLOT.MOUSE_HAS, on ? 1 : 0); },
+    /** Host side: which pointer the program asked for (MOUSE_MODE). */
+    wanted() { return Atomics.load(ctrl, SLOT.MOUSE_MODE); },
+    /** Guest side: ask for a pointer -- 1 visible and absolute, 2 captured and relative. */
+    want(mode) { Atomics.store(ctrl, SLOT.MOUSE_MODE, mode | 0); },
 
     /** Guest side: how far since the last call, and reset -- INT 33h AX=000B, exactly. */
     take() {
