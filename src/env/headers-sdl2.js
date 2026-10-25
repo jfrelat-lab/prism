@@ -430,6 +430,7 @@ void SDL_SetTextInputRect(const SDL_Rect *rect);
 int SDL_PollEvent(SDL_Event *event);
 int SDL_PushEvent(SDL_Event *event);
 void SDL_StartTextInput(void);
+SDL_bool SDL_IsTextInputActive(void);
 void SDL_StopTextInput(void);
 const char *SDL_GetScancodeName(SDL_Scancode scancode);
 SDL_Scancode SDL_GetScancodeFromName(const char *name);

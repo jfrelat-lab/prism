@@ -1659,6 +1659,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     const deliverKeys = () => {
       for (let e = keyboard.nextEvent(); e; e = keyboard.nextEvent()) {
         if (env.sdl2?.pushScan) env.sdl2.pushScan(e.scan, !!e.extended, e.down);
+        // A printable character the key typed follows its key down, as SDL_TEXTINPUT.
+        if (e.down && e.ascii >= 32 && e.ascii !== 127) env.sdl2?.pushText?.(String.fromCharCode(e.ascii));
       }
       deliverMouse();
     };

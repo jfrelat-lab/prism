@@ -54,6 +54,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     initFlags: 0, ignored: new Set(), keyNames: {}, displayName: null,
     // The pointer as the program sees it: position, SDL button mask (1 left, 2 middle, 4 right), motion not yet read.
     mouse: { x: 0, y: 0, buttons: 0, relX: 0, relY: 0 }, relative: false, onRelative: null,
+    textInput: true,
     quit: false,
   };
   M.sdl = state;
@@ -426,8 +427,10 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       return keyArray();
     },
     SDL_SetTextInputRect: () => 0,
-    SDL_StartTextInput: () => 0,
-    SDL_StopTextInput: () => 0,
+    // Text input is ON from the start, as SDL 2 starts it with its video (SDL_VideoInit).
+    SDL_StartTextInput: () => { state.textInput = true; },
+    SDL_StopTextInput: () => { state.textInput = false; },
+    SDL_IsTextInputActive: () => (state.textInput ? 1 : 0),
     SDL_GetScancodeName: (sc) => intern(scancodeName(sc | 0)),
     SDL_GetScancodeFromName: (name) => scancodeFromName(cstr(name)),
 
@@ -660,6 +663,17 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       state.events.push(e);
     }
   }
+  /*
+   * The text a key typed, as SDL_TEXTINPUT after its SDL_KEYDOWN: UTF-8 in a 32-byte field, while
+   * text input is on. What the page's keyboard typed, layout and shift included.
+   */
+  function pushText(text) {
+    if (!state.textInput || state.ignored.has(0x303)) return;
+    const e = new Uint8Array(56), d = new DataView(e.buffer);
+    d.setUint32(0, 0x303, true); d.setUint32(4, state.clock.now() >>> 0, true); d.setUint32(8, 1, true);
+    e.set(enc.encode(text).subarray(0, 31), 12);
+    state.events.push(e);
+  }
   /** The same, from a PC set-1 scan code and its 0xE0 prefix, which is what a host's keyboard has. */
   function pushScan(scan, extended, down) {
     const code = (extended ? SET1_EXTENDED : SET1)[scan];
@@ -667,7 +681,7 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
   }
 
   Object.assign(M.rt, api);
-  return { state, pumpAudio, pushKey, pushScan, pushMouse };
+  return { state, pumpAudio, pushKey, pushScan, pushMouse, pushText };
 }
 
 /* PC scan code set 1 -> SDL scancode (the USB usage), for a US keyboard. */
@@ -748,7 +762,7 @@ export function sdl2Builtins(T) {
     SDL_GetMouseState: f(U, P, P), SDL_GetRelativeMouseState: f(U, P, P),
     SDL_LockAudio: f(V), SDL_UnlockAudio: f(V),
     SDL_PollEvent: f(I, P), SDL_PushEvent: f(I, P),
-    SDL_StartTextInput: f(V), SDL_StopTextInput: f(V),
+    SDL_StartTextInput: f(V), SDL_StopTextInput: f(V), SDL_IsTextInputActive: f(I),
     SDL_GetScancodeName: f(P, I), SDL_GetScancodeFromName: f(I, P),
     SDL_NumJoysticks: f(I), SDL_JoystickOpen: f(P, I), SDL_JoystickClose: f(V, P),
     SDL_JoystickName: f(P, P), SDL_JoystickNumAxes: f(I, P), SDL_JoystickNumButtons: f(I, P),
