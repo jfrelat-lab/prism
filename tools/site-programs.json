@@ -204,6 +204,84 @@
       ]
     },
     {
+      "id": "neverball",
+      "thumb": {
+        "frames": 300
+      },
+      "program": "neverball",
+      "machine": "linux",
+      "title": "Neverball",
+      "author": "Robert Kooima and the Neverball team",
+      "year": 2014,
+      "kind": "Arcade puzzle",
+      "blurb": "Tilt the floor to roll a ball to the goal: 1.6.0 on SDL 2 and OpenGL, its 235 levels compiled from their sources by its own mapc, which PRISM compiled too.",
+      "code": {
+        "license": "GPL-2.0-or-later",
+        "source": "https://github.com/Neverball/neverball"
+      },
+      "data": {
+        "license": "GPL-2.0-or-later (the Neverball release); fonts DejaVu and WenQuanYi Micro Hei (Apache-2.0 or GPL-3.0); the Octocat ball by GitHub's permission"
+      },
+      "licenseFiles": [
+        {
+          "name": "Neverball licensing (LICENSE.md)",
+          "path": "corpus/neverball-1.6.0/LICENSE.md",
+          "for": "both"
+        },
+        {
+          "name": "GPL-2.0",
+          "path": "corpus/neverball-1.6.0/doc/legal/license-GPL-2.0.txt",
+          "for": "both"
+        },
+        {
+          "name": "DejaVu font licence",
+          "path": "corpus/neverball-1.6.0/doc/legal/license-DejaVu.txt",
+          "for": "data"
+        },
+        {
+          "name": "Octocat permission",
+          "path": "corpus/neverball-1.6.0/doc/legal/license-octocat.md",
+          "for": "data"
+        },
+        {
+          "name": "SDL2_ttf licence (zlib)",
+          "path": "corpus/SDL2_ttf-2.0.12/COPYING.txt",
+          "for": "code"
+        },
+        {
+          "name": "FreeType licence (FTL)",
+          "path": "corpus/freetype-2.3.11/docs/FTL.TXT",
+          "for": "code"
+        },
+        {
+          "name": "libvorbis licence (BSD)",
+          "path": "corpus/libvorbis-1.3.4/COPYING",
+          "for": "code"
+        },
+        {
+          "name": "libogg licence (BSD)",
+          "path": "corpus/libogg-1.3.2/COPYING",
+          "for": "code"
+        },
+        {
+          "name": "libpng licence",
+          "path": "corpus/libpng-1.6.16/LICENSE",
+          "for": "code"
+        },
+        {
+          "name": "libjpeg (IJG) README",
+          "path": "corpus/jpeg-6b/README",
+          "for": "code"
+        },
+        {
+          "name": "zlib README",
+          "path": "corpus/zlib-1.1.3/README",
+          "for": "code"
+        }
+      ],
+      "credits": "This software is based in part on the work of the Independent JPEG Group. Portions of this software are copyright © 2009 The FreeType Project (www.freetype.org). All rights reserved."
+    },
+    {
       "id": "cube",
       "thumb": {
         "frames": 900,

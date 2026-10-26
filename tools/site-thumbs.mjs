@@ -72,6 +72,25 @@ for (const e of programs.filter((p) => !p._skip && (p.thumb?.frames || p.thumb?.
     const bgrx = new Uint8Array(shot.w * shot.h * 4);
     for (let i = 0; i < shot.w * shot.h; i++) { bgrx[4 * i] = shot.rgba[4 * i + 2]; bgrx[4 * i + 1] = shot.rgba[4 * i + 1]; bgrx[4 * i + 2] = shot.rgba[4 * i]; }
     writeRgbPng(file, { bytes: bgrx, width: shot.w, height: shot.h });
+  } else if (desc.host === 'sdl2' && envNames(JSON.parse(readFileSync(join(ROOT, 'targets', `${desc.target}.json`), 'utf8')).env).includes('sdl2gl')) {
+    /*
+     * An SDL 2 OPENGL program (Neverball): frame N at its SDL_GL_SwapWindow, on a virtual clock, gl.js's
+     * software rasteriser, its data read from the root as the page reads it (each file when opened).
+     */
+    const files = {}, root = join(GAMES, desc.needsData.dir);
+    const walk = (d, pre) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p, `${pre}${f}/`); else if (f !== 'PROVENANCE.txt') files[pre + f] = () => new Uint8Array(readFileSync(p)); } };
+    walk(root, '');
+    const b = buildTarget(loadTarget(join(ROOT, 'targets', `${desc.target}.json`)), { root: ROOT,
+      envExtra: { stdio: { files, exactPaths: !!desc.needsData.exactPaths }, sdl2: { clock: virtualClock() } } });
+    let n = 0;
+    b.env.sdl2gl.onSwap = (gl) => {
+      if (++n < frame) return;
+      const W = gl.state.width, H = gl.state.height, px = gl.readPixels(), bgrx = new Uint8Array(W * H * 4);
+      for (let i = 0; i < W * H; i++) { bgrx[4 * i] = px[4 * i + 2]; bgrx[4 * i + 1] = px[4 * i + 1]; bgrx[4 * i + 2] = px[4 * i]; }
+      writeRgbPng(file, { bytes: bgrx, width: W, height: H });
+      throw new Error('__thumb_done');
+    };
+    try { b.program.run([desc.target]); } catch (err) { if (!/__thumb_done/.test(err.message)) { console.log(`${e.id}: ${err.message}`); continue; } }
   } else if (desc.host === 'sdl' && envNames(JSON.parse(readFileSync(join(ROOT, 'targets', `${desc.target}.json`), 'utf8')).env).includes('gl')) {
     /*
      * An SDL 1.2 OPENGL program (Chromium B.S.U.): frame N at its SDL_GL_SwapBuffers, on a virtual

@@ -27,6 +27,7 @@ import { prismHash } from '../src/build-cache.js';
 import { createHash } from 'node:crypto';
 import { loadTarget } from '../src/target.js';
 import { targetFile } from '../web/endpoints.js';
+import { envNames } from '../src/env/registry.js';
 import { programPage } from './program-page.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -93,7 +94,7 @@ function techTags(target, answer, desc, extra = []) {
   // The host a variant names wins over its descriptor's: quake.exe is the Win32 build of `quake`.
   // WinQuake's MGL window and a WGL context are Win32 hosts as much as `win32` is.
   if (['win32', 'mgl', 'wgl'].includes(answer.host ?? desc.host ?? desc.platform)) tags.push('Win32');
-  for (const e of target.env ?? []) if (ENV_TAGS[e]) tags.push(ENV_TAGS[e]);
+  for (const e of envNames(target.env)) if (ENV_TAGS[e]) tags.push(ENV_TAGS[e]);
   for (const a of answer.asmTranslate) tags.push(typeof a !== 'string' || /\.s$/i.test(a) ? 'GNU as' : 'NASM');
   if (answer.tasm.length) tags.push('TASM');
   return [...new Set([...tags, ...extra])];

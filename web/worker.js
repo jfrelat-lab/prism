@@ -651,7 +651,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     if (name in files) continue;
     files[name] = () => {
       const x = new XMLHttpRequest();
-      x.open('GET', `/__data/${name.split('/').map(encodeURIComponent).join('/')}`, false);
+      // Where the data lives: serve.mjs's /__data, or a static export's data/<root>/ (web/endpoints.js).
+      x.open('GET', api.dataFile(program.needsData?.dir ?? '', name), false);
       x.responseType = 'arraybuffer';
       try { x.send(); } catch { return null; }
       if (x.status !== 200) return null;

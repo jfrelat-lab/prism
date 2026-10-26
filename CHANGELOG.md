@@ -5,6 +5,19 @@ is updated continuously, so entries are dated rather than versioned; the source 
 comes from are released as [prism-sources](https://github.com/jfrelat-lab/prism-sources/releases).
 Every change is in the [commit history](https://github.com/jfrelat-lab/prism/commits/main).
 
+## 2026-10-26
+
+- **Neverball plays**: [/neverball/](https://prism-compiler.pages.dev/neverball/), tilt the floor with
+  the mouse to roll the ball to the goal. Version 1.6.0 compiled from its source with everything it
+  links (SDL2_ttf, FreeType, libvorbis, libpng, libjpeg), and its 235 levels compiled from their
+  sources by Neverball's own level compiler, which PRISM compiled too -- each level identical, byte
+  for byte, to what gcc's build makes. Its data is fetched as the game opens it: the menu is there
+  after 2.4 MB, not 117.
+- **OpenGL**: vertex buffers, point sprites and every vertex-array type; 3D programs draw faster
+  (Neverball's intro: 38% less JavaScript a frame).
+- **SDL 2 programs** draw with OpenGL, take the mouse (a visible pointer in their menus, captured
+  for play) and typed text.
+
 ## 2026-10-24
 
 - **Quake plays without your files**: [/quake-shareware/](https://prism-compiler.pages.dev/quake-shareware/),
