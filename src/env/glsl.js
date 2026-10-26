@@ -101,20 +101,21 @@ const VERTEX_IN = { gl_Vertex: 'prism_Vertex', gl_Color: 'prism_ColorIn', gl_Nor
 export const VERTEX_ATTRIBUTES = ['prism_Vertex', 'prism_ColorIn', 'prism_MultiTexCoord0', 'prism_unused', 'prism_Normal'];
 
 /** Object-like macros (`#define ve return`, `#define ec float`, as the 4K intros shorten their
- *  shaders) replaced by what they stand for and their lines dropped, so that the rewrite sees the
- *  types and keywords; function-like macros are left to the compiler. */
+ *  shaders) replaced by what they stand for in the CODE, so that the rewrite sees the types and
+ *  keywords; function-like macros are left to the compiler. The preprocessor lines themselves are left
+ *  as they are, `#define`s included: `#define FAST` tested by `#ifdef FAST` must stay a name there. */
 function expandDefines(src) {
-  const defs = new Map();
-  const kept = src.split('\n').map((line) => {
+  const defs = new Map(), lines = src.split('\n');
+  for (const line of lines) {
     const m = /^\s*#\s*define\s+([A-Za-z_]\w*)(?!\()(?:\s+(.*))?$/.exec(line);
-    if (!m) return line;
-    defs.set(m[1], (m[2] || '').trim());
-    return '';
-  }).join('\n');
+    if (m) defs.set(m[1], (m[2] || '').trim());
+  }
   if (!defs.size) return src;
-  let out = kept;
-  for (let pass = 0; pass < 4; pass++) out = out.replace(/[A-Za-z_]\w*/g, (w) => (defs.has(w) ? defs.get(w) : w));
-  return out;
+  return lines.map((line) => {
+    if (/^\s*#/.test(line)) return line;
+    for (let pass = 0; pass < 4; pass++) line = line.replace(/[A-Za-z_]\w*/g, (w) => (defs.has(w) ? defs.get(w) : w));
+    return line;
+  }).join('\n');
 }
 
 const DECL_TYPES = new Set([...INT_TYPES, 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'void', 'sampler1D', 'sampler2D', 'sampler3D', 'samplerCube']);

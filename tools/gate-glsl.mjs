@@ -52,7 +52,7 @@ const idioms = [
     'void main(){int i=7;i=(i*(i*i*15731+789221)+1376312589)&0x7fffffff;prism_FragColor=vec4(i&255)/255.0;}'],
   ['object-like macros are what they stand for (Valleyball 2009: #define ve return, #define ec float)',
     '#define ve return\n#define ec float\nec f(ec x){ve x*2;}void main(){gl_FragColor=vec4(f(1));}',
-    '\n\nfloat f(float x){return x*2.0;}void main(){prism_FragColor=vec4(f(1.0));}'],
+    '#define ve return\n\n#define ec float\n\nfloat f(float x){return x*2.0;}void main(){prism_FragColor=vec4(f(1.0));}'],
   ['a name is the declaration it sees: int k in one function, float k in another (Valleyball 2009)',
     'float g(int k){return float(k);}float h(float k){return k*50;}void main(){gl_FragColor=vec4(h(.5)+g(2));}',
     'float g(int k){return float(k);}float h(float k){return k*50.0;}void main(){prism_FragColor=vec4(h(.5)+g(2));}'],
@@ -64,6 +64,9 @@ const idioms = [
 idioms.push(['an overloaded function: the overload with as many parameters as the call has arguments',
   'float f(float a,float b){return a;}float f(float a,float b,int c){return b;}void main(){gl_FragColor=vec4(f(1,2.,3));}',
   'float f(float a,float b){return a;}float f(float a,float b,int c){return b;}void main(){prism_FragColor=vec4(f(1.0,2.,3));}']);
+idioms.push(['an empty macro tested by #ifdef stays a name there',
+  '#define FAST\n#ifdef FAST\nfloat k=1.;\n#endif\nvoid main(){gl_FragColor=vec4(k);}',
+  '#define FAST\n\n#ifdef FAST\n\nfloat k=1.;\n#endif\n\nvoid main(){prism_FragColor=vec4(k);}']);
 for (const [what, src, want] of idioms) { const got = T(src); check(got === want, `translate: ${what}`, `got  ${got}\n        want ${want}`); }
 // A vertex shader: its body as main became prism_main, between the declarations and the wrapper.
 const TV = (src) => translateVertex(src).source.replace(/^[\s\S]*?vec4 prism_discard;\n(?:uniform [^\n]*\n)*/, '').replace(/\nvoid main\(\) \{[^\n]*\n$/, '');
