@@ -152,6 +152,34 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * not implemented, and enabling it says so (glEnable).
    */
   const TEX3D = 0x806f, WRAP_R = 0x8072;
+  /*
+   * GL_GENERATE_MIPMAP (GL 1.4, SGIS_generate_mipmap): a texture object's flag that makes every write
+   * to its level 0 make the levels below again. Each level is the one above halved in every dimension
+   * greater than 1, each texel the rounded mean of the 2, 4 or 8 above it -- the box filter Mesa uses.
+   */
+  const GENERATE_MIPMAP = 0x8191;
+  function generateMipmaps(t) {
+    let A = t.levels[0];
+    t.levels.length = 1;
+    for (let lv = 1; A.w > 1 || A.h > 1 || (A.d ?? 1) > 1; lv++) {
+      const w = Math.max(1, A.w >> 1), h = Math.max(1, A.h >> 1), d = Math.max(1, (A.d ?? 1) >> 1);
+      const sx = A.w > 1 ? 2 : 1, sy = A.h > 1 ? 2 : 1, sz = (A.d ?? 1) > 1 ? 2 : 1, n = sx * sy * sz;
+      const data = new Uint8Array(w * h * d * 4), S = A.data;
+      for (let z = 0; z < d; z++) for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        for (let k = 0; k < 4; k++) {
+          let sum = 0;
+          for (let c = 0; c < sz; c++) for (let b = 0; b < sy; b++) for (let a = 0; a < sx; a++) {
+            sum += S[(((z * sz + c) * A.h + y * sy + b) * A.w + x * sx + a) * 4 + k];
+          }
+          data[((z * h + y) * w + x) * 4 + k] = Math.floor((sum + (n >> 1)) / n);
+        }
+      }
+      A = t.levels[lv] = A.d ? { w, h, d, data } : { w, h, data };
+    }
+    t.dirty = true;
+  }
+  // After a write to a level: the chain made again when it was level 0 of a texture that asks for it.
+  const written = (t, level) => { if (level === 0 && t.generate) generateMipmaps(t); };
   const s = {
     width: 0, height: 0, color: null, depth: null,
     viewport: [0, 0, 0, 0], clear: [0, 0, 0, 0], clearDepth: 1,
@@ -850,11 +878,25 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
 
   // --- textures
-  function toRGBA(format, w, h, ptr) {
-    const u8 = M.u8, out = new Uint8Array(w * h * 4);
+  /*
+   * Client texels as RGBA bytes. GL_FLOAT ones are stored as every internal format here is, 8 bits a
+   * component: clamped to [0, 1] and rounded to the nearest of 255 steps, as Mesa stores floats given
+   * to an 8-bit format -- converted first into tightly packed bytes, then read as those.
+   */
+  function toRGBA(format, w, h, ptr, type = 0x1401) {
+    let u8 = M.u8, out = new Uint8Array(w * h * 4);
     const n = { [FMT.RGBA]: 4, [FMT.RGB]: 3, [FMT.LUMINANCE]: 1, [FMT.ALPHA]: 1, [FMT.LUMINANCE_ALPHA]: 2, [FMT.INTENSITY]: 1 }[format];
     if (!n) throw new Error(`gl: pixel format 0x${format.toString(16)} (colour index needs an extension PRISM does not advertise)`);
-    const row = Math.ceil(w * n / s.unpackAlign) * s.unpackAlign;
+    if (type !== 0x1401 && type !== 0x1406) throw new Error(`gl: texel type 0x${type.toString(16)} (GL_UNSIGNED_BYTE or GL_FLOAT)`);
+    let row = Math.ceil(w * n / s.unpackAlign) * s.unpackAlign;
+    if (type === 0x1406) {
+      const frow = Math.ceil(w * n * 4 / s.unpackAlign) * s.unpackAlign, packed = new Uint8Array(w * h * n), d = dv();
+      for (let j = 0; j < h; j++) for (let i = 0; i < w * n; i++) {
+        const f = d.getFloat32(ptr + j * frow + 4 * i, true);
+        packed[j * w * n + i] = Math.round((f > 1 ? 1 : f > 0 ? f : 0) * 255);
+      }
+      u8 = packed; ptr = 0; row = w * n;
+    }
     for (let i = 0; i < w * h; i++) {
       const p = ptr + Math.floor(i / w) * row + (i % w) * n, o = i * 4;
       if (format === FMT.RGBA) { out[o] = u8[p]; out[o + 1] = u8[p + 1]; out[o + 2] = u8[p + 2]; out[o + 3] = u8[p + 3]; }
@@ -1080,6 +1122,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (p === TEX.MIN) t.min = v; else if (p === TEX.MAG) t.mag = v;
       else if (p === TEX.WRAP_S) t.wrapS = v; else if (p === TEX.WRAP_T) t.wrapT = v;
       else if (p === WRAP_R) t.wrapR = v;
+      else if (p === GENERATE_MIPMAP) { t.generate = !!v; if (t.generate && t.levels[0]) generateMipmaps(t); }
       else throw new Error(`gl: glTexParameter 0x${p.toString(16)}`);
       t.dirty = true;
     },
@@ -1128,6 +1171,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.base = baseFormat(internal);
       t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4) };
       t.dirty = true;
+      written(t, level);
     },
     // Its texels as RGBA bytes, one w x h layer after another (read at call time, see ARRAYS).
     glTexImage3D: (target, level, internal, w, h, d, border, format, type, texels) => {
@@ -1136,6 +1180,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.base = baseFormat(internal);
       t.levels[level] = { w, h, d, data: texels ?? new Uint8Array(w * h * d * 4) };
       t.dirty = true;
+      written(t, level);
     },
     glColorMask: (r, g, b, a) => { s.colorMask = [!!r, !!g, !!b, !!a]; },
     glPolygonOffset: (factor, units) => { s.polygonOffset = [factor, units]; },
@@ -1179,12 +1224,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexParameterfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x1004 ? 4 : 1)],
     glPointParameterfvARB: (a) => [a[0], f32(a[1], a[0] === 0x8129 ? 3 : 1)],
     glTexImage2D: (a) => {
-      if (a[7] !== 0x1401) throw new Error(`gl: texel type 0x${a[7].toString(16)} (only GL_UNSIGNED_BYTE)`);
-      return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8]) : null];
+      return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null];
     },
     glTexImage3D: (a) => {
-      if (a[8] !== 0x1401) throw new Error(`gl: texel type 0x${a[8].toString(16)} (only GL_UNSIGNED_BYTE)`);
-      return [...a.slice(0, 9), a[9] ? toRGBA(a[7], a[3], a[4] * a[5], a[9]) : null];
+      return [...a.slice(0, 9), a[9] ? toRGBA(a[7], a[3], a[4] * a[5], a[9], a[8]) : null];
     },
   };
   // Only these leave the fragment state alone; every other command may change it, display lists included.
@@ -1239,17 +1282,19 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       for (let k = 0; k < 16; k++) dv().setFloat64(out + 8 * k, Math.fround(m[k]), true);
     },
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
-      const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr);
+      const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr, type);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
       // A dirty texture is uploaded where the draw state is worked out: so that state is worked out again.
+      written(t, level);
       t.dirty = true; gpuCache = null;
     },
     glTexSubImage3D: (target, level, x, y, z, w, h, d, format, type, ptr) => {
-      const t = texture3D(), L = t.levels[level], src = toRGBA(format, w, h * d, ptr);
+      const t = texture3D(), L = t.levels[level], src = toRGBA(format, w, h * d, ptr, type);
       if (!L) throw new Error(`gl: glTexSubImage3D into level ${level}, which has no image`);
       for (let k = 0; k < d; k++) for (let j = 0; j < h; j++) {
         L.data.set(src.subarray(((k * h + j) * w) * 4, ((k * h + j) * w + w) * 4), (((z + k) * L.h + y + j) * L.w + x) * 4);
       }
+      written(t, level);
       t.dirty = true; gpuCache = null;
     },
     // The framebuffer copied into a texture, through the texture's own copy of its texels (what both
@@ -1259,6 +1304,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const t = texture(), L = t.levels[level];
       if (!L) throw new Error(`gl: glCopyTexSubImage2D into level ${level}, which has no image`);
       copyFramebuffer(L, xo, yo, x, y, w, h);
+      written(t, level);
       t.dirty = true; gpuCache = null;
     },
     glCopyTexImage2D: (target, level, internal, x, y, w, h, border) => {
@@ -1266,6 +1312,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.base = baseFormat(internal);
       t.levels[level] = L;
       copyFramebuffer(L, 0, 0, x, y, w, h);
+      written(t, level);
       t.dirty = true; gpuCache = null;
     },
     glReadPixels: (x, y, w, h, format, type, out) => {

@@ -86,9 +86,11 @@ const cases = [
     src: 'void main(){gl_FragColor=vec4(gl_ModelViewMatrixInverse[3].xyz,1);}', translate: [-0.25, -0.5, -0.125], want: () => [0.25, 0.5, 0.125, 1] },
   { name: 'a back face culled under a vertex shader',
     vs: 'void main(){gl_Position=gl_Vertex;}', src: 'void main(){gl_FragColor=vec4(1);}', cull: true, raw: false, rect: [1, -1, -1, 1], want: () => [0, 0, 0, 0] },
-  // A 2x2x2 texture through glTexImage3D, nearest texels: texel (i, j, k) is (i, j, k, 1). The shader
-  // reads layer k = 1 (r = .75) across the window, so blue is 1 everywhere and red and green split it
-  // in four -- a texture made of its first layer only, or of one layer per call, would show no blue.
+  // A 2x2x2 texture through glTexImage3D, nearest texels of level 0: texel (i, j, k) is (i, j, k, 1).
+  // The shader reads layer k = 1 (r = .75) across the window, so blue is 1 everywhere and red and green
+  // split it in four -- a texture made of its first layer only, or of one layer per call, would show no
+  // blue. Its filter is mipmapped and its other levels are GL_GENERATE_MIPMAP's: without them it is
+  // incomplete and reads black.
   { name: 'a sampler3D read with texture3D, a texture made with glTexImage3D',
     src: 'uniform sampler3D t;void main(){gl_FragColor=texture3D(t,vec3(gl_FragCoord.xy/vec2(64,48),.75));}',
     tex3d: true, want: (x, y) => [x < W / 2 ? 0 : 1, y < H / 2 ? 0 : 1, 1, 1] },
@@ -125,10 +127,11 @@ for (const k of CASES) {
     if (k.cull) G.glEnable(0x0b44);
     if (k.tex3d) {
       const ids = heap; heap += 4; G.glGenTextures(1, ids); G.glBindTexture(0x806f, dv.getUint32(ids, true));
-      G.glTexParameteri(0x806f, 0x2801, 0x2600); G.glTexParameteri(0x806f, 0x2800, 0x2600);
-      const texels = heap; heap += 32;
-      for (let t = 0; t < 8; t++) u8.set([(t & 1) * 255, ((t >> 1) & 1) * 255, (t >> 2) * 255, 255], texels + 4 * t);
-      G.glTexImage3D(0x806f, 0, 0x1908, 2, 2, 2, 0, 0x1908, 0x1401, texels);
+      // As Retrospection makes its noise: GL_FLOAT texels, a mipmapped filter, levels from GL_GENERATE_MIPMAP.
+      G.glTexParameteri(0x806f, 0x8191, 1); G.glTexParameteri(0x806f, 0x2801, 0x2700); G.glTexParameteri(0x806f, 0x2800, 0x2600);
+      const texels = heap; heap += 128;
+      for (let t = 0; t < 8; t++) [t & 1, (t >> 1) & 1, t >> 2, 1].forEach((v, c) => dv.setFloat32(texels + 16 * t + 4 * c, v, true));
+      G.glTexImage3D(0x806f, 0, 0x1908, 2, 2, 2, 0, 0x1908, 0x1406, texels);
     }
     for (const [n, v] of k.uniforms || []) G.glUniform1f(G.glGetUniformLocation(pr, put(n)), v);
     const c = k.colour || [255, 255, 255, 255], cp = heap; heap += 4; u8.set(c, cp); G.glColor4ubv(cp);

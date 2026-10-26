@@ -46,6 +46,12 @@
  *   far           identity matrices, a glRecti 10^7 times the clip volume and a smooth-shaded triangle
  *                 with one vertex 10^7 above it: both clipped to the volume
  *
+ * And what a 2009 intro does with its noise:
+ *
+ *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
+ *                 with GL_GENERATE_MIPMAP, drawn GL_NEAREST_MIPMAP_NEAREST in three bands that read
+ *                 levels 1, 2 and 3 -- levels the program never gave
+ *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
 #include <stdio.h>
@@ -294,6 +300,36 @@ static void display(void) {
     glColor3f(0, 1, 0); glVertex2f(0.9f, -0.9f);
     glColor3f(0, 0, 1); glVertex2f(0, 1e7f);
     glEnd();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "generate-mipmap")) {
+    static GLfloat texels[8 * 8 * 3];
+    for (int j = 0; j < 8; j++) for (int i = 0; i < 8; i++) {
+      GLfloat *t = texels + (j * 8 + i) * 3;
+      t[0] = ((i * 37 + j * 91) % 64) / 63.0f; t[1] = (i - 2) / 4.0f; t[2] = (j * j) / 40.0f;
+    }
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glBindTexture(GL_TEXTURE_2D, 1);
+    glTexParameteri(GL_TEXTURE_2D, GL_GENERATE_MIPMAP, GL_TRUE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGB, GL_FLOAT, texels);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    /* Band b is 80 pixels high and the whole width; 2^(b+1) texels a pixel each way, so level b + 1. */
+    for (int b = 0; b < 3; b++) {
+      float r = (float)(2 << b) / 8, y0 = 80 * b, y1 = y0 + 80;
+      glBegin(GL_QUADS);
+      glTexCoord2f(0, 0); glVertex2f(0, y0);
+      glTexCoord2f(320 * r, 0); glVertex2f(320, y0);
+      glTexCoord2f(320 * r, 80 * r); glVertex2f(320, y1);
+      glTexCoord2f(0, 80 * r); glVertex2f(0, y1);
+      glEnd();
+    }
+    glDisable(GL_TEXTURE_2D);
+    glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "copytex")) {

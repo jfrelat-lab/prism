@@ -1026,6 +1026,8 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 #define GL_TEXTURE_3D 0x806F
 #define GL_TEXTURE_WRAP_R 0x8072
 #define GL_MAX_3D_TEXTURE_SIZE 0x8073
+/* GL 1.4: a texture object's levels made from its level 0 whenever that is written. */
+#define GL_GENERATE_MIPMAP 0x8191
 void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
 void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid *pixels);
 #endif
