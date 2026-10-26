@@ -130,8 +130,9 @@ function translate(src, stage) {
   // global `int r` beside it is another thing.
   const isField = (k) => !!(at(k - 1) && at(k - 1).v === '.');
   // The shader's own functions and the types of their parameters: `float mn(float p,float pp,int ppp)`
-  // is called `mn(a, b, 2)`, and that 2 is an int (Retrospection 2009).
-  const params = new Map();
+  // is called `mn(a, b, 2)`, and that 2 is an int (Retrospection 2009). Every overload is kept; a call
+  // takes the one with as many parameters as it has arguments.
+  const params = new Map();                 // name -> [types of each declaration's parameters]
   for (let k = 1, depth = 0; k < sig.length; k++) {
     const x = at(k);
     if (x.v === '{') depth++; else if (x.v === '}') depth--;
@@ -142,7 +143,8 @@ function translate(src, stage) {
       if (y.v === ',') { want = true; continue; }
       if (want && y.t === 'id' && !['in', 'out', 'inout', 'const', 'highp', 'mediump', 'lowp'].includes(y.v)) { types.push(y.v); want = false; }
     }
-    if (!params.has(x.v)) params.set(x.v, types);
+    if (!params.has(x.v)) params.set(x.v, []);
+    params.get(x.v).push(types);
   }
   // Integer context of the significant token k: inside [...], inside an int constructor's parentheses or
   // an int parameter's place in a call of the shader's own function, or beside an integer variable
@@ -156,7 +158,15 @@ function translate(src, stage) {
         if (y === '[') return true;
         const f = at(j - 1);
         if (f && f.t === 'id' && INT_TYPES.has(f.v)) return true;
-        if (f && f.t === 'id' && params.has(f.v) && INT_TYPES.has(params.get(f.v)[arg])) return true;
+        if (f && f.t === 'id' && params.has(f.v)) {
+          let n = 1;                                         // the call's arguments, from its '(' at j
+          for (let e = j + 1, d = 0; at(e) && !(d === 0 && at(e).v === ')'); e++) {
+            const z = at(e).v;
+            if (z === '(' || z === '[') d++; else if (z === ')' || z === ']') d--; else if (z === ',' && d === 0) n++;
+          }
+          const decl = params.get(f.v).find((t) => t.length === n);
+          if (decl && INT_TYPES.has(decl[arg])) return true;
+        }
         break;
       } else if (y === ',' && depth === 0) arg++;
       else if ((y === ';' || y === '{' || y === '}') && depth === 0) break;

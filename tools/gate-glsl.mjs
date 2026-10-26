@@ -48,6 +48,9 @@ const idioms = [
   ['texture2D and gl_TexCoord[0], varying', 'uniform sampler2D t;varying vec2 q;void main(){gl_FragData[0]=texture2D(t,gl_TexCoord[0].xy);}',
     'uniform sampler2D t;in vec2 q;void main(){prism_FragColor=texture(t,prism_TexCoord0.xy);}'],
 ];
+idioms.push(['an overloaded function: the overload with as many parameters as the call has arguments',
+  'float f(float a,float b){return a;}float f(float a,float b,int c){return b;}void main(){gl_FragColor=vec4(f(1,2.,3));}',
+  'float f(float a,float b){return a;}float f(float a,float b,int c){return b;}void main(){prism_FragColor=vec4(f(1.0,2.,3));}']);
 for (const [what, src, want] of idioms) { const got = T(src); check(got === want, `translate: ${what}`, `got  ${got}\n        want ${want}`); }
 // A vertex shader: its body as main became prism_main, between the declarations and the wrapper.
 const TV = (src) => translateVertex(src).source.replace(/^[\s\S]*?vec4 prism_discard;\n(?:uniform [^\n]*\n)*/, '').replace(/\nvoid main\(\) \{[^\n]*\n$/, '');
