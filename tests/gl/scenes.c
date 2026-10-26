@@ -48,6 +48,8 @@
  *
  * And what a 2009 intro does with its noise:
  *
+ *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
+ *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
  *                 with GL_GENERATE_MIPMAP, drawn GL_NEAREST_MIPMAP_NEAREST in three bands that read
  *                 levels 1, 2 and 3 -- levels the program never gave
@@ -300,6 +302,24 @@ static void display(void) {
     glColor3f(0, 1, 0); glVertex2f(0.9f, -0.9f);
     glColor3f(0, 0, 1); glVertex2f(0, 1e7f);
     glEnd();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "rect-forms")) {
+    static const GLfloat fa[2] = { 90, 10 }, fb[2] = { 150, 70 };
+    static const GLint ia[2] = { 170, 10 }, ib[2] = { 230, 70 };
+    static const GLshort sa[2] = { 250, 10 }, sb[2] = { 310, 70 };
+    static const GLdouble da[2] = { 10.25, 90.5 }, db[2] = { 70.75, 150.25 };
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glColor3f(1, 0, 0); glRectf(10.5f, 10, 70, 70);
+    glColor3f(0, 1, 0); glRecti(90, 90, 150, 150);
+    glColor3f(0, 0, 1); glRects(170, 90, 230, 150);
+    glColor3f(1, 1, 0); glRectd(250.5, 90.25, 310.75, 150.5);
+    glColor3f(0, 1, 1); glRectfv(fa, fb);
+    glColor3f(1, 0, 1); glRectiv(ia, ib);
+    glColor3f(1, 1, 1); glRectsv(sa, sb);
+    glColor3f(1, 0.5f, 0); glRectdv(da, db);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {
