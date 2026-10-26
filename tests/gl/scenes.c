@@ -41,6 +41,11 @@
  *                 part of a checker texture, and by glCopyTexImage2D into a texture of its own (RGB),
  *                 then both drawn, GL_NEAREST, on a cleared screen
  *
+ * And what Retrospection (2009) does to fill its window:
+ *
+ *   far           identity matrices, a glRecti 10^7 times the clip volume and a smooth-shaded triangle
+ *                 with one vertex 10^7 above it: both clipped to the volume
+ *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
 #include <stdio.h>
@@ -275,6 +280,22 @@ static void display(void) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glPopMatrix();
     glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T);
+  } else if (!strcmp(scene, "far")) {
+    /* Identity matrices: a rectangle 10^7 times the clip volume (at 10^8 Mesa's llvmpipe itself
+       loses a corner of it), then a triangle with one vertex 10^7
+       above it, smooth-shaded -- clipped to the volume, the colours as they are where it crosses. */
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glColor3f(0.5f, 0.5f, 0.5f);
+    glRecti(-10000000, -10000000, 10000000, 10000000);
+    glBegin(GL_TRIANGLES);
+    glColor3f(1, 0, 0); glVertex2f(-0.9f, -0.9f);
+    glColor3f(0, 1, 0); glVertex2f(0.9f, -0.9f);
+    glColor3f(0, 0, 1); glVertex2f(0, 1e7f);
+    glEnd();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "copytex")) {
     glDisable(GL_DEPTH_TEST);
     glBegin(GL_TRIANGLES);

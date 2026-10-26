@@ -92,12 +92,17 @@ const cases = [
   { name: 'a sampler3D read with texture3D, a texture made with glTexImage3D',
     src: 'uniform sampler3D t;void main(){gl_FragColor=texture3D(t,vec3(gl_FragCoord.xy/vec2(64,48),.75));}',
     tex3d: true, want: (x, y) => [x < W / 2 ? 0 : 1, y < H / 2 ? 0 : 1, 1, 1] },
+  // No shader: the fixed function, identity matrices, a rectangle 10^8 times the clip volume. GL clips
+  // it to the volume (2.12), so it covers the window; a GPU whose guard band it overflows draws nothing
+  // of it unless gl.js clips it first. Retrospection draws its backgrounds so.
+  { name: 'the fixed function: a rectangle far outside the clip volume covers the window',
+    src: null, identity: true, raw: false, rect: [-1e8, -1e8, 1e8, 1e8], want: () => [1, 1, 1, 1] },
 ];
 
 // The page: gl.js on a flat memory, as PRISM's runtime gives it, each case drawn and read back.
 const page = `<!doctype html><pre id=o>running</pre><script type=module>
 import { installGL } from '/src/env/gl.js';
-const CASES = ${JSON.stringify(cases.map(({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d }) => ({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d })))};
+const CASES = ${JSON.stringify(cases.map(({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d, identity }) => ({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d, identity })))};
 const out = {};
 const raw = (src) => { const c = new OffscreenCanvas(4, 4).getContext('webgl2'), s = c.createShader(c.FRAGMENT_SHADER); c.shaderSource(s, src); c.compileShader(s); return !!c.getShaderParameter(s, c.COMPILE_STATUS); };
 for (const k of CASES) {
@@ -109,12 +114,13 @@ for (const k of CASES) {
     const M = { u8, rt: {}, cstr, mod: { dv, cstr, intern: (b) => { const p = heap; u8.set(b, p); heap += b.length; return p; } } };
     const gl = installGL(M, { backend: 'webgl' }), G = M.rt;
     gl.resize(${W}, ${H});
-    G.glViewport(0, 0, ${W}, ${H}); G.glMatrixMode(0x1701); G.glLoadIdentity(); G.glOrtho(0, ${W}, 0, ${H}, -1, 1); G.glMatrixMode(0x1700); G.glLoadIdentity();
+    G.glViewport(0, 0, ${W}, ${H}); G.glMatrixMode(0x1701); G.glLoadIdentity(); if (!k.identity) G.glOrtho(0, ${W}, 0, ${H}, -1, 1); G.glMatrixMode(0x1700); G.glLoadIdentity();
     if (k.translate) G.glTranslatef(...k.translate);
     const compile = (type, src) => { const sh = G.glCreateShader(type), strs = heap; heap += 4; dv.setUint32(strs, put(src), true); G.glShaderSource(sh, 1, strs, 0); G.glCompileShader(sh); return sh; };
-    const pr = G.glCreateProgram(); G.glAttachShader(pr, compile(0x8b30, k.src));
+    const pr = k.src ? G.glCreateProgram() : 0;
+    if (k.src) G.glAttachShader(pr, compile(0x8b30, k.src));
     if (k.vs) G.glAttachShader(pr, compile(0x8b31, k.vs));
-    G.glLinkProgram(pr); G.glUseProgram(pr);
+    if (k.src) { G.glLinkProgram(pr); G.glUseProgram(pr); }
     if (k.normal) G.glNormal3f(...k.normal);
     if (k.cull) G.glEnable(0x0b44);
     if (k.tex3d) {
@@ -127,7 +133,7 @@ for (const k of CASES) {
     for (const [n, v] of k.uniforms || []) G.glUniform1f(G.glGetUniformLocation(pr, put(n)), v);
     const c = k.colour || [255, 255, 255, 255], cp = heap; heap += 4; u8.set(c, cp); G.glColor4ubv(cp);
     G.glRecti(...(k.rect || [0, 0, ${W}, ${H}]));
-    out[k.name] = { pixels: Array.from(gl.readPixels()), raw: raw(k.src) };
+    out[k.name] = { pixels: Array.from(gl.readPixels()), raw: k.src && raw(k.src) };
   } catch (e) { out[k.name] = { error: String(e.message || e) }; }
 }
 document.getElementById('o').textContent = JSON.stringify(out);

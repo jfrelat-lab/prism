@@ -417,6 +417,38 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     return seg;
   }
 
+  /*
+   * THE GUARD BAND. GL clips a primitive to the clip volume whatever its size (2.12); a GPU does not
+   * always: SwiftShader draws nothing of a rectangle whose corners are 10^6 times the volume (10^5 it
+   * draws), Mesa's llvmpipe loses a corner of one at 10^8, and where a GPU gives up is its own. So a
+   * polygon reaching beyond GUARD times the volume in x or y is clipped HERE to those planes,
+   * attributes linear in clip space as GL's clipping takes them, and each rasteriser clips what is left
+   * to the window. Both rasterisers, so that both are given the same polygons. Anything within the
+   * band -- every primitive of an ordinary frame -- is drawn as it is.
+   */
+  const GUARD = 1e4;
+  const guardPlanes = [(v) => GUARD * v.clip[3] - v.clip[0], (v) => GUARD * v.clip[3] + v.clip[0],
+    (v) => GUARD * v.clip[3] - v.clip[1], (v) => GUARD * v.clip[3] + v.clip[1]];
+  const outsideGuard = (v) => { const g = GUARD * v.clip[3]; return v.clip[0] > g || v.clip[0] < -g || v.clip[1] > g || v.clip[1] < -g; };
+  function clipGuard(poly) {
+    let out = true;
+    for (let i = 0; i < poly.length; i++) if (outsideGuard(poly[i])) { out = false; break; }
+    if (out) return poly;
+    for (const d of guardPlanes) {
+      if (poly.length < 2) break;
+      const next = [];
+      for (let i = 0; i < poly.length; i++) {
+        if (poly.length === 2 && i === 1) break;               // a segment: one edge, not a closed loop
+        const a = poly[i], b = poly[(i + 1) % poly.length], da = d(a), db = d(b);
+        if (da >= 0) next.push(a);
+        if ((da >= 0) !== (db >= 0)) next.push(lerpV(a, b, da / (da - db)));
+        if (poly.length === 2 && db >= 0) next.push(b);
+      }
+      poly = next;
+    }
+    return poly;
+  }
+
   // --- rasterisation
   /** The pixels a fragment may land on: the viewport the view volume maps to, cut by the scissor box. */
   function drawBox() {
@@ -676,7 +708,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // A vertex shader positions the vertices: clipping and culling are the GPU's (the cull state goes
     // with the program, apply()).
     if (webgl && a.vs) { webgl.tri(a, b, c, null, gpuState()); return; }
-    const poly = clipUser(clipNear([a, b, c]));
+    let poly = clipUser(clipNear([a, b, c]));
+    poly = clipGuard(poly);
     if (poly.length < 3) return;
     const asBack = (v) => ({ ...v, colour: v.back });
     for (let k = 1; k + 1 < poly.length; k++) {
@@ -732,7 +765,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   function line(a, b) {
     if (webgl && a.vs) { webgl.line(a, b, gpuState()); return; }
-    const seg = clipUserSegment(clipNear([a, b]));
+    let seg = clipUserSegment(clipNear([a, b]));
+    if (seg.length === 2) seg = clipGuard(seg);
     if (seg.length < 2) return;
     if (webgl) { webgl.line(seg[0], seg[1], gpuState()); return; }
     const A = toWindow(seg[0]), B = toWindow(seg[1]);
