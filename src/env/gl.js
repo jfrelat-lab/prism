@@ -1152,7 +1152,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
-      t.dirty = true;
+      // A dirty texture is uploaded where the draw state is worked out: so that state is worked out again.
+      t.dirty = true; gpuCache = null;
     },
     // The framebuffer copied into a texture, through the texture's own copy of its texels (what both
     // rasterisers upload from): read back after whatever is pending is drawn. A source pixel outside the
@@ -1161,14 +1162,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const t = texture(), L = t.levels[level];
       if (!L) throw new Error(`gl: glCopyTexSubImage2D into level ${level}, which has no image`);
       copyFramebuffer(L, xo, yo, x, y, w, h);
-      t.dirty = true;
+      t.dirty = true; gpuCache = null;
     },
     glCopyTexImage2D: (target, level, internal, x, y, w, h, border) => {
       const t = texture(), L = { w, h, data: new Uint8Array(w * h * 4) };
       t.base = baseFormat(internal);
       t.levels[level] = L;
       copyFramebuffer(L, 0, 0, x, y, w, h);
-      t.dirty = true;
+      t.dirty = true; gpuCache = null;
     },
     glReadPixels: (x, y, w, h, format, type, out) => {
       // The depth buffer, as floats in [0, 1]: Cube reads the one under its crosshair every frame.
