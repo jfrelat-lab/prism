@@ -17,6 +17,11 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
   (Neverball's intro: 38% less JavaScript a frame).
 - **SDL 2 programs** draw with OpenGL, take the mouse (a visible pointer in their menus, captured
   for play) and typed text.
+- **Neverball's ball shadow**: OpenGL now has three texture units and their combiners (GL_COMBINE),
+  which is how Neverball darkens the floor under the ball. Holes along shared triangle edges in the
+  software rasteriser are gone too.
+- **OpenGL**: 3D textures (in GLSL shaders), float texels, generated mipmaps, every form of glRect;
+  and a polygon far outside the screen is no longer lost (it covered nothing on some GPUs).
 
 ## 2026-10-24
 
