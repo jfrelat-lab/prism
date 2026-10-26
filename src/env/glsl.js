@@ -82,9 +82,26 @@ function hoistGlobals(src) {
   return res;
 }
 
-/** Translate a desktop GLSL fragment shader into GLSL ES 3.00. Returns { source, uniforms } — the
- *  uniforms as name -> type, as the shader declares them. */
-export function translateFragment(src) {
+/** Translate a desktop GLSL fragment shader into GLSL ES 3.00. Returns { source, uniforms, matrices }
+ *  — the uniforms as name -> type, as the shader declares them; the built-in matrices it reads. */
+export const translateFragment = (src) => translate(src, 'fragment');
+/** The same for a vertex shader: its attributes are gl.js's vertex as given (object space, the current
+ *  colour, texture coordinate and normal), its outputs the fragment stage's inputs. */
+export const translateVertex = (src) => translate(src, 'vertex');
+
+/*
+ * THE BUILT-IN MATRICES (GLSL 1.10, 7.4), uniforms in both stages: the modelview, projection, their
+ * product and the texture matrix, each also inverted, transposed or both, and the normal matrix. ES has
+ * none of them; each one a shader reads becomes a uniform gl.js sets from its matrix stacks
+ * (matrixValue). gl_TextureMatrix[0] only: gl.js has one texture unit.
+ */
+const MATRIX = /^gl_(ModelView|Projection|ModelViewProjection|Texture)Matrix(Inverse)?(Transpose)?$/;
+const VERTEX_IN = { gl_Vertex: 'prism_Vertex', gl_Color: 'prism_ColorIn', gl_Normal: 'prism_Normal', gl_MultiTexCoord0: 'prism_MultiTexCoord0' };
+/** The attribute names of a translated vertex shader, by gl.js's vertex layout (pos, col, tc, ez, normal). */
+export const VERTEX_ATTRIBUTES = ['prism_Vertex', 'prism_ColorIn', 'prism_MultiTexCoord0', 'prism_unused', 'prism_Normal'];
+
+function translate(src, stage) {
+  const vertex = stage === 'vertex', matrices = new Set();
   const tk = tokens(hoistGlobals(src));
   const sig = [];                                   // indices of the significant tokens (not whitespace)
   tk.forEach((x, i) => { if (x.t !== 'ws') sig.push(i); });
@@ -165,6 +182,37 @@ export function translateFragment(src) {
     if (x.t === 'num' && isIntLiteral(x.v) && !/^0[xX]/.test(x.v) && !/[uU]$/.test(x.v) && !intCtx(k)) { out.push(x.v + '.0'); continue; }
     if (converted.has(k)) { out.push(`float(${x.v})`); continue; }
     if (x.t === 'id') {
+      if (MATRIX.test(x.v)) {
+        matrices.add(x.v);
+        if (x.v === 'gl_TextureMatrix' || /^gl_TextureMatrix/.test(x.v)) {   // gl_TextureMatrix[n]: unit 0, else identity
+          const a = at(k + 1), b = at(k + 2), c = at(k + 3);
+          if (a && a.v === '[' && b && c && c.v === ']') { out.push(b.v === '0' ? x.v.replace('gl_', 'prism_') : 'mat4(1.0)'); i = sig[k + 3]; continue; }
+        }
+        out.push(x.v.replace('gl_', 'prism_')); continue;
+      }
+      if (x.v === 'gl_NormalMatrix') { matrices.add(x.v); out.push('prism_NormalMatrix'); continue; }
+      if (vertex) {
+        if (VERTEX_IN[x.v]) { out.push(VERTEX_IN[x.v]); continue; }
+        if (/^gl_MultiTexCoord[1-7]$/.test(x.v)) { out.push('vec4(0.0, 0.0, 0.0, 1.0)'); continue; }
+        if (x.v === 'gl_SecondaryColor') { out.push('vec4(0.0)'); continue; }
+        if (x.v === 'gl_FogCoord') { out.push('0.0'); continue; }
+        if (x.v === 'ftransform') {                          // ftransform(): the fixed function's own position
+          const a = at(k + 1), b = at(k + 2);
+          if (a && a.v === '(' && b && b.v === ')') { matrices.add('gl_ModelViewProjectionMatrix'); out.push('(prism_ModelViewProjectionMatrix * prism_Vertex)'); i = sig[k + 2]; continue; }
+        }
+        if (x.v === 'gl_FrontColor') { out.push('prism_Color'); continue; }
+        if (/^gl_(BackColor|FrontSecondaryColor|BackSecondaryColor|ClipVertex)$/.test(x.v)) { out.push('prism_discard'); continue; }
+        if (x.v === 'gl_TexCoord') {                         // an output: unit 0 is passed on, the others written nowhere
+          const a = at(k + 1), b = at(k + 2), c = at(k + 3);
+          if (a && a.v === '[' && b && c && c.v === ']') { out.push(b.v === '0' ? 'prism_TexCoord0' : 'prism_discard'); i = sig[k + 3]; continue; }
+        }
+        if (x.v === 'gl_FogFragCoord') { out.push('prism_FogFragCoord'); continue; }
+        if (x.v === 'attribute') { out.push('in'); continue; }
+        if (x.v === 'varying') { out.push('out'); continue; }
+        if (x.v === 'main') { out.push('prism_main'); continue; }
+        if (TEXTURE[x.v]) { out.push(TEXTURE[x.v]); continue; }
+        out.push(x.v); continue;
+      }
       if (x.v === 'gl_FragColor') { out.push('prism_FragColor'); continue; }
       if (x.v === 'gl_FragData') {                           // gl_FragData[0]: the one colour output
         const a = at(k + 1), b = at(k + 2), c = at(k + 3);
@@ -182,9 +230,19 @@ export function translateFragment(src) {
     }
     out.push(x.v);
   }
+  const decl = [...matrices].map((m) => `uniform ${m === 'gl_NormalMatrix' ? 'mat3' : 'mat4'} ${m.replace('gl_', 'prism_')};\n`).join('');
+  if (vertex) {
+    // The outputs start as the fixed function leaves them (the colour as given), then the shader's main.
+    const head = '#version 300 es\nprecision highp float;\nprecision highp int;\n' +
+      'in vec4 prism_Vertex;\nin vec4 prism_ColorIn;\nin vec4 prism_MultiTexCoord0;\nin vec3 prism_Normal;\nuniform int zFlip;\n' +
+      'out vec4 prism_Color;\nout vec4 prism_TexCoord0;\nout float prism_FogFragCoord;\nvec4 prism_discard;\n' + decl;
+    const tail = '\nvoid main() { prism_Color = prism_ColorIn; prism_TexCoord0 = vec4(0.0, 0.0, 0.0, 1.0); prism_FogFragCoord = 0.0;' +
+      ' prism_main(); if (zFlip == 1) gl_Position.z = -gl_Position.z; }\n';
+    return { source: head + out.join('') + tail, uniforms, matrices: [...matrices] };
+  }
   const head = '#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler3D;\n' +
-    'in vec4 prism_Color;\nin vec4 prism_TexCoord0;\nin float prism_FogFragCoord;\nout vec4 prism_FragColor;\n';
-  return { source: head + out.join(''), uniforms };
+    'in vec4 prism_Color;\nin vec4 prism_TexCoord0;\nin float prism_FogFragCoord;\nout vec4 prism_FragColor;\n' + decl;
+  return { source: head + out.join(''), uniforms, matrices: [...matrices] };
 }
 
 /** The vertex stage of a program whose only shader is a fragment one (OpenGL 2.0, 2.15: the fixed
@@ -206,9 +264,10 @@ const COMPILE_STATUS = 0x8b81, LINK_STATUS = 0x8b82, VALIDATE_STATUS = 0x8b83, I
  * as GetProcAddress hands both out), and what the WebGL rasteriser needs to draw with a program.
  * A program whose only shader is a fragment one is drawn: gl.js transforms the vertices as always
  * (2.15: the fixed function does what no vertex shader does) and the program's fragment shader runs
- * in place of the fixed one. A VERTEX shader is refused when the program is used, naming itself —
- * it reads object-space vertices and the matrices, which this rasteriser does not hand WebGL yet. The
- * software rasteriser refuses GLSL altogether: it would need a GLSL interpreter.
+ * in place of the fixed one. A program with a VERTEX shader is handed the vertices as given (object
+ * space) and positions them itself; gl.js then leaves clipping and culling to the GPU, since only the
+ * shader knows where a vertex lands. The software rasteriser refuses GLSL altogether: it would need a
+ * GLSL interpreter.
  */
 export function makeGLSL(M) {
   const dv = () => M.mod.dv;
@@ -238,7 +297,7 @@ export function makeGLSL(M) {
       }
       shaderOf(sh).source = src;
     },
-    glCompileShader: (sh) => { const o = shaderOf(sh); if (o.type === FRAGMENT_SHADER) o.es = translateFragment(o.source); },
+    glCompileShader: (sh) => { const o = shaderOf(sh); o.es = o.type === FRAGMENT_SHADER ? translateFragment(o.source) : o.type === VERTEX_SHADER ? translateVertex(o.source) : null; },
     glCreateProgram: () => create({ kind: 'program', shaders: [], fragment: null, vertex: null, locations: [], values: new Map(), gpu: null }),
     glAttachShader: (p, sh) => { programOf(p).shaders.push(shaderOf(sh)); },
     glDetachShader: (p, sh) => { const o = programOf(p); o.shaders = o.shaders.filter((x) => x !== shaderOf(sh)); },
@@ -247,10 +306,12 @@ export function makeGLSL(M) {
       o.fragment = o.shaders.find((x) => x.type === FRAGMENT_SHADER) || null;
       o.vertex = o.shaders.find((x) => x.type === VERTEX_SHADER) || null;
       o.gpu = null; o.values = new Map(); version++;
+      // The built-in matrices either stage reads: gl.js sends them with every draw that uses the program.
+      o.matrices = [...new Set([o.fragment, o.vertex].flatMap((x) => (x && x.es ? x.es.matrices : [])))];
     },
     glUseProgram: (p) => {
       current = p ? programOf(p) : null;
-      if (current && current.vertex) throw new Error('gl: GLSL: a program with a vertex shader is not implemented (its fragment shader alone is)');
+      if (current && !current.fragment) throw new Error('gl: GLSL: a program with a vertex shader and no fragment shader is not implemented');
       version++;
     },
     glValidateProgram: () => {},
@@ -326,14 +387,15 @@ export function makeGLSLWebGL(g, layout, shader) {
     m4t: (l, v) => g.uniformMatrix4fv(l, false, transpose(v, 4)), m3t: (l, v) => g.uniformMatrix3fv(l, false, transpose(v, 3)),
   };
   return {
-    use(program, zFlip) {
+    /** Make `program` current with its uniforms and `matrices` (name -> values); false for the fixed function. */
+    use(program, zFlip, matrices) {
       if (!program) return false;
       if (!program.gpu) {
         if (!program.fragment || !program.fragment.es) throw new Error('gl: GLSL: a program without a compiled fragment shader');
         const p = g.createProgram();
-        g.attachShader(p, shader(g.VERTEX_SHADER, FIXED_VERTEX));
+        g.attachShader(p, shader(g.VERTEX_SHADER, program.vertex ? program.vertex.es.source : FIXED_VERTEX));
         g.attachShader(p, shader(g.FRAGMENT_SHADER, program.fragment.es.source));
-        layout.forEach((n, i) => g.bindAttribLocation(p, i, n));
+        (program.vertex ? VERTEX_ATTRIBUTES : layout).forEach((n, i) => g.bindAttribLocation(p, i, n));
         g.linkProgram(p);
         if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(`gl: GLSL: link: ${g.getProgramInfoLog(p)}`);
         program.gpu = { p, zFlip: g.getUniformLocation(p, 'zFlip'), loc: new Map() };
@@ -341,6 +403,12 @@ export function makeGLSLWebGL(g, layout, shader) {
       const gp = program.gpu;
       g.useProgram(gp.p);
       g.uniform1i(gp.zFlip, zFlip);
+      for (const m of program.matrices || []) {
+        const name = m.replace('gl_', 'prism_');
+        if (!gp.loc.has(name)) gp.loc.set(name, g.getUniformLocation(gp.p, name));
+        const l = gp.loc.get(name);
+        if (l) (m === 'gl_NormalMatrix' ? g.uniformMatrix3fv : g.uniformMatrix4fv).call(g, l, false, matrices[m]);
+      }
       for (const [name, { kind, values }] of program.values) {
         if (!gp.loc.has(name)) gp.loc.set(name, g.getUniformLocation(gp.p, name));
         const l = gp.loc.get(name);

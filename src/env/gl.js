@@ -345,7 +345,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const su = tm[0] * tu + tm[4] * tv + tm[12], sv = tm[1] * tu + tm[5] * tv + tm[13];
       tu = q === 1 ? su : su / q; tv = q === 1 ? sv : sv / q;
     }
-    s.verts.push({ clip, colour, back, tex: [tu, tv], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye });
+    // Under a program with a vertex shader, the vertex as given is what the GPU gets (its attributes).
+    const vs = glsl.current()?.vertex ? { o: [x, y, z, 1], c: s.colour.slice(), t: [s.tex[0], s.tex[1]], n: s.normal.slice() } : null;
+    s.verts.push({ clip, colour, back, tex: [tu, tv], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye, vs });
   }
 
   // --- clipping against the near plane (z + w >= 0), every attribute linear in clip space
@@ -661,6 +663,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   function triangle(a, b, c, provoking) {
     s.stats.triangles++;
+    // A vertex shader positions the vertices: clipping and culling are the GPU's (the cull state goes
+    // with the program, apply()).
+    if (webgl && a.vs) { webgl.tri(a, b, c, null, gpuState()); return; }
     const poly = clipUser(clipNear([a, b, c]));
     if (poly.length < 3) return;
     const asBack = (v) => ({ ...v, colour: v.back });
@@ -697,6 +702,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * COORD_REPLACE its texture coordinates run 0..1 across it, t from the top (ARB_point_sprite).
    */
   function point(v) {
+    if (v.vs) throw new Error('gl: GLSL: points drawn under a vertex shader are not implemented');
     if (v.clip[3] <= 0 || v.clip[2] < -v.clip[3]) return;      // behind the eye or the near plane
     const [a, b, c] = s.pointAtten;
     let size = s.pointSize;
@@ -715,6 +721,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     triangle(q[0], q[2], q[3], null);
   }
   function line(a, b) {
+    if (webgl && a.vs) { webgl.line(a, b, gpuState()); return; }
     const seg = clipUserSegment(clipNear([a, b]));
     if (seg.length < 2) return;
     if (webgl) { webgl.line(seg[0], seg[1], gpuState()); return; }
@@ -770,7 +777,29 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       offset: s.caps.has(CAP.POLYGON_OFFSET_FILL) ? s.polygonOffset.join(',') : '',
       fog: s.caps.has(CAP.FOG) ? `${s.fog.mode},${s.fog.density},${s.fog.start},${s.fog.end},${s.fog.colour.join(',')}` : '',
       program: glsl.key(), glsl: glsl.current(),
+      cull: glsl.current()?.vertex && s.caps.has(CAP.CULL_FACE) ? `${s.cullFace},${s.frontFace}` : '',
+      xf: glsl.current()?.matrices?.length ? builtinMatrices() : null,
     };
+  }
+  /*
+   * GLSL's built-in matrices (glsl.js), from the stacks' tops. Those are replaced, never written in
+   * place, so the same three tops are the same values: one object for them, which gpuState compares.
+   */
+  let xfOf = [], xfVal = null, xfId = 0;
+  function builtinMatrices() {
+    const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1), tm = s.stacks[TEXTURE_MATRIX].at(-1);
+    if (xfOf[0] === mv && xfOf[1] === pr && xfOf[2] === tm) return xfVal;
+    xfOf = [mv, pr, tm];
+    const t4 = (m) => Float32Array.from({ length: 16 }, (_, k) => m[(k % 4) * 4 + (k >> 2)]);
+    const base = { ModelView: mv, Projection: pr, ModelViewProjection: mul(pr, mv), Texture: tm }, v = { id: ++xfId };
+    for (const [name, m] of Object.entries(base)) {
+      const inv = invert4(m);
+      v[`gl_${name}Matrix`] = Float32Array.from(m); v[`gl_${name}MatrixInverse`] = Float32Array.from(inv);
+      v[`gl_${name}MatrixTranspose`] = t4(m); v[`gl_${name}MatrixInverseTranspose`] = t4(inv);
+    }
+    const nm = normalMatrix(mv);                               // row-major; a uniform is column-major
+    v.gl_NormalMatrix = Float32Array.of(nm[0], nm[3], nm[6], nm[1], nm[4], nm[7], nm[2], nm[5], nm[8]);
+    return xfVal = v;
   }
 
   // --- textures
@@ -1435,7 +1464,8 @@ void main() {
   const U = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
     .map((n) => [n, g.getUniformLocation(prog, n)]));
   g.uniform1i(U.tex, 0);
-  g.bindBuffer(g.ARRAY_BUFFER, g.createBuffer());
+  const vertexBuffer = g.createBuffer();
+  g.bindBuffer(g.ARRAY_BUFFER, vertexBuffer);
   const STRIDE = 11 * 4;
   g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 4, g.FLOAT, false, STRIDE, 0);
   g.enableVertexAttribArray(1); g.vertexAttribPointer(1, 4, g.FLOAT, false, STRIDE, 16);
@@ -1444,6 +1474,9 @@ void main() {
   g.disable(g.CULL_FACE);
   const gpuTex = new Map();
   const MAXV = 3 * 65536, data = new Float32Array(MAXV * 11);
+  // The normals, for a vertex shader's gl_Normal: their own buffer and attribute 4, bound only for a
+  // batch drawn with one, so a program without one sends WebGL what it always did.
+  let normalBuffer = null, normals = null;
   let n = 0, mode = g.TRIANGLES, key = null, pending = null;
   const BASES = { RGB: 0, RGBA: 1, L: 2, LA: 3, A: 4, I: 5 };
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
@@ -1456,7 +1489,7 @@ void main() {
    * ends one -- and sending all of the state with each was a fifth of its frame. Whatever else
    * touches the same WebGL state (clear, upload, readDepth) forgets the pieces it changed.
    */
-  let applied = { program: 'fixed' };
+  let applied = { program: 'fixed' }, culling = false;
   const texParams = new Map();                // texture id -> its min, mag and wraps as last set
   const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
   function apply(st) {
@@ -1464,9 +1497,12 @@ void main() {
     // stage applies too) or the fixed function's, which keeps its own uniforms from before.
     // The fixed path's key never changes ('fixed', as `applied` starts and as readDepth leaves it), so a
     // program that uses no GLSL sends WebGL exactly what it sent before GLSL existed (gate-webgl-stream).
-    put('program', st.glsl ? `${st.program},${st.range}` : 'fixed', () => {
+    put('program', st.glsl ? `${st.program},${st.range},${st.cull},${st.xf ? st.xf.id : ''}` : 'fixed', () => {
       const flip = st.range.split(',').map(Number).reduce((dn, df) => (dn > df ? 1 : 0));
-      if (!programs.use(st.glsl, flip)) { g.useProgram(prog); g.uniform1i(U.zFlip, zFlip); }
+      if (!programs.use(st.glsl, flip, st.xf)) { g.useProgram(prog); g.uniform1i(U.zFlip, zFlip); }
+      // Culling is WebGL's only under a vertex shader (gl.js culls the rest itself), so only then is it on.
+      if (st.cull) { const [cf, ff] = st.cull.split(',').map(Number); g.enable(g.CULL_FACE); g.cullFace(cf); g.frontFace(ff); culling = true; }
+      else if (culling) { g.disable(g.CULL_FACE); culling = false; }
     });
     if (st.tex >= 0) {
       put('tex', st.tex, () => g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex)));
@@ -1518,10 +1554,23 @@ void main() {
     if (!n) return;
     apply(pending);
     g.bufferData(g.ARRAY_BUFFER, data.subarray(0, n * 11), g.STREAM_DRAW);
+    const vs = pending.glsl?.vertex;
+    if (vs) {
+      g.bindBuffer(g.ARRAY_BUFFER, normalBuffer ??= g.createBuffer());
+      g.bufferData(g.ARRAY_BUFFER, normals.subarray(0, n * 3), g.STREAM_DRAW);
+      g.enableVertexAttribArray(4); g.vertexAttribPointer(4, 3, g.FLOAT, false, 0, 0);
+      g.bindBuffer(g.ARRAY_BUFFER, vertexBuffer);
+    }
     g.drawArrays(mode, 0, n);
+    if (vs) g.disableVertexAttribArray(4);
     n = 0;
   };
-  const push = (v, colour) => { const o = n * 11; data.set(v.clip, o); data.set(colour ?? v.colour, o + 4); data[o + 8] = v.tex[0]; data[o + 9] = v.tex[1]; data[o + 10] = v.eyeZ; n++; };
+  const push = (v, colour) => {
+    if (v.vs) {                                // under a vertex shader: the attributes as given
+      const o = n * 11; data.set(v.vs.o, o); data.set(v.vs.c, o + 4); data[o + 8] = v.vs.t[0]; data[o + 9] = v.vs.t[1]; data[o + 10] = 0;
+      (normals ??= new Float32Array(MAXV * 3)).set(v.vs.n, n * 3); n++; return;
+    }
+    const o = n * 11; data.set(v.clip, o); data.set(colour ?? v.colour, o + 4); data[o + 8] = v.tex[0]; data[o + 9] = v.tex[1]; data[o + 10] = v.eyeZ; n++; };
   // gpuState builds every field from primitives in a fixed order, so field-wise equality is identity.
   const same = (a, b) => { if (!a || !b) return false; for (const f in a) if (a[f] !== b[f]) return false; return true; };
   const begin = (st, m, count) => {
@@ -1565,6 +1614,7 @@ void main() {
       }
       g.bindFramebuffer(g.FRAMEBUFFER, probeTarget);
       g.disable(g.DEPTH_TEST); g.disable(g.BLEND); g.disable(g.SCISSOR_TEST); g.disable(g.STENCIL_TEST); g.disable(g.POLYGON_OFFSET_FILL);
+      if (culling) { g.disable(g.CULL_FACE); culling = false; }   // a vertex shader's; the next batch sets it again
       g.colorMask(true, true, true, true);
       g.viewport(0, 0, rw, rh);
       g.useProgram(probe);
