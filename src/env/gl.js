@@ -29,6 +29,7 @@
 // positional lights, colour-index textures.
 
 import { GL_H } from './headers-gl.js';
+import { makeGLSL, makeGLSLWebGL } from './glsl.js';
 
 const MODELVIEW = 0x1700, PROJECTION = 0x1701, TEXTURE_MATRIX = 0x1702;
 const CAP = {
@@ -190,6 +191,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     stats: { triangles: 0, culled: 0, clipped: 0, fragments: 0 },
     strings: new Map(),
   };
+  const glsl = makeGLSL(M);                 // shaders and programs (src/env/glsl.js)
   const top = () => { const st = s.stacks[s.mode]; return st[st.length - 1]; };
   const setTop = (m) => { const st = s.stacks[s.mode]; st[st.length - 1] = m; };
   const texture = () => s.textures.get(s.bound);
@@ -683,6 +685,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (back) { p0 = asBack(p0); p1 = asBack(p1); p2 = asBack(p2); if (!webgl) { A = toWindow(p0); B = toWindow(p1); C = toWindow(p2); } }
       const flatColour = provoking ? (back ? provoking.back : provoking.colour) : null;
       if (webgl) webgl.tri(p0, p1, p2, flatColour, gpuState());
+      else if (glsl.current()) throw new Error('gl: GLSL programs are drawn by the WebGL rasteriser only');
       else rasterTriangle(A, B, C, flatColour);
     }
   }
@@ -751,7 +754,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   /** What the GPU path needs of the fragment state, as one comparable value. */
   function gpuState() {
     if (gpuCache) return gpuCache;
-    const t = s.caps.has(CAP.TEXTURE_2D) ? texture() : null, textured = !!(t && complete(t));
+    // A GLSL program samples the bound texture whether or not GL_TEXTURE_2D is enabled.
+    const t = s.caps.has(CAP.TEXTURE_2D) || glsl.current() ? texture() : null, textured = !!(t && complete(t));
     if (textured && t.dirty) { webgl.upload(s.bound, t); t.dirty = false; }
     return gpuCache = {
       tex: textured ? s.bound : -1, base: textured ? t.base : '', env: s.envMode,
@@ -765,6 +769,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       stencil: s.stencil && s.caps.has(CAP.STENCIL_TEST) ? `${s.stencilFunc.join(',')},${s.stencilOp.join(',')},${s.stencilWriteMask}` : '',
       offset: s.caps.has(CAP.POLYGON_OFFSET_FILL) ? s.polygonOffset.join(',') : '',
       fog: s.caps.has(CAP.FOG) ? `${s.fog.mode},${s.fog.density},${s.fog.start},${s.fog.end},${s.fog.colour.join(',')}` : '',
+      program: glsl.key(), glsl: glsl.current(),
     };
   }
 
@@ -1111,6 +1116,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       exec[name](...a);
     };
   }
+  // GLSL's entry points: what they change is part of the state a draw is made with.
+  for (const [name, fn] of Object.entries(glsl.api)) api[name] = (...a) => { gpuCache = null; return fn(...a); };
   const readFramebuffer = () => (webgl ? webgl.read() : s.color);  // bottom row first
   Object.assign(api, {
     glGenLists: (range) => { const first = s.nextList; s.nextList += range; return first; },
@@ -1399,6 +1406,7 @@ void main() {
   const probeDepth = g.getUniformLocation(probe, 'depth'), probeOrigin = g.getUniformLocation(probe, 'origin');
   let probeTarget = null, probeColour = null, probeVao = null, probeSize = '';
   g.useProgram(prog);
+  const programs = makeGLSLWebGL(g, ['pos', 'col', 'tc', 'ez'], shader);   // GLSL programs (src/env/glsl.js)
   const U = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
     .map((n) => [n, g.getUniformLocation(prog, n)]));
   g.uniform1i(U.tex, 0);
@@ -1423,10 +1431,18 @@ void main() {
    * ends one -- and sending all of the state with each was a fifth of its frame. Whatever else
    * touches the same WebGL state (clear, upload, readDepth) forgets the pieces it changed.
    */
-  let applied = {};
+  let applied = { program: 'fixed' };
   const texParams = new Map();                // texture id -> its min, mag and wraps as last set
   const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
   function apply(st) {
+    // The program first: a GLSL program's (its uniforms, and the depth range's flip, which its vertex
+    // stage applies too) or the fixed function's, which keeps its own uniforms from before.
+    // The fixed path's key never changes ('fixed', as `applied` starts and as readDepth leaves it), so a
+    // program that uses no GLSL sends WebGL exactly what it sent before GLSL existed (gate-webgl-stream).
+    put('program', st.glsl ? `${st.program},${st.range}` : 'fixed', () => {
+      const flip = st.range.split(',').map(Number).reduce((dn, df) => (dn > df ? 1 : 0));
+      if (!programs.use(st.glsl, flip)) { g.useProgram(prog); g.uniform1i(U.zFlip, zFlip); }
+    });
     if (st.tex >= 0) {
       put('tex', st.tex, () => g.bindTexture(g.TEXTURE_2D, gpuTex.get(st.tex)));
       const p = `${st.min},${st.mag},${st.wrapS},${st.wrapT}`;
@@ -1453,7 +1469,7 @@ void main() {
     put('range', st.range, () => {
       const [dn, df] = st.range.split(',').map(Number), flip = dn > df ? 1 : 0;
       g.depthRange(flip ? df : dn, flip ? dn : df);
-      if (flip !== zFlip) { zFlip = flip; g.uniform1i(U.zFlip, flip); }
+      if (flip !== zFlip) { zFlip = flip; if (!st.glsl) g.uniform1i(U.zFlip, flip); }
     });
     put('scissor', st.scissor, () => { if (st.scissor) { const [x, y, sw, sh] = st.scissor.split(',').map(Number); g.enable(g.SCISSOR_TEST); g.scissor(x, y, sw, sh); } else g.disable(g.SCISSOR_TEST); });
     put('fog', st.fog, () => {
@@ -1539,7 +1555,7 @@ void main() {
       g.useProgram(prog);
       g.bindFramebuffer(g.FRAMEBUFFER, target);
       g.viewport(...view);
-      key = null; applied = {};
+      key = null; applied = { program: 'fixed' };
       const out = new Float32Array(rw * rh);
       for (let i = 0; i < rw * rh; i++) out[i] = (px[4 * i] | (px[4 * i + 1] << 8) | (px[4 * i + 2] << 16)) / 16777215;
       return out;
