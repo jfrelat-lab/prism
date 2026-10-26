@@ -22,7 +22,7 @@ const TEXTURE = { texture1D: 'texture', texture2D: 'texture', texture3D: 'textur
 /** The tokens of a GLSL source: comments dropped, preprocessor lines kept whole, whitespace kept. */
 function tokens(src) {
   const out = [];
-  const re = /(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)|(^[ \t]*#[^\n]*)|(\s+)|([A-Za-z_][A-Za-z0-9_]*)|((?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFuU]?|0[xX][0-9a-fA-F]+[uU]?)|(<<=|>>=|\+\+|--|<=|>=|==|!=|&&|\|\||\^\^|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|<<|>>|[^\s])/gm;
+  const re = /(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)|(^[ \t]*#[^\n]*)|(\s+)|([A-Za-z_][A-Za-z0-9_]*)|(0[xX][0-9a-fA-F]+[uU]?|(?:\d+\.\d*|\.\d+|\d+)(?:[eE][+-]?\d+)?[fFuU]?)|(<<=|>>=|\+\+|--|<=|>=|==|!=|&&|\|\||\^\^|\+=|-=|\*=|\/=|%=|&=|\|=|\^=|<<|>>|[^\s])/gm;
   for (let m; (m = re.exec(src));) {
     if (m[1] || m[2]) { out.push({ t: 'ws', v: ' ' }); continue; }
     if (m[3]) out.push({ t: 'pp', v: m[3] });
@@ -100,26 +100,76 @@ const VERTEX_IN = { gl_Vertex: 'prism_Vertex', gl_Color: 'prism_ColorIn', gl_Nor
 /** The attribute names of a translated vertex shader, by gl.js's vertex layout (pos, col, tc, ez, normal). */
 export const VERTEX_ATTRIBUTES = ['prism_Vertex', 'prism_ColorIn', 'prism_MultiTexCoord0', 'prism_unused', 'prism_Normal'];
 
+/** Object-like macros (`#define ve return`, `#define ec float`, as the 4K intros shorten their
+ *  shaders) replaced by what they stand for and their lines dropped, so that the rewrite sees the
+ *  types and keywords; function-like macros are left to the compiler. */
+function expandDefines(src) {
+  const defs = new Map();
+  const kept = src.split('\n').map((line) => {
+    const m = /^\s*#\s*define\s+([A-Za-z_]\w*)(?!\()(?:\s+(.*))?$/.exec(line);
+    if (!m) return line;
+    defs.set(m[1], (m[2] || '').trim());
+    return '';
+  }).join('\n');
+  if (!defs.size) return src;
+  let out = kept;
+  for (let pass = 0; pass < 4; pass++) out = out.replace(/[A-Za-z_]\w*/g, (w) => (defs.has(w) ? defs.get(w) : w));
+  return out;
+}
+
+const DECL_TYPES = new Set([...INT_TYPES, 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'void', 'sampler1D', 'sampler2D', 'sampler3D', 'samplerCube']);
+
 function translate(src, stage) {
   const vertex = stage === 'vertex', matrices = new Set();
-  const tk = tokens(hoistGlobals(src));
+  const tk = tokens(hoistGlobals(expandDefines(src)));
   const sig = [];                                   // indices of the significant tokens (not whitespace)
   tk.forEach((x, i) => { if (x.t !== 'ws') sig.push(i); });
   const at = (k) => (k >= 0 && k < sig.length ? tk[sig[k]] : null);
-  // The identifiers declared with an integer type, anywhere (a loop counter, a parameter, a local).
-  const ints = new Set(), uniforms = {};
+  // WHICH NAMES ARE INTEGERS, scope by scope: each use of a name is the declaration it sees -- a
+  // global, a function's parameter in its body, a local -- so `int k` in one function and `float k` in
+  // another are two (Valleyball 2009: R(vec3 n, vec3 m, int k) and F's float k).
+  const intAt = new Array(sig.length).fill(false), uniforms = {};
+  {
+    const scopes = [new Map()];
+    let pending = null;                                     // a function's parameters, for its body
+    const bind = (name, isInt) => scopes[scopes.length - 1].set(name, isInt);
+    const look = (name) => { for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].has(name)) return scopes[i].get(name); return false; };
+    for (let k = 0; k < sig.length; k++) {
+      const x = at(k);
+      if (x.v === '{') { scopes.push(new Map(pending || [])); pending = null; continue; }
+      if (x.v === '}') { if (scopes.length > 1) scopes.pop(); continue; }
+      if (x.v === ';' && scopes.length === 1) { pending = null; continue; }
+      if (x.t !== 'id') continue;
+      const next = at(k + 1), prev = at(k - 1);
+      if (DECL_TYPES.has(x.v) && next && next.t === 'id' && !(prev && prev.v === '.')) {
+        if (at(k + 2) && at(k + 2).v === '(' && scopes.length === 1) {
+          // a function: its parameters bound in its body (a prototype's are forgotten at its `;`)
+          const ps = [];
+          for (let j = k + 3, depth = 0, type = null; at(j); j++) {
+            const y = at(j);
+            if (y.v === '(' || y.v === '[') depth++;
+            else if (y.v === ')' || y.v === ']') { if (depth === 0) break; depth--; }
+            else if (y.v === ',' && depth === 0) type = null;
+            else if (y.t === 'id' && depth === 0) { if (DECL_TYPES.has(y.v)) type = y.v; else if (type) ps.push([y.v, INT_TYPES.has(type)]); }
+          }
+          pending = ps;
+        } else {
+          // `int a = 1, b;` -- every name of the declarator list, until `;` or `)` at the same depth
+          for (let j = k + 1, depth = 0; j < sig.length; j++) {
+            const y = at(j);
+            if (y.v === '(' || y.v === '[') depth++;
+            else if (y.v === ')' || y.v === ']') { if (depth === 0) break; depth--; }
+            else if ((y.v === ';' || y.v === '{') && depth === 0) break;
+            if (y.t === 'id' && depth === 0 && (at(j - 1).v === ',' || j === k + 1)) bind(y.v, INT_TYPES.has(x.v));
+          }
+        }
+      }
+      if (!(prev && prev.v === '.')) intAt[k] = look(x.v);
+    }
+  }
+  const isInt = (k) => !!intAt[k];
   for (let k = 0; k < sig.length; k++) {
     const x = at(k);
-    if (x.t === 'id' && INT_TYPES.has(x.v)) {
-      // `int a = 1, b;` — every name in the declarator list, until `;` or `)` at the same depth
-      for (let j = k + 1, depth = 0; j < sig.length; j++) {
-        const y = at(j);
-        if (y.v === '(' || y.v === '[') depth++;
-        else if (y.v === ')' || y.v === ']') { if (depth === 0) break; depth--; }
-        else if ((y.v === ';' || y.v === '{') && depth === 0) break;
-        if (y.t === 'id' && depth === 0 && (at(j - 1).v === ',' || j === k + 1)) ints.add(y.v);
-      }
-    }
     if (x.t === 'id' && x.v === 'uniform') {
       let j = k + 1; while (at(j) && ['lowp', 'mediump', 'highp'].includes(at(j).v)) j++;
       const type = at(j) && at(j).v;
@@ -146,6 +196,41 @@ function translate(src, stage) {
     if (!params.has(x.v)) params.set(x.v, []);
     params.get(x.v).push(types);
   }
+  // Whether the parenthesised group whose parenthesis is at k (its `)` when dir is -1, its `(` when 1)
+  // holds integers only: int literals, int variables, operators, int constructors -- Valleyball's hash
+  // (i*(i*i*15731+789221)+1376312589)&0x7fffffff, all ints, its last literal beside a `)`.
+  const intGroup = (k, dir) => {
+    let j = k + dir, depth = 0, intVar = false;
+    for (; at(j); j += dir) {
+      const y = at(j);
+      if (y.v === (dir < 0 ? ')' : '(')) { depth++; continue; }
+      if (y.v === (dir < 0 ? '(' : ')')) { if (!depth) break; depth--; continue; }
+      if (y.t === 'num') { if (!isIntLiteral(y.v)) return false; continue; }
+      if (y.t === 'id') {
+        if (isField(j)) return false;
+        if (INT_TYPES.has(y.v) && at(j + 1) && at(j + 1).v === '(') { intVar = true; continue; }
+        if (!isInt(j) || (at(j + 1) && at(j + 1).v === '(')) return false;   // a float, or a call of unknown type
+        intVar = true; continue;
+      }
+      if (y.v === '.' || y.v === '[' || y.v === ']') return false;
+    }
+    if (!at(j) || !intVar) return false;                        // literals alone say nothing: x*(1+2) is a float's
+    // a call's parentheses: an int constructor's are an int, any other function's are not known
+    if (dir < 0) { const f = at(j - 1); if (f && f.t === 'id' && !INT_TYPES.has(f.v)) return false; }
+    return true;
+  };
+  // Whether the literal at k is an operand of + - * / whose other operand is a float: a float literal,
+  // a name that is not an int variable (or is a swizzle), a parenthesis or bracket closing.
+  const besideFloat = (k) => {
+    for (const d of [-1, 1]) {
+      const op = at(k + d), side = at(k + 2 * d);
+      if (!op || !['*', '/', '+', '-'].includes(op.v) || !side) continue;
+      if (side.t === 'num') { if (!isIntLiteral(side.v)) return true; continue; }
+      if (side.t === 'id') { if (!isInt(k + 2 * d) || isField(k + 2 * d) || (at(k + 3 * d) && at(k + 3 * d).v === '.')) return true; continue; }
+      if (side.v === ')' || side.v === ']') return true;
+    }
+    return false;
+  };
   // Integer context of the significant token k: inside [...], inside an int constructor's parentheses or
   // an int parameter's place in a call of the shader's own function, or beside an integer variable
   // through an operator (a < 75, i += 1, n * 2).
@@ -157,7 +242,9 @@ function translate(src, stage) {
         if (depth) { depth--; continue; }
         if (y === '[') return true;
         const f = at(j - 1);
-        if (f && f.t === 'id' && INT_TYPES.has(f.v)) return true;
+        // an int constructor's argument is integer unless the literal sits in float arithmetic there:
+        // Valleyball (2009) hashes with int(j.x*40+j.y*6400), where 40 and 6400 multiply floats
+        if (f && f.t === 'id' && INT_TYPES.has(f.v)) return !besideFloat(k);
         if (f && f.t === 'id' && params.has(f.v)) {
           let n = 1;                                         // the call's arguments, from its '(' at j
           for (let e = j + 1, d = 0; at(e) && !(d === 0 && at(e).v === ')'); e++) {
@@ -167,6 +254,8 @@ function translate(src, stage) {
           const decl = params.get(f.v).find((t) => t.length === n);
           if (decl && INT_TYPES.has(decl[arg])) return true;
         }
+        // plain parentheses (not a call's) around integers only: (i*i*15731+789221)
+        if (y === '(' && !(f && f.t === 'id' && !['return', 'if', 'while', 'for'].includes(f.v)) && intGroup(j, 1)) return true;
         break;
       } else if (y === ',' && depth === 0) arg++;
       else if ((y === ';' || y === '{' || y === '}') && depth === 0) break;
@@ -175,12 +264,13 @@ function translate(src, stage) {
     for (const d of [-1, 1]) {
       const op = at(k + d), side = at(k + 2 * d);
       if (op && OPS.has(op.v) && side) {
-        if (side.t === 'id' && ints.has(side.v) && !isField(k + 2 * d) && !converted.has(k + 2 * d) && !(at(k + 3 * d) && at(k + 3 * d).v === '.')) return true;
-        if (side.t === 'num' && isIntLiteral(side.v) && d === -1 && at(k - 3) && ints.has(at(k - 3).v)) return true;
+        if (side.t === 'id' && isInt(k + 2 * d) && !isField(k + 2 * d) && !converted.has(k + 2 * d) && !(at(k + 3 * d) && at(k + 3 * d).v === '.')) return true;
+        if (side.t === 'num' && isIntLiteral(side.v) && d === -1 && at(k - 3) && isInt(k - 3)) return true;
+        if ((side.v === ')' && d === -1) || (side.v === '(' && d === 1)) { if (intGroup(k + 2 * d, d)) return true; }
       }
     }
     // the initialiser of an int declaration: `int i = 0`, `int n = 3`
-    if (at(k - 1) && at(k - 1).v === '=' && at(k - 2) && ints.has(at(k - 2).v)) return true;
+    if (at(k - 1) && at(k - 1).v === '=' && at(k - 2) && isInt(k - 2)) return true;
     // a `case` label, a `return` in a function declared int (rare in the intros) — left as integers
     if (at(k - 1) && at(k - 1).v === 'case') return true;
     return false;
@@ -195,7 +285,7 @@ function translate(src, stage) {
     for (const [op, side, sk] of [[at(k - 1), at(k - 2), k - 2], [at(k + 1), at(k + 2), k + 2]]) {
       if (!op || !ARITH.has(op.v) || !side) continue;
       if (side.t === 'num') { if (!isIntLiteral(side.v)) return true; continue; }
-      if (side.t === 'id' && ints.has(side.v) && !isField(sk)) continue;
+      if (side.t === 'id' && isInt(sk) && !isField(sk)) continue;
       if (side.v === ')' || side.v === ']' || side.t === 'id') return true;
     }
     return false;
@@ -203,7 +293,7 @@ function translate(src, stage) {
   // Which integer variables become float(...), decided before the literals beside them are: in `s*c/8`
   // c is converted, so 8 is beside a float and becomes 8.0.
   const converted = new Set();
-  for (let k = 0; k < sig.length; k++) { const x = at(k); if (x.t === 'id' && ints.has(x.v) && !isField(k) && floatNeighbour(k) && !intCtx(k)) converted.add(k); }
+  for (let k = 0; k < sig.length; k++) { const x = at(k); if (x.t === 'id' && isInt(k) && !isField(k) && floatNeighbour(k) && !intCtx(k)) converted.add(k); }
   const out = [];
   for (let i = 0, k = 0; i < tk.length; i++) {
     const x = tk[i];
