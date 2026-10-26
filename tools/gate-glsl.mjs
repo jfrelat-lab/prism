@@ -38,6 +38,13 @@ const idioms = [
   ['a global initialised from gl_FragCoord is initialised in main', 'vec2 v=gl_FragCoord.xy/vec2(64,48);void main(){gl_FragColor=vec4(v,0,1);}',
     'vec2 v;void main(){v=gl_FragCoord.xy/vec2(64.0,48.0);prism_FragColor=vec4(v,0.0,1.0);}'],
   ['a constant global stays where it is', 'const float s=0.4;void main(){gl_FragColor=vec4(s);}', 'const float s=0.4;void main(){prism_FragColor=vec4(s);}'],
+  ['a swizzle named like an int variable stays a swizzle (Retrospection 2009: int r; texture3D(...).r)',
+    'uniform sampler3D t;int r=0;void main(){float a=.5*texture3D(t,vec3(0)).r+.25*texture3D(t,vec3(1)).r;gl_FragColor=vec4(a)*r;}',
+    'uniform sampler3D t;int r=0;void main(){float a=.5*texture(t,vec3(0.0)).r+.25*texture(t,vec3(1.0)).r;prism_FragColor=vec4(a)*float(r);}'],
+  ['an int parameter of the shader\'s own function keeps its integer argument (Retrospection 2009: mn(a, b, 2))',
+    'int r=0;float mn(float p,float pp,int ppp){if(pp<p){p=pp;r=ppp;}return p;}void main(){gl_FragColor=vec4(mn(1,.5,2));}',
+    'int r=0;float mn(float p,float pp,int ppp){if(pp<p){p=pp;r=ppp;}return p;}void main(){prism_FragColor=vec4(mn(1.0,.5,2));}'],
+  ['an int constructor\'s second argument stays an int', 'void main(){ivec2 a=ivec2(3,4);gl_FragColor=vec4(a.y);}', 'void main(){ivec2 a=ivec2(3,4);prism_FragColor=vec4(a.y);}'],
   ['texture2D and gl_TexCoord[0], varying', 'uniform sampler2D t;varying vec2 q;void main(){gl_FragData[0]=texture2D(t,gl_TexCoord[0].xy);}',
     'uniform sampler2D t;in vec2 q;void main(){prism_FragColor=texture(t,prism_TexCoord0.xy);}'],
 ];

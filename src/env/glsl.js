@@ -126,10 +126,29 @@ function translate(src, stage) {
       for (j++; at(j) && at(j).v !== ';'; j++) if (at(j).t === 'id' && (at(j - 1).v === type || at(j - 1).v === ',')) uniforms[at(j).v] = type;
     }
   }
-  // Integer context of the significant token k: inside [...], inside an int constructor's parentheses,
-  // or beside an integer variable through an operator (a < 75, i += 1, n * 2).
+  // A name after a dot is a field or a swizzle (`texture(...).r`), never the variable of that name: a
+  // global `int r` beside it is another thing.
+  const isField = (k) => !!(at(k - 1) && at(k - 1).v === '.');
+  // The shader's own functions and the types of their parameters: `float mn(float p,float pp,int ppp)`
+  // is called `mn(a, b, 2)`, and that 2 is an int (Retrospection 2009).
+  const params = new Map();
+  for (let k = 1, depth = 0; k < sig.length; k++) {
+    const x = at(k);
+    if (x.v === '{') depth++; else if (x.v === '}') depth--;
+    if (depth || x.t !== 'id' || !at(k + 1) || at(k + 1).v !== '(' || at(k - 1).t !== 'id' || QUALIFIERS.has(at(k - 1).v)) continue;
+    const types = [];
+    for (let j = k + 2, want = true; at(j) && at(j).v !== ')'; j++) {
+      const y = at(j);
+      if (y.v === ',') { want = true; continue; }
+      if (want && y.t === 'id' && !['in', 'out', 'inout', 'const', 'highp', 'mediump', 'lowp'].includes(y.v)) { types.push(y.v); want = false; }
+    }
+    if (!params.has(x.v)) params.set(x.v, types);
+  }
+  // Integer context of the significant token k: inside [...], inside an int constructor's parentheses or
+  // an int parameter's place in a call of the shader's own function, or beside an integer variable
+  // through an operator (a < 75, i += 1, n * 2).
   const intCtx = (k) => {
-    for (let j = k - 1, depth = 0; j >= 0; j--) {          // the innermost open bracket or parenthesis
+    for (let j = k - 1, depth = 0, arg = 0; j >= 0; j--) {   // the innermost open bracket or parenthesis
       const y = at(j).v;
       if (y === ')' || y === ']') depth++;
       else if (y === '(' || y === '[') {
@@ -137,14 +156,16 @@ function translate(src, stage) {
         if (y === '[') return true;
         const f = at(j - 1);
         if (f && f.t === 'id' && INT_TYPES.has(f.v)) return true;
+        if (f && f.t === 'id' && params.has(f.v) && INT_TYPES.has(params.get(f.v)[arg])) return true;
         break;
-      } else if ((y === ';' || y === '{' || y === '}' || y === ',') && depth === 0) break;
+      } else if (y === ',' && depth === 0) arg++;
+      else if ((y === ';' || y === '{' || y === '}') && depth === 0) break;
     }
     const OPS = new Set(['<', '>', '<=', '>=', '==', '!=', '=', '+', '-', '*', '/', '%', '+=', '-=', '*=', '/=', '%=', '<<', '>>', '&', '|', '^']);
     for (const d of [-1, 1]) {
       const op = at(k + d), side = at(k + 2 * d);
       if (op && OPS.has(op.v) && side) {
-        if (side.t === 'id' && ints.has(side.v) && !converted.has(k + 2 * d) && !(at(k + 3 * d) && at(k + 3 * d).v === '.')) return true;
+        if (side.t === 'id' && ints.has(side.v) && !isField(k + 2 * d) && !converted.has(k + 2 * d) && !(at(k + 3 * d) && at(k + 3 * d).v === '.')) return true;
         if (side.t === 'num' && isIntLiteral(side.v) && d === -1 && at(k - 3) && ints.has(at(k - 3).v)) return true;
       }
     }
@@ -161,10 +182,10 @@ function translate(src, stage) {
   const floatNeighbour = (k) => {
     const prev = at(k - 1), next = at(k + 1);
     if (prev && prev.t === 'id' && INT_TYPES.has(prev.v)) return false;            // the declaration
-    for (const [op, side] of [[at(k - 1), at(k - 2)], [at(k + 1), at(k + 2)]]) {
+    for (const [op, side, sk] of [[at(k - 1), at(k - 2), k - 2], [at(k + 1), at(k + 2), k + 2]]) {
       if (!op || !ARITH.has(op.v) || !side) continue;
       if (side.t === 'num') { if (!isIntLiteral(side.v)) return true; continue; }
-      if (side.t === 'id' && ints.has(side.v)) continue;
+      if (side.t === 'id' && ints.has(side.v) && !isField(sk)) continue;
       if (side.v === ')' || side.v === ']' || side.t === 'id') return true;
     }
     return false;
@@ -172,7 +193,7 @@ function translate(src, stage) {
   // Which integer variables become float(...), decided before the literals beside them are: in `s*c/8`
   // c is converted, so 8 is beside a float and becomes 8.0.
   const converted = new Set();
-  for (let k = 0; k < sig.length; k++) { const x = at(k); if (x.t === 'id' && ints.has(x.v) && floatNeighbour(k) && !intCtx(k)) converted.add(k); }
+  for (let k = 0; k < sig.length; k++) { const x = at(k); if (x.t === 'id' && ints.has(x.v) && !isField(k) && floatNeighbour(k) && !intCtx(k)) converted.add(k); }
   const out = [];
   for (let i = 0, k = 0; i < tk.length; i++) {
     const x = tk[i];
