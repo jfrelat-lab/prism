@@ -1119,6 +1119,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // GLSL's entry points: what they change is part of the state a draw is made with.
   for (const [name, fn] of Object.entries(glsl.api)) api[name] = (...a) => { gpuCache = null; return fn(...a); };
   const readFramebuffer = () => (webgl ? webgl.read() : s.color);  // bottom row first
+  function copyFramebuffer(L, xo, yo, x, y, w, h) {
+    const fb = readFramebuffer();
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+      const sx = x + i, sy = y + j, tx = xo + i, ty = yo + j;
+      if (sx < 0 || sy < 0 || sx >= s.width || sy >= s.height || tx >= L.w || ty >= L.h) continue;
+      L.data.set(fb.subarray((sy * s.width + sx) * 4, (sy * s.width + sx) * 4 + 4), (ty * L.w + tx) * 4);
+    }
+  }
   Object.assign(api, {
     glGenLists: (range) => { const first = s.nextList; s.nextList += range; return first; },
     glNewList: (n, mode) => { s.recording = []; s.recordMode = mode; s.recordingId = n; },
@@ -1144,6 +1152,22 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
+      t.dirty = true;
+    },
+    // The framebuffer copied into a texture, through the texture's own copy of its texels (what both
+    // rasterisers upload from): read back after whatever is pending is drawn. A source pixel outside the
+    // framebuffer is undefined (GL 1.1, 3.8.2); it is left as it was.
+    glCopyTexSubImage2D: (target, level, xo, yo, x, y, w, h) => {
+      const t = texture(), L = t.levels[level];
+      if (!L) throw new Error(`gl: glCopyTexSubImage2D into level ${level}, which has no image`);
+      copyFramebuffer(L, xo, yo, x, y, w, h);
+      t.dirty = true;
+    },
+    glCopyTexImage2D: (target, level, internal, x, y, w, h, border) => {
+      const t = texture(), L = { w, h, data: new Uint8Array(w * h * 4) };
+      t.base = baseFormat(internal);
+      t.levels[level] = L;
+      copyFramebuffer(L, 0, 0, x, y, w, h);
       t.dirty = true;
     },
     glReadPixels: (x, y, w, h, format, type, out) => {
@@ -1611,6 +1635,7 @@ export function glBuiltins(T) {
     glFogf: f(V, U, F), glFogi: f(V, U, I), glFogfv: f(V, U, P),
     glBindTexture: f(V, U, U), glTexParameterf: f(V, U, U, F), glTexEnvf: f(V, U, U, F), glTexParameteri: f(V, U, U, I), glTexEnvi: f(V, U, U, I),
     glTexImage2D: f(V, U, I, I, I, I, I, U, U, P), glTexSubImage2D: f(V, U, I, I, I, I, I, U, U, P),
+    glCopyTexSubImage2D: f(V, U, I, I, I, I, I, I, I), glCopyTexImage2D: f(V, U, I, U, I, I, I, I, I),
     glReadPixels: f(V, I, I, I, I, U, U, P), glPolygonMode: f(V, U, U), glHint: f(V, U, U),
     glDrawBuffer: f(V, U), glReadBuffer: f(V, U),
     glScissor: f(V, I, I, I, I), glPointSize: f(V, F), glColor3fv: f(V, P), glColor4ubv: f(V, P),

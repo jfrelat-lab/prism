@@ -35,6 +35,12 @@
  *   array-types   a 2D panel as Neverball's interface draws one: GL_SHORT positions, GL_UNSIGNED_BYTE
  *                 colours (normalized), GL_FLOAT texture coordinates, interleaved, under glOrtho
  *
+ * And what the 4K intros of 2004 do (a frame fed back into the next):
+ *
+ *   copytex       a smooth-shaded triangle copied out of the framebuffer by glCopyTexSubImage2D into
+ *                 part of a checker texture, and by glCopyTexImage2D into a texture of its own (RGB),
+ *                 then both drawn, GL_NEAREST, on a cleared screen
+ *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
 #include <stdio.h>
@@ -269,6 +275,36 @@ static void display(void) {
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glPopMatrix();
     glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T);
+  } else if (!strcmp(scene, "copytex")) {
+    glDisable(GL_DEPTH_TEST);
+    glBegin(GL_TRIANGLES);
+    glColor3f(1, 0.2f, 0.2f); glVertex3f(-2.5f, -1.6f, -3);
+    glColor3f(0.2f, 1, 0.2f); glVertex3f(2.5f, -1.4f, -3);
+    glColor3f(0.2f, 0.2f, 1); glVertex3f(0.2f, 2, -3);
+    glEnd();
+    glColor4f(1, 1, 1, 1);
+    glBindTexture(GL_TEXTURE_2D, 3);
+    upload(0);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 8, 4, 120, 80, 48, 40);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 4);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 96, 64, 64, 64, 0);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_TEXTURE_2D);
+    for (int k = 0; k < 2; k++) {
+      float x = k ? 0.2f : -2.6f;
+      glBindTexture(GL_TEXTURE_2D, 3 + k);
+      glBegin(GL_QUADS);
+      glTexCoord2f(0, 0); glVertex3f(x, -1.2f, -3);
+      glTexCoord2f(1, 0); glVertex3f(x + 2.4f, -1.2f, -3);
+      glTexCoord2f(1, 1); glVertex3f(x + 2.4f, 1.2f, -3);
+      glTexCoord2f(0, 1); glVertex3f(x, 1.2f, -3);
+      glEnd();
+    }
+    glDisable(GL_TEXTURE_2D);
   } else if (!strcmp(scene, "vbo")) {
     static GLfloat col[17 * 17][4];
     GLuint b[3];
