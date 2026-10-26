@@ -1021,6 +1021,13 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 #define GL_OPERAND0_ALPHA 0x8598
 #define GL_OPERAND1_ALPHA 0x8599
 #define GL_OPERAND2_ALPHA 0x859A
+/* GL 1.2 3D textures: sampled by GLSL programs (sampler3D), not by the fixed function. */
+#define GL_TEXTURE_BINDING_3D 0x806A
+#define GL_TEXTURE_3D 0x806F
+#define GL_TEXTURE_WRAP_R 0x8072
+#define GL_MAX_3D_TEXTURE_SIZE 0x8073
+void glTexImage3D(GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid *pixels);
+void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid *pixels);
 #endif
 `;
 

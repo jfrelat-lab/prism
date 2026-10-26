@@ -145,7 +145,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
   const material = () => ({ ambient: [0.2, 0.2, 0.2, 1], diffuse: [0.8, 0.8, 0.8, 1], specular: [0, 0, 0, 1], emission: [0, 0, 0, 1], shininess: 0 });
   const light = () => ({ ambient: [0, 0, 0, 1], diffuse: [0, 0, 0, 1], specular: [0, 0, 0, 1], position: [0, 0, 1, 0] });
-  const newTexture = () => ({ levels: [], base: 'RGBA', min: TEX.NL, mag: TEX.LINEAR, wrapS: TEX.REPEAT, wrapT: TEX.REPEAT, gpu: null, dirty: true });
+  const newTexture = () => ({ levels: [], base: 'RGBA', min: TEX.NL, mag: TEX.LINEAR, wrapS: TEX.REPEAT, wrapT: TEX.REPEAT, wrapR: TEX.REPEAT, gpu: null, dirty: true });
+  /*
+   * GL_TEXTURE_3D (GL 1.2) is a second binding beside GL_TEXTURE_2D, with its own default object. Only
+   * a GLSL program samples it (a sampler3D, on the WebGL path): the fixed function's 3D texturing is
+   * not implemented, and enabling it says so (glEnable).
+   */
+  const TEX3D = 0x806f, WRAP_R = 0x8072;
   const s = {
     width: 0, height: 0, color: null, depth: null,
     viewport: [0, 0, 0, 0], clear: [0, 0, 0, 0], clearDepth: 1,
@@ -164,6 +170,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     envMode: TEX.MODULATE,
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
     textures: new Map([[0, newTexture()]]), bound: 0, nextTexture: 1, genTextures: new Set(),
+    bound3D: 0, default3D: newTexture(),
     arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false }, normal: { on: false } },
     // glTexGen: per coordinate (s, t) its mode and object plane; the caps TEXTURE_GEN_S/T turn it on.
     texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
@@ -195,6 +202,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const top = () => { const st = s.stacks[s.mode]; return st[st.length - 1]; };
   const setTop = (m) => { const st = s.stacks[s.mode]; st[st.length - 1] = m; };
   const texture = () => s.textures.get(s.bound);
+  const texture3D = () => (s.bound3D ? s.textures.get(s.bound3D) : s.default3D);
+  const targetTexture = (target) => (target === TEX3D ? texture3D() : texture());
   /*
    * Component k of element i of array a, as glArrayElement reads it -- defined once, not per element.
    * Every type GL 1.1 allows an array (2.8): bytes, shorts and ints, signed or not, floats and
@@ -467,11 +476,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   function complete(t) {
     if (!t.levels[0]) return false;
     if (!mipmapped(t.min)) return true;
-    let w = t.levels[0].w, h = t.levels[0].h, lv = 0;
+    let w = t.levels[0].w, h = t.levels[0].h, d = t.levels[0].d ?? 1, lv = 0;
     for (;;) {
-      if (!t.levels[lv] || t.levels[lv].w !== w || t.levels[lv].h !== h) return false;
-      if (w === 1 && h === 1) return true;
-      w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); lv++;
+      const L = t.levels[lv];
+      if (!L || L.w !== w || L.h !== h || (L.d ?? 1) !== d) return false;
+      if (w === 1 && h === 1 && d === 1) return true;
+      w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); d = Math.max(1, d >> 1); lv++;
     }
   }
   /** The texture colour at (u, v) with scale factor rho (texels of level 0 per pixel), by the spec's rules -- in an array
@@ -764,9 +774,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // A GLSL program samples the bound texture whether or not GL_TEXTURE_2D is enabled.
     const t = s.caps.has(CAP.TEXTURE_2D) || glsl.current() ? texture() : null, textured = !!(t && complete(t));
     if (textured && t.dirty) { webgl.upload(s.bound, t); t.dirty = false; }
+    const t3 = glsl.current() ? texture3D() : null, textured3 = !!(t3 && complete(t3));
+    if (textured3 && t3.dirty) { webgl.upload3D(s.bound3D, t3); t3.dirty = false; }
     return gpuCache = {
       tex: textured ? s.bound : -1, base: textured ? t.base : '', env: s.envMode,
       min: textured ? t.min : 0, mag: textured ? t.mag : 0, wrapS: textured ? t.wrapS : 0, wrapT: textured ? t.wrapT : 0,
+      tex3: textured3 ? s.bound3D : -1, params3: textured3 ? `${t3.min},${t3.mag},${t3.wrapS},${t3.wrapT},${t3.wrapR}` : '',
       blend: s.caps.has(CAP.BLEND) ? `${s.blend[0]},${s.blend[1]}` : '',
       alpha: s.caps.has(CAP.ALPHA_TEST) ? `${s.alphaFunc},${s.alphaRef}` : '',
       depth: s.caps.has(CAP.DEPTH_TEST) ? `${s.depthFunc},${s.depthMask}` : '',
@@ -1024,14 +1037,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glFogfv: (p, v) => { if (p === FOG.COLOR) s.fog.colour = v.map(clamp01); else exec.glFogf(p, v[0]); },
     glBindTexture: (target, id) => {
       if (s.activeUnit) return;
-      if (target !== CAP.TEXTURE_2D) throw new Error(`gl: texture target 0x${target.toString(16)}`);
-      if (!s.textures.has(id)) s.textures.set(id, newTexture());
-      s.bound = id;
+      if (target !== CAP.TEXTURE_2D && target !== TEX3D) throw new Error(`gl: texture target 0x${target.toString(16)}`);
+      if (id && !s.textures.has(id)) s.textures.set(id, newTexture());
+      if (target === TEX3D) s.bound3D = id; else s.bound = id;
     },
     glTexParameterf: (target, p, v) => {
-      const t = texture();
+      const t = targetTexture(target);
       if (p === TEX.MIN) t.min = v; else if (p === TEX.MAG) t.mag = v;
       else if (p === TEX.WRAP_S) t.wrapS = v; else if (p === TEX.WRAP_T) t.wrapT = v;
+      else if (p === WRAP_R) t.wrapR = v;
       else throw new Error(`gl: glTexParameter 0x${p.toString(16)}`);
       t.dirty = true;
     },
@@ -1081,6 +1095,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4) };
       t.dirty = true;
     },
+    // Its texels as RGBA bytes, one w x h layer after another (read at call time, see ARRAYS).
+    glTexImage3D: (target, level, internal, w, h, d, border, format, type, texels) => {
+      if (target !== TEX3D) throw new Error(`gl: glTexImage3D target 0x${target.toString(16)}`);
+      const t = texture3D();
+      t.base = baseFormat(internal);
+      t.levels[level] = { w, h, d, data: texels ?? new Uint8Array(w * h * d * 4) };
+      t.dirty = true;
+    },
     glColorMask: (r, g, b, a) => { s.colorMask = [!!r, !!g, !!b, !!a]; },
     glPolygonOffset: (factor, units) => { s.polygonOffset = [factor, units]; },
     // The plane is given in object space and kept in eye space, by the modelview current NOW (2.11).
@@ -1097,7 +1119,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glStencilMask: (m) => { s.stencilWriteMask = m >>> 0; },
     glClearStencil: (v) => { s.clearStencil = v; },
     glTexParameterfv: (target, p, v) => {
-      if (p === 0x1004) { texture().border = v; return; }   // GL_TEXTURE_BORDER_COLOR, kept with the texture
+      if (p === 0x1004) { targetTexture(target).border = v; return; }   // GL_TEXTURE_BORDER_COLOR, kept with the texture
       exec.glTexParameterf(target, p, v[0]);
     },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
@@ -1125,6 +1147,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexImage2D: (a) => {
       if (a[7] !== 0x1401) throw new Error(`gl: texel type 0x${a[7].toString(16)} (only GL_UNSIGNED_BYTE)`);
       return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8]) : null];
+    },
+    glTexImage3D: (a) => {
+      if (a[8] !== 0x1401) throw new Error(`gl: texel type 0x${a[8].toString(16)} (only GL_UNSIGNED_BYTE)`);
+      return [...a.slice(0, 9), a[9] ? toRGBA(a[7], a[3], a[4] * a[5], a[9]) : null];
     },
   };
   // Only these leave the fragment state alone; every other command may change it, display lists included.
@@ -1184,6 +1210,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // A dirty texture is uploaded where the draw state is worked out: so that state is worked out again.
       t.dirty = true; gpuCache = null;
     },
+    glTexSubImage3D: (target, level, x, y, z, w, h, d, format, type, ptr) => {
+      const t = texture3D(), L = t.levels[level], src = toRGBA(format, w, h * d, ptr);
+      if (!L) throw new Error(`gl: glTexSubImage3D into level ${level}, which has no image`);
+      for (let k = 0; k < d; k++) for (let j = 0; j < h; j++) {
+        L.data.set(src.subarray(((k * h + j) * w) * 4, ((k * h + j) * w + w) * 4), (((z + k) * L.h + y + j) * L.w + x) * 4);
+      }
+      t.dirty = true; gpuCache = null;
+    },
     // The framebuffer copied into a texture, through the texture's own copy of its texels (what both
     // rasterisers upload from): read back after whatever is pending is drawn. A source pixel outside the
     // framebuffer is undefined (GL 1.1, 3.8.2); it is left as it was.
@@ -1215,7 +1249,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         for (let k = 0; k < n; k++) M.u8[d + k] = fb[o + k];
       }
     },
-    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; } } },
+    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; if (s.bound3D === id) s.bound3D = 0; } } },
     glGetError: () => 0,
     glGetBooleanv: (p, out) => {
       const v = p === 0x0c32 ? 1 : p === 0x0b72 ? +s.depthMask : s.caps.has(p) ? 1 : null;   // DOUBLEBUFFER, DEPTH_WRITEMASK, a capability
@@ -1491,6 +1525,7 @@ void main() {
    */
   let applied = { program: 'fixed' }, culling = false;
   const texParams = new Map();                // texture id -> its min, mag and wraps as last set
+  const gpuTex3 = new Map(), texParams3 = new Map();   // the same for GL_TEXTURE_3D (its default object is id 0)
   const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
   function apply(st) {
     // The program first: a GLSL program's (its uniforms, and the depth range's flip, which its vertex
@@ -1511,6 +1546,16 @@ void main() {
         texParams.set(st.tex, p);
         g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MIN_FILTER, FILT[st.min]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAG_FILTER, FILT[st.mag]);
         g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, WRAP[st.wrapS]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, WRAP[st.wrapT]);
+      }
+    }
+    if (st.tex3 >= 0) {
+      put('tex3', st.tex3, () => g.bindTexture(g.TEXTURE_3D, gpuTex3.get(st.tex3)));
+      if (texParams3.get(st.tex3) !== st.params3) {
+        texParams3.set(st.tex3, st.params3);
+        const [mn, mg, ws, wt, wr] = st.params3.split(',').map(Number);
+        g.texParameteri(g.TEXTURE_3D, g.TEXTURE_MIN_FILTER, FILT[mn]); g.texParameteri(g.TEXTURE_3D, g.TEXTURE_MAG_FILTER, FILT[mg]);
+        g.texParameteri(g.TEXTURE_3D, g.TEXTURE_WRAP_S, WRAP[ws]); g.texParameteri(g.TEXTURE_3D, g.TEXTURE_WRAP_T, WRAP[wt]);
+        g.texParameteri(g.TEXTURE_3D, g.TEXTURE_WRAP_R, WRAP[wr]);
       }
     }
     put('textured', st.tex >= 0, () => g.uniform1i(U.textured, st.tex >= 0 ? 1 : 0));
@@ -1586,6 +1631,17 @@ void main() {
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
       t.levels.forEach((L, lv) => { if (L) g.texImage2D(g.TEXTURE_2D, lv, g.RGBA, L.w, L.h, 0, g.RGBA, g.UNSIGNED_BYTE, L.data); });
       g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAX_LEVEL, t.levels.length - 1);
+      key = null;
+    },
+    upload3D(id, t) {
+      flush();
+      let tx = gpuTex3.get(id);
+      if (!tx) { tx = g.createTexture(); gpuTex3.set(id, tx); }
+      g.bindTexture(g.TEXTURE_3D, tx);
+      delete applied.tex3;
+      g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+      t.levels.forEach((L, lv) => { if (L) g.texImage3D(g.TEXTURE_3D, lv, g.RGBA, L.w, L.h, L.d, 0, g.RGBA, g.UNSIGNED_BYTE, L.data); });
+      g.texParameteri(g.TEXTURE_3D, g.TEXTURE_MAX_LEVEL, t.levels.length - 1);
       key = null;
     },
     tri(a, b, c, flat, st) { begin(st, g.TRIANGLES, 3); push(a, flat); push(b, flat); push(c, flat); },
@@ -1686,6 +1742,7 @@ export function glBuiltins(T) {
     glFogf: f(V, U, F), glFogi: f(V, U, I), glFogfv: f(V, U, P),
     glBindTexture: f(V, U, U), glTexParameterf: f(V, U, U, F), glTexEnvf: f(V, U, U, F), glTexParameteri: f(V, U, U, I), glTexEnvi: f(V, U, U, I),
     glTexImage2D: f(V, U, I, I, I, I, I, U, U, P), glTexSubImage2D: f(V, U, I, I, I, I, I, U, U, P),
+    glTexImage3D: f(V, U, I, I, I, I, I, I, U, U, P), glTexSubImage3D: f(V, U, I, I, I, I, I, I, I, U, U, P),
     glCopyTexSubImage2D: f(V, U, I, I, I, I, I, I, I), glCopyTexImage2D: f(V, U, I, U, I, I, I, I, I),
     glReadPixels: f(V, I, I, I, I, U, U, P), glPolygonMode: f(V, U, U), glHint: f(V, U, U),
     glDrawBuffer: f(V, U), glReadBuffer: f(V, U),

@@ -86,12 +86,18 @@ const cases = [
     src: 'void main(){gl_FragColor=vec4(gl_ModelViewMatrixInverse[3].xyz,1);}', translate: [-0.25, -0.5, -0.125], want: () => [0.25, 0.5, 0.125, 1] },
   { name: 'a back face culled under a vertex shader',
     vs: 'void main(){gl_Position=gl_Vertex;}', src: 'void main(){gl_FragColor=vec4(1);}', cull: true, raw: false, rect: [1, -1, -1, 1], want: () => [0, 0, 0, 0] },
+  // A 2x2x2 texture through glTexImage3D, nearest texels: texel (i, j, k) is (i, j, k, 1). The shader
+  // reads layer k = 1 (r = .75) across the window, so blue is 1 everywhere and red and green split it
+  // in four -- a texture made of its first layer only, or of one layer per call, would show no blue.
+  { name: 'a sampler3D read with texture3D, a texture made with glTexImage3D',
+    src: 'uniform sampler3D t;void main(){gl_FragColor=texture3D(t,vec3(gl_FragCoord.xy/vec2(64,48),.75));}',
+    tex3d: true, want: (x, y) => [x < W / 2 ? 0 : 1, y < H / 2 ? 0 : 1, 1, 1] },
 ];
 
 // The page: gl.js on a flat memory, as PRISM's runtime gives it, each case drawn and read back.
 const page = `<!doctype html><pre id=o>running</pre><script type=module>
 import { installGL } from '/src/env/gl.js';
-const CASES = ${JSON.stringify(cases.map(({ name, src, vs, colour, uniforms, rect, normal, translate, cull }) => ({ name, src, vs, colour, uniforms, rect, normal, translate, cull })))};
+const CASES = ${JSON.stringify(cases.map(({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d }) => ({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d })))};
 const out = {};
 const raw = (src) => { const c = new OffscreenCanvas(4, 4).getContext('webgl2'), s = c.createShader(c.FRAGMENT_SHADER); c.shaderSource(s, src); c.compileShader(s); return !!c.getShaderParameter(s, c.COMPILE_STATUS); };
 for (const k of CASES) {
@@ -111,6 +117,13 @@ for (const k of CASES) {
     G.glLinkProgram(pr); G.glUseProgram(pr);
     if (k.normal) G.glNormal3f(...k.normal);
     if (k.cull) G.glEnable(0x0b44);
+    if (k.tex3d) {
+      const ids = heap; heap += 4; G.glGenTextures(1, ids); G.glBindTexture(0x806f, dv.getUint32(ids, true));
+      G.glTexParameteri(0x806f, 0x2801, 0x2600); G.glTexParameteri(0x806f, 0x2800, 0x2600);
+      const texels = heap; heap += 32;
+      for (let t = 0; t < 8; t++) u8.set([(t & 1) * 255, ((t >> 1) & 1) * 255, (t >> 2) * 255, 255], texels + 4 * t);
+      G.glTexImage3D(0x806f, 0, 0x1908, 2, 2, 2, 0, 0x1908, 0x1401, texels);
+    }
     for (const [n, v] of k.uniforms || []) G.glUniform1f(G.glGetUniformLocation(pr, put(n)), v);
     const c = k.colour || [255, 255, 255, 255], cp = heap; heap += 4; u8.set(c, cp); G.glColor4ubv(cp);
     G.glRecti(...(k.rect || [0, 0, ${W}, ${H}]));
