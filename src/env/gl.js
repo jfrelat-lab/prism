@@ -60,8 +60,29 @@ const TEX = {
   MAG: 0x2800, MIN: 0x2801, WRAP_S: 0x2802, WRAP_T: 0x2803,
   NEAREST: 0x2600, LINEAR: 0x2601, NN: 0x2700, LN: 0x2701, NL: 0x2702, LL: 0x2703,
   REPEAT: 0x2901, CLAMP: 0x2900, CLAMP_TO_EDGE: 0x812f,
-  ENV_MODE: 0x2200, MODULATE: 0x2100, REPLACE: 0x1e01, DECAL: 0x2101,
+  ENV_MODE: 0x2200, MODULATE: 0x2100, REPLACE: 0x1e01, DECAL: 0x2101, COMBINE: 0x8570,
 };
+/*
+ * ARB_multitexture: THREE UNITS. Unit 0's state is where it always was (s.bound, s.envMode, s.texGen,
+ * s.tex, s.arrays.tex, s.stacks[GL_TEXTURE], its enables in s.caps), so a program that uses one unit
+ * runs the code it ran before; units 1 and 2 keep theirs in s.units[k], and every command that acts
+ * on "the active unit" goes there when that is not 0. A fragment then goes through each enabled unit
+ * in turn, the colour one gives being the PREVIOUS the next one takes (GL 1.3, 3.8.13).
+ */
+const UNITS = 3;
+/*
+ * GL_COMBINE (GL 1.3, ARB_texture_env_combine): each unit's function of up to three arguments, each a
+ * source (its texture, the constant colour, the primary colour, the previous unit's) through an operand
+ * (the colour, its alpha, or one minus either), separately for RGB and alpha, scaled and clamped.
+ * Neverball's ball shadow is two of them. The defaults are the specification's.
+ */
+const COMBINE_FN = { 0x1e01: 0, 0x2100: 1, 0x0104: 2, 0x8574: 3, 0x8575: 4, 0x84e7: 5 };   // REPLACE MODULATE ADD ADD_SIGNED INTERPOLATE SUBTRACT
+const COMBINE_SRC = { 0x1702: 0, 0x8576: 1, 0x8577: 2, 0x8578: 3 };                          // TEXTURE CONSTANT PRIMARY_COLOR PREVIOUS
+const COMBINE_OP = { 0x300: 0, 0x301: 1, 0x302: 2, 0x303: 3 };                               // SRC_COLOR, 1 - it, SRC_ALPHA, 1 - it
+const newCombine = () => ({
+  rgb: 0x2100, alpha: 0x2100, srcRGB: [0x1702, 0x8578, 0x8576], srcA: [0x1702, 0x8578, 0x8576],
+  opRGB: [0x300, 0x300, 0x302], opA: [0x302, 0x302, 0x302], scaleRGB: 1, scaleA: 1, colour: [0, 0, 0, 0],
+});
 const FMT = { ALPHA: 0x1906, RGB: 0x1907, RGBA: 0x1908, LUMINANCE: 0x1909, LUMINANCE_ALPHA: 0x190a, INTENSITY: 0x8049, COLOR_INDEX: 0x1900 };
 const FOG = { MODE: 0x0b65, DENSITY: 0x0b62, START: 0x0b63, END: 0x0b64, COLOR: 0x0b66, LINEAR: 0x2601, EXP: 0x0800, EXP2: 0x0801 };
 
@@ -145,6 +166,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
   const material = () => ({ ambient: [0.2, 0.2, 0.2, 1], diffuse: [0.8, 0.8, 0.8, 1], specular: [0, 0, 0, 1], emission: [0, 0, 0, 1], shininess: 0 });
   const light = () => ({ ambient: [0, 0, 0, 1], diffuse: [0, 0, 0, 1], specular: [0, 0, 0, 1], position: [0, 0, 1, 0] });
+  // A texture unit other than 0: its binding, environment, coordinate generation, matrix stack, enables,
+  // current coordinate (s, t, r, q) and coordinate array.
+  const newUnit = () => ({
+    bound: 0, envMode: TEX.MODULATE, combine: newCombine(),
+    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
+    matrix: [ident()], caps: new Set(), coord: [0, 0, 0, 1], array: { on: false },
+  });
   const newTexture = () => ({ levels: [], base: 'RGBA', min: TEX.NL, mag: TEX.LINEAR, wrapS: TEX.REPEAT, wrapT: TEX.REPEAT, wrapR: TEX.REPEAT, gpu: null, dirty: true });
   /*
    * GL_TEXTURE_3D (GL 1.2) is a second binding beside GL_TEXTURE_2D, with its own default object. Only
@@ -195,7 +223,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     }),
     depthFunc: 0x201, depthMask: true, depthRange: [0, 1],
     alphaFunc: 0x207, alphaRef: 0, blend: [1, 0],
-    envMode: TEX.MODULATE,
+    envMode: TEX.MODULATE, combine: newCombine(),
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
     textures: new Map([[0, newTexture()]]), bound: 0, nextTexture: 1, genTextures: new Set(),
     bound3D: 0, default3D: newTexture(),
@@ -213,9 +241,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // ARB_point_parameters: the size's clamp and its attenuation with eye distance (a + b d + c d^2);
     // ARB_point_sprite's COORD_REPLACE gives each point's fragments texture coordinates across it.
     pointMin: 0, pointMax: 64, pointAtten: [1, 0, 0], coordReplace: false,
-    // ARB_multitexture: the selected server and client units. One unit is implemented, and
-    // GL_MAX_TEXTURE_UNITS says so; a program that asks for more falls back on one (Neverball does).
-    activeUnit: 0, clientUnit: 0,
+    // ARB_multitexture: the selected server and client units; units 1 and 2 (see UNITS).
+    activeUnit: 0, clientUnit: 0, units: [null, newUnit(), newUnit()],
     // ARB_vertex_buffer_object: a buffer is a block of the program's own memory, so an array pointer
     // into a bound buffer is an ordinary pointer once its base is added -- the arrays, glDrawArrays
     // and glDrawElements read it unchanged. id -> { ptr, size }; the two bindings by target.
@@ -227,9 +254,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     strings: new Map(),
   };
   const glsl = makeGLSL(M);                 // shaders and programs (src/env/glsl.js)
-  const top = () => { const st = s.stacks[s.mode]; return st[st.length - 1]; };
-  const setTop = (m) => { const st = s.stacks[s.mode]; st[st.length - 1] = m; };
-  const texture = () => s.textures.get(s.bound);
+  // The stack a matrix command acts on: GL_TEXTURE's is the active unit's.
+  const stackOf = (mode) => (mode === TEXTURE_MATRIX && s.activeUnit ? s.units[s.activeUnit].matrix : s.stacks[mode]);
+  const top = () => { const st = stackOf(s.mode); return st[st.length - 1]; };
+  const setTop = (m) => { const st = stackOf(s.mode); st[st.length - 1] = m; };
+  // The 2D texture bound to the ACTIVE unit, which glTexImage2D and glTexParameter act on.
+  const texture = () => s.textures.get(s.activeUnit ? s.units[s.activeUnit].bound : s.bound);
+  const xunit = () => (s.activeUnit ? s.units[s.activeUnit] : null);
+  const clientTex = () => (s.clientUnit ? s.units[s.clientUnit].array : s.arrays.tex);
   const texture3D = () => (s.bound3D ? s.textures.get(s.bound3D) : s.default3D);
   const targetTexture = (target) => (target === TEX3D ? texture3D() : texture());
   /*
@@ -360,31 +392,68 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     } else colour = s.colour.map(clamp01);
     // A generated coordinate replaces the current one: the object plane dotted with the vertex as given.
     let tu = s.tex[0], tv = s.tex[1];
+    const tr = s.tex.length > 2 ? s.tex[2] : 0;      // not s.tex[2] ?? 0: a read past the end is V8's slow path, once a vertex
     const genS = s.caps.has(0x0c60), genT = s.caps.has(0x0c61);
     if ((genS && s.texGen[0].mode === 0x2402) || (genT && s.texGen[1].mode === 0x2402)) {
-      // GL_SPHERE_MAP (GL 1.1, 2.10.4): the eye-space reflection of the view direction about the normal.
-      const nm = normalMatrixOf(mv), n = s.normal;
-      const en = norm3([nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]]);
-      const w = eye[3] || 1, u = norm3([eye[0] / w, eye[1] / w, eye[2] / w]);
-      const d = 2 * (en[0] * u[0] + en[1] * u[1] + en[2] * u[2]);
-      const r = [u[0] - d * en[0], u[1] - d * en[1], u[2] - d * en[2]];
-      const m = 2 * Math.sqrt(r[0] * r[0] + r[1] * r[1] + (r[2] + 1) * (r[2] + 1)) || 1;
-      if (genS && s.texGen[0].mode === 0x2402) tu = r[0] / m + 0.5;
-      if (genT && s.texGen[1].mode === 0x2402) tv = r[1] / m + 0.5;
+      const sm = sphereMap(mv, eye);
+      if (genS && s.texGen[0].mode === 0x2402) tu = sm[0];
+      if (genT && s.texGen[1].mode === 0x2402) tv = sm[1];
     }
     if (genS && s.texGen[0].mode === 0x2401) { const p = s.texGen[0].object; tu = p[0] * x + p[1] * y + p[2] * z + p[3]; }
     if (genT && s.texGen[1].mode === 0x2401) { const p = s.texGen[1].object; tv = p[0] * x + p[1] * y + p[2] * z + p[3]; }
-    // The texture matrix (2.10.2), on (s, t, 0, 1) after any generation; q divided out, as a fragment
-    // would. Chromium B.S.U.'s title scrolls and turns its background through it.
+    // The texture matrix (2.10.2), on (s, t, r, 1) after any generation; q divided out, as a fragment
+    // would. Chromium B.S.U.'s title scrolls and turns its background through it. r is 0 unless the
+    // coordinate had three components, and then only is its column read.
     const tm = s.stacks[TEXTURE_MATRIX].at(-1);
-    if (tm[0] !== 1 || tm[1] || tm[4] || tm[5] !== 1 || tm[12] || tm[13] || tm[3] || tm[7] || tm[15] !== 1) {
-      const q = tm[3] * tu + tm[7] * tv + tm[15];
-      const su = tm[0] * tu + tm[4] * tv + tm[12], sv = tm[1] * tu + tm[5] * tv + tm[13];
+    if (tm[0] !== 1 || tm[1] || tm[4] || tm[5] !== 1 || tm[12] || tm[13] || tm[3] || tm[7] || tm[15] !== 1 || (tr && (tm[8] || tm[9] || tm[11]))) {
+      let q = tm[3] * tu + tm[7] * tv + tm[15];
+      let su = tm[0] * tu + tm[4] * tv + tm[12], sv = tm[1] * tu + tm[5] * tv + tm[13];
+      if (tr) { su += tm[8] * tr; sv += tm[9] * tr; q += tm[11] * tr; }
       tu = q === 1 ? su : su / q; tv = q === 1 ? sv : sv / q;
     }
+    // The other units, each its own coordinate through its own generation and matrix -- only those
+    // enabled: a disabled unit's coordinate reaches no fragment.
+    let tex1 = null, tex2 = null;
+    if (s.units[1].caps.has(CAP.TEXTURE_2D)) tex1 = unitCoord(s.units[1], x, y, z, mv, eye);
+    if (s.units[2].caps.has(CAP.TEXTURE_2D)) tex2 = unitCoord(s.units[2], x, y, z, mv, eye);
     // Under a program with a vertex shader, the vertex as given is what the GPU gets (its attributes).
     const vs = glsl.current()?.vertex ? { o: [x, y, z, 1], c: s.colour.slice(), t: [s.tex[0], s.tex[1]], n: s.normal.slice() } : null;
-    s.verts.push({ clip, colour, back, tex: [tu, tv], eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye, vs });
+    s.verts.push({ clip, colour, back, tex: [tu, tv], tex1, tex2, eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye, vs });
+  }
+  // GL_SPHERE_MAP (GL 1.1, 2.10.4): the eye-space reflection of the view direction about the normal.
+  function sphereMap(mv, eye) {
+    const nm = normalMatrixOf(mv), n = s.normal;
+    const en = norm3([nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]]);
+    const w = eye[3] || 1, u = norm3([eye[0] / w, eye[1] / w, eye[2] / w]);
+    const d = 2 * (en[0] * u[0] + en[1] * u[1] + en[2] * u[2]);
+    const r = [u[0] - d * en[0], u[1] - d * en[1], u[2] - d * en[2]];
+    const m = 2 * Math.sqrt(r[0] * r[0] + r[1] * r[1] + (r[2] + 1) * (r[2] + 1)) || 1;
+    return [r[0] / m + 0.5, r[1] / m + 0.5];
+  }
+  // A unit's (s, t) for this vertex: its current (s, t, r, q), generation, then its matrix, q divided out.
+  // Whether a matrix is the identity, once per matrix: they are replaced, never written in place (setTop).
+  const identity = new WeakMap();
+  const isIdentity = (m) => {
+    let v = identity.get(m);
+    if (v === undefined) { v = true; for (let k = 0; k < 16; k++) if (m[k] !== (k % 5 === 0 ? 1 : 0)) { v = false; break; } identity.set(m, v); }
+    return v;
+  };
+  function unitCoord(u, x, y, z, mv, eye) {
+    const c = u.coord, genS = u.caps.has(0x0c60), genT = u.caps.has(0x0c61), g = u.texGen, tm = u.matrix.at(-1);
+    // A surface's own coordinate, as given (Neverball's unit 2 for every textured face): q is 1.
+    if (!genS && !genT && c[3] === 1 && isIdentity(tm)) return [c[0], c[1]];
+    let cs = c[0], ct = c[1];
+    const cr = c[2], cq = c[3];
+    if ((genS && g[0].mode === 0x2402) || (genT && g[1].mode === 0x2402)) {
+      const sm = sphereMap(mv, eye);
+      if (genS && g[0].mode === 0x2402) cs = sm[0];
+      if (genT && g[1].mode === 0x2402) ct = sm[1];
+    }
+    if (genS && g[0].mode === 0x2401) { const p = g[0].object; cs = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    if (genT && g[1].mode === 0x2401) { const p = g[1].object; ct = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    const q = tm[3] * cs + tm[7] * ct + tm[11] * cr + tm[15] * cq;
+    const su = tm[0] * cs + tm[4] * ct + tm[8] * cr + tm[12] * cq, sv = tm[1] * cs + tm[5] * ct + tm[9] * cr + tm[13] * cq;
+    return q === 1 ? [su, sv] : [su / q, sv / q];
   }
 
   // --- clipping against the near plane (z + w >= 0), every attribute linear in clip space
@@ -393,6 +462,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     colour: a.colour.map((v, k) => v + (b.colour[k] - v) * t),
     back: a.back && a.back.map((v, k) => v + (b.back[k] - v) * t),
     tex: [a.tex[0] + (b.tex[0] - a.tex[0]) * t, a.tex[1] + (b.tex[1] - a.tex[1]) * t],
+    tex1: a.tex1 && [a.tex1[0] + (b.tex1[0] - a.tex1[0]) * t, a.tex1[1] + (b.tex1[1] - a.tex1[1]) * t],
+    tex2: a.tex2 && [a.tex2[0] + (b.tex2[0] - a.tex2[0]) * t, a.tex2[1] + (b.tex2[1] - a.tex2[1]) * t],
     eyeZ: a.eyeZ + (b.eyeZ - a.eyeZ) * t,
     eye: a.eye && a.eye.map((v, k) => v + (b.eye[k] - v) * t),
   });
@@ -562,8 +633,44 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     for (let k = 0; k < 4; k++) a[k] = (1 - fr) * a[k] + fr * b[k];
     return a;
   }
-  function envApply(cf, ct, base) {
-    const m = s.envMode;
+  /*
+   * The units a fragment goes through, in order: those enabled whose texture is complete (an incomplete
+   * one is as if disabled, 3.8.10). Unit 0 by itself in a classic environment is the one-unit path.
+   */
+  function textureStages() {
+    const out = [];
+    if (s.caps.has(CAP.TEXTURE_2D)) { const t = s.textures.get(s.bound); if (t && complete(t)) out.push({ k: 0, key: 'tex', t, env: s.envMode, combine: s.combine }); }
+    for (let k = 1; k < UNITS; k++) {
+      const u = s.units[k];
+      if (!u.caps.has(CAP.TEXTURE_2D)) continue;
+      const t = s.textures.get(u.bound);
+      if (t && complete(t)) out.push({ k, key: k === 1 ? 'tex1' : 'tex2', t, env: u.envMode, combine: u.combine });
+    }
+    return out;
+  }
+  const oneUnit = (st) => st.length === 1 && st[0].k === 0 && st[0].env !== TEX.COMBINE;
+  // A texel as GL_COMBINE's TEXTURE source has it (table 3.15): what the base format lacks, 0 or 1.
+  function texSource(base, ct) {
+    if (base === 'RGB') return [ct[0], ct[1], ct[2], 1];
+    if (base === 'L') return [ct[0], ct[0], ct[0], 1];
+    if (base === 'LA') return [ct[0], ct[0], ct[0], ct[3]];
+    if (base === 'I') return [ct[0], ct[0], ct[0], ct[0]];
+    if (base === 'A') return [0, 0, 0, ct[3]];
+    return [ct[0], ct[1], ct[2], ct[3]];
+  }
+  function combineApply(c, base, ct, prev, prim) {
+    const T = texSource(base, ct);
+    const src = (x) => (x === 0x1702 ? T : x === 0x8576 ? c.colour : x === 0x8577 ? prim : prev);
+    const fn = (f, a0, a1, a2) => (f === 0x1e01 ? a0 : f === 0x2100 ? a0 * a1 : f === 0x0104 ? a0 + a1 : f === 0x8574 ? a0 + a1 - 0.5
+      : f === 0x8575 ? a0 * a2 + a1 * (1 - a2) : a0 - a1);
+    const out = [0, 0, 0, 0];
+    const argRGB = (i, k) => { const v = src(c.srcRGB[i]), o = c.opRGB[i]; return o === 0x300 ? v[k] : o === 0x301 ? 1 - v[k] : o === 0x302 ? v[3] : 1 - v[3]; };
+    for (let k = 0; k < 3; k++) out[k] = clamp01(fn(c.rgb, argRGB(0, k), argRGB(1, k), argRGB(2, k)) * c.scaleRGB);
+    const argA = (i) => { const a = src(c.srcA[i])[3]; return c.opA[i] === 0x302 ? a : 1 - a; };
+    out[3] = clamp01(fn(c.alpha, argA(0), argA(1), argA(2)) * c.scaleA);
+    return out;
+  }
+  function envApply(cf, ct, base, m = s.envMode) {
     const rgb = base === 'RGB' || base === 'RGBA', lum = base === 'L' || base === 'LA';
     const hasA = base === 'RGBA' || base === 'A' || base === 'LA';
     const T = base === 'I' ? [ct[0], ct[0], ct[0], ct[0]] : lum ? [ct[0], ct[0], ct[0], ct[3]] : ct;
@@ -667,13 +774,22 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const owns = (u, v) => { const dy = v.y - u.y, dx = v.x - u.x; return dy < 0 || (dy === 0 && dx < 0); };
     const eQR = owns(Q, R), eRP = owns(R, P), ePQ = owns(P, Q);
     // The edge functions (v.x - u.x) * (py - u.y) - (v.y - u.y) * (px - u.x), their constant
-    // differences taken once: the same subtractions, so the same doubles.
-    const qrX = R.x - Q.x, qrY = R.y - Q.y, rpX = P.x - R.x, rpY = P.y - R.y, pqX = Q.x - P.x, pqY = Q.y - P.y;
-    const eQ = (cx, cy) => qrX * (cy - Q.y) - qrY * (cx - Q.x);
-    const eR = (cx, cy) => rpX * (cy - R.y) - rpY * (cx - R.x);
-    const eP = (cx, cy) => pqX * (cy - P.y) - pqY * (cx - P.x);
-    const t = s.caps.has(CAP.TEXTURE_2D) ? texture() : null;
-    const textured = t && complete(t);
+    // differences taken once. An edge two triangles share is walked u->v by one and v->u by the other;
+    // evaluated each its own way, the two roundings need not be opposite, and a pixel centre on the edge
+    // went to neither (a row of holes along a quad's diagonal). So an edge is always evaluated from its
+    // lower endpoint (by y, then x) and negated for the other direction: exactly opposite values, and
+    // the top-left rule gives the pixel to one triangle.
+    const edgeFn = (u, v) => {
+      if (u.y < v.y || (u.y === v.y && u.x < v.x)) { const dx = v.x - u.x, dy = v.y - u.y; return (cx, cy) => dx * (cy - u.y) - dy * (cx - u.x); }
+      const dx = u.x - v.x, dy = u.y - v.y;
+      return (cx, cy) => -(dx * (cy - v.y) - dy * (cx - v.x));
+    };
+    const eQ = edgeFn(Q, R), eR = edgeFn(R, P), eP = edgeFn(P, Q);
+    const stages = textureStages();
+    const t = oneUnit(stages) ? stages[0].t : null;
+    const textured = !!t;
+    // More than unit 0, or a combiner: each unit in turn, its own coordinate and level of detail.
+    const multi = !textured && stages.length ? stages : null;
     const fog = s.caps.has(CAP.FOG);
     let zoff = 0;
     if (s.caps.has(CAP.POLYGON_OFFSET_FILL) && (s.polygonOffset[0] || s.polygonOffset[1])) {
@@ -689,6 +805,19 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      */
     const L0 = textured ? t.levels[0] : null, qc0 = x0 >> 1, quads = (x1 >> 1) - qc0 + 1;
     const rhoOf = textured ? new Float64Array(quads) : null, rhoRow = textured ? new Int32Array(quads).fill(-1) : null;
+    if (multi) for (const S of multi) { S.L0 = S.t.levels[0]; S.rhoOf = new Float64Array(quads); S.rhoRow = new Int32Array(quads).fill(-1); }
+    const texAtK = (cx, cy, key, k) => {
+      const l0 = eQ(cx, cy) / ar, l1 = eR(cx, cy) / ar, l2 = eP(cx, cy) / ar;
+      const iw = l0 * P.iw + l1 * Q.iw + l2 * R.iw;
+      return persp(l0, l1, l2, iw, P, Q, R, Pv[key][k], Qv[key][k], Rv[key][k]);
+    };
+    const quadRhoK = (px, py, key, L) => {
+      const qx = (px & ~1) + 0.5, qy = (py & ~1) + 0.5;
+      const u0 = texAtK(qx, qy, key, 0), v0 = texAtK(qx, qy, key, 1);
+      const dudx = (texAtK(qx + 1, qy, key, 0) - u0) * L.w, dvdx = (texAtK(qx + 1, qy, key, 1) - v0) * L.h;
+      const dudy = (texAtK(qx, qy + 1, key, 0) - u0) * L.w, dvdy = (texAtK(qx, qy + 1, key, 1) - v0) * L.h;
+      return Math.max(Math.hypot(dudx, dvdx), Math.hypot(dudy, dvdy));
+    };
     const texAt = (cx, cy, k) => {
       const l0 = eQ(cx, cy) / ar, l1 = eR(cx, cy) / ar, l2 = eP(cx, cy) / ar;
       const iw = l0 * P.iw + l1 * Q.iw + l2 * R.iw;
@@ -726,6 +855,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
           const qc = (px >> 1) - qc0;
           if (rhoRow[qc] !== row) { rhoRow[qc] = row; rhoOf[qc] = quadRho(px, py); }
           col = envApply(col, sample(t, u, v, rhoOf[qc]), t.base);
+        } else if (multi) {
+          const prim = col, qc = (px >> 1) - qc0;
+          for (const S of multi) {
+            const key = S.key;
+            const u = persp(l0, l1, l2, iw, P, Q, R, Pv[key][0], Qv[key][0], Rv[key][0]);
+            const v = persp(l0, l1, l2, iw, P, Q, R, Pv[key][1], Qv[key][1], Rv[key][1]);
+            if (S.rhoRow[qc] !== row) { S.rhoRow[qc] = row; S.rhoOf[qc] = quadRhoK(px, py, key, S.L0); }
+            const ct = sample(S.t, u, v, S.rhoOf[qc]);
+            col = S.env === TEX.COMBINE ? combineApply(S.combine, S.t.base, ct, col, prim) : envApply(col, ct, S.t.base, S.env);
+          }
         }
         fragment(py * W + px, z, col, fog ? persp(l0, l1, l2, iw, P, Q, R, Pv.eyeZ, Qv.eyeZ, Rv.eyeZ) : 0);
       }
@@ -834,13 +973,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   function gpuState() {
     if (gpuCache) return gpuCache;
     // A GLSL program samples the bound texture whether or not GL_TEXTURE_2D is enabled.
-    const t = s.caps.has(CAP.TEXTURE_2D) || glsl.current() ? texture() : null, textured = !!(t && complete(t));
+    const t = s.caps.has(CAP.TEXTURE_2D) || glsl.current() ? s.textures.get(s.bound) : null, textured = !!(t && complete(t));
+    const stages = glsl.current() ? [] : textureStages(), multi = stages.length && !oneUnit(stages) ? multiKey(stages) : '';
     if (textured && t.dirty) { webgl.upload(s.bound, t); t.dirty = false; }
     const t3 = glsl.current() ? texture3D() : null, textured3 = !!(t3 && complete(t3));
     if (textured3 && t3.dirty) { webgl.upload3D(s.bound3D, t3); t3.dirty = false; }
     return gpuCache = {
       tex: textured ? s.bound : -1, base: textured ? t.base : '', env: s.envMode,
       min: textured ? t.min : 0, mag: textured ? t.mag : 0, wrapS: textured ? t.wrapS : 0, wrapT: textured ? t.wrapT : 0,
+      multi,
       tex3: textured3 ? s.bound3D : -1, params3: textured3 ? `${t3.min},${t3.mag},${t3.wrapS},${t3.wrapT},${t3.wrapR}` : '',
       blend: s.caps.has(CAP.BLEND) ? `${s.blend[0]},${s.blend[1]}` : '',
       alpha: s.caps.has(CAP.ALPHA_TEST) ? `${s.alphaFunc},${s.alphaRef}` : '',
@@ -855,6 +996,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       cull: glsl.current()?.vertex && s.caps.has(CAP.CULL_FACE) ? `${s.cullFace},${s.frontFace}` : '',
       xf: glsl.current()?.matrices?.length ? builtinMatrices() : null,
     };
+  }
+  /*
+   * The units for the WebGL path's multitexture program, as one string: per unit its number, texture,
+   * base format, environment and combiner, and the texture's filters -- what apply() sends. The
+   * textures of units 1 and 2 are uploaded here as unit 0's is above.
+   */
+  const BASE_N = { RGB: 0, RGBA: 1, L: 2, LA: 3, A: 4, I: 5 }, ENV_N = { [TEX.MODULATE]: 0, [TEX.REPLACE]: 1, [TEX.DECAL]: 2, [TEX.COMBINE]: 3 };
+  function multiKey(stages) {
+    return stages.map(({ k, t, env, combine: c }) => {
+      const id = k ? s.units[k].bound : s.bound;
+      if (k && t.dirty) { webgl.upload(id, t); t.dirty = false; }
+      return [k, id, BASE_N[t.base] ?? 1, ENV_N[env], COMBINE_FN[c.rgb], COMBINE_FN[c.alpha], ...c.srcRGB.map((x) => COMBINE_SRC[x]), ...c.srcA.map((x) => COMBINE_SRC[x]),
+        ...c.opRGB.map((x) => COMBINE_OP[x]), ...c.opA.map((x) => COMBINE_OP[x]), c.scaleRGB, c.scaleA, ...c.colour, t.min, t.mag, t.wrapS, t.wrapT].join(',');
+    }).join('|');
   }
   /*
    * GLSL's built-in matrices (glsl.js), from the stacks' tops. Those are replaced, never written in
@@ -925,7 +1080,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glClearColor: (r, g, b, a) => { s.clear = [r, g, b, a].map(clamp01); },
     glEnable: (cap) => {
-      if (s.activeUnit && UNIT_CAPS.has(cap)) return;
+      if (s.activeUnit && UNIT_CAPS.has(cap)) { s.units[s.activeUnit].caps.add(cap); return; }
       // A capability this GL does not implement is said once, by number: enabling it changes nothing
       // here, and a picture that is wrong for that reason should be traceable to it.
       if (!KNOWN_CAPS.has(cap) && !(cap >= 0x4000 && cap < 0x4008) && !(cap >= 0x3000 && cap < 0x3006) && !s.unknownCaps.has(cap)) {
@@ -935,7 +1090,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.caps.add(cap);
     },
     glColorMaterial: (face, mode) => { s.colourMaterial = { face, mode }; },
-    glDisable: (cap) => { if (s.activeUnit && UNIT_CAPS.has(cap)) return; s.caps.delete(cap); },
+    glDisable: (cap) => { if (s.activeUnit && UNIT_CAPS.has(cap)) { s.units[s.activeUnit].caps.delete(cap); return; } s.caps.delete(cap); },
     glShadeModel: (m) => { s.shade = m; },
     glCullFace: (m) => { s.cullFace = m; },
     glFrontFace: (m) => { s.frontFace = m; },
@@ -952,7 +1107,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glMultMatrixf: (m) => setTop(mul(top(), Float64Array.from(m))),
     glMultMatrixd: (m) => setTop(mul(top(), Float64Array.from(m))),
     glLoadMatrixd: (m) => setTop(Float64Array.from(m)),
-    glPushMatrix: () => { s.stacks[s.mode].push(Float64Array.from(top())); },
+    glPushMatrix: () => { stackOf(s.mode).push(Float64Array.from(top())); },
     /*
      * The attribute stacks, for the groups whose whole state is kept here: GL_ENABLE_BIT (every
      * capability) and GL_COLOR_BUFFER_BIT (the alpha test, blending, the colour mask, the clear
@@ -963,7 +1118,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const other = mask & ~(0x2000 | 0x4000);
       if (other) throw new Error(`gl: glPushAttrib of the groups 0x${other.toString(16)} is not implemented (GL_ENABLE_BIT and GL_COLOR_BUFFER_BIT are)`);
       (s.attribStack ??= []).push({
-        mask, caps: mask & 0x2000 ? new Set(s.caps) : null,
+        mask, caps: mask & 0x2000 ? new Set(s.caps) : null, unitCaps: mask & 0x2000 ? s.units.map((u) => u && new Set(u.caps)) : null,
         colour: mask & 0x4000 ? { alphaFunc: s.alphaFunc, alphaRef: s.alphaRef, blend: [...s.blend], colorMask: [...s.colorMask], clear: [...s.clear],
           alphaOn: s.caps.has(CAP.ALPHA_TEST), blendOn: s.caps.has(CAP.BLEND) } : null,
       });
@@ -971,7 +1126,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glPopAttrib: () => {
       const a = s.attribStack?.pop();
       if (!a) return;                                      // GL_STACK_UNDERFLOW: nothing changes
-      if (a.caps) s.caps = new Set(a.caps);
+      if (a.caps) { s.caps = new Set(a.caps); a.unitCaps.forEach((c, k) => { if (c) s.units[k].caps = c; }); }
       if (a.colour) {
         const c = a.colour;
         s.alphaFunc = c.alphaFunc; s.alphaRef = c.alphaRef; s.blend = c.blend; s.colorMask = c.colorMask; s.clear = c.clear;
@@ -982,15 +1137,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glPushClientAttrib: (mask) => {
       const other = mask & ~(0x1 | 0x2);
       if (other) throw new Error(`gl: glPushClientAttrib of the groups 0x${other.toString(16)} is not implemented`);
-      (s.clientAttribStack ??= []).push({ mask, unpackAlign: s.unpackAlign, packAlign: s.packAlign, arrays: mask & 0x2 ? JSON.parse(JSON.stringify(s.arrays)) : null });
+      (s.clientAttribStack ??= []).push({ mask, unpackAlign: s.unpackAlign, packAlign: s.packAlign, arrays: mask & 0x2 ? JSON.parse(JSON.stringify(s.arrays)) : null,
+        unitArrays: mask & 0x2 ? s.units.map((u) => u && JSON.parse(JSON.stringify(u.array))) : null });
     },
     glPopClientAttrib: () => {
       const a = s.clientAttribStack?.pop();
       if (!a) return;
       if (a.mask & 0x1) { s.unpackAlign = a.unpackAlign; s.packAlign = a.packAlign; }
-      if (a.arrays) s.arrays = a.arrays;
+      if (a.arrays) { s.arrays = a.arrays; a.unitArrays.forEach((x, k) => { if (x) s.units[k].array = x; }); }
     },
-    glPopMatrix: () => { if (s.stacks[s.mode].length > 1) s.stacks[s.mode].pop(); },
+    glPopMatrix: () => { const st = stackOf(s.mode); if (st.length > 1) st.pop(); },
     glTranslatef: (x, y, z) => { const t = ident(); t[12] = x; t[13] = y; t[14] = z; setTop(mul(top(), t)); },
     glScalef: (x, y, z) => { const t = ident(); t[0] = x; t[5] = y; t[10] = z; setTop(mul(top(), t)); },
     glRotatef: (angle, x, y, z) => {
@@ -1061,13 +1217,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     // Texture coordinate generation: GL_OBJECT_LINEAR, the mode a terrain textured by position uses.
     glTexGeni: (coord, pname, v) => {
-      const g = s.texGen[coord - 0x2000];
+      const g = (xunit()?.texGen ?? s.texGen)[coord - 0x2000];
       if (!g || pname !== 0x2500) throw new Error(`gl: glTexGeni 0x${coord.toString(16)} 0x${pname.toString(16)}`);
       if (v !== 0x2401 && v !== 0x2402) throw new Error(`gl: texture generation mode 0x${v.toString(16)} (GL_EYE_LINEAR is not implemented)`);
       g.mode = v;
     },
     glTexGenfv: (coord, pname, v) => {
-      const g = s.texGen[coord - 0x2000];
+      const g = (xunit()?.texGen ?? s.texGen)[coord - 0x2000];
       if (!g) throw new Error(`gl: glTexGenfv coordinate 0x${coord.toString(16)}`);
       if (pname === 0x2501) g.object = v; else if (pname === 0x2500) exec.glTexGeni(coord, pname, v[0]);
       else throw new Error(`gl: glTexGenfv 0x${pname.toString(16)} (eye planes are not implemented)`);
@@ -1119,9 +1275,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glFogi: (p, v) => exec.glFogf(p, v),
     glFogfv: (p, v) => { if (p === FOG.COLOR) s.fog.colour = v.map(clamp01); else exec.glFogf(p, v[0]); },
     glBindTexture: (target, id) => {
-      if (s.activeUnit) return;
       if (target !== CAP.TEXTURE_2D && target !== TEX3D) throw new Error(`gl: texture target 0x${target.toString(16)}`);
       if (id && !s.textures.has(id)) s.textures.set(id, newTexture());
+      if (s.activeUnit) {
+        if (target === TEX3D) throw new Error('gl: GL_TEXTURE_3D on a texture unit other than 0 is not implemented');
+        s.units[s.activeUnit].bound = id; return;
+      }
       if (target === TEX3D) s.bound3D = id; else s.bound = id;
     },
     glTexParameterf: (target, p, v) => {
@@ -1143,16 +1302,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       else throw new Error(`gl: glPointParameter 0x${p.toString(16)}`);
     },
     glPointParameterfARB: (p, v) => exec.glPointParameterfvARB(p, [v]),
-    glActiveTextureARB: (unit) => { s.activeUnit = unit - 0x84c0; },
-    glClientActiveTextureARB: (unit) => { s.clientUnit = unit - 0x84c0; },
+    glActiveTextureARB: (unit) => { const k = unit - 0x84c0; if (k < 0 || k >= UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`); s.activeUnit = k; },
+    glClientActiveTextureARB: (unit) => { const k = unit - 0x84c0; if (k < 0 || k >= UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`); s.clientUnit = k; },
     glColor3fv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
     glColor4ubv: (v) => { s.colour = [v[0] / 255, v[1] / 255, v[2] / 255, v[3] / 255]; },
     glColor4ub: (r, g, b, a) => { s.colour = [(r & 255) / 255, (g & 255) / 255, (b & 255) / 255, (a & 255) / 255]; },
-    glEnableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = true; },
-    glDisableClientState: (cap) => { if (ARRAY[cap] !== 'tex' || !s.clientUnit) s.arrays[ARRAY[cap]].on = false; },
+    glEnableClientState: (cap) => { (ARRAY[cap] === 'tex' ? clientTex() : s.arrays[ARRAY[cap]]).on = true; },
+    glDisableClientState: (cap) => { (ARRAY[cap] === 'tex' ? clientTex() : s.arrays[ARRAY[cap]]).on = false; },
     glVertexPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.vertex, { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
     glColorPointer: (size, type, stride, ptr) => { Object.assign(s.arrays.color, { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
-    glTexCoordPointer: (size, type, stride, ptr) => { if (!s.clientUnit) Object.assign(s.arrays.tex, { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
+    glTexCoordPointer: (size, type, stride, ptr) => { Object.assign(clientTex(), { size, type, stride, ...layout(type, size, stride), ...inBuffer(ptr) }); },
     glNormalPointer: (type, stride, ptr) => { Object.assign(s.arrays.normal, { size: 3, type, stride, ...layout(type, 3, stride), ...inBuffer(ptr) }); },
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
     // One element of the enabled arrays, as if its colour, texture coordinate and vertex were given.
@@ -1160,7 +1319,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const { vertex: va, color: ca, tex: ta, normal: na } = s.arrays;
       if (na.on) s.normal = [arrayAt(na, i, 0, true), arrayAt(na, i, 1, true), arrayAt(na, i, 2, true)];
       if (ca.on) s.colour = [arrayAt(ca, i, 0, true), arrayAt(ca, i, 1, true), arrayAt(ca, i, 2, true), ca.size > 3 ? arrayAt(ca, i, 3, true) : 1];
-      if (ta.on) s.tex = [arrayAt(ta, i, 0, false), ta.size > 1 ? arrayAt(ta, i, 1, false) : 0];
+      // r too when the array has it: Neverball's shadow takes positions as coordinates, through a matrix.
+      if (ta.on) s.tex = ta.size > 2 ? [arrayAt(ta, i, 0, false), arrayAt(ta, i, 1, false), arrayAt(ta, i, 2, false)] : [arrayAt(ta, i, 0, false), ta.size > 1 ? arrayAt(ta, i, 1, false) : 0];
+      for (let k = 1; k < UNITS; k++) {
+        const a = s.units[k].array;
+        // Written in place: vertex() reads it at once (unitCoord) and keeps only what it computes from it.
+        if (a.on) { const c = s.units[k].coord; c[0] = arrayAt(a, i, 0, false); c[1] = a.size > 1 ? arrayAt(a, i, 1, false) : 0; c[2] = a.size > 2 ? arrayAt(a, i, 2, false) : 0; c[3] = a.size > 3 ? arrayAt(a, i, 3, false) : 1; }
+      }
       if (va.on) vertex(arrayAt(va, i, 0, false), arrayAt(va, i, 1, false), va.size > 2 ? arrayAt(va, i, 2, false) : 0);
     },
     // GL_EXT_compiled_vertex_array: a lock is a promise the program makes, which nothing here relies on.
@@ -1168,10 +1333,30 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glUnlockArraysEXT: () => {},
     glTexEnvf: (target, p, v) => {
       if (target === 0x8861 && p === 0x8862) { s.coordReplace = !!v; return; }   // GL_POINT_SPRITE, GL_COORD_REPLACE
-      if (s.activeUnit) return;
-      if (p === TEX.ENV_MODE) s.envMode = v; else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`);
+      const u = xunit();
+      if (p === TEX.ENV_MODE) {
+        if (v !== TEX.MODULATE && v !== TEX.REPLACE && v !== TEX.DECAL && v !== TEX.COMBINE) throw new Error(`gl: texture environment 0x${v.toString(16)}`);
+        if (u) u.envMode = v; else s.envMode = v;
+        return;
+      }
+      const c = u ? u.combine : s.combine;
+      const check = (table, x) => { if (table[x] === undefined) throw new Error(`gl: glTexEnv 0x${p.toString(16)} = 0x${x.toString(16)}`); return x; };
+      if (p === 0x8571) c.rgb = check(COMBINE_FN, v);
+      else if (p === 0x8572) c.alpha = check(COMBINE_FN, v);
+      else if (p >= 0x8580 && p <= 0x8582) c.srcRGB[p - 0x8580] = check(COMBINE_SRC, v);
+      else if (p >= 0x8588 && p <= 0x858a) c.srcA[p - 0x8588] = check(COMBINE_SRC, v);
+      else if (p >= 0x8590 && p <= 0x8592) c.opRGB[p - 0x8590] = check(COMBINE_OP, v);
+      else if (p >= 0x8598 && p <= 0x859a) c.opA[p - 0x8598] = check({ 0x302: 2, 0x303: 3 }, v);
+      else if (p === 0x8573) c.scaleRGB = v;
+      else if (p === 0x0d1c) c.scaleA = v;
+      else throw new Error(`gl: glTexEnv 0x${p.toString(16)}`);
     },
     glTexEnvi: (target, p, v) => exec.glTexEnvf(target, p, v),
+    // GL_TEXTURE_ENV_COLOR: the active unit's constant colour, GL_COMBINE's CONSTANT source.
+    glTexEnvfv: (target, p, v) => {
+      if (p !== 0x2201) { exec.glTexEnvf(target, p, v[0]); return; }
+      (xunit()?.combine ?? s.combine).colour = v.map(clamp01);
+    },
     glTexParameteri: (target, p, v) => exec.glTexParameterf(target, p, v),
     glTexImage2D: (target, level, internal, w, h, border, format, type, texels) => {
       const t = texture();
@@ -1233,6 +1418,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexGenfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x2500 ? 1 : 4)],
     glClipPlane: (a) => [a[0], Array.from({ length: 4 }, (_, k) => dv().getFloat64(a[1] + 8 * k, true))],
     glTexParameterfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x1004 ? 4 : 1)],
+    glTexEnvfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x2201 ? 4 : 1)],
     glPointParameterfvARB: (a) => [a[0], f32(a[1], a[0] === 0x8129 ? 3 : 1)],
     glTexImage2D: (a) => {
       return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null];
@@ -1341,7 +1527,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         for (let k = 0; k < n; k++) M.u8[d + k] = fb[o + k];
       }
     },
-    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; if (s.bound3D === id) s.bound3D = 0; } } },
+    glDeleteTextures: (n, ids) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) { s.textures.delete(id); s.genTextures.delete(id); if (s.bound === id) s.bound = 0; if (s.bound3D === id) s.bound3D = 0; for (const u of s.units) if (u?.bound === id) u.bound = 0; } } },
     glGetError: () => 0,
     glGetBooleanv: (p, out) => {
       const v = p === 0x0c32 ? 1 : p === 0x0b72 ? +s.depthMask : s.caps.has(p) ? 1 : null;   // DOUBLEBUFFER, DEPTH_WRITEMASK, a capability
@@ -1362,7 +1548,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glGetIntegerv: (p, out) => {
       // The pixel store: the two alignments kept, the other modes 0 (glPixelStorei accepts only that).
       const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
-      const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [1] : null;
+      const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [UNITS]
+        : p === 0x84e0 ? [0x84c0 + s.activeUnit] : p === 0x84e1 ? [0x84c0 + s.clientUnit] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
     },
@@ -1398,7 +1585,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.fromArrays = true; exec.glEnd(); s.fromArrays = false;
     },
     glIsTexture: (id) => (id && s.textures.has(id) ? 1 : 0),
-    glIsEnabled: (cap) => (s.caps.has(cap) ? 1 : 0),
+    glIsEnabled: (cap) => ((s.activeUnit && UNIT_CAPS.has(cap) ? s.units[s.activeUnit].caps : s.caps).has(cap) ? 1 : 0),
     // The front or back material's property, as glMaterialfv left it (GL_COLOR_MATERIAL included).
     glGetMaterialfv: (face, pname, out) => {
       const m = face === BACK ? s.backMaterial : s.material;
@@ -1587,8 +1774,97 @@ void main() {
   let probeTarget = null, probeColour = null, probeVao = null, probeSize = '';
   g.useProgram(prog);
   const programs = makeGLSLWebGL(g, ['pos', 'col', 'tc', 'ez'], shader);   // GLSL programs (src/env/glsl.js)
-  const U = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
+  const U0 = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
     .map((n) => [n, g.getUniformLocation(prog, n)]));
+  let U = U0;                                 // the current fixed program's uniforms: prog's, or multi's
+  /*
+   * THE MULTITEXTURE PROGRAM, for a batch that uses a unit other than 0 or a combiner: the same
+   * pipeline with three samplers (WebGL units 0, 2 and 3 -- 1 is readDepth's) applied in turn, each
+   * unit in its classic environment or GL_COMBINE, and two more coordinates a vertex. Made the first
+   * time it is wanted and used only then, so a one-unit program sends WebGL what it always did.
+   */
+  let multi = null;
+  const multiProgram = () => {
+    if (multi) return multi;
+    const p = g.createProgram();
+    g.attachShader(p, shader(g.VERTEX_SHADER, `#version 300 es
+in vec4 pos; in vec4 col; in vec2 tc; in float ez; in vec2 tc1; in vec2 tc2;
+out vec4 v; out vec2 uv; out float eyeZ; out vec2 uv1; out vec2 uv2;
+uniform int zFlip;
+void main() { gl_Position = vec4(pos.xy, zFlip == 1 ? -pos.z : pos.z, pos.w); v = col; uv = tc; eyeZ = ez; uv1 = tc1; uv2 = tc2; }`));
+    g.attachShader(p, shader(g.FRAGMENT_SHADER, `#version 300 es
+precision highp float;
+in vec4 v; in vec2 uv; in float eyeZ; in vec2 uv1; in vec2 uv2; out vec4 o;
+uniform sampler2D tex0, tex1, tex2;
+// Per unit: on, base (0 RGB 1 RGBA 2 L 3 LA 4 A 5 I), environment (0 MODULATE 1 REPLACE 2 DECAL 3 COMBINE);
+// the combiner as cA (functions RGB, alpha; RGB sources 0, 1), cB (RGB source 2; alpha sources 0-2),
+// cC (RGB operands 0-2; alpha operands packed 2 bits each), its constant colour and its two scales.
+uniform int on[3], base[3], env[3];
+uniform ivec4 cA[3], cB[3], cC[3];
+uniform vec4 kc[3]; uniform vec2 sc[3];
+uniform int alphaFn, fogMode;
+uniform float alphaRef, fogDensity, fogStart, fogEnd;
+uniform vec4 fogColour;
+bool cmp(int f, float a, float b) {
+  if (f == 0) return false; if (f == 1) return a < b; if (f == 2) return a == b; if (f == 3) return a <= b;
+  if (f == 4) return a > b; if (f == 5) return a != b; if (f == 6) return a >= b; return true;
+}
+vec4 source(int b, vec4 t) {
+  if (b == 0) return vec4(t.rgb, 1.0); if (b == 2) return vec4(t.rrr, 1.0); if (b == 3) return vec4(t.rrr, t.a);
+  if (b == 4) return vec4(0.0, 0.0, 0.0, t.a); if (b == 5) return vec4(t.r); return t;
+}
+vec4 pick(int s, vec4 T, vec4 k, vec4 prim, vec4 prev) { return s == 0 ? T : s == 1 ? k : s == 2 ? prim : prev; }
+vec3 opc(int o, vec4 c) { return o == 0 ? c.rgb : o == 1 ? 1.0 - c.rgb : o == 2 ? vec3(c.a) : vec3(1.0 - c.a); }
+float opa(int o, vec4 c) { return o == 2 ? c.a : 1.0 - c.a; }
+vec3 fnc(int f, vec3 a0, vec3 a1, vec3 a2) {
+  if (f == 0) return a0; if (f == 1) return a0 * a1; if (f == 2) return a0 + a1; if (f == 3) return a0 + a1 - 0.5;
+  if (f == 4) return a0 * a2 + a1 * (1.0 - a2); return a0 - a1;
+}
+float fna(int f, float a0, float a1, float a2) {
+  if (f == 0) return a0; if (f == 1) return a0 * a1; if (f == 2) return a0 + a1; if (f == 3) return a0 + a1 - 0.5;
+  if (f == 4) return a0 * a2 + a1 * (1.0 - a2); return a0 - a1;
+}
+vec4 unit(int i, vec4 t, vec4 c, vec4 prim) {
+  int b = base[i];
+  if (env[i] == 3) {
+    vec4 T = source(b, t), k = kc[i];
+    ivec4 A = cA[i], B = cB[i], C = cC[i];
+    vec3 rgb = fnc(A.x, opc(C.x, pick(A.z, T, k, prim, c)), opc(C.y, pick(A.w, T, k, prim, c)), opc(C.z, pick(B.x, T, k, prim, c)));
+    float a = fna(A.y, opa(C.w & 3, pick(B.y, T, k, prim, c)), opa((C.w >> 2) & 3, pick(B.z, T, k, prim, c)), opa((C.w >> 4) & 3, pick(B.w, T, k, prim, c)));
+    return clamp(vec4(rgb * sc[i].x, a * sc[i].y), 0.0, 1.0);
+  }
+  if (b == 5) t = vec4(t.r); else if (b == 2) t = vec4(t.rrr, 1.0); else if (b == 3) t = vec4(t.rrr, t.a);
+  bool hasA = b == 1 || b == 3 || b == 4 || b == 5;
+  if (env[i] == 1) return b == 4 ? vec4(c.rgb, t.a) : vec4(t.rgb, hasA ? t.a : c.a);
+  if (env[i] == 2) return b == 0 ? vec4(t.rgb, c.a) : vec4(mix(c.rgb, t.rgb, t.a), c.a);
+  return b == 4 ? vec4(c.rgb, c.a * t.a) : vec4(c.rgb * t.rgb, hasA ? c.a * t.a : c.a);
+}
+void main() {
+  vec4 c = v;
+  if (on[0] == 1) c = unit(0, texture(tex0, uv), c, v);
+  if (on[1] == 1) c = unit(1, texture(tex1, uv1), c, v);
+  if (on[2] == 1) c = unit(2, texture(tex2, uv2), c, v);
+  if (fogMode != 0) {
+    float f = fogMode == 1 ? (fogEnd - eyeZ) / (fogEnd - fogStart) : fogMode == 2 ? exp(-fogDensity * eyeZ) : exp(-pow(fogDensity * eyeZ, 2.0));
+    f = clamp(f, 0.0, 1.0);
+    c = vec4(mix(fogColour.rgb, c.rgb, f), c.a);
+  }
+  if (alphaFn >= 0 && !cmp(alphaFn, c.a, alphaRef)) discard;
+  o = c;
+}`));
+    ['pos', 'col', 'tc', 'ez'].forEach((n, i) => g.bindAttribLocation(p, i, n));
+    g.bindAttribLocation(p, 5, 'tc1'); g.bindAttribLocation(p, 6, 'tc2');
+    g.linkProgram(p);
+    if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(p)}`);
+    const loc = (n) => g.getUniformLocation(p, n);
+    multi = { p, U: Object.fromEntries(['alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip'].map((n) => [n, loc(n)]).concat([['textured', null], ['base', null], ['env', null]])),
+      on: loc('on'), base: loc('base'), env: loc('env'), cA: loc('cA'), cB: loc('cB'), cC: loc('cC'), kc: loc('kc'), sc: loc('sc') };
+    g.useProgram(p);
+    g.uniform1i(loc('tex0'), 0); g.uniform1i(loc('tex1'), 2); g.uniform1i(loc('tex2'), 3);
+    return multi;
+  };
+  // The uniforms the two fixed programs share by name: switching between them, each is sent again.
+  const FIXED_UNIFORMS = ['textured', 'base', 'env', 'alpha', 'fog', 'multi'];
   g.uniform1i(U.tex, 0);
   const vertexBuffer = g.createBuffer();
   g.bindBuffer(g.ARRAY_BUFFER, vertexBuffer);
@@ -1600,6 +1876,8 @@ void main() {
   g.disable(g.CULL_FACE);
   const gpuTex = new Map();
   const MAXV = 3 * 65536, data = new Float32Array(MAXV * 11);
+  let dataM_ = null;
+  const dataMOf = () => (dataM_ ??= new Float32Array(MAXV * 15));   // a multitexture batch's vertices, made when first wanted
   // The normals, for a vertex shader's gl_Normal: their own buffer and attribute 4, bound only for a
   // batch drawn with one, so a program without one sends WebGL what it always did.
   let normalBuffer = null, normals = null;
@@ -1624,9 +1902,13 @@ void main() {
     // stage applies too) or the fixed function's, which keeps its own uniforms from before.
     // The fixed path's key never changes ('fixed', as `applied` starts and as readDepth leaves it), so a
     // program that uses no GLSL sends WebGL exactly what it sent before GLSL existed (gate-webgl-stream).
-    put('program', st.glsl ? `${st.program},${st.range},${st.cull},${st.xf ? st.xf.id : ''}` : 'fixed', () => {
+    put('program', st.glsl ? `${st.program},${st.range},${st.cull},${st.xf ? st.xf.id : ''}` : st.multi ? 'fixed-multi' : 'fixed', () => {
       const flip = st.range.split(',').map(Number).reduce((dn, df) => (dn > df ? 1 : 0));
-      if (!programs.use(st.glsl, flip, st.xf)) { g.useProgram(prog); g.uniform1i(U.zFlip, zFlip); }
+      if (!programs.use(st.glsl, flip, st.xf)) {
+        const m = st.multi ? multiProgram() : null, nu = m ? m.U : U0;
+        if (nu !== U) { U = nu; for (const k of FIXED_UNIFORMS) delete applied[k]; }
+        g.useProgram(m ? m.p : prog); g.uniform1i(U.zFlip, zFlip);
+      }
       // Culling is WebGL's only under a vertex shader (gl.js culls the rest itself), so only then is it on.
       if (st.cull) { const [cf, ff] = st.cull.split(',').map(Number); g.enable(g.CULL_FACE); g.cullFace(cf); g.frontFace(ff); culling = true; }
       else if (culling) { g.disable(g.CULL_FACE); culling = false; }
@@ -1650,6 +1932,7 @@ void main() {
         g.texParameteri(g.TEXTURE_3D, g.TEXTURE_WRAP_R, WRAP[wr]);
       }
     }
+    if (st.multi) applyUnits(st.multi);
     put('textured', st.tex >= 0, () => g.uniform1i(U.textured, st.tex >= 0 ? 1 : 0));
     put('base', st.base, () => g.uniform1i(U.base, BASES[st.base] ?? 0));
     put('env', st.env, () => g.uniform1i(U.env, ENVS[st.env] ?? 0));
@@ -1687,9 +1970,55 @@ void main() {
     }
     put('offset', st.offset, () => { if (st.offset) { const [f, u] = st.offset.split(',').map(Number); g.enable(g.POLYGON_OFFSET_FILL); g.polygonOffset(f, u); } else g.disable(g.POLYGON_OFFSET_FILL); });
   }
+  /*
+   * The units of a multitexture batch (gpuState's multiKey): units 1 and 2 bound on WebGL units 2 and 3
+   * with their filters, then every unit's uniforms. Unit 0's texture is bound above, as always.
+   */
+  const texParamsOn = (target, id, min, mag, ws, wt) => {
+    const p = `${min},${mag},${ws},${wt}`;
+    if (texParams.get(id) === p) return;
+    texParams.set(id, p);
+    g.texParameteri(target, g.TEXTURE_MIN_FILTER, FILT[min]); g.texParameteri(target, g.TEXTURE_MAG_FILTER, FILT[mag]);
+    g.texParameteri(target, g.TEXTURE_WRAP_S, WRAP[ws]); g.texParameteri(target, g.TEXTURE_WRAP_T, WRAP[wt]);
+  };
+  function applyUnits(key) {
+    const units = key.split('|').map((x) => x.split(',').map(Number));
+    for (const u of units) {
+      const [k, id] = u, [min, mag, ws, wt] = u.slice(-4);
+      if (!k) continue;
+      put(`tex${k}`, id, () => { g.activeTexture(g.TEXTURE0 + k + 1); g.bindTexture(g.TEXTURE_2D, gpuTex.get(id)); g.activeTexture(g.TEXTURE0); });
+      if (texParams.get(id) !== `${min},${mag},${ws},${wt}`) { g.activeTexture(g.TEXTURE0 + k + 1); texParamsOn(g.TEXTURE_2D, id, min, mag, ws, wt); g.activeTexture(g.TEXTURE0); }
+    }
+    put('multi', key, () => {
+      const on = [0, 0, 0], base = [0, 0, 0], env = [0, 0, 0], cA = new Int32Array(12), cB = new Int32Array(12), cC = new Int32Array(12);
+      const kc = new Float32Array(12), sc = new Float32Array(6);
+      for (const u of units) {
+        const [k, , b, e, fr, fa, s0, s1, s2, a0, a1, a2, o0, o1, o2, p0, p1, p2, scR, scA, r, gg, bb, aa] = u;
+        on[k] = 1; base[k] = b; env[k] = e;
+        cA.set([fr, fa, s0, s1], 4 * k); cB.set([s2, a0, a1, a2], 4 * k); cC.set([o0, o1, o2, p0 + 4 * p1 + 16 * p2], 4 * k);
+        kc.set([r, gg, bb, aa], 4 * k); sc.set([scR, scA], 2 * k);
+      }
+      g.uniform1iv(multi.on, on); g.uniform1iv(multi.base, base); g.uniform1iv(multi.env, env);
+      g.uniform4iv(multi.cA, cA); g.uniform4iv(multi.cB, cB); g.uniform4iv(multi.cC, cC);
+      g.uniform4fv(multi.kc, kc); g.uniform2fv(multi.sc, sc);
+    });
+  }
   const flush = () => {
     if (!n) return;
     apply(pending);
+    if (pending.multi) {
+      g.bufferData(g.ARRAY_BUFFER, dataMOf().subarray(0, n * 15), g.STREAM_DRAW);
+      g.vertexAttribPointer(0, 4, g.FLOAT, false, 60, 0); g.vertexAttribPointer(1, 4, g.FLOAT, false, 60, 16);
+      g.vertexAttribPointer(2, 2, g.FLOAT, false, 60, 32); g.vertexAttribPointer(3, 1, g.FLOAT, false, 60, 40);
+      g.enableVertexAttribArray(5); g.vertexAttribPointer(5, 2, g.FLOAT, false, 60, 44);
+      g.enableVertexAttribArray(6); g.vertexAttribPointer(6, 2, g.FLOAT, false, 60, 52);
+      g.drawArrays(mode, 0, n);
+      g.disableVertexAttribArray(5); g.disableVertexAttribArray(6);
+      g.vertexAttribPointer(0, 4, g.FLOAT, false, STRIDE, 0); g.vertexAttribPointer(1, 4, g.FLOAT, false, STRIDE, 16);
+      g.vertexAttribPointer(2, 2, g.FLOAT, false, STRIDE, 32); g.vertexAttribPointer(3, 1, g.FLOAT, false, STRIDE, 40);
+      n = 0;
+      return;
+    }
     g.bufferData(g.ARRAY_BUFFER, data.subarray(0, n * 11), g.STREAM_DRAW);
     const vs = pending.glsl?.vertex;
     if (vs) {
@@ -1706,6 +2035,12 @@ void main() {
     if (v.vs) {                                // under a vertex shader: the attributes as given
       const o = n * 11; data.set(v.vs.o, o); data.set(v.vs.c, o + 4); data[o + 8] = v.vs.t[0]; data[o + 9] = v.vs.t[1]; data[o + 10] = 0;
       (normals ??= new Float32Array(MAXV * 3)).set(v.vs.n, n * 3); n++; return;
+    }
+    if (pending.multi) {
+      const dataM = dataMOf(), o = n * 15, t1 = v.tex1, t2 = v.tex2;
+      dataM.set(v.clip, o); dataM.set(colour ?? v.colour, o + 4); dataM[o + 8] = v.tex[0]; dataM[o + 9] = v.tex[1]; dataM[o + 10] = v.eyeZ;
+      dataM[o + 11] = t1 ? t1[0] : 0; dataM[o + 12] = t1 ? t1[1] : 0; dataM[o + 13] = t2 ? t2[0] : 0; dataM[o + 14] = t2 ? t2[1] : 0;
+      n++; return;
     }
     const o = n * 11; data.set(v.clip, o); data.set(colour ?? v.colour, o + 4); data[o + 8] = v.tex[0]; data[o + 9] = v.tex[1]; data[o + 10] = v.eyeZ; n++; };
   // gpuState builds every field from primitives in a fixed order, so field-wise equality is identity.
@@ -1778,7 +2113,7 @@ void main() {
       g.useProgram(prog);
       g.bindFramebuffer(g.FRAMEBUFFER, target);
       g.viewport(...view);
-      key = null; applied = { program: 'fixed' };
+      key = null; applied = { program: 'fixed' }; U = U0;
       const out = new Float32Array(rw * rh);
       for (let i = 0; i < rw * rh; i++) out[i] = (px[4 * i] | (px[4 * i + 1] << 8) | (px[4 * i + 2] << 16)) / 16777215;
       return out;
@@ -1833,7 +2168,7 @@ export function glBuiltins(T) {
     glLightfv: f(V, U, U, P), glMaterialfv: f(V, U, U, P),
     glLightModelfv: f(V, U, P), glLightModelf: f(V, U, F), glLightModeli: f(V, U, I), glIsTexture: f(U, U),
     glFogf: f(V, U, F), glFogi: f(V, U, I), glFogfv: f(V, U, P),
-    glBindTexture: f(V, U, U), glTexParameterf: f(V, U, U, F), glTexEnvf: f(V, U, U, F), glTexParameteri: f(V, U, U, I), glTexEnvi: f(V, U, U, I),
+    glBindTexture: f(V, U, U), glTexParameterf: f(V, U, U, F), glTexEnvf: f(V, U, U, F), glTexEnvfv: f(V, U, U, P), glTexParameteri: f(V, U, U, I), glTexEnvi: f(V, U, U, I),
     glTexImage2D: f(V, U, I, I, I, I, I, U, U, P), glTexSubImage2D: f(V, U, I, I, I, I, I, U, U, P),
     glTexImage3D: f(V, U, I, I, I, I, I, I, U, U, P), glTexSubImage3D: f(V, U, I, I, I, I, I, I, I, U, U, P),
     glCopyTexSubImage2D: f(V, U, I, I, I, I, I, I, I), glCopyTexImage2D: f(V, U, I, U, I, I, I, I, I),

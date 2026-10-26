@@ -1021,6 +1021,7 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 #define GL_OPERAND0_ALPHA 0x8598
 #define GL_OPERAND1_ALPHA 0x8599
 #define GL_OPERAND2_ALPHA 0x859A
+#define GL_SUBTRACT 0x84E7
 /* GL 1.2 3D textures: sampled by GLSL programs (sampler3D), not by the fixed function. */
 #define GL_TEXTURE_BINDING_3D 0x806A
 #define GL_TEXTURE_3D 0x806F

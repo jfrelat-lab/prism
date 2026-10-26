@@ -109,12 +109,20 @@ const cases = [
   // of it unless gl.js clips it first. Retrospection draws its backgrounds so.
   { name: 'the fixed function: a rectangle far outside the clip volume covers the window',
     src: null, identity: true, raw: false, rect: [-1e8, -1e8, 1e8, 1e8], want: () => [1, 1, 1, 1] },
+  // No shader: three texture units as Neverball's shadow sets them, on 1x1 textures so that every pixel
+  // is the same arithmetic. Unit 0 GL_COMBINE MODULATE, the previous colour by one minus its alpha
+  // (64); unit 1 INTERPOLATE between previous and primary by its alpha (128); unit 2 a texel MODULATE.
+  { name: 'the fixed function on three units: the shadow combiners of Neverball', src: null, raw: false, multitex: true,
+    colour: [204, 153, 255, 255], want: () => {
+      const c = [204 / 255, 153 / 255, 1], a0 = 64 / 255, a1 = 128 / 255, t2 = [128 / 255, 1, 64 / 255];
+      return [...c.map((p, k) => (p * (1 - a0) * a1 + p * (1 - a1)) * t2[k]), 1];
+    } },
 ];
 
 // The page: gl.js on a flat memory, as PRISM's runtime gives it, each case drawn and read back.
 const page = `<!doctype html><pre id=o>running</pre><script type=module>
 import { installGL } from '/src/env/gl.js';
-const CASES = ${JSON.stringify(cases.map(({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d, identity }) => ({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d, identity })))};
+const CASES = ${JSON.stringify(cases.map(({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d, identity, multitex }) => ({ name, src, vs, colour, uniforms, rect, normal, translate, cull, tex3d, identity, multitex })))};
 const out = {};
 const raw = (src) => { const c = new OffscreenCanvas(4, 4).getContext('webgl2'), s = c.createShader(c.FRAGMENT_SHADER); c.shaderSource(s, src); c.compileShader(s); return !!c.getShaderParameter(s, c.COMPILE_STATUS); };
 for (const k of CASES) {
@@ -135,6 +143,23 @@ for (const k of CASES) {
     if (k.src) { G.glLinkProgram(pr); G.glUseProgram(pr); }
     if (k.normal) G.glNormal3f(...k.normal);
     if (k.cull) G.glEnable(0x0b44);
+    if (k.multitex) {
+      const ids = heap; heap += 12; G.glGenTextures(3, ids);
+      const unit = (u, fmt, bytes) => {
+        G.glActiveTextureARB(0x84c0 + u); G.glBindTexture(0x0de1, dv.getUint32(ids + 4 * u, true));
+        const p = heap; heap += 4; u8.set(bytes, p);
+        G.glTexImage2D(0x0de1, 0, fmt, 1, 1, 0, fmt, 0x1401, p);
+        G.glTexParameteri(0x0de1, 0x2801, 0x2600); G.glTexParameteri(0x0de1, 0x2800, 0x2600); G.glEnable(0x0de1);
+      };
+      const env = (pairs) => { for (const [p, v] of pairs) G.glTexEnvi(0x2300, p, v); };
+      unit(0, 0x190a, [255, 64]);
+      env([[0x2200, 0x8570], [0x8571, 0x2100], [0x8580, 0x8578], [0x8581, 0x1702], [0x8590, 0x300], [0x8591, 0x303], [0x8572, 0x1e01], [0x8588, 0x8578], [0x8598, 0x302]]);
+      unit(1, 0x190a, [255, 128]);
+      env([[0x2200, 0x8570], [0x8571, 0x8575], [0x8580, 0x8578], [0x8581, 0x8577], [0x8582, 0x1702], [0x8590, 0x300], [0x8591, 0x300], [0x8592, 0x302],
+        [0x8572, 0x1e01], [0x8588, 0x8578], [0x8598, 0x302]]);
+      unit(2, 0x1907, [128, 255, 64]);
+      G.glActiveTextureARB(0x84c0);
+    }
     if (k.tex3d) {
       const ids = heap; heap += 4; G.glGenTextures(1, ids); G.glBindTexture(0x806f, dv.getUint32(ids, true));
       // As Retrospection makes its noise: GL_FLOAT texels, a mipmapped filter, levels from GL_GENERATE_MIPMAP.

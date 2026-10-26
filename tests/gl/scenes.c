@@ -48,6 +48,15 @@
  *
  * And what a 2009 intro does with its noise:
  *
+ *   multitex-shadow  Neverball's ball shadow on three texture units: unit 0 a shadow texture under
+ *                 GL_COMBINE MODULATE (the previous colour by one minus its alpha), unit 1 a 1x2 clip
+ *                 texture under INTERPOLATE (previous and primary colours by its alpha), unit 2 a checker
+ *                 MODULATE; units 0 and 1 take three-component positions as coordinates, each through
+ *                 its own texture matrix, unit 2 its own array; smooth colours, glDrawArrays
+ *   combine       one strip per combiner: REPLACE with ONE_MINUS_SRC_COLOR, MODULATE by SRC_ALPHA with
+ *                 RGB_SCALE 2, ADD of the constant colour, ADD_SIGNED with ALPHA_SCALE 2, INTERPOLATE of
+ *                 texture and constant by the primary alpha, SUBTRACT of the constant; the last strip adds unit 1
+ *                 under GL_OBJECT_LINEAR generation, MODULATE, and unit 2 under GL_SPHERE_MAP, DECAL
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -72,6 +81,8 @@
 #define glDeleteBuffersARB glDeleteBuffers
 #define glPointParameterfARB glPointParameterf
 #define glPointParameterfvARB glPointParameterfv
+#define glActiveTextureARB glActiveTexture
+#define glClientActiveTextureARB glClientActiveTexture
 #endif
 
 static const char *scene = "tex-nearest";
@@ -302,6 +313,166 @@ static void display(void) {
     glColor3f(0, 1, 0); glVertex2f(0.9f, -0.9f);
     glColor3f(0, 0, 1); glVertex2f(0, 1e7f);
     glEnd();
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "multitex-shadow")) {
+    static unsigned char shad[8 * 8 * 2], check[4 * 4 * 3];
+    static const unsigned char clip[4] = { 0xff, 0xff, 0x00, 0x00 };
+    static GLfloat pos[9 * 7 * 3], uv[9 * 7 * 2], col[9 * 7 * 4];
+    static GLushort quads[8 * 6 * 4];
+    GLuint tx[3];
+    int n = 0;
+    for (int j = 0; j < 8; j++) for (int i = 0; i < 8; i++) {
+      float dx = i - 3.5f, dy = j - 3.5f, a = 255 - 60 * sqrtf(dx * dx + dy * dy);
+      shad[(j * 8 + i) * 2] = 255; shad[(j * 8 + i) * 2 + 1] = (unsigned char)(a < 0 ? 0 : a);
+    }
+    for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {
+      unsigned char *c = check + (j * 4 + i) * 3, on = (i + j) & 1;
+      c[0] = on ? 240 : 90; c[1] = on ? 200 : 140; c[2] = on ? 120 : 220;
+    }
+    for (int j = 0; j < 7; j++) for (int i = 0; i < 9; i++) {
+      int k = j * 9 + i;
+      pos[3 * k] = i * 40; pos[3 * k + 1] = j * 40; pos[3 * k + 2] = -(i + 2 * j) / 20.0f;   /* z: the height the clip reads */
+      uv[2 * k] = i * 0.5f; uv[2 * k + 1] = j * 0.5f;
+      col[4 * k] = 0.4f + i * 0.07f; col[4 * k + 1] = 0.9f - j * 0.1f; col[4 * k + 2] = 0.5f; col[4 * k + 3] = 1;
+    }
+    for (int j = 0; j < 6; j++) for (int i = 0; i < 8; i++) {
+      quads[n++] = j * 9 + i; quads[n++] = j * 9 + i + 1; quads[n++] = (j + 1) * 9 + i + 1; quads[n++] = (j + 1) * 9 + i;
+    }
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glGenTextures(3, tx);
+    /* Unit 0: the shadow, centred on (160, 120), 100 pixels across. */
+    glActiveTextureARB(GL_TEXTURE0); glClientActiveTextureARB(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, tx[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 8, 8, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, shad);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS); glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR); glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_ONE_MINUS_SRC_ALPHA);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PREVIOUS); glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, GL_SRC_ALPHA);
+    glMatrixMode(GL_TEXTURE); glLoadIdentity();
+    glTranslatef(0.5f, 0.5f, 0); glScalef(0.01f, 0.01f, 1); glTranslatef(-160, -120, 0);
+    glMatrixMode(GL_MODELVIEW);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY); glTexCoordPointer(3, GL_FLOAT, 0, pos);
+    /* Unit 1: the clip, its t the vertex's height (r) moved by 0.163 -- the row changes across the screen. */
+    glActiveTextureARB(GL_TEXTURE1); glClientActiveTextureARB(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tx[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 1, 2, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, clip);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS); glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB, GL_TEXTURE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR); glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_SRC_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+    glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PREVIOUS); glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, GL_SRC_ALPHA);
+    {
+      static const GLfloat m[16] = { 0, 0, 0, 0,  0, 0, 0, 0,  0, -1, 0, 0,  0, 0.163f, 0, 1 };   /* t = 0.163 - z, never 0.5 on a vertex */
+      glMatrixMode(GL_TEXTURE); glLoadMatrixf(m); glMatrixMode(GL_MODELVIEW);
+    }
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY); glTexCoordPointer(3, GL_FLOAT, 0, pos);
+    /* Unit 2: the surface. */
+    glActiveTextureARB(GL_TEXTURE2); glClientActiveTextureARB(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, tx[2]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_BYTE, check);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY); glTexCoordPointer(2, GL_FLOAT, 0, uv);
+    glEnableClientState(GL_VERTEX_ARRAY); glVertexPointer(3, GL_FLOAT, 0, pos);
+    glEnableClientState(GL_COLOR_ARRAY); glColorPointer(4, GL_FLOAT, 0, col);
+    glShadeModel(GL_SMOOTH);
+    glDrawElements(GL_QUADS, n, GL_UNSIGNED_SHORT, quads);
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    for (int u = 2; u >= 0; u--) {
+      glActiveTextureARB(GL_TEXTURE0 + u); glClientActiveTextureARB(GL_TEXTURE0 + u);
+      glDisableClientState(GL_TEXTURE_COORD_ARRAY); glDisable(GL_TEXTURE_2D);
+      glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+      glMatrixMode(GL_TEXTURE); glLoadIdentity(); glMatrixMode(GL_MODELVIEW);
+    }
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "combine")) {
+    static const unsigned char rgba[4 * 4] = { 255,40,0,255,  30,200,90,128,  10,60,250,64,  220,220,40,0 };
+    static const unsigned char grad[4 * 3] = { 0,0,0, 255,0,0, 0,255,0, 255,255,255 };
+    static const unsigned char env[2 * 2 * 4] = { 255,255,255,255, 40,40,40,60, 40,40,40,128, 200,100,0,200 };
+    static const GLfloat k[4] = { 0.2f, 0.5f, 0.1f, 0.6f }, plane[4] = { 0.01f, 0.003f, 0, 0 };
+    GLuint tx[3];
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glGenTextures(3, tx);
+    glBindTexture(GL_TEXTURE_2D, tx[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, k);
+    for (int strip = 0; strip < 6; strip++) {
+      GLenum fn = strip == 0 ? GL_REPLACE : strip == 1 ? GL_MODULATE : strip == 2 ? GL_ADD : strip == 3 ? GL_ADD_SIGNED : strip == 4 ? GL_INTERPOLATE : GL_SUBTRACT;
+      glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, fn); glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, fn);
+      glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, strip == 5 ? GL_PRIMARY_COLOR : GL_TEXTURE);
+      glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, strip == 1 || strip == 3 ? GL_PRIMARY_COLOR : GL_CONSTANT);
+      glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB, GL_PRIMARY_COLOR);
+      glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, strip == 5 ? GL_PRIMARY_COLOR : GL_TEXTURE);
+      glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA, strip == 5 ? GL_TEXTURE : GL_CONSTANT);
+      glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_ALPHA, GL_PRIMARY_COLOR);
+      glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, strip == 0 ? GL_ONE_MINUS_SRC_COLOR : GL_SRC_COLOR);
+      glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, strip == 1 ? GL_SRC_ALPHA : GL_SRC_COLOR);
+      glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+      glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_ALPHA, strip == 2 ? GL_ONE_MINUS_SRC_ALPHA : GL_SRC_ALPHA);
+      glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, strip == 1 ? 2 : 1);
+      glTexEnvf(GL_TEXTURE_ENV, GL_ALPHA_SCALE, strip == 3 ? 2 : 1);
+      if (strip == 5) {
+        /* Units 1 and 2 as well: generated coordinates, MODULATE and DECAL. Rows of 2 RGB texels are 6
+           bytes: the unpack alignment of 4 would read 8. */
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glActiveTextureARB(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, tx[1]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, grad);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glEnable(GL_TEXTURE_2D); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_OBJECT_LINEAR); glTexGenfv(GL_S, GL_OBJECT_PLANE, plane);
+        glEnable(GL_TEXTURE_GEN_S);
+        glActiveTextureARB(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, tx[2]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, env);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glEnable(GL_TEXTURE_2D); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_DECAL);
+        glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP); glTexGeni(GL_T, GL_TEXTURE_GEN_MODE, GL_SPHERE_MAP);
+        glEnable(GL_TEXTURE_GEN_S); glEnable(GL_TEXTURE_GEN_T);
+        glActiveTextureARB(GL_TEXTURE0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+      }
+      /* Two triangles, not a quad: which diagonal a quad is cut along is the implementation's choice
+         (Mesa's differs between its paths), and the generated coordinates are not affine across it. */
+      static const GLfloat corner[4][9] = {
+        { 0.6f, 0.3f, 0.6f, 0.25f, -0.5f, -0.3f, 0.8f, 0, 0 }, { 0.1f, 0.8f, 0.4f, 0.75f, 0.5f, -0.3f, 0.8f, 1, 0 },
+        { 0.4f, 0.7f, 0.1f, 1.0f, 0.5f, 0.3f, 0.8f, 1, 1 }, { 0.9f, 0.2f, 0.3f, 0.5f, -0.5f, 0.3f, 0.8f, 0, 1 } };
+      static const int order[6] = { 0, 1, 2, 0, 2, 3 };
+      float y0 = strip * 40;
+      glBegin(GL_TRIANGLES);
+      for (int i = 0; i < 6; i++) {
+        const GLfloat *c = corner[order[i]];
+        glColor4f(c[0], c[1], c[2], c[3]); glNormal3f(c[4], c[5], c[6]); glTexCoord2f(c[7], c[8]);
+        glVertex2f(c[7] * 320, y0 + c[8] * 40);
+      }
+      glEnd();
+    }
+    for (int u = 2; u >= 0; u--) {
+      glActiveTextureARB(GL_TEXTURE0 + u);
+      glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T); glDisable(GL_TEXTURE_2D);
+      glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    }
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "rect-forms")) {
