@@ -9,7 +9,8 @@
 // `docker cp`, so Node writes them directly.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync } from 'node:fs';
+import { GLUT_H } from '../src/env/headers-gl.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -204,6 +205,24 @@ export function watcom16(prelude, queries, { model = 'ms', flags = '' } = {}) {
 
 /** Run a shell command inside the oracle. Returns {code, stdout, stderr} — never throws on a
  *  non-zero exit, because a compile failure is data a gate wants to see, not an accident. */
+/*
+ * THE REFERENCE GLUT, written into a work directory: glut-egl.c (a GLUT on a surfaceless EGL context,
+ * whose window is a framebuffer object) and GL/glut.h -- PRISM's own header, so a constant is the same
+ * number on both sides, with one addition: the program's binds of framebuffer 0 go through glut-egl.c,
+ * which reads 0 as the window, where on the bare context 0 would be no framebuffer at all.
+ */
+export function oracleGlut(dir) {
+  mkdirSync(join(dir, 'GL'), { recursive: true });
+  writeFileSync(join(dir, 'GL', 'glut.h'), GLUT_H.replace(/#endif\n$/, `#ifndef PRISM_GLUT_EGL_IMPL
+void prism_glutBindFramebuffer(unsigned int target, unsigned int framebuffer);
+#define glBindFramebuffer(t, f) prism_glutBindFramebuffer((t), (f))
+#define glBindFramebufferEXT(t, f) prism_glutBindFramebuffer((t), (f))
+#endif
+#endif
+`));
+  copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(dir, 'glut-egl.c'));
+}
+
 export function sh(cmd, { timeout = 120000 } = {}) {
   up();
   const r = docker(['exec', NAME, 'sh', '-c', cmd], { timeout });

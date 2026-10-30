@@ -12,7 +12,19 @@
 // time in ms instead of the fixed step -- the page passes real time, so the gears turn at 70 degrees
 // a second whatever the frame rate.
 
+import { GLUT_H } from './headers-gl.js';
+
 const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1, GLUT_STENCIL = 0x20, GLUT_DOUBLE = 2;
+/*
+ * WHAT GLUT ANSWERS ABOUT ITSELF, the same here and in tools/oracle/glut-egl.c (the reference build
+ * of the GL gates), so that a program that asks takes the same path on both sides: glutGet,
+ * glutDeviceGet, glutLayerGet and glutGameModeGet by their GLUT 3.7 numbers. A window of 8 bits a
+ * colour channel with a 24-bit depth buffer, on a 1024x768 screen; a keyboard and a three-button
+ * mouse; no overlay, no colour index, no extension claimed (glutExtensionSupported is 0, so a program
+ * takes its baseline path on both sides).
+ */
+const GET = { 100: 0, 101: 0, 104: 32, 106: 24, 107: 8, 108: 8, 109: 8, 110: 8, 116: 1, 200: 1024, 201: 768, 202: 361, 203: 271, 400: 1 };
+const DEVICE = { 600: 1, 601: 1, 605: 3 };
 
 export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, stop = () => false, onSwap = null, now = null, events = null } = {}) {
   const gl = M.gl;
@@ -20,14 +32,31 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
   const want = frames ? new Set(frames) : null;
   const last = frames ? Math.max(...frames) : Infinity;
   // GLUT's default display mode is GLUT_RGBA | GLUT_SINGLE: single-buffered until the program says.
-  const s = { w: 300, h: 300, swaps: 0, redisplay: false, double: false, cb: {}, pointer: [0, 0] };
+  const s = { w: 300, h: 300, swaps: 0, redisplay: false, double: false, cb: {}, pointer: [0, 0], mode: 0, cursor: 1, gameMode: 0,
+    // glutTimerFunc: { due, fn, value, n } in registration order; menus: id -> entries
+    timers: [], timerN: 0, menus: new Map(), menu: 0, nextMenu: 1 };
+  const time = () => (now ? Math.floor(now()) : s.swaps * stepMs);
+  /*
+   * TIMERS fire once each, at the first turn of the loop whose time has reached theirs -- before the
+   * idle callback, oldest due first and in registration order among equals -- with the value they were
+   * given. Time is GLUT_ELAPSED_TIME's, so a timer-driven program draws the same frame on both sides.
+   */
+  function fireTimers() {
+    if (!s.timers.length) return;
+    const t = time(), due = s.timers.filter((x) => x.due <= t).sort((a, b) => a.due - b.due || a.n - b.n);
+    if (!due.length) return;
+    s.timers = s.timers.filter((x) => x.due > t);
+    for (const x of due) call(x.fn, [x.value]);
+  }
+  const menu = () => s.menus.get(s.menu);
   /*
    * A FRAME ENDS where the picture becomes visible: at glutSwapBuffers when double-buffered, and when
    * the display callback returns when single-buffered -- which draws to the front buffer and ends with
    * glFlush. Counting swaps alone, a single-buffered program had no frames at all.
    */
   function present() {
-    if (want?.has(s.swaps) && onFrame) onFrame(s.swaps, gl.readPixels(), gl.state.width, gl.state.height);
+    // The window's picture, whatever framebuffer object the program has bound.
+    if (want?.has(s.swaps) && onFrame) onFrame(s.swaps, gl.readPixels(), gl.state.win.width, gl.state.win.height);
     if (onSwap) onSwap(s.swaps, gl);
     if (s.swaps++ >= last) throw new Error('__glut_done');
   }
@@ -48,7 +77,9 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
   Object.assign(M.rt, {
     glutInit: () => {},
     // Of the display mode, only the stencil buffer changes what gl.js allocates: 8 bits, as Mesa's.
-    glutInitDisplayMode: (mode) => { gl.stencilBits = mode & GLUT_STENCIL ? 8 : 0; s.double = (mode & GLUT_DOUBLE) !== 0; },
+    glutInitDisplayMode: (mode) => { s.mode = mode; gl.stencilBits = mode & GLUT_STENCIL ? 8 : 0; s.double = (mode & GLUT_DOUBLE) !== 0; },
+    // The display string's words that change something here: double and stencil (GLUT 3.7's grammar otherwise ignored).
+    glutInitDisplayString: (p) => { const w = M.mod.cstr(p).split(/\s+/).map((x) => x.split(/[=<>~!]/)[0]); M.rt.glutInitDisplayMode((w.includes('double') ? GLUT_DOUBLE : 0) | (w.includes('stencil') ? GLUT_STENCIL : 0)); },
     glutInitWindowSize: (w, h) => { s.w = w; s.h = h; },
     glutInitWindowPosition: () => {},
     glutCreateWindow: () => { gl.resize(s.w, s.h); return 1; },
@@ -73,13 +104,50 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
     glutMotionFunc: (p) => { s.cb.motion = p; },
     glutPassiveMotionFunc: (p) => { s.cb.passive = p; },
     // The host delivers one press per press: there is no auto-repeat to ignore, no cursor, no mode switch.
-    glutIgnoreKeyRepeat: () => {}, glutSetCursor: () => {},
+    glutIgnoreKeyRepeat: () => {}, glutSetCursor: (c) => { s.cursor = c; },
     glutWarpPointer: (x, y) => { s.pointer = [x, y]; },
     // Game mode takes the whole display, whatever window size was asked for: here a 640x480 one.
-    glutEnterGameMode: () => { s.w = 640; s.h = 480; gl.resize(s.w, s.h); return 1; },
-    glutLeaveGameMode: () => {},
+    glutEnterGameMode: () => { s.w = 640; s.h = 480; s.gameMode = 1; gl.resize(s.w, s.h); return 1; },
+    glutLeaveGameMode: () => { s.gameMode = 0; },
     glutPostRedisplay: () => { s.redisplay = true; },
-    glutGet: (what) => (what === GLUT_ELAPSED_TIME ? (now ? Math.floor(now()) : s.swaps * stepMs) : what === GLUT_WINDOW_WIDTH ? s.w : what === GLUT_WINDOW_HEIGHT ? s.h : 0),
+    glutGet: (what) => (what === GLUT_ELAPSED_TIME ? time() : what === GLUT_WINDOW_WIDTH ? s.w : what === GLUT_WINDOW_HEIGHT ? s.h
+      : what === 105 ? (s.mode & GLUT_STENCIL ? 8 : 0) : what === 115 ? (s.double ? 1 : 0) : what === 122 ? s.cursor
+      : what === 300 ? (menu()?.length ?? 0) : what === 502 ? s.w : what === 503 ? s.h : what === 504 ? s.mode : GET[what] ?? 0),
+    glutDeviceGet: (what) => DEVICE[what] ?? 0,
+    glutLayerGet: () => 0,
+    glutGetModifiers: () => 0,
+    glutExtensionSupported: () => 0,
+    glutGameModeGet: (what) => (what === 0 ? s.gameMode : what === 1 ? 1 : what === 2 ? 640 : what === 3 ? 480 : what === 4 ? 32 : what === 5 ? 60 : 0),
+    glutGameModeString: () => {},
+    glutTimerFunc: (ms, fn, value) => { s.timers.push({ due: time() + (ms >>> 0), fn, value, n: s.timerN++ }); },
+    glutPostWindowRedisplay: () => { s.redisplay = true; },
+    // Menus are kept (glutGet(GLUT_MENU_NUM_ITEMS) counts their entries) and never shown: no click opens one.
+    glutCreateMenu: () => { const id = s.nextMenu++; s.menus.set(id, []); s.menu = id; return id; },
+    glutDestroyMenu: (id) => { s.menus.delete(id); if (s.menu === id) s.menu = 0; },
+    glutGetMenu: () => s.menu,
+    glutSetMenu: (id) => { if (s.menus.has(id)) s.menu = id; },
+    glutAddMenuEntry: (_label, value) => { menu()?.push(value); },
+    glutAddSubMenu: (_label, sub) => { menu()?.push(-sub); },
+    glutChangeToMenuEntry: (item, _label, value) => { const m = menu(); if (m && item >= 1 && item <= m.length) m[item - 1] = value; },
+    glutChangeToSubMenu: (item, _label, sub) => { const m = menu(); if (m && item >= 1 && item <= m.length) m[item - 1] = -sub; },
+    glutRemoveMenuItem: (item) => { const m = menu(); if (m && item >= 1 && item <= m.length) m.splice(item - 1, 1); },
+    glutAttachMenu: () => {}, glutDetachMenu: () => {},
+    /*
+     * WHAT A WINDOW MANAGER WOULD DO, done by nobody: the window keeps its size and place (reshaping
+     * would change the picture's size between the two sides), there are no subwindows of its own
+     * (a subwindow draws into the one window), no overlay and no colour index.
+     */
+    glutCreateSubWindow: () => 2,
+    glutReshapeWindow: () => {}, glutPositionWindow: () => {}, glutPopWindow: () => {}, glutPushWindow: () => {},
+    glutIconifyWindow: () => {}, glutShowWindow: () => {}, glutHideWindow: () => {}, glutFullScreen: () => {}, glutSetIconTitle: () => {},
+    glutSetKeyRepeat: () => {}, glutReportErrors: () => {}, glutForceJoystickFunc: () => {},
+    glutEstablishOverlay: () => {}, glutRemoveOverlay: () => {}, glutUseLayer: () => {}, glutPostOverlayRedisplay: () => {},
+    glutPostWindowOverlayRedisplay: () => {}, glutShowOverlay: () => {}, glutHideOverlay: () => {},
+    glutSetColor: () => {}, glutGetColor: () => 0, glutCopyColormap: () => {},
+    glutVideoResizeGet: () => 0, glutSetupVideoResizing: () => {}, glutStopVideoResizing: () => {}, glutVideoResize: () => {}, glutVideoPan: () => {},
+    // Callbacks for devices and events this host never has: kept, never called.
+    ...Object.fromEntries(['Entry', 'MenuStatus', 'MenuState', 'WindowStatus', 'OverlayDisplay', 'SpaceballMotion', 'SpaceballRotate', 'SpaceballButton',
+      'ButtonBox', 'Dials', 'TabletMotion', 'TabletButton', 'Joystick'].map((n) => [`glut${n}Func`, (p) => { s.cb[n] = p; }])),
     // "If the layer in use is not double buffered, glutSwapBuffers has no effect" (GLUT 3 spec 4.6).
     glutSwapBuffers: () => { if (s.double) present(); },
     glutMainLoop: () => {
@@ -100,6 +168,7 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
             else if (ev.kind === 'button') call(s.cb.mouse, [ev.button, ev.down ? 0 : 1, x, y]);
             else if (ev.kind === 'motion') call(ev.held ? s.cb.motion : s.cb.passive, [x, y]);
           }
+          fireTimers();
           call(s.cb.idle);
           if (s.redisplay) { s.redisplay = false; display(); }
           // Single-buffered, an idle callback that draws draws on the front buffer, visible as it is:
@@ -122,19 +191,32 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
   return s;
 }
 
+/*
+ * The signatures, read from PRISM's glut.h (generated from GLUT 3.7's, tools/gen-glut-h.mjs): every
+ * entry point it declares, so a call compiles whether or not this file answers it yet -- one it does
+ * not answer is a named error when it is called, not a compile failure of the whole program.
+ */
 export function glutBuiltins(T) {
-  const I = T.INT, U = T.UINT, V = T.VOID, P = T.ptr(T.CHAR);
-  const f = (ret, ...params) => ({ ret, params });
-  return {
-    glutInit: f(V, P, P), glutInitDisplayMode: f(V, U), glutInitWindowSize: f(V, I, I),
-    glutInitWindowPosition: f(V, I, I), glutCreateWindow: f(I, P), glutDestroyWindow: f(V, I),
-    glutGetWindow: f(I), glutSetWindow: f(V, I), glutSetWindowTitle: f(V, P),
-    glutWireCube: f(V, T.DOUBLE), glutSolidCube: f(V, T.DOUBLE),
-    glutDisplayFunc: f(V, P), glutReshapeFunc: f(V, P), glutIdleFunc: f(V, P), glutVisibilityFunc: f(V, P),
-    glutKeyboardFunc: f(V, P), glutSpecialFunc: f(V, P), glutPostRedisplay: f(V), glutGet: f(I, I),
-    glutKeyboardUpFunc: f(V, P), glutSpecialUpFunc: f(V, P), glutMouseFunc: f(V, P), glutMotionFunc: f(V, P),
-    glutPassiveMotionFunc: f(V, P), glutIgnoreKeyRepeat: f(V, I), glutSetCursor: f(V, I), glutWarpPointer: f(V, I, I),
-    glutEnterGameMode: f(I), glutLeaveGameMode: f(V),
-    glutSwapBuffers: f(V), glutMainLoop: f(V),
+  const type = (t) => {
+    t = t.replace(/\b(const|struct)\b/g, '').trim();
+    if (t.includes('*')) return T.ptr(T.CHAR);
+    if (/^(void)$/.test(t)) return T.VOID;
+    if (/^(unsigned int|unsigned|GLuint|GLenum|GLbitfield)$/.test(t)) return T.UINT;
+    if (/^(double|GLdouble)$/.test(t)) return T.DOUBLE;
+    if (/^(float|GLfloat)$/.test(t)) return T.FLOAT;
+    if (/^(unsigned char|GLubyte)$/.test(t)) return T.UCHAR;
+    return T.INT;
   };
+  const out = {};
+  for (const m of GLUT_H.matchAll(/^([\w ]+?\**)\s*(glut\w+)\((.*)\);$/gm)) {
+    const params = m[3].trim() === 'void' ? [] : m[3].split(/,(?![^(]*\))/).map((p) => {
+      p = p.trim();
+      if (p.includes('(*')) return T.ptr(T.CHAR);                           // a callback
+      const toks = p.replace(/\*/g, ' * ').trim().split(/\s+/);
+      if (toks.length > 1 && toks.at(-1) !== '*') toks.pop();                // its name
+      return type(toks.join(' '));
+    });
+    out[m[2]] = { ret: type(m[1]), params };
+  }
+  return out;
 }

@@ -19,7 +19,7 @@ import { readFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, cpSync,
 import { join, dirname, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildTarget } from '../src/target.js';
-import { up, sh, SCRATCH } from './oracle.mjs';
+import { up, sh, SCRATCH, oracleGlut } from './oracle.mjs';
 import { writeRgbPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -68,8 +68,7 @@ const programs = SETS[SET]().filter((p) => !NAMES.length || NAMES.includes(p.nam
 up();
 const work = join(SCRATCH, 'gl-census');
 mkdirSync(join(work, '_glut', 'GL'), { recursive: true });
-copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(work, '_glut', 'glut-egl.c'));
-copyFileSync(join(ROOT, 'tools', 'oracle', 'GL', 'glut.h'), join(work, '_glut', 'GL', 'glut.h'));
+oracleGlut(join(work, '_glut'));
 // Each program's directory and the ones it includes from, fresh (the archives' files are read-only).
 const copied = new Set();
 for (const p of programs) for (const d of [p.dir, ...(p.include ?? []), ...(p.images ? ['images'] : [])]) {

@@ -23,7 +23,7 @@ import { readFileSync, mkdirSync, copyFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
-import { up, sh, SCRATCH } from './oracle.mjs';
+import { up, sh, SCRATCH, oracleGlut } from './oracle.mjs';
 import { writeRgbPng } from './png.mjs';
 import { skip } from './gate-skip.mjs';
 
@@ -86,8 +86,7 @@ function mesa(c) {
   for (const f of c.sources ?? [`${c.target}.c`]) copyFileSync(join(ROOT, 'corpus', 'mesademos', f), join(work, f));
   for (const f of c.files ?? []) copyFileSync(join(ROOT, 'corpus', 'mesademos', f), join(work, f));
   const units = (c.sources ?? [`${c.target}.c`]).filter((f) => f.endsWith('.c')).join(' ');
-  copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(work, 'glut-egl.c'));
-  copyFileSync(join(ROOT, 'tools', 'oracle', 'GL', 'glut.h'), join(work, 'GL', 'glut.h'));
+  oracleGlut(work);
   const env = c.version ? `MESA_GL_VERSION_OVERRIDE=${c.version} ` : '';
   const r = sh(`cd /work/mesademos/${dir} && rm -f frame-*.ppm prog && gcc -O0 -I. -o prog ${units} glut-egl.c ${c.glu ? '-lGLU ' : ''}-lEGL -lOpenGL -lm && ${env}PRISM_GLUT_FRAMES=${c.frames.join(',')} ./prog`);
   if (r.code !== 0) throw new Error(`${c.name}: reference: ${r.stderr || r.stdout}`);

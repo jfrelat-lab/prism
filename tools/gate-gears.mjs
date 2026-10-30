@@ -20,7 +20,7 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
-import { up, sh, SCRATCH } from './oracle.mjs';
+import { up, sh, SCRATCH, oracleGlut } from './oracle.mjs';
 import { writeRgbPng } from './png.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -33,8 +33,7 @@ up();
 const work = join(SCRATCH, 'gears');
 mkdirSync(join(work, 'GL'), { recursive: true });
 for (const f of ['gears.c', 'glut_wrap.h']) copyFileSync(join(ROOT, 'corpus', 'gears', f), join(work, f));
-copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(work, 'glut-egl.c'));
-copyFileSync(join(ROOT, 'tools', 'oracle', 'GL', 'glut.h'), join(work, 'GL', 'glut.h'));
+oracleGlut(work);
 const r = sh(`cd /work/gears && rm -f frame-*.ppm gears && gcc -O0 -I. -o gears gears.c glut-egl.c -lEGL -lOpenGL -lm && PRISM_GLUT_FRAMES=${FRAMES.join(',')} ./gears -info`);
 if (r.code !== 0) throw new Error(`reference build: ${r.stderr || r.stdout}`);
 console.log(`Mesa: ${(r.stdout.match(/GL_RENDERER\s*=\s*(.*)/) ?? [])[1] ?? '?'}`);

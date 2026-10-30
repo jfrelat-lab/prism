@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { buildTarget } from '../src/target.js';
 import { snapshotProgram } from '../src/compile.js';
-import { up, sh, SCRATCH } from './oracle.mjs';
+import { up, sh, SCRATCH, oracleGlut } from './oracle.mjs';
 import { writeRgbPng } from './png.mjs';
 import { skip } from './gate-skip.mjs';
 
@@ -46,8 +46,7 @@ up();
 const work = join(SCRATCH, 'gl-scenes');
 mkdirSync(join(work, 'GL'), { recursive: true });
 copyFileSync(join(ROOT, 'tests', 'gl', 'scenes.c'), join(work, 'scenes.c'));
-copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(work, 'glut-egl.c'));
-copyFileSync(join(ROOT, 'tools', 'oracle', 'GL', 'glut.h'), join(work, 'GL', 'glut.h'));
+oracleGlut(work);
 const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c -lEGL -lOpenGL -lm');
 if (build.code !== 0) throw new Error(`reference build: ${build.stderr || build.stdout}`);
 const mesa = {};
