@@ -985,6 +985,41 @@ void glVertex4s(GLshort x, GLshort y, GLshort z, GLshort w);
 void glVertex4sv(const GLshort *v);
 void glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr);
 void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+/* GL 1.3's multitexture entry points (Mesa's gl.h declares them unconditionally). */
+void glActiveTexture(GLenum texture);
+void glClientActiveTexture(GLenum texture);
+void glMultiTexCoord1d(GLenum target, GLdouble s);
+void glMultiTexCoord1dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord1f(GLenum target, GLfloat s);
+void glMultiTexCoord1fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord1i(GLenum target, GLint s);
+void glMultiTexCoord1iv(GLenum target, const GLint *v);
+void glMultiTexCoord1s(GLenum target, GLshort s);
+void glMultiTexCoord1sv(GLenum target, const GLshort *v);
+void glMultiTexCoord2d(GLenum target, GLdouble s, GLdouble t);
+void glMultiTexCoord2dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord2f(GLenum target, GLfloat s, GLfloat t);
+void glMultiTexCoord2fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord2i(GLenum target, GLint s, GLint t);
+void glMultiTexCoord2iv(GLenum target, const GLint *v);
+void glMultiTexCoord2s(GLenum target, GLshort s, GLshort t);
+void glMultiTexCoord2sv(GLenum target, const GLshort *v);
+void glMultiTexCoord3d(GLenum target, GLdouble s, GLdouble t, GLdouble r);
+void glMultiTexCoord3dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord3f(GLenum target, GLfloat s, GLfloat t, GLfloat r);
+void glMultiTexCoord3fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord3i(GLenum target, GLint s, GLint t, GLint r);
+void glMultiTexCoord3iv(GLenum target, const GLint *v);
+void glMultiTexCoord3s(GLenum target, GLshort s, GLshort t, GLshort r);
+void glMultiTexCoord3sv(GLenum target, const GLshort *v);
+void glMultiTexCoord4d(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q);
+void glMultiTexCoord4dv(GLenum target, const GLdouble *v);
+void glMultiTexCoord4f(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+void glMultiTexCoord4fv(GLenum target, const GLfloat *v);
+void glMultiTexCoord4i(GLenum target, GLint s, GLint t, GLint r, GLint q);
+void glMultiTexCoord4iv(GLenum target, const GLint *v);
+void glMultiTexCoord4s(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q);
+void glMultiTexCoord4sv(GLenum target, const GLshort *v);
 /*
  * GL 1.2 and 1.3 TOKENS, as Mesa's gl.h has them (gate-gl-abi holds every value here to it): a program
  * written for GL 1.3 names them unconditionally even on a path it does not take. Neverball's shadow
@@ -1252,10 +1287,40 @@ typedef void (*PFNGLUNLOCKARRAYSEXTPROC)(void);
 #define GL_MAX_TEXTURE_UNITS_ARB 0x84E2
 typedef void (*PFNGLACTIVETEXTUREARBPROC)(GLenum texture);
 typedef void (*PFNGLCLIENTACTIVETEXTUREARBPROC)(GLenum texture);
-#ifdef GL_GLEXT_PROTOTYPES
 void glActiveTextureARB(GLenum texture);
 void glClientActiveTextureARB(GLenum texture);
-#endif
+void glMultiTexCoord1dARB(GLenum target, GLdouble s);
+void glMultiTexCoord1dvARB(GLenum target, const GLdouble *v);
+void glMultiTexCoord1fARB(GLenum target, GLfloat s);
+void glMultiTexCoord1fvARB(GLenum target, const GLfloat *v);
+void glMultiTexCoord1iARB(GLenum target, GLint s);
+void glMultiTexCoord1ivARB(GLenum target, const GLint *v);
+void glMultiTexCoord1sARB(GLenum target, GLshort s);
+void glMultiTexCoord1svARB(GLenum target, const GLshort *v);
+void glMultiTexCoord2dARB(GLenum target, GLdouble s, GLdouble t);
+void glMultiTexCoord2dvARB(GLenum target, const GLdouble *v);
+void glMultiTexCoord2fARB(GLenum target, GLfloat s, GLfloat t);
+void glMultiTexCoord2fvARB(GLenum target, const GLfloat *v);
+void glMultiTexCoord2iARB(GLenum target, GLint s, GLint t);
+void glMultiTexCoord2ivARB(GLenum target, const GLint *v);
+void glMultiTexCoord2sARB(GLenum target, GLshort s, GLshort t);
+void glMultiTexCoord2svARB(GLenum target, const GLshort *v);
+void glMultiTexCoord3dARB(GLenum target, GLdouble s, GLdouble t, GLdouble r);
+void glMultiTexCoord3dvARB(GLenum target, const GLdouble *v);
+void glMultiTexCoord3fARB(GLenum target, GLfloat s, GLfloat t, GLfloat r);
+void glMultiTexCoord3fvARB(GLenum target, const GLfloat *v);
+void glMultiTexCoord3iARB(GLenum target, GLint s, GLint t, GLint r);
+void glMultiTexCoord3ivARB(GLenum target, const GLint *v);
+void glMultiTexCoord3sARB(GLenum target, GLshort s, GLshort t, GLshort r);
+void glMultiTexCoord3svARB(GLenum target, const GLshort *v);
+void glMultiTexCoord4dARB(GLenum target, GLdouble s, GLdouble t, GLdouble r, GLdouble q);
+void glMultiTexCoord4dvARB(GLenum target, const GLdouble *v);
+void glMultiTexCoord4fARB(GLenum target, GLfloat s, GLfloat t, GLfloat r, GLfloat q);
+void glMultiTexCoord4fvARB(GLenum target, const GLfloat *v);
+void glMultiTexCoord4iARB(GLenum target, GLint s, GLint t, GLint r, GLint q);
+void glMultiTexCoord4ivARB(GLenum target, const GLint *v);
+void glMultiTexCoord4sARB(GLenum target, GLshort s, GLshort t, GLshort r, GLshort q);
+void glMultiTexCoord4svARB(GLenum target, const GLshort *v);
 #endif
 #ifndef GL_ARB_vertex_buffer_object
 #define GL_ARB_vertex_buffer_object 1

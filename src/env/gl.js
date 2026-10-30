@@ -59,6 +59,29 @@ const ATTRIB_GROUPS = [
   [0x40000, { fields: ['bound', 'bound3D', 'envMode', 'combine', 'texGen', 'activeUnit'], caps: TEXTURE_CAPS }],   // TEXTURE (units 1, 2: glPushAttrib)
   [0x80000, { fields: ['scissor'], caps: [0x0c11] }],                                             // SCISSOR
 ];
+/*
+ * The immediate-mode spellings (GL 1.1 2.7, GL 1.3 2.7's glMultiTexCoord): each family's component
+ * counts and types, with and without v. A type: its C scalar (T's name), its size, the DataView getter
+ * a v form reads it with, and how a COLOUR or a NORMAL of it becomes a float (GL 1.1 Table 2.6, as
+ * Mesa's BYTE_TO_FLOAT and the rest have it: a signed c maps to (2c + 1) / (2^n - 1)). The integer is narrowed to its type first: an unsigned int arrives as a
+ * negative JS number. A position or a
+ * texture coordinate is the number itself, made a float as Mesa's entry points make it.
+ */
+const IMM_TYPES = {
+  b: ['SCHAR', 1, 'getInt8', (c) => (2 * (c << 24 >> 24) + 1) / 255], s: ['SHORT', 2, 'getInt16', (c) => (2 * (c << 16 >> 16) + 1) / 65535],
+  i: ['INT', 4, 'getInt32', (c) => (2 * (c | 0) + 1) / 4294967295], f: ['FLOAT', 4, 'getFloat32', (c) => c],
+  d: ['DOUBLE', 8, 'getFloat64', Math.fround], ub: ['UCHAR', 1, 'getUint8', (c) => (c & 0xff) / 255],
+  us: ['USHORT', 2, 'getUint16', (c) => (c & 0xffff) / 65535], ui: ['UINT', 4, 'getUint32', (c) => (c >>> 0) / 4294967295],
+};
+const IMM_FAMILIES = [
+  ['glVertex', [2, 3, 4], 'sifd'], ['glColor', [3, 4], ['b', 's', 'i', 'f', 'd', 'ub', 'us', 'ui']], ['glTexCoord', [1, 2, 3, 4], 'sifd'],
+  ['glNormal', [3], 'bsifd'], ['glMultiTexCoord', [1, 2, 3, 4], 'sifd'], ['glMultiTexCoordARB', [1, 2, 3, 4], 'sifd'],
+];
+/** Every spelling: { name, family, n, t, v }. glMultiTexCoordARB's names end in ARB (glMultiTexCoord2fARB). */
+const immediateForms = () => IMM_FAMILIES.flatMap(([family, counts, types]) => counts.flatMap((n) => [...types].flatMap((t) => [false, true].map((v) => {
+  const base = family.replace(/ARB$/, '');
+  return { name: `${base}${n}${t}${v ? 'v' : ''}${family.endsWith('ARB') ? 'ARB' : ''}`, family: base, n, t, v };
+}))));
 const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
 // The size of one component of an array, by its type (GL_BYTE .. GL_FLOAT, GL_DOUBLE).
 const TYPE_BYTES = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x1405: 4, 0x1406: 4, 0x140a: 8 };
@@ -510,10 +533,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     out[0] = clamp01(out[0]); out[1] = clamp01(out[1]); out[2] = clamp01(out[2]); out[3] = clamp01(out[3]);
     return out;
   }
-  function vertex(x, y, z) {
-    if (s.gpuPrim) { recordVertex(x, y, z); return; }
+  function vertex(x, y, z, w = 1) {
+    if (s.gpuPrim) { recordVertex(x, y, z, w); return; }
     const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
-    const eye = xform(mv, x, y, z, 1);
+    const eye = xform(mv, x, y, z, w);
     const clip = xform(pr, eye[0], eye[1], eye[2], eye[3]);
     let colour, back = null;
     if (s.caps.has(CAP.LIGHTING)) {
@@ -549,8 +572,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (genS && s.texGen[0].mode === 0x2402) tu = sm[0];
       if (genT && s.texGen[1].mode === 0x2402) tv = sm[1];
     }
-    if (genS && s.texGen[0].mode === 0x2401) { const p = s.texGen[0].object; tu = p[0] * x + p[1] * y + p[2] * z + p[3]; }
-    if (genT && s.texGen[1].mode === 0x2401) { const p = s.texGen[1].object; tv = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    if (genS && s.texGen[0].mode === 0x2401) { const p = s.texGen[0].object; tu = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
+    if (genT && s.texGen[1].mode === 0x2401) { const p = s.texGen[1].object; tv = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
     // The texture matrix (2.10.2), on (s, t, r, 1) after any generation; q divided out, as a fragment
     // would. Chromium B.S.U.'s title scrolls and turns its background through it. r is 0 unless the
     // coordinate had three components, and then only is its column read.
@@ -564,10 +587,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // The other units, each its own coordinate through its own generation and matrix -- only those
     // enabled: a disabled unit's coordinate reaches no fragment.
     let tex1 = null, tex2 = null;
-    if (s.units[1].caps.has(CAP.TEXTURE_2D)) tex1 = unitCoord(s.units[1], x, y, z, mv, eye);
-    if (s.units[2].caps.has(CAP.TEXTURE_2D)) tex2 = unitCoord(s.units[2], x, y, z, mv, eye);
+    if (s.units[1].caps.has(CAP.TEXTURE_2D)) tex1 = unitCoord(s.units[1], x, y, z, w, mv, eye);
+    if (s.units[2].caps.has(CAP.TEXTURE_2D)) tex2 = unitCoord(s.units[2], x, y, z, w, mv, eye);
     // Under a program with a vertex shader, the vertex as given is what the GPU gets (its attributes).
-    const vs = glsl.current()?.vertex ? { o: [x, y, z, 1], c: s.colour.slice(), t: [s.tex[0], s.tex[1]], n: s.normal.slice() } : null;
+    const vs = glsl.current()?.vertex ? { o: [x, y, z, w], c: s.colour.slice(), t: [s.tex[0], s.tex[1]], n: s.normal.slice() } : null;
     s.verts.push({ clip, colour, back, tex: [tu, tv], tex1, tex2, eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye, vs });
   }
   // GL_SPHERE_MAP (GL 1.1, 2.10.4): the eye-space reflection of the view direction about the normal.
@@ -588,7 +611,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     if (v === undefined) { v = true; for (let k = 0; k < 16; k++) if (m[k] !== (k % 5 === 0 ? 1 : 0)) { v = false; break; } identity.set(m, v); }
     return v;
   };
-  function unitCoord(u, x, y, z, mv, eye) {
+  function unitCoord(u, x, y, z, w, mv, eye) {
     const c = u.coord, genS = u.caps.has(0x0c60), genT = u.caps.has(0x0c61), g = u.texGen, tm = u.matrix.at(-1);
     // A surface's own coordinate, as given (Neverball's unit 2 for every textured face): q is 1.
     if (!genS && !genT && c[3] === 1 && isIdentity(tm)) return [c[0], c[1]];
@@ -599,8 +622,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (genS && g[0].mode === 0x2402) cs = sm[0];
       if (genT && g[1].mode === 0x2402) ct = sm[1];
     }
-    if (genS && g[0].mode === 0x2401) { const p = g[0].object; cs = p[0] * x + p[1] * y + p[2] * z + p[3]; }
-    if (genT && g[1].mode === 0x2401) { const p = g[1].object; ct = p[0] * x + p[1] * y + p[2] * z + p[3]; }
+    if (genS && g[0].mode === 0x2401) { const p = g[0].object; cs = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
+    if (genT && g[1].mode === 0x2401) { const p = g[1].object; ct = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
     const q = tm[3] * cs + tm[7] * ct + tm[11] * cr + tm[15] * cq;
     const su = tm[0] * cs + tm[4] * ct + tm[8] * cr + tm[12] * cq, sv = tm[1] * cs + tm[5] * ct + tm[9] * cr + tm[13] * cq;
     return q === 1 ? [su, sv] : [su / q, sv / q];
@@ -705,11 +728,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
   const SMALL_DRAW = 128;
   const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
-  function recordVertex(x, y, z) {
+  function recordVertex(x, y, z, w) {
     if ((recN + 1) * REC > rec.length) { const r = new Float32Array(rec.length * 2); r.set(rec); rec = r; }
     if (x > FAR || x < -FAR || y > FAR || y < -FAR || z > FAR || z < -FAR) recFar = true;
     const o = recN++ * REC, c = s.colour, n = s.normal, t = s.tex, u1 = s.units[1].coord, u2 = s.units[2].coord;
-    rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = 1;
+    rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = w;
     rec[o + 4] = c[0]; rec[o + 5] = c[1]; rec[o + 6] = c[2]; rec[o + 7] = c[3];
     rec[o + 8] = t[0]; rec[o + 9] = t[1]; rec[o + 10] = t.length > 2 ? t[2] : 0; rec[o + 11] = 1;
     rec[o + 12] = n[0]; rec[o + 13] = n[1]; rec[o + 14] = n[2];
@@ -723,7 +746,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     for (let i = 0; i < recN; i++) {
       const o = i * REC, r = (k, m) => Array.from(rec.subarray(o + k, o + k + m));
       s.colour = r(4, 4); s.tex = r(8, 3); s.normal = r(12, 3); s.units[1].coord = r(15, 4); s.units[2].coord = r(19, 4);
-      vertex(rec[o], rec[o + 1], rec[o + 2]);
+      vertex(rec[o], rec[o + 1], rec[o + 2], rec[o + 3]);
     }
     recN = 0;
     [s.colour, s.normal, s.tex, s.units[1].coord, s.units[2].coord] = keep;
@@ -1785,6 +1808,35 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
   };
+  /*
+   * The immediate-mode spellings not written above, from IMM_FAMILIES: each converts its components
+   * (IMM_TYPES) and sets what its family sets. glTexCoord4 with q other than 1 divides it out at the
+   * vertex, as the texture matrix's q is (vertex()). Unit 0's glMultiTexCoord is glTexCoord.
+   */
+  const IMM_SET = {
+    glVertex: (c) => vertex(c[0], c[1], c.length > 2 ? c[2] : 0, c.length > 3 ? c[3] : 1),
+    glColor: (c) => { s.colour = [c[0], c[1], c[2], c.length > 3 ? c[3] : 1]; },
+    glNormal: (c) => { s.normal = [c[0], c[1], c[2]]; },
+    glTexCoord: (c) => {
+      const q = c.length > 3 ? c[3] : 1;
+      s.tex = c.length > 2 ? [c[0] / q, c[1] / q, c[2] / q] : [c[0], c.length > 1 ? c[1] : 0];
+    },
+    glMultiTexCoord: (c, unit) => {
+      const k = unit - 0x84c0;
+      if (k < 0 || k >= UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`);
+      if (k === 0) IMM_SET.glTexCoord(c);
+      else s.units[k].coord = [c[0], c.length > 1 ? c[1] : 0, c.length > 2 ? c[2] : 0, c.length > 3 ? c[3] : 1];
+    },
+  };
+  const immediate = immediateForms().filter((m) => !exec[m.name]);
+  for (const { name, family, n, t, v } of immediate) {
+    const conv = family === 'glColor' || family === 'glNormal' ? IMM_TYPES[t][3] : t === 'f' ? (c) => c : Math.fround;
+    const set = IMM_SET[family], multi = family === 'glMultiTexCoord';
+    exec[name] = v ? (multi ? (unit, a) => set(a.map(conv), unit) : (a) => set(a.map(conv)))
+      : multi ? (unit, ...c) => set(c.map(conv), unit) : (...c) => set(c.map(conv));
+  }
+  exec.glActiveTexture = exec.glActiveTextureARB;
+  exec.glClientActiveTexture = exec.glClientActiveTextureARB;
   // Array arguments are read at CALL time, so a display list keeps the values (the spec's copy rule).
   const ARRAYS = {
     glLightfv: (a) => [a[0], a[1], f32(a[2], a[1] === PNAME.SHININESS ? 1 : 4)],
@@ -1817,11 +1869,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       return [...a.slice(0, 9), a[9] ? toRGBA(a[7], a[3], a[4] * a[5], a[9], a[8]) : null];
     },
   };
+  for (const { name, family, n, t, v } of immediate) {
+    if (!v) continue;
+    const [, size, get] = IMM_TYPES[t], at = family === 'glMultiTexCoord' ? 1 : 0;
+    ARRAYS[name] = (a) => { const r = Array.from({ length: n }, (_, k) => dv()[get](a[at] + size * k, true)); return at ? [a[0], r] : [r]; };
+  }
   // Only these leave the fragment state alone; every other command may change it, display lists included.
   const VERTEX_ONLY = new Set(['glBegin', 'glEnd', 'glVertex2f', 'glVertex3f', 'glVertex3fv', 'glNormal3f',
     'glColor3f', 'glColor4f', 'glColor3fv', 'glColor4fv', 'glColor3ubv', 'glColor4ubv', 'glTexCoord2f', 'glTexCoord2fv',
     'glArrayElement', 'glLockArraysEXT', 'glUnlockArraysEXT', 'glTexCoord2d', 'glTexCoord2dv', 'glColor3dv', 'glColor4dv',
-    'glVertex2dv', 'glVertex3dv', 'glNormal3fv']);
+    'glVertex2dv', 'glVertex3dv', 'glNormal3fv', ...immediate.map((m) => m.name)]);
   for (const name of Object.keys(exec)) {
     if (VERTEX_ONLY.has(name)) continue;
     const run = exec[name];
@@ -2822,7 +2879,14 @@ void main() {
 export function glBuiltins(T) {
   const I = T.INT, U = T.UINT, V = T.VOID, F = T.FLOAT, D = T.DOUBLE, P = T.ptr(T.CHAR);
   const f = (ret, ...params) => ({ ret, params });
+  const immediate = {};
+  for (const { name, family, n, t, v } of immediateForms()) {
+    const multi = family === 'glMultiTexCoord' ? [U] : [];
+    immediate[name] = f(V, ...multi, ...(v ? [P] : Array(n).fill(T[IMM_TYPES[t][0]])));
+  }
   return {
+    ...immediate,
+    glActiveTexture: f(V, U), glClientActiveTexture: f(V, U),
     glClear: f(V, U), glClearColor: f(V, F, F, F, F), glEnable: f(V, U), glDisable: f(V, U),
     glShadeModel: f(V, U), glCullFace: f(V, U), glFrontFace: f(V, U), glViewport: f(V, I, I, I, I),
     glDepthFunc: f(V, U), glDepthMask: f(V, U), glDepthRange: f(V, D, D), glClearDepth: f(V, D), glAlphaFunc: f(V, U, F), glBlendFunc: f(V, U, U),

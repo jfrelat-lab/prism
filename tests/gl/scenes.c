@@ -74,6 +74,11 @@
  *   push-attrib   glPushAttrib/glPopAttrib: one lit, fogged, culled, scissored, stencilled strip drawn
  *                 between pushes of each group in turn (and of all of them, nested), each push followed
  *                 by changes to its group and each pop by the same strip, which shows any state left over
+ *   immediate-forms  the immediate-mode spellings: a row of quads per glColor type (b, s, i, ub, us, ui,
+ *                 d, scalar and v, 3 and 4 components, negative and full-scale values), glVertex in s, i,
+ *                 d and 4 components with w = 2, glNormal in b, s, i under lighting, glTexCoord in 1, 3
+ *                 and 4 components (q = 2), glMultiTexCoord on unit 1, all through glActiveTexture
+ *                 (every textured quad planar in its coordinates: Mesa cuts these along 0-2)
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -761,6 +766,68 @@ static void display(void) {
     glViewport(0, 0, 320, 240);
     glDeleteTextures(1, &t);
     glDisable(GL_LIGHTING); glDisable(GL_LIGHT0); glDisable(GL_FOG); glDisable(GL_CULL_FACE);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "immediate-forms")) {
+    static const GLubyte tex[4 * 4 * 3] = { 255,255,255, 0,0,0, 255,0,0, 0,255,0, 0,0,255, 255,255,0, 0,255,255, 255,0,255,
+      128,128,128, 255,128,0, 0,128,255, 128,0,255, 64,64,64, 200,200,200, 255,64,64, 64,255,64 };
+    static const GLbyte cb[4] = { 127, -64, 40, 100 }; static const GLshort cs[3] = { 10000, 32767, -100 };
+    static const GLint ci[4] = { 2147483647, 1000000000, -2147483647 - 1, 2000000000 };
+    static const GLubyte cub[3] = { 30, 200, 90 }; static const GLushort cus[4] = { 65535, 20000, 40000, 65535 };
+    static const GLuint cui[3] = { 4294967295u, 1000000000u, 3000000000u }; static const GLdouble cd[4] = { 0.25, 0.5, 0.75, 1 };
+    static const GLshort vs[2] = { 5, 5 }; static const GLint vi[3] = { 5, 5, 0 }; static const GLdouble vd[3] = { 0, 0, 0 };
+    static const GLfloat v4[4] = { 0, 0, 0, 2 }; static const GLbyte nb[3] = { 20, 60, 100 };
+    static const GLfloat t1[3] = { 0.9f, 0.1f, 0 }; static const GLshort mt[2] = { 1, 1 };
+    GLuint t;
+    glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_BYTE, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D);
+#define Q(x, y) glTranslatef(x, y, 0); glBegin(GL_QUADS); glVertex2f(0, 0); glVertex2f(30, 0); glVertex2f(30, 30); glVertex2f(0, 30); glEnd(); glLoadIdentity()
+    /* Colours: one quad per spelling. */
+    glColor3b(127, -64, 40); Q(5, 200);           glColor4bv(cb); Q(40, 200);
+    glColor3s(10000, 32767, -100); Q(75, 200);    glColor3sv(cs); Q(110, 200);
+    glColor4i(2147483647, 1000000000, -2147483647 - 1, 2000000000); Q(145, 200); glColor4iv(ci); Q(180, 200);
+    glColor3ubv(cub); Q(215, 200);                glColor4us(65535, 20000, 40000, 65535); Q(250, 200);
+    glColor4usv(cus); Q(285, 200);
+    glColor3ui(4294967295u, 1000000000u, 3000000000u); Q(5, 160); glColor3uiv(cui); Q(40, 160);
+    glColor4d(0.25, 0.5, 0.75, 1); Q(75, 160);    glColor4dv(cd); Q(110, 160);
+    glColor3us(0, 65535, 30000); Q(145, 160);     glColor3i(0, 1500000000, -1500000000); Q(180, 160);
+    /* Positions. */
+    glColor3f(1, 1, 1);
+    glTranslatef(215, 160, 0); glBegin(GL_TRIANGLES); glVertex2s(0, 0); glVertex2sv(vs); glVertex3i(30, 0, 0); glVertex3iv(vi); glVertex3d(30, 30, 0); glVertex3dv(vd); glEnd(); glLoadIdentity();
+    glColor3f(1, 0.5f, 0);
+    glTranslatef(250, 160, 0); glBegin(GL_TRIANGLES); glVertex4f(0, 0, 0, 2); glVertex4i(60, 0, 0, 2); glVertex4d(30, 60, 0, 2); glVertex4fv(v4); glVertex4s(15, 30, 0, 1); glVertex4dv(cd); glEnd(); glLoadIdentity();
+    /* Normals under a light. */
+    {
+      static const GLfloat pos[4] = { 0, 0, 1, 0 };
+      glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glLightfv(GL_LIGHT0, GL_POSITION, pos);
+      glNormal3b(40, -80, 100); Q(5, 120); glNormal3bv(nb); Q(40, 120);
+      glNormal3s(-12000, 9000, 20000); Q(75, 120); glNormal3i(1000000000, 0, 1500000000); Q(110, 120);
+      glNormal3d(0.6, 0.0, 0.8); Q(145, 120);
+      glDisable(GL_LIGHTING); glDisable(GL_LIGHT0);
+    }
+    /* Texture coordinates. */
+    glEnable(GL_TEXTURE_2D); glColor3f(1, 1, 1);
+    glTranslatef(180, 120, 0); glBegin(GL_QUADS); glTexCoord1i(0); glVertex2f(0, 0); glTexCoord1d(0.9); glVertex2f(30, 0); glTexCoord1f(0.9f); glVertex2f(30, 30); glTexCoord1s(0); glVertex2f(0, 30); glEnd(); glLoadIdentity();
+    glTranslatef(215, 120, 0); glBegin(GL_QUADS); glTexCoord3f(0, 0, 0); glVertex2f(0, 0); glTexCoord3fv(t1); glVertex2f(30, 0); glTexCoord3d(0.9, 1.1, 0); glVertex2f(30, 30); glTexCoord3s(0, 1, 0); glVertex2f(0, 30); glEnd(); glLoadIdentity();
+    glTranslatef(250, 120, 0); glBegin(GL_QUADS); glTexCoord4f(0, 0, 0, 2); glVertex2f(0, 0); glTexCoord4f(2, 0, 0, 2); glVertex2f(30, 0); glTexCoord4f(2, 2, 0, 2); glVertex2f(30, 30); glTexCoord4f(0, 2, 0, 2); glVertex2f(0, 30); glEnd(); glLoadIdentity();
+    /* Unit 1, through the GL 1.3 names: its coordinates from glMultiTexCoord, unit 0's from glMultiTexCoord too. */
+    glActiveTexture(GL_TEXTURE1); glEnable(GL_TEXTURE_2D); glBindTexture(GL_TEXTURE_2D, t); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glActiveTexture(GL_TEXTURE0);
+    glTranslatef(5, 60, 0); glBegin(GL_QUADS);
+    glMultiTexCoord1f(GL_TEXTURE0, 0); glMultiTexCoord2d(GL_TEXTURE1, 1, 0); glVertex2f(0, 0);
+    glMultiTexCoord2i(GL_TEXTURE0, 1, 0); glMultiTexCoord2sv(GL_TEXTURE1, mt); glVertex2f(60, 0);
+    glMultiTexCoord2f(GL_TEXTURE0, 1, 1); glMultiTexCoord3f(GL_TEXTURE1, 0, 1, 0); glVertex2f(60, 50);
+    glMultiTexCoord2d(GL_TEXTURE0, 0, 1); glMultiTexCoord4f(GL_TEXTURE1, 0, 0, 0, 1); glVertex2f(0, 50);
+    glEnd(); glLoadIdentity();
+    glActiveTexture(GL_TEXTURE1); glDisable(GL_TEXTURE_2D); glActiveTexture(GL_TEXTURE0);
+    glDisable(GL_TEXTURE_2D);
+#undef Q
+    glDeleteTextures(1, &t);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {
