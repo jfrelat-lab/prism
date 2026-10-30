@@ -67,6 +67,13 @@
  *                 glCopyTexSubImage2D while it is bound; then in the window the three textures side by
  *                 side, the first mipmapped by glGenerateMipmap and minified, and the framebuffer blitted
  *                 twice its size by glBlitFramebuffer
+ *   polygon-mode  glPolygonMode: quads, a polygon and a quad strip as outlines (no diagonals), a
+ *                 polygon as its corners in large points, a folded strip with its front in lines and its
+ *                 back filled, back faces culled under GL_LINE, flat-shaded outlines, and an outline
+ *                 crossing the near plane
+ *   push-attrib   glPushAttrib/glPopAttrib: one lit, fogged, culled, scissored, stencilled strip drawn
+ *                 between pushes of each group in turn (and of all of them, nested), each push followed
+ *                 by changes to its group and each pop by the same strip, which shows any state left over
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -629,6 +636,131 @@ static void display(void) {
     glColor3f(1, 0, 1); glRectiv(ia, ib);
     glColor3f(1, 1, 1); glRectsv(sa, sb);
     glColor3f(1, 0.5f, 0); glRectdv(da, db);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "polygon-mode")) {
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-1.33, 1.33, -1, 1, 1, 20);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity(); glTranslatef(0, 0, -4);
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D); glDisable(GL_LIGHTING);
+    glShadeModel(GL_SMOOTH);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    /* Two quads, smooth colours: outlines without the diagonal. */
+    glBegin(GL_QUADS);
+    glColor3f(1, 0, 0); glVertex2f(-4.6f, 2.1f); glColor3f(0, 1, 0); glVertex2f(-3.3f, 2.3f);
+    glColor3f(0, 0, 1); glVertex2f(-3.1f, 3.2f); glColor3f(1, 1, 0); glVertex2f(-4.4f, 3.1f);
+    glColor3f(0, 1, 1); glVertex2f(-2.9f, 2.2f); glColor3f(1, 0, 1); glVertex2f(-1.8f, 2.0f);
+    glColor3f(1, 1, 1); glVertex2f(-1.7f, 3.3f); glColor3f(1, 0.5f, 0); glVertex2f(-2.8f, 3.0f);
+    glEnd();
+    /* A hexagon as a polygon: its outline, none of the fan's inner edges. */
+    glBegin(GL_POLYGON);
+    for (int i = 0; i < 6; i++) { float a = i * 1.0472f + 0.2f; glColor3f(i & 1, (i >> 1) & 1, 1 - (i & 1)); glVertex2f(-0.4f + 0.8f * cosf(a), 2.6f + 0.7f * sinf(a)); }
+    glEnd();
+    /* A quad strip: rungs and sides, no diagonals. */
+    glBegin(GL_QUAD_STRIP);
+    for (int i = 0; i < 4; i++) { glColor3f(1, i / 3.0f, 0); glVertex2f(1.0f + i * 0.6f, 2.0f + 0.15f * i); glColor3f(0, i / 3.0f, 1); glVertex2f(1.1f + i * 0.6f, 3.2f - 0.1f * i); }
+    glEnd();
+    /* A pentagon as its corners, in 5-pixel points. */
+    glPolygonMode(GL_FRONT_AND_BACK, GL_POINT); glPointSize(5);
+    glBegin(GL_POLYGON);
+    for (int i = 0; i < 5; i++) { float a = i * 1.2566f; glColor3f(1, i / 4.0f, 1 - i / 4.0f); glVertex2f(-3.6f + 0.9f * cosf(a), 0.3f + 0.9f * sinf(a)); }
+    glEnd();
+    glPointSize(1);
+    /* A strip folded so both sides show: its front in lines, its back filled. */
+    glPolygonMode(GL_FRONT, GL_LINE); glPolygonMode(GL_BACK, GL_FILL);
+    glPushMatrix(); glTranslatef(-0.6f, 0.2f, 0); glRotatef(70, 0, 1, 0);
+    glBegin(GL_TRIANGLE_STRIP);
+    for (int i = 0; i < 6; i++) { float z = sinf(i * 1.3f) * 0.9f; glColor3f(i / 5.0f, 1 - i / 5.0f, 0.5f); glVertex3f(z, -0.9f + 0.36f * i, -0.6f); glVertex3f(-z, -0.9f + 0.36f * i, 0.6f); }
+    glEnd();
+    glPopMatrix();
+    /* Back faces culled under GL_LINE: of two triangles of opposite windings, one remains. */
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glEnable(GL_CULL_FACE); glCullFace(GL_BACK);
+    glBegin(GL_TRIANGLES);
+    glColor3f(1, 1, 0); glVertex2f(1.0f, -0.4f); glVertex2f(2.0f, -0.3f); glVertex2f(1.4f, 0.8f);
+    glColor3f(1, 0, 0); glVertex2f(2.3f, -0.4f); glVertex2f(2.9f, 0.8f); glVertex2f(3.6f, -0.3f);
+    glEnd();
+    glDisable(GL_CULL_FACE);
+    /* Flat-shaded outlines: each quad in its provoking vertex's colour. */
+    glShadeModel(GL_FLAT);
+    glBegin(GL_QUADS);
+    glColor3f(1, 0, 0); glVertex2f(-4.5f, -2.8f); glColor3f(0, 1, 0); glVertex2f(-3.4f, -2.7f);
+    glColor3f(0, 0, 1); glVertex2f(-3.3f, -1.6f); glColor3f(1, 0, 1); glVertex2f(-4.4f, -1.7f);
+    glColor3f(0, 1, 1); glVertex2f(-3.0f, -2.9f); glColor3f(1, 1, 1); glVertex2f(-1.9f, -2.6f);
+    glColor3f(1, 1, 0); glVertex2f(-2.0f, -1.5f); glColor3f(0.5f, 0.5f, 1); glVertex2f(-3.1f, -1.8f);
+    glEnd();
+    glShadeModel(GL_SMOOTH);
+    /* A triangle crossing the near plane: its outline clipped, the cut edge not drawn. */
+    glBegin(GL_TRIANGLES);
+    glColor3f(1, 0.5f, 0); glVertex3f(0.0f, -2.6f, 0.0f); glColor3f(0, 1, 0.5f); glVertex3f(2.5f, -2.0f, 0.0f);
+    glColor3f(0.5f, 0, 1); glVertex3f(1.0f, -1.0f, 4.5f);
+    glEnd();
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glEnable(GL_DEPTH_TEST);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "push-attrib")) {
+    static const GLfloat amb[4] = { 0.1f, 0.1f, 0.2f, 1 }, dif[4] = { 0.9f, 0.6f, 0.3f, 1 }, pos[4] = { 0.3f, 0.5f, 1, 0 };
+    static const GLfloat red[4] = { 1, 0, 0, 1 }, fogc[4] = { 0.2f, 0.3f, 0.6f, 1 }, plane[4] = { 1, 0, 0, 0.6f };
+    static const GLubyte tex[4 * 3] = { 255, 255, 255, 40, 40, 200, 40, 200, 40, 200, 40, 40 };
+    GLuint t;
+    glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-1.33, 1.33, -1, 1, 1, 20);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_TEXTURE_2D);
+    /* The base state every strip is drawn in. */
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glLightfv(GL_LIGHT0, GL_AMBIENT, amb); glLightfv(GL_LIGHT0, GL_DIFFUSE, dif); glLightfv(GL_LIGHT0, GL_POSITION, pos);
+    glEnable(GL_FOG); glFogi(GL_FOG_MODE, GL_LINEAR); glFogf(GL_FOG_START, 3); glFogf(GL_FOG_END, 9); glFogfv(GL_FOG_COLOR, fogc);
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS);
+    glShadeModel(GL_SMOOTH); glCullFace(GL_BACK); glEnable(GL_CULL_FACE);
+    glClearColor(0.05f, 0.05f, 0.1f, 1);
+    for (int k = 0; k < 13; k++) {
+      static const GLbitfield groups[13] = { GL_CURRENT_BIT, GL_POLYGON_BIT, GL_LIGHTING_BIT, GL_FOG_BIT, GL_DEPTH_BUFFER_BIT,
+        GL_VIEWPORT_BIT, GL_TRANSFORM_BIT, GL_ENABLE_BIT, GL_COLOR_BUFFER_BIT, GL_TEXTURE_BIT, GL_SCISSOR_BIT, GL_POINT_BIT | GL_LINE_BIT,
+        GL_ALL_ATTRIB_BITS };
+      int col = k % 5, row = k / 5;
+      glViewport(col * 64, 240 - (row + 1) * 80, 64, 80);
+      glPushAttrib(groups[k]);
+      /* Every change, whatever the group: what the group did not save must stay. Not glMaterial:
+         Mesa 22 (llvmpipe) draws with the changed material after the pop, which GL_LIGHTING_BIT
+         saves (GL 1.1 table 6.9); gl.js restores it. */
+      switch (k) {
+        case 0: glColor3f(1, 0, 0); glNormal3f(0, 0, -1); break;
+        case 1: glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glFrontFace(GL_CW); glCullFace(GL_FRONT); break;
+        case 2: glShadeModel(GL_FLAT); glLightfv(GL_LIGHT0, GL_DIFFUSE, red); glLightModelfv(GL_LIGHT_MODEL_AMBIENT, red); glDisable(GL_LIGHT0); break;
+        case 3: glFogfv(GL_FOG_COLOR, red); glFogf(GL_FOG_END, 4); glDisable(GL_FOG); break;
+        case 4: glDepthFunc(GL_NEVER); glDepthMask(GL_FALSE); break;
+        case 5: glViewport(0, 0, 10, 10); glDepthRange(0.5, 0.6); break;
+        case 6: glMatrixMode(GL_PROJECTION); glClipPlane(GL_CLIP_PLANE0, plane); glEnable(GL_CLIP_PLANE0); glEnable(GL_NORMALIZE); break;
+        case 7: glDisable(GL_LIGHTING); glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glEnable(GL_BLEND); glEnable(GL_TEXTURE_2D); break;
+        case 8: glEnable(GL_BLEND); glBlendFunc(GL_ONE, GL_ONE); glColorMask(GL_TRUE, GL_FALSE, GL_TRUE, GL_TRUE); glEnable(GL_ALPHA_TEST); glAlphaFunc(GL_NEVER, 0); break;
+        case 9: glEnable(GL_TEXTURE_2D); glBindTexture(GL_TEXTURE_2D, t); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE); break;
+        case 10: glEnable(GL_SCISSOR_TEST); glScissor(0, 0, 1, 1); break;
+        case 11: glPointSize(4); glLineWidth(3); break;
+        case 12:
+          glPushAttrib(GL_LIGHTING_BIT | GL_POLYGON_BIT);
+          glShadeModel(GL_FLAT); glPolygonMode(GL_FRONT, GL_POINT);
+          glPopAttrib();
+          glColor3f(0, 1, 0); glPolygonMode(GL_FRONT_AND_BACK, GL_LINE); glDisable(GL_LIGHTING); glEnable(GL_TEXTURE_2D); glBindTexture(GL_TEXTURE_2D, t);
+          glMatrixMode(GL_PROJECTION); glDepthFunc(GL_GREATER); glDisable(GL_FOG); glViewport(0, 0, 4, 4);
+          break;
+      }
+      glPopAttrib();
+      /* The strip: a ribbon going away from the eye, its colour from lighting, fog in its depth. */
+      glLoadIdentity(); glTranslatef(0, 0, -3); glRotatef(-60, 1, 0, 0);
+      glBegin(GL_TRIANGLE_STRIP);
+      for (int i = 0; i < 6; i++) {
+        float y = -1 + 0.8f * i, z = 0.3f * sinf(i * 1.7f);
+        glNormal3f(0.3f * cosf(i * 1.7f), 0, 1); glTexCoord2f(0, i / 5.0f); glVertex3f(-0.8f, y, z); glTexCoord2f(1, i / 5.0f); glVertex3f(0.8f, y, z);
+      }
+      glEnd();
+    }
+    glViewport(0, 0, 320, 240);
+    glDeleteTextures(1, &t);
+    glDisable(GL_LIGHTING); glDisable(GL_LIGHT0); glDisable(GL_FOG); glDisable(GL_CULL_FACE);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {

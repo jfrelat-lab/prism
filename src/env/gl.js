@@ -25,8 +25,7 @@
 //     alpha test, depth test (every function, DepthMask, DepthRange), blending (every factor).
 //   - rasterisation: pixel centres and the top-left fill rule, CULL_FACE by window-space winding,
 //     perspective-correct colour, texture coordinates and fog distance.
-// NOT implemented, and refused rather than approximated: points, polygon modes other than FILL,
-// positional lights, colour-index textures.
+// NOT implemented, and refused rather than approximated: colour-index textures.
 
 import { GL_H } from './headers-gl.js';
 import { makeGLSL, makeGLSLWebGL } from './glsl.js';
@@ -39,6 +38,27 @@ const CAP = {
 };
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
 const KNOWN_CAPS = new Set([0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
+/*
+ * glPushAttrib's groups: the fields of the state each saves, and its enables. Texture units 1 and 2,
+ * and the ENABLE group's every capability, are glPushAttrib's own (they are not plain fields).
+ */
+const TEXTURE_CAPS = [0x0de1, 0x806f, 0x0c60, 0x0c61, 0x0c62, 0x0c63];
+const ATTRIB_GROUPS = [
+  [0x1, { fields: ['colour', 'normal', 'tex'], caps: [] }],                                       // CURRENT
+  [0x2, { fields: ['pointSize', 'pointMin', 'pointMax', 'pointAtten', 'coordReplace'], caps: [0x0b10, 0x8861] }],   // POINT
+  [0x4, { fields: ['lineWidth'], caps: [0x0b20, 0x0b24] }],                                       // LINE
+  [0x8, { fields: ['cullFace', 'frontFace', 'polyMode', 'polygonOffset'], caps: [0x0b44, 0x0b41, 0x0b42, 0x8037, 0x2a01, 0x2a02] }],  // POLYGON
+  [0x40, { fields: ['shade', 'material', 'backMaterial', 'sceneAmbient', 'twoSide', 'lights', 'colourMaterial', 'colourControl'],
+    caps: [0x0b50, 0x0b57, 0x4000, 0x4001, 0x4002, 0x4003, 0x4004, 0x4005, 0x4006, 0x4007] }],      // LIGHTING
+  [0x80, { fields: ['fog'], caps: [0x0b60] }],                                                    // FOG
+  [0x100, { fields: ['depthFunc', 'depthMask', 'clearDepth'], caps: [0x0b71] }],                  // DEPTH_BUFFER
+  [0x400, { fields: ['stencilFunc', 'stencilOp', 'stencilWriteMask', 'clearStencil'], caps: [0x0b90] }],   // STENCIL_BUFFER
+  [0x800, { fields: ['viewport', 'depthRange'], caps: [] }],                                      // VIEWPORT
+  [0x1000, { fields: ['mode', 'clipPlanes'], caps: [0x0ba1, 0x803a, 0x3000, 0x3001, 0x3002, 0x3003, 0x3004, 0x3005] }],   // TRANSFORM
+  [0x4000, { fields: ['alphaFunc', 'alphaRef', 'blend', 'colorMask', 'clear'], caps: [0x0bc0, 0x0be2, 0x0bd0, 0x0bf2] }],   // COLOR_BUFFER
+  [0x40000, { fields: ['bound', 'bound3D', 'envMode', 'combine', 'texGen', 'activeUnit'], caps: TEXTURE_CAPS }],   // TEXTURE (units 1, 2: glPushAttrib)
+  [0x80000, { fields: ['scissor'], caps: [0x0c11] }],                                             // SCISSOR
+];
 const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
 // The size of one component of an array, by its type (GL_BYTE .. GL_FLOAT, GL_DOUBLE).
 const TYPE_BYTES = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x1405: 4, 0x1406: 4, 0x140a: 8 };
@@ -53,6 +73,7 @@ const OPTIONAL_EXTENSIONS = new Set(['GL_ARB_multitexture', 'GL_ARB_vertex_buffe
 // Capabilities that belong to a texture unit (2D texturing, coordinate generation).
 const UNIT_CAPS = new Set([0x0de1, 0x0c60, 0x0c61, 0x0c62, 0x0c63]);
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
+const POINT = 0x1b00, LINE = 0x1b01, FILL = 0x1b02;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
 const LIGHT_MODEL = { LOCAL_VIEWER: 0x0b51, TWO_SIDE: 0x0b52, AMBIENT: 0x0b53 };
 const COMPILE_AND_EXECUTE = 0x1301;
@@ -212,7 +233,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     width: 0, height: 0, color: null, depth: null,
     viewport: [0, 0, 0, 0], clear: [0, 0, 0, 0], clearDepth: 1,
     mode: MODELVIEW, stacks: { [MODELVIEW]: [ident()], [PROJECTION]: [ident()], [TEXTURE_MATRIX]: [ident()] },
-    caps: new Set(), shade: 0x1d01, frontFace: CCW, cullFace: BACK,
+    caps: new Set(), shade: 0x1d01, frontFace: CCW, cullFace: BACK, polyMode: [FILL, FILL],
     normal: [0, 0, 1], colour: [1, 1, 1, 1], tex: [0, 0],
     material: material(), backMaterial: material(),
     sceneAmbient: [0.2, 0.2, 0.2, 1], twoSide: false,
@@ -683,7 +704,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const vertexWork = () => s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
     || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
   const SMALL_DRAW = 128;
-  const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork();
+  const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
   function recordVertex(x, y, z) {
     if ((recN + 1) * REC > rec.length) { const r = new Float32Array(rec.length * 2); r.set(rec); rec = r; }
     if (x > FAR || x < -FAR || y > FAR || y < -FAR || z > FAR || z < -FAR) recFar = true;
@@ -731,7 +752,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   /** Draw `count` elements of the enabled arrays on the GPU; false when the state is not one it covers. */
   function gpuArrays(mode, count, indexAt) {
-    if (!webgl || !tnl || glsl.current()) return false;
+    if (!webgl || !tnl || glsl.current() || s.polyMode[0] !== FILL || s.polyMode[1] !== FILL) return false;
     // A small unlit draw is cheaper batched in clip space with its neighbours (see vertexWork): Cube
     // draws its world as some 1,700 strips a frame, and one GPU draw each halved its frame rate.
     if (count < SMALL_DRAW && !vertexWork()) return false;
@@ -1267,9 +1288,34 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       fragment(y * s.width + x, A.z + (B.z - A.z) * t, a.colour.map((v, i) => v + (b.colour[i] - v) * t), 0);
     }
   }
+  /*
+   * A triangle under glPolygonMode other than GL_FILL: its facing decided first, from the sign of the
+   * homogeneous determinant of its clip coordinates -- the winding of whatever part of it lies in front
+   * of the eye, so no clipping is needed to know it -- then culled, then drawn as its boundary EDGES
+   * (`edges`: bit 0 a-b, bit 1 b-c, bit 2 c-a; the diagonals that cut a quad or a polygon into triangles
+   * are not edges) or as the vertices that start them. Each edge is clipped as a line is, so the edges
+   * that clipping would add to the polygon are never drawn, as Mesa's draw module leaves them unflagged.
+   */
+  function unfilled(a, b, c, provoking, edges) {
+    if (a.vs) throw new Error('gl: GLSL: glPolygonMode other than GL_FILL under a vertex shader is not implemented');
+    const [ax, ay, , aw] = a.clip, [bx, by, , bw] = b.clip, [cx, cy, , cw] = c.clip;
+    const det = ax * (by * cw - bw * cy) - ay * (bx * cw - bw * cx) + aw * (bx * cy - by * cx);
+    if (det === 0) return;
+    const front = (det > 0) === (s.frontFace === CCW);
+    if (s.caps.has(CAP.CULL_FACE) && (s.cullFace === FRONT_AND_BACK || (s.cullFace === BACK) === !front)) { s.stats.culled++; return; }
+    const mode = s.polyMode[front ? 0 : 1];
+    if (mode === FILL) { triangle(a, b, c, provoking); return; }
+    const back = !front && a.back;
+    const colour = provoking ? (back ? provoking.back : provoking.colour) : null;
+    const as = (p) => (back || colour ? { ...p, colour: colour ?? p.back } : p);
+    const q = [as(a), as(b), as(c)];
+    for (let k = 0; k < 3; k++) if (edges & (1 << k)) { if (mode === LINE) line(q[k], q[(k + 1) % 3]); else point(q[k]); }
+  }
   function assemble(mode, v) {
     const flat = s.shade === FLAT;
-    const tri = (a, b, c, provoking) => triangle(v[a], v[b], v[c], flat ? v[provoking] : null);
+    const fill = s.polyMode[0] === FILL && s.polyMode[1] === FILL;
+    const tri = (a, b, c, provoking, edges = 7) => (fill ? triangle(v[a], v[b], v[c], flat ? v[provoking] : null)
+      : unfilled(v[a], v[b], v[c], flat ? v[provoking] : null, edges));
     switch (mode) {
       case 0x0001: for (let i = 0; i + 1 < v.length; i += 2) line(v[i], v[i + 1]); break;
       case 0x0003: for (let i = 0; i + 1 < v.length; i++) line(v[i], v[i + 1]); break;
@@ -1282,11 +1328,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // From ARRAYS (glDrawArrays, glDrawElements) Mesa cuts along 0-2 instead: those go through
       // gallium's u_indices as (0,1,2),(0,2,3); immediate mode is converted by vbo_exec to (0,1,3),(1,2,3).
       case 0x0007:
-        if (s.fromArrays) for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 2, i + 3); tri(i, i + 2, i + 3, i + 3); }
-        else for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3); tri(i + 1, i + 2, i + 3, i + 3); }
+        if (s.fromArrays) for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 2, i + 3, 3); tri(i, i + 2, i + 3, i + 3, 6); }
+        else for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3, 5); tri(i + 1, i + 2, i + 3, i + 3, 3); }
         break;
-      case 0x0008: for (let i = 0; i + 3 < v.length; i += 2) { tri(i, i + 1, i + 3, i + 3); tri(i, i + 3, i + 2, i + 3); } break;
-      case 0x0009: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, 0); break;
+      case 0x0008: for (let i = 0; i + 3 < v.length; i += 2) { tri(i, i + 1, i + 3, i + 3, 3); tri(i, i + 3, i + 2, i + 3, 6); } break;
+      case 0x0009: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, 0, 2 | (i === 1 ? 1 : 0) | (i + 2 === v.length ? 4 : 0)); break;
       case 0x0000: for (const p of v) point(p); break;
       default: throw new Error(`gl: primitive 0x${mode.toString(16)} is not implemented`);
     }
@@ -1431,29 +1477,45 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glLoadMatrixd: (m) => setTop(Float64Array.from(m)),
     glPushMatrix: () => { stackOf(s.mode).push(Float64Array.from(top())); },
     /*
-     * The attribute stacks, for the groups whose whole state is kept here: GL_ENABLE_BIT (every
-     * capability) and GL_COLOR_BUFFER_BIT (the alpha test, blending, the colour mask, the clear
-     * colour, and the enables of alpha test and blending) -- FTGL's buffer font brackets its drawing
-     * with those two. Any other group is refused by name, not saved in part.
+     * The attribute stacks (GL 1.1 6.1.14, Table 6.x's "attribute" column): each group the state it
+     * names, of what is kept here, with the enables that belong to it. The state of a texture OBJECT
+     * is not saved with GL_TEXTURE_BIT (only the bindings), as Mesa does not either since GL 1.1's
+     * objects. A group with no state kept here (pixel mode, hints, multisample) saves nothing,
+     * which is exact while nothing can change it.
      */
     glPushAttrib: (mask) => {
-      const other = mask & ~(0x2000 | 0x4000);
-      if (other) throw new Error(`gl: glPushAttrib of the groups 0x${other.toString(16)} is not implemented (GL_ENABLE_BIT and GL_COLOR_BUFFER_BIT are)`);
-      (s.attribStack ??= []).push({
-        mask, caps: mask & 0x2000 ? new Set(s.caps) : null, unitCaps: mask & 0x2000 ? s.units.map((u) => u && new Set(u.caps)) : null,
-        colour: mask & 0x4000 ? { alphaFunc: s.alphaFunc, alphaRef: s.alphaRef, blend: [...s.blend], colorMask: [...s.colorMask], clear: [...s.clear],
-          alphaOn: s.caps.has(CAP.ALPHA_TEST), blendOn: s.caps.has(CAP.BLEND) } : null,
-      });
+      const saved = { mask, fields: {}, caps: [], unitCaps: null, units: null };
+      for (const [bit, g] of ATTRIB_GROUPS) {
+        if (!(mask & bit)) continue;
+        for (const k of g.fields) saved.fields[k] = structuredClone(s[k]);
+        for (const cap of g.caps) saved.caps.push([cap, s.caps.has(cap)]);
+      }
+      if (mask & 0x2000) {                                  // GL_ENABLE_BIT: every capability, every unit
+        saved.allCaps = new Set(s.caps); saved.unknownCaps = new Set(s.unknownCaps);
+        saved.unitCaps = s.units.map((u) => u && new Set(u.caps));
+      }
+      if (mask & 0x40000) saved.units = s.units.map((u) => u && structuredClone({ bound: u.bound, envMode: u.envMode, combine: u.combine, texGen: u.texGen,
+        caps: [...u.caps].filter((c) => TEXTURE_CAPS.includes(c)) }));
+      if (mask & 0x1) saved.coords = s.units.map((u) => u && [...u.coord]);
+      (s.attribStack ??= []).push(saved);
     },
     glPopAttrib: () => {
       const a = s.attribStack?.pop();
       if (!a) return;                                      // GL_STACK_UNDERFLOW: nothing changes
-      if (a.caps) { s.caps = new Set(a.caps); a.unitCaps.forEach((c, k) => { if (c) s.units[k].caps = c; }); }
-      if (a.colour) {
-        const c = a.colour;
-        s.alphaFunc = c.alphaFunc; s.alphaRef = c.alphaRef; s.blend = c.blend; s.colorMask = c.colorMask; s.clear = c.clear;
-        for (const [cap, on] of [[CAP.ALPHA_TEST, c.alphaOn], [CAP.BLEND, c.blendOn]]) { if (on) s.caps.add(cap); else s.caps.delete(cap); }
+      if (a.allCaps) {
+        s.caps = a.allCaps; s.unknownCaps = a.unknownCaps;
+        a.unitCaps.forEach((c, k) => { if (c) s.units[k].caps = c; });
       }
+      Object.assign(s, a.fields);
+      for (const [cap, on] of a.caps) { if (on) s.caps.add(cap); else s.caps.delete(cap); }
+      if (a.units) a.units.forEach((u, k) => {
+        if (!u) return;
+        const unit = s.units[k];
+        unit.bound = u.bound; unit.envMode = u.envMode; unit.combine = u.combine; unit.texGen = u.texGen;
+        for (const c of TEXTURE_CAPS) { if (u.caps.includes(c)) unit.caps.add(c); else unit.caps.delete(c); }
+      });
+      if (a.coords) a.coords.forEach((c, k) => { if (c) s.units[k].coord = c; });
+      if (a.mask & 0x800 && webgl) webgl.viewport(...s.viewport);      // the one piece of state the backend holds itself
     },
     // ...and the client's: the pixel store (both alignments) and the vertex arrays.
     glPushClientAttrib: (mask) => {
@@ -1972,7 +2034,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         dv().setUint32(out + 4 * k, s.nextTexture, true);
       }
     },
-    glPolygonMode: (face, mode) => { if (mode !== 0x1b02) throw new Error('gl: glPolygonMode other than GL_FILL is not implemented'); },
+    glPolygonMode: (face, mode) => {
+      if (face !== BACK) s.polyMode[0] = mode;
+      if (face !== FRONT) s.polyMode[1] = mode;
+    },
     glHint: () => {}, glDrawBuffer: () => {}, glReadBuffer: () => {},
     ...fboApi,
     glFinish: () => {}, glFlush: () => {},

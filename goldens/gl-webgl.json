@@ -26,5 +26,7 @@
   "multitex-shadow": 0,
   "combine": 0,
   "lights": 13,
-  "fbo": 35
+  "fbo": 35,
+  "polygon-mode": 51,
+  "push-attrib": 0
 }
