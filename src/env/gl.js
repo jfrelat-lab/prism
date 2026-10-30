@@ -545,7 +545,17 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * the usual way are far inside it -- Quake's maps are within +-4096.
    */
   const FAR = 1e5;
-  const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9;
+  /*
+   * ONLY WHERE THERE IS VERTEX WORK TO HAND OVER: lighting, texture generation, a user clip plane.
+   * Unlit, a vertex is two matrix products in JavaScript, and that path batches across matrix changes
+   * -- its triangles are in clip space -- where the shader's batch ends at each one: Tux Racer's
+   * menus move the matrix for every widget, and taking them to the GPU made 526 draws a frame and
+   * the frame three times slower (gl-bench).
+   */
+  const vertexWork = () => s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
+    || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
+  const SMALL_DRAW = 128;
+  const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork();
   function recordVertex(x, y, z) {
     if ((recN + 1) * REC > rec.length) { const r = new Float32Array(rec.length * 2); r.set(rec); rec = r; }
     if (x > FAR || x < -FAR || y > FAR || y < -FAR || z > FAR || z < -FAR) recFar = true;
@@ -594,6 +604,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   /** Draw `count` elements of the enabled arrays on the GPU; false when the state is not one it covers. */
   function gpuArrays(mode, count, indexAt) {
     if (!webgl || !tnl || glsl.current()) return false;
+    // A small unlit draw is cheaper batched in clip space with its neighbours (see vertexWork): Cube
+    // draws its world as some 1,700 strips a frame, and one GPU draw each halved its frame rate.
+    if (count < SMALL_DRAW && !vertexWork()) return false;
     const flat = s.shade === FLAT;
     if (mode < 4 || mode > 9 || (flat && mode === 7)) return false;
     const va = s.arrays.vertex;

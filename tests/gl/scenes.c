@@ -514,7 +514,10 @@ static void display(void) {
     glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, front);
     glPopMatrix();
     }
-    glDisable(GL_LIGHTING); glDisable(GL_NORMALIZE); glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, 0);
+    glDisable(GL_NORMALIZE); glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, 0);
+    /* The rest lit too, its colours through GL_COLOR_MATERIAL: lit, it is what the GPU transforms (gl.js
+       leaves unlit immediate primitives to its JavaScript path, which batches them). */
+    glEnable(GL_COLOR_MATERIAL); glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE); glNormal3f(0, 0, 1);
     /* Flat shading: the provoking vertex of a fan, of quads, of a polygon. */
     glShadeModel(GL_FLAT);
     glPushMatrix(); glTranslatef(1.6f, 0.9f, -5);
@@ -545,6 +548,7 @@ static void display(void) {
     glEnd();
     glDisable(GL_CULL_FACE); glCullFace(GL_BACK);
     glPopMatrix();
+    glDisable(GL_COLOR_MATERIAL); glDisable(GL_LIGHTING);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "rect-forms")) {

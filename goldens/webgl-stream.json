@@ -183,34 +183,30 @@
     ]
   },
   "texobj (texture objects)": {
-    "calls": 1669,
+    "calls": 866,
     "draws": 102,
-    "sha": "cd5fc22f1eacbadc9fc0c686614c1a40c3ad9c2096dfea1085a72e0440692d51",
-    "state": "10a22c6f234ba742c8266d501e3115617faea885e4b5d7927f40e94860ef0170",
+    "sha": "28b5e6bad0e3c3194cee5fc3a775f25911e5875d55535e8c1089fc531181b356",
+    "state": "2739e923a57ec70a9b82c2579795e4702f19c37dcf874d059beb28ffc1abf715",
     "ranges": [
       [
         0,
         1
       ]
     ],
-    "flips": [
-      0
-    ]
+    "flips": []
   },
   "texobj (display lists)": {
-    "calls": 2064,
+    "calls": 1261,
     "draws": 102,
-    "sha": "6d34da8b38d31fe5a58dc518309a18e0342b0cc4a5f3dbee33a9152269606224",
-    "state": "a7ae364f9e14f1a546c82fcb6e20ef41c090a5b2017dd806c9b385002fdd64bc",
+    "sha": "7afb8606466ecf57d38c30df9cb846c6669e6cf9b39ec43dda0e864c8daa0230",
+    "state": "5bb4029c522a91206988d96c294dad984b4b59fa594835b1641a4db8c55786df",
     "ranges": [
       [
         0,
         1
       ]
     ],
-    "flips": [
-      0
-    ]
+    "flips": []
   },
   "quake3 q3dm1": {
     "calls": 319674,
