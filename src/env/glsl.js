@@ -126,15 +126,15 @@ function translate(src, stage) {
   const sig = [];                                   // indices of the significant tokens (not whitespace)
   tk.forEach((x, i) => { if (x.t !== 'ws') sig.push(i); });
   const at = (k) => (k >= 0 && k < sig.length ? tk[sig[k]] : null);
-  // WHICH NAMES ARE INTEGERS, scope by scope: each use of a name is the declaration it sees -- a
+  // WHICH TYPE EACH NAME HAS, scope by scope: each use of a name is the declaration it sees -- a
   // global, a function's parameter in its body, a local -- so `int k` in one function and `float k` in
   // another are two (Valleyball 2009: R(vec3 n, vec3 m, int k) and F's float k).
-  const intAt = new Array(sig.length).fill(false), uniforms = {};
+  const typeAt = new Array(sig.length).fill(null), intAt = new Array(sig.length).fill(false), uniforms = {};
   {
     const scopes = [new Map()];
     let pending = null;                                     // a function's parameters, for its body
-    const bind = (name, isInt) => scopes[scopes.length - 1].set(name, isInt);
-    const look = (name) => { for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].has(name)) return scopes[i].get(name); return false; };
+    const bind = (name, type) => scopes[scopes.length - 1].set(name, type);
+    const look = (name) => { for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].has(name)) return scopes[i].get(name); return null; };
     for (let k = 0; k < sig.length; k++) {
       const x = at(k);
       if (x.v === '{') { scopes.push(new Map(pending || [])); pending = null; continue; }
@@ -151,7 +151,7 @@ function translate(src, stage) {
             if (y.v === '(' || y.v === '[') depth++;
             else if (y.v === ')' || y.v === ']') { if (depth === 0) break; depth--; }
             else if (y.v === ',' && depth === 0) type = null;
-            else if (y.t === 'id' && depth === 0) { if (DECL_TYPES.has(y.v)) type = y.v; else if (type) ps.push([y.v, INT_TYPES.has(type)]); }
+            else if (y.t === 'id' && depth === 0) { if (DECL_TYPES.has(y.v)) type = y.v; else if (type) ps.push([y.v, type]); }
           }
           pending = ps;
         } else {
@@ -161,11 +161,11 @@ function translate(src, stage) {
             if (y.v === '(' || y.v === '[') depth++;
             else if (y.v === ')' || y.v === ']') { if (depth === 0) break; depth--; }
             else if ((y.v === ';' || y.v === '{') && depth === 0) break;
-            if (y.t === 'id' && depth === 0 && (at(j - 1).v === ',' || j === k + 1)) bind(y.v, INT_TYPES.has(x.v));
+            if (y.t === 'id' && depth === 0 && (at(j - 1).v === ',' || j === k + 1)) bind(y.v, x.v);
           }
         }
       }
-      if (!(prev && prev.v === '.')) intAt[k] = look(x.v);
+      if (!(prev && prev.v === '.')) { typeAt[k] = look(x.v); intAt[k] = INT_TYPES.has(typeAt[k]); }
     }
   }
   const isInt = (k) => !!intAt[k];
@@ -286,13 +286,50 @@ function translate(src, stage) {
     for (const [op, side, sk] of [[at(k - 1), at(k - 2), k - 2], [at(k + 1), at(k + 2), k + 2]]) {
       if (!op || !ARITH.has(op.v) || !side) continue;
       if (side.t === 'num') { if (!isIntLiteral(side.v)) return true; continue; }
-      if (side.t === 'id' && isInt(sk) && !isField(sk)) continue;
+      if (side.t === 'id' && (isField(sk) ? INT_TYPES.has(typeAt[sk - 2]) : isInt(sk))) continue;   // q.x of an ivec2 q is an int
       if (side.v === ')' || side.v === ']' || side.t === 'id') return true;
+    }
+    // the right side of a compound assignment to a float: `y/=v` (vec3 y, int v; Hartverdrahtet 2012)
+    const op = at(k - 1), lhs = at(k - 2);
+    if (op && ['+=', '-=', '*=', '/='].includes(op.v) && lhs && lhs.t === 'id') {
+      const type = isField(k - 2) ? typeAt[k - 4] : typeAt[k - 2];       // `t.x*=c`: t's type
+      if (type && !INT_TYPES.has(type)) return true;
     }
     return false;
   };
   // Which integer variables become float(...), decided before the literals beside them are: in `s*c/8`
   // c is converted, so 8 is beside a float and becomes 8.0.
+  /*
+   * A SWIZZLE OF A SCALAR: `float m; ... m.x`, `dE(z).x` with dE returning float (Hartverdrahtet,
+   * 2012). GLSL 4.20 allows it and the desktop drivers of the time took it with no #version; GLSL ES
+   * 3.00 does not. One component (.x, .r, .s) is the scalar itself; .xx to .xxxx its vector
+   * constructor, vec2(m) .. vec4(m) (ivec, bvec for an int, a bool). The scalar is a name declared so,
+   * not a field, or a call of a function whose every declaration returns one: the shader's own, or
+   * length, distance, dot and the scalar constructors.
+   */
+  const SCALAR_VEC = { float: 'vec', int: 'ivec', uint: 'uvec', bool: 'bvec' };
+  // The shader's own functions: name -> their return types; and the built-ins that return a scalar.
+  const returns = new Map(Object.entries({ length: 'float', distance: 'float', dot: 'float', float: 'float', int: 'int', bool: 'bool' }).map(([n, t]) => [n, new Set([t])]));
+  for (let k = 1, depth = 0; k < sig.length; k++) {
+    const x = at(k);
+    if (x.v === '{') depth++; else if (x.v === '}') depth--;
+    if (!depth && x.t === 'id' && at(k + 1) && at(k + 1).v === '(' && at(k - 1).t === 'id' && DECL_TYPES.has(at(k - 1).v)) {
+      if (!returns.has(x.v)) returns.set(x.v, new Set());
+      returns.get(x.v).add(at(k - 1).v);
+    }
+  }
+  const scalarSwizzle = new Map();          // the swizzle's index -> [the scalar's first token, its type]
+  for (let k = 1; k + 1 < sig.length; k++) {
+    if (at(k).v !== '.' || at(k + 1).t !== 'id' || !/^(x{1,4}|r{1,4}|s{1,4})$/.test(at(k + 1).v)) continue;
+    const left = at(k - 1);
+    if (left.t === 'id' && !isField(k - 1) && SCALAR_VEC[typeAt[k - 1]]) { scalarSwizzle.set(k + 1, [k - 1, typeAt[k - 1]]); continue; }
+    if (left.v !== ')') continue;
+    let j = k - 2;
+    for (let depth = 0; j >= 0; j--) { const y = at(j).v; if (y === ')') depth++; else if (y === '(') { if (!depth) break; depth--; } }
+    const f = at(j - 1), types = f && f.t === 'id' && !isField(j - 1) ? returns.get(f.v) : null;
+    if (types && types.size === 1 && SCALAR_VEC[[...types][0]]) scalarSwizzle.set(k + 1, [j - 1, [...types][0]]);
+  }
+  const scalarStart = new Map([...scalarSwizzle].map(([sw, [start]]) => [start, sw]));
   const converted = new Set();
   for (let k = 0; k < sig.length; k++) { const x = at(k); if (x.t === 'id' && isInt(k) && !isField(k) && floatNeighbour(k) && !intCtx(k)) converted.add(k); }
   const out = [];
@@ -300,6 +337,9 @@ function translate(src, stage) {
     const x = tk[i];
     if (x.t === 'ws') { out.push(x.v); continue; }
     k = sig.indexOf(i, k);
+    // A swizzle of a scalar (see scalarSwizzle): the constructor opened before it, closed for its dot.
+    if (scalarStart.has(k)) { const n = at(scalarStart.get(k)).v.length; if (n > 1) out.push(`${SCALAR_VEC[scalarSwizzle.get(scalarStart.get(k))[1]]}${n}(`); }
+    if (scalarSwizzle.has(k + 1) && x.v === '.') { if (at(k + 1).v.length > 1) out.push(')'); i = sig[k + 1]; continue; }
     if (x.t === 'pp') { if (!/^\s*#\s*version\b/.test(x.v)) out.push(x.v + '\n'); continue; }
     if (x.t === 'num' && isIntLiteral(x.v) && !/^0[xX]/.test(x.v) && !/[uU]$/.test(x.v) && !intCtx(k)) { out.push(x.v + '.0'); continue; }
     if (converted.has(k)) { out.push(`float(${x.v})`); continue; }

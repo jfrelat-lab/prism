@@ -64,6 +64,12 @@ const idioms = [
 idioms.push(['an overloaded function: the overload with as many parameters as the call has arguments',
   'float f(float a,float b){return a;}float f(float a,float b,int c){return b;}void main(){gl_FragColor=vec4(f(1,2.,3));}',
   'float f(float a,float b){return a;}float f(float a,float b,int c){return b;}void main(){prism_FragColor=vec4(f(1.0,2.,3));}']);
+idioms.push(['a swizzle of a scalar is the scalar, or its vector (Hartverdrahtet 2012: float m; m.x, dE(z).x)',
+  'float dE(vec3 z){return length(z);}void main(){float m=dE(gl_FragCoord.xyz);int i=2;gl_FragColor=vec4(m.x+dE(vec3(1)).r,i.xx,0)+m.sss.xyzz;}',
+  'float dE(vec3 z){return length(z);}void main(){float m=dE(gl_FragCoord.xyz);int i=2;prism_FragColor=vec4(m+dE(vec3(1.0)),ivec2(i),0.0)+vec3(m).xyzz;}']);
+idioms.push(['an int on the right of a compound assignment to a float is converted (Hartverdrahtet 2012: y/=v)',
+  'void main(){vec3 y=vec3(1);vec2 t=vec2(1);int v=4;ivec2 q=ivec2(1);int i=3;y/=v;t.x*=v;q.x*=v;i+=v;gl_FragColor=vec4(y,t.x+float(q.x+i));}',
+  'void main(){vec3 y=vec3(1.0);vec2 t=vec2(1.0);int v=4;ivec2 q=ivec2(1);int i=3;y/=float(v);t.x*=float(v);q.x*=v;i+=v;prism_FragColor=vec4(y,t.x+float(q.x+i));}']);
 idioms.push(['an empty macro tested by #ifdef stays a name there',
   '#define FAST\n#ifdef FAST\nfloat k=1.;\n#endif\nvoid main(){gl_FragColor=vec4(k);}',
   '#define FAST\n\n#ifdef FAST\n\nfloat k=1.;\n#endif\n\nvoid main(){prism_FragColor=vec4(k);}']);
