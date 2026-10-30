@@ -10,6 +10,10 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
 - **Faster 3D**: OpenGL's vertex work -- moving, lighting and texturing each point -- now runs on the
   graphics card where it pays. Frames a second of JavaScript: Neverball 40 to 142, Enemy Territory
   101 to 192, Quake III 55 to 95, Chromium B.S.U. 143 to 246.
+- **More of OpenGL 1.x and GLUT**: GLUT's spheres, cones, tori and polyhedra (GLUT 3.7's own code),
+  wireframe polygons, the attribute stack, every immediate-mode spelling and the multitexture
+  coordinates, and lines drawn by the GL's own rule. Of the OpenGL Red Book's 63 examples, 27 now
+  draw what Mesa draws, up from 12. GLSL shaders that swizzle a scalar (`m.x`) now compile.
 
 ## 2026-10-26
 
