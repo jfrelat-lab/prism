@@ -57,6 +57,11 @@
  *                 RGB_SCALE 2, ADD of the constant colour, ADD_SIGNED with ALPHA_SCALE 2, INTERPOLATE of
  *                 texture and constant by the primary alpha, SUBTRACT of the constant; the last strip adds unit 1
  *                 under GL_OBJECT_LINEAR generation, MODULATE, and unit 2 under GL_SPHERE_MAP, DECAL
+ *   lights        a rippled sheet turned so both of its sides show, under a directional light and a
+ *                 positional one with attenuation, specular, GL_NORMALIZE under a scale, two-sided
+ *                 lighting with a back material of its own, and a glMaterial between two vertices of
+ *                 one strip; beside it flat shading (a fan, quads, a polygon), a user clip plane, and
+ *                 face culling of one triangle of two
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -473,6 +478,73 @@ static void display(void) {
       glDisable(GL_TEXTURE_GEN_S); glDisable(GL_TEXTURE_GEN_T); glDisable(GL_TEXTURE_2D);
       glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     }
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "lights")) {
+    static const GLfloat dir[4] = { -0.4f, 0.6f, 0.7f, 0 }, at[4] = { 0.6f, -0.3f, -2.5f, 1 };
+    static const GLfloat white[4] = { 1, 1, 1, 1 }, warm[4] = { 1, 0.6f, 0.3f, 1 }, dim[4] = { 0.1f, 0.1f, 0.1f, 1 };
+    static const GLfloat front[4] = { 0.8f, 0.7f, 0.2f, 1 }, back[4] = { 0.2f, 0.4f, 0.9f, 1 }, other[4] = { 0.9f, 0.2f, 0.3f, 1 };
+    static const GLdouble plane[4] = { 1, 1, 0, -0.2 };
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-1.33, 1.33, -1, 1, 1.5, 20);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glLightfv(GL_LIGHT0, GL_POSITION, dir); glLightfv(GL_LIGHT0, GL_DIFFUSE, white); glLightfv(GL_LIGHT0, GL_SPECULAR, white);
+    glLightfv(GL_LIGHT1, GL_POSITION, at); glLightfv(GL_LIGHT1, GL_DIFFUSE, warm); glLightfv(GL_LIGHT1, GL_SPECULAR, warm); glLightfv(GL_LIGHT1, GL_AMBIENT, dim);
+    glLightf(GL_LIGHT1, GL_CONSTANT_ATTENUATION, 0.5f); glLightf(GL_LIGHT1, GL_LINEAR_ATTENUATION, 0.2f); glLightf(GL_LIGHT1, GL_QUADRATIC_ATTENUATION, 0.05f);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_LIGHT1); glEnable(GL_NORMALIZE);
+    glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, 1);
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, front); glMaterialfv(GL_BACK, GL_AMBIENT_AND_DIFFUSE, back);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, white); glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 24);
+    /* The sheet: z = 0.45 sin(3x) cos(2y), scaled by 1.5 (so its normals need GL_NORMALIZE), turned 78
+       degrees about y so that some of its ripples face away. */
+    for (int copy = 0; copy < 2; copy++) {   /* the second shows mostly its back */
+    glPushMatrix();
+    glTranslatef(copy ? 0.1f : -1.1f, 0, -4.2f); glRotatef(copy ? 140 : 78, 0, 1, 0); glScalef(copy ? 0.9f : 1.5f, copy ? 0.9f : 1.5f, copy ? 0.9f : 1.5f);
+    for (int j = 0; j < 8; j++) {
+      glBegin(GL_QUAD_STRIP);
+      for (int i = 0; i <= 12; i++) {
+        for (int k = 1; k >= 0; k--) {
+          float x = -1 + i / 6.0f, y = -1 + (j + k) / 4.0f, z = 0.45f * sinf(3 * x) * cosf(2 * y);
+          float dx = 1.35f * cosf(3 * x) * cosf(2 * y), dy = -0.9f * sinf(3 * x) * sinf(2 * y);
+          glNormal3f(-dx, -dy, 1); glVertex3f(x, y, z);
+        }
+        if (!copy && j == 3 && i == 6) glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, other);   /* inside the strip */
+      }
+      glEnd();
+    }
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, front);
+    glPopMatrix();
+    }
+    glDisable(GL_LIGHTING); glDisable(GL_NORMALIZE); glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, 0);
+    /* Flat shading: the provoking vertex of a fan, of quads, of a polygon. */
+    glShadeModel(GL_FLAT);
+    glPushMatrix(); glTranslatef(1.6f, 0.9f, -5);
+    glBegin(GL_TRIANGLE_FAN);
+    for (int i = 0; i < 6; i++) { glColor3f(i / 5.0f, 1 - i / 5.0f, (i & 1) ? 1 : 0); glVertex2f(i ? 0.6f * cosf(i * 0.9f) : 0, i ? 0.6f * sinf(i * 0.9f) : 0); }
+    glEnd();
+    glTranslatef(0, -1.1f, 0);
+    glBegin(GL_QUADS);
+    glColor3f(1, 0, 0); glVertex2f(-0.6f, -0.3f); glColor3f(0, 1, 0); glVertex2f(0, -0.3f); glColor3f(0, 0, 1); glVertex2f(0, 0.3f); glColor3f(1, 1, 0); glVertex2f(-0.6f, 0.3f);
+    glEnd();
+    glBegin(GL_POLYGON);
+    glColor3f(0, 1, 1); glVertex2f(0.1f, -0.3f); glColor3f(1, 0, 1); glVertex2f(0.6f, -0.3f); glColor3f(1, 1, 1); glVertex2f(0.6f, 0.3f); glColor3f(0.5f, 0.5f, 0); glVertex2f(0.1f, 0.3f);
+    glEnd();
+    glPopMatrix();
+    glShadeModel(GL_SMOOTH);
+    /* A user clip plane through a smooth quad; culling of the front faces, one triangle of two wound each way. */
+    glPushMatrix(); glTranslatef(1.6f, -1.4f, -5);
+    glClipPlane(GL_CLIP_PLANE0, plane); glEnable(GL_CLIP_PLANE0);
+    glBegin(GL_QUADS);
+    glColor3f(1, 0.5f, 0); glVertex2f(-0.6f, -0.4f); glColor3f(0, 0.5f, 1); glVertex2f(0.6f, -0.4f); glColor3f(0.5f, 1, 0.5f); glVertex2f(0.6f, 0.4f); glColor3f(1, 1, 1); glVertex2f(-0.6f, 0.4f);
+    glEnd();
+    glDisable(GL_CLIP_PLANE0);
+    glEnable(GL_CULL_FACE); glCullFace(GL_FRONT);
+    glColor3f(0.9f, 0.9f, 0.9f);
+    glBegin(GL_TRIANGLES);
+    glVertex2f(-1.5f, -0.5f); glVertex2f(-0.9f, -0.5f); glVertex2f(-1.2f, 0.3f);    /* counter-clockwise: culled */
+    glVertex2f(-0.8f, -0.5f); glVertex2f(-0.5f, 0.3f); glVertex2f(-0.2f, -0.5f);    /* clockwise: drawn */
+    glEnd();
+    glDisable(GL_CULL_FACE); glCullFace(GL_BACK);
+    glPopMatrix();
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "rect-forms")) {

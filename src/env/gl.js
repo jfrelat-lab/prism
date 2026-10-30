@@ -152,7 +152,7 @@ function baseFormat(internal) {
  * uses texture objects on "1.1" and display lists otherwise -- so a gate can ask for either, as
  * MESA_GL_VERSION_OVERRIDE does on the reference side.
  */
-export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM', onLost = null, extensions = [] } = {}) {
+export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM', onLost = null, extensions = [], tnl = true } = {}) {
   for (const e of extensions) if (!OPTIONAL_EXTENSIONS.has(e)) throw new Error(`gl: extension ${e} is not implemented`);
   const extensionString = [EXTENSIONS, ...extensions].join(' ');
   // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
@@ -250,7 +250,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
-    stats: { triangles: 0, culled: 0, clipped: 0, fragments: 0 },
+    stats: { triangles: 0, culled: 0, clipped: 0, fragments: 0, gpuDraws: 0 },
     strings: new Map(),
   };
   const glsl = makeGLSL(M);                 // shaders and programs (src/env/glsl.js)
@@ -362,6 +362,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     return out;
   }
   function vertex(x, y, z) {
+    if (s.gpuPrim) { recordVertex(x, y, z); return; }
     const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
     const eye = xform(mv, x, y, z, 1);
     const clip = xform(pr, eye[0], eye[1], eye[2], eye[3]);
@@ -454,6 +455,186 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const q = tm[3] * cs + tm[7] * ct + tm[11] * cr + tm[15] * cq;
     const su = tm[0] * cs + tm[4] * ct + tm[8] * cr + tm[12] * cq, sv = tm[1] * cs + tm[5] * ct + tm[9] * cr + tm[13] * cq;
     return q === 1 ? [su, sv] : [su / q, sv / q];
+  }
+
+  /*
+   * TRANSFORMATION AND LIGHTING ON THE GPU, for vertex arrays (P15.15). On the WebGL path a
+   * glDrawArrays or glDrawElements whose state the fixed-function vertex shader covers is not taken
+   * apart vertex by vertex: the program's arrays go to WebGL as they are (their bytes, types and
+   * strides), the primitive becomes an index list, and the shader does what vertex() does -- the two
+   * matrices, lighting with colour material and two sides, texture generation and each unit's
+   * matrix, fog distance, user clip planes. The GPU clips and culls. What it does not cover falls back
+   * to the vertex-by-vertex path, which stays the reference: points and lines, a GLSL program, flat
+   * shading of GL_QUADS (no single provoking vertex per triangle), an array of doubles, an array not
+   * aligned to its component. The arrays leave the program's current colour, normal and coordinates
+   * as they were, as Mesa does; the vertex-by-vertex path sets them to the last element's.
+   */
+  const ARRAY_TYPES = new Set([0x1400, 0x1401, 0x1402, 0x1403, 0x1404, 0x1405, 0x1406]);
+  const CM_MODE = { [PNAME.AMBIENT_AND_DIFFUSE]: 1, [PNAME.AMBIENT]: 2, [PNAME.DIFFUSE]: 3, [PNAME.SPECULAR]: 4, [PNAME.EMISSION]: 5 };
+  const genMode = (caps, g, k) => (caps.has(0x0c60 + k) ? (g[k].mode === 0x2401 ? 1 : g[k].mode === 0x2402 ? 2 : 0) : 0);
+  // Each primitive's triangles as index triples, the provoking vertex last (WebGL's flat varyings take it).
+  // A quad is cut as assemble() cuts it: along 0-2 from arrays, along 1-3 in immediate mode.
+  function triangleIndices(mode, el, flat, fromArrays = true) {
+    const n = el.length, out = [];
+    const t = (a, b, c) => { out.push(el[a], el[b], el[c]); };
+    switch (mode) {
+      case 4: for (let i = 0; i + 2 < n; i += 3) t(i, i + 1, i + 2); break;
+      case 5: for (let i = 0; i + 2 < n; i++) (i & 1) ? t(i + 1, i, i + 2) : t(i, i + 1, i + 2); break;
+      case 6: for (let i = 1; i + 1 < n; i++) t(0, i, i + 1); break;
+      case 7:
+        if (fromArrays) for (let i = 0; i + 3 < n; i += 4) { t(i, i + 1, i + 2); t(i, i + 2, i + 3); }
+        else for (let i = 0; i + 3 < n; i += 4) { t(i, i + 1, i + 3); t(i + 1, i + 2, i + 3); }
+        break;
+      case 8: for (let i = 0; i + 3 < n; i += 2) { t(i, i + 1, i + 3); flat ? t(i + 2, i, i + 3) : t(i, i + 3, i + 2); } break;
+      case 9: for (let i = 1; i + 1 < n; i++) flat ? t(i, i + 1, 0) : t(0, i, i + 1); break;
+      default: return null;
+    }
+    return out;
+  }
+  // What the fixed-function vertex shader needs of the state, as typed arrays (makeWebGL's drawArrays).
+  function tnlUniforms() {
+    const mv = s.stacks[MODELVIEW].at(-1), lit = s.caps.has(CAP.LIGHTING), fl = new Int32Array(13);
+    fl[0] = lit ? 1 : 0; fl[1] = s.caps.has(CAP.NORMALIZE) ? 1 : 0; fl[2] = lit && s.twoSide ? 1 : 0;
+    if (lit && s.caps.has(0x0b57)) {
+      const { face, mode } = s.colourMaterial;
+      fl[3] = CM_MODE[mode] ?? 0; fl[4] = face === FRONT ? 1 : face === BACK ? 2 : 3;
+    }
+    const lPos = new Float32Array(32), lAmb = new Float32Array(32), lDif = new Float32Array(32), lSpe = new Float32Array(32), lAtt = new Float32Array(32);
+    for (let i = 0; i < 8; i++) {
+      if (!s.caps.has(CAP.LIGHT0 + i)) continue;
+      const L = s.lights[i];
+      fl[5] |= 1 << i;
+      lPos.set(L.position, 4 * i); lAmb.set(L.ambient, 4 * i); lDif.set(L.diffuse, 4 * i); lSpe.set(L.specular, 4 * i); lAtt.set(L.attenuation ?? [1, 0, 0], 4 * i);
+    }
+    const clipP = new Float32Array(24);
+    for (let i = 0; i < 6; i++) if (s.clipPlanes[i] && s.caps.has(CAP.CLIP_PLANE0 + i)) { fl[6] |= 1 << i; clipP.set(s.clipPlanes[i], 4 * i); }
+    const tm = new Float32Array(48), genS = new Float32Array(12), genT = new Float32Array(12);
+    for (let k = 0; k < UNITS; k++) {
+      const caps = k ? s.units[k].caps : s.caps, g = k ? s.units[k].texGen : s.texGen;
+      fl[7 + 2 * k] = genMode(caps, g, 0); fl[8 + 2 * k] = genMode(caps, g, 1);
+      genS.set(g[0].object, 4 * k); genT.set(g[1].object, 4 * k);
+      tm.set(k ? s.units[k].matrix.at(-1) : s.stacks[TEXTURE_MATRIX].at(-1), 16 * k);
+    }
+    const mat = (m) => [...m.ambient, ...m.diffuse, ...m.specular, ...m.emission];
+    return {
+      mv: Float32Array.from(mv), proj: Float32Array.from(s.stacks[PROJECTION].at(-1)), nmat: Float32Array.from(normalMatrixOf(mv)), fl,
+      sceneAmb: Float32Array.from(s.sceneAmbient), mF: Float32Array.from(mat(s.material)), mB: Float32Array.from(mat(s.backMaterial)),
+      sh: Float32Array.of(s.material.shininess, s.backMaterial.shininess), lPos, lAmb, lDif, lSpe, lAtt, tm, genS, genT, clipP,
+    };
+  }
+  /*
+   * The vertex shader's uniforms, once per state: the same cache as gpuState's, which every command
+   * that is not a vertex's clears. Immediate mode asks for them at every glEnd.
+   */
+  let tnlFor = null, tnlVal = null;
+  const tnlCached = () => { const st = gpuState(); if (tnlFor !== st) { tnlFor = st; tnlVal = tnlUniforms(); } return tnlVal; };
+  /*
+   * IMMEDIATE MODE on the GPU: between glBegin and glEnd each vertex's attributes are recorded as
+   * given -- its position, the current colour, normal and each unit's coordinate (s, t, r, q), REC
+   * floats -- and glEnd hands the primitive to makeWebGL, which batches consecutive primitives drawn
+   * with the same state into one draw (Quake begins and ends a polygon per surface). A glMaterial
+   * inside the primitive sends what was recorded through vertex() first, under the material it had,
+   * and the rest of the primitive goes that way too.
+   */
+  const REC = 23;
+  let rec = new Float32Array(REC * 1024), recN = 0, recFar = false;
+  /*
+   * A primitive whose coordinates reach past FAR goes through vertex() after all: the GPU clips it
+   * itself, and a GPU's clipper has a range (SwiftShader draws nothing of a rectangle 10^6 times the
+   * clip volume), where vertex()'s path has the guard band (clipGuard). Coordinates of objects drawn
+   * the usual way are far inside it -- Quake's maps are within +-4096.
+   */
+  const FAR = 1e5;
+  const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9;
+  function recordVertex(x, y, z) {
+    if ((recN + 1) * REC > rec.length) { const r = new Float32Array(rec.length * 2); r.set(rec); rec = r; }
+    if (x > FAR || x < -FAR || y > FAR || y < -FAR || z > FAR || z < -FAR) recFar = true;
+    const o = recN++ * REC, c = s.colour, n = s.normal, t = s.tex, u1 = s.units[1].coord, u2 = s.units[2].coord;
+    rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = 1;
+    rec[o + 4] = c[0]; rec[o + 5] = c[1]; rec[o + 6] = c[2]; rec[o + 7] = c[3];
+    rec[o + 8] = t[0]; rec[o + 9] = t[1]; rec[o + 10] = t.length > 2 ? t[2] : 0; rec[o + 11] = 1;
+    rec[o + 12] = n[0]; rec[o + 13] = n[1]; rec[o + 14] = n[2];
+    rec[o + 15] = u1[0]; rec[o + 16] = u1[1]; rec[o + 17] = u1[2]; rec[o + 18] = u1[3];
+    rec[o + 19] = u2[0]; rec[o + 20] = u2[1]; rec[o + 21] = u2[2]; rec[o + 22] = u2[3];
+  }
+  // The recorded vertices through vertex(), each with the current values it was given, which are put back.
+  function replayRecorded() {
+    const keep = [s.colour, s.normal, s.tex, s.units[1].coord, s.units[2].coord];
+    s.gpuPrim = false;
+    for (let i = 0; i < recN; i++) {
+      const o = i * REC, r = (k, m) => Array.from(rec.subarray(o + k, o + k + m));
+      s.colour = r(4, 4); s.tex = r(8, 3); s.normal = r(12, 3); s.units[1].coord = r(15, 4); s.units[2].coord = r(19, 4);
+      vertex(rec[o], rec[o + 1], rec[o + 2]);
+    }
+    recN = 0;
+    [s.colour, s.normal, s.tex, s.units[1].coord, s.units[2].coord] = keep;
+  }
+  function endGpuPrimitive(mode) {
+    const flat = s.shade === FLAT, n = recN;
+    recN = 0;
+    if ((flat && mode === 7 && s.fromArrays) || recFar) { recN = n; recFar = false; replayRecorded(); assemble(mode, s.verts); s.verts = []; return; }
+    const tri = triangleIndices(mode, Array.from({ length: n }, (_, i) => i), flat, !!s.fromArrays);
+    if (!tri || !tri.length) return;
+    const st = gpuState();
+    webgl.primitive(st, `tnl${st.multi ? '-multi' : ''}${flat ? '-flat' : ''}`, tnlCached(), s.caps.has(CAP.CULL_FACE) ? [s.cullFace, s.frontFace] : null,
+      rec.subarray(0, n * REC), n, tri);
+    s.stats.triangles += tri.length / 3; s.stats.gpuDraws++;
+    // GL_COLOR_MATERIAL: the material follows the current colour, as vertex() leaves it.
+    if (s.caps.has(CAP.LIGHTING) && s.caps.has(0x0b57)) {
+      const { face, mode: cm } = s.colourMaterial;
+      for (const m of face === FRONT ? [s.material] : face === BACK ? [s.backMaterial] : [s.material, s.backMaterial]) {
+        if (cm === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = s.colour; m.diffuse = s.colour; }
+        else if (cm === PNAME.AMBIENT) m.ambient = s.colour;
+        else if (cm === PNAME.DIFFUSE) m.diffuse = s.colour;
+        else if (cm === PNAME.SPECULAR) m.specular = s.colour;
+        else if (cm === PNAME.EMISSION) m.emission = s.colour;
+      }
+    }
+  }
+  /** Draw `count` elements of the enabled arrays on the GPU; false when the state is not one it covers. */
+  function gpuArrays(mode, count, indexAt) {
+    if (!webgl || !tnl || glsl.current()) return false;
+    const flat = s.shade === FLAT;
+    if (mode < 4 || mode > 9 || (flat && mode === 7)) return false;
+    const va = s.arrays.vertex;
+    if (!va.on || va.size < 2) return false;
+    const list = [[0, va, false]];
+    if (s.arrays.color.on) list.push([1, s.arrays.color, true]);
+    if (s.arrays.tex.on) list.push([2, s.arrays.tex, false]);
+    if (s.arrays.normal.on) list.push([4, s.arrays.normal, true]);
+    for (let k = 1; k < UNITS; k++) if (s.units[k].array.on) list.push([4 + k, s.units[k].array, false]);
+    for (const [, a] of list) if (!ARRAY_TYPES.has(a.type) || a.ptr % a.n || a.step % a.n) return false;
+    const el = new Uint32Array(count);
+    for (let i = 0; i < count; i++) el[i] = indexAt(i);
+    const tri = triangleIndices(mode, el, flat);
+    if (!tri) return false;
+    if (!tri.length) return true;
+    let lo = Infinity, hi = -1;
+    for (const i of tri) { if (i < lo) lo = i; if (i > hi) hi = i; }
+    // The bytes each array spans for those elements, neighbouring spans (interleaved arrays) uploaded once.
+    const spans = list.map(([loc, a, norm]) => ({ loc, a, norm, start: a.ptr + lo * a.step, end: a.ptr + hi * a.step + a.size * a.n }))
+      .sort((x, y) => x.start - y.start);
+    const ranges = [];
+    for (const sp of spans) {
+      const r = ranges.at(-1);
+      if (r && sp.start <= r.end + 256) { r.end = Math.max(r.end, sp.end); r.spans.push(sp); }
+      else ranges.push({ start: sp.start, end: sp.end, spans: [sp] });
+    }
+    const attribs = [], uploads = [];
+    ranges.forEach((r, i) => {
+      const base = r.start & ~3;
+      uploads.push(M.u8.slice(base, r.end));
+      for (const sp of r.spans) attribs.push({ loc: sp.loc, size: sp.a.size, type: sp.a.type, norm: sp.norm, stride: sp.a.step, range: i, offset: sp.start - base });
+    });
+    const indices = hi - lo < 65536 ? new Uint16Array(tri.length) : new Uint32Array(tri.length);
+    for (let i = 0; i < tri.length; i++) indices[i] = tri[i] - lo;
+    const t0 = s.tex, u = s.units;
+    const consts = { 1: s.colour, 2: [t0[0], t0[1], t0.length > 2 ? t0[2] : 0, 1], 4: [...s.normal, 0], 5: u[1].coord, 6: u[2].coord };
+    const st = gpuState();
+    const key = `tnl${st.multi ? '-multi' : ''}${flat ? '-flat' : ''}`;
+    webgl.drawArrays(st, key, tnlCached(), uploads, attribs, consts, indices, s.caps.has(CAP.CULL_FACE) ? [s.cullFace, s.frontFace] : null);
+    s.stats.triangles += tri.length / 3; s.stats.gpuDraws++;
+    return true;
   }
 
   // --- clipping against the near plane (z + w >= 0), every attribute linear in clip space
@@ -1169,8 +1350,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = -(f + n) / (f - n);
       setTop(mul(top(), m));
     },
-    glBegin: (mode) => { s.prim = mode; s.verts = []; },
-    glEnd: () => { const v = s.verts; s.verts = []; const m = s.prim; s.prim = null; assemble(m, v); },
+    glBegin: (mode) => { s.prim = mode; s.verts = []; recN = 0; recFar = false; s.gpuPrim = gpuPrimitive(mode); },
+    glEnd: () => {
+      const m = s.prim; s.prim = null;
+      if (s.gpuPrim) { s.gpuPrim = false; endGpuPrimitive(m); return; }
+      const v = s.verts; s.verts = []; assemble(m, v);
+    },
     glVertex3f: (x, y, z) => vertex(x, y, z),
     glVertex3fv: (v) => vertex(v[0], v[1], v[2]),
     glVertex2f: (x, y) => vertex(x, y, 0),
@@ -1247,6 +1432,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       else throw new Error(`gl: glLightfv pname 0x${pname.toString(16)}`);
     },
     glMaterialfv: (face, pname, v) => {
+      if (s.gpuPrim) replayRecorded();          // between glBegin and glEnd: what came before keeps its material
       for (const m of face === FRONT ? [s.material] : face === BACK ? [s.backMaterial] : [s.material, s.backMaterial]) {
         if (pname === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = v; m.diffuse = v; }
         else if (pname === PNAME.AMBIENT) m.ambient = v;
@@ -1557,6 +1743,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // The arrays' elements first..first+count-1, between a Begin and an End of the mode.
     glDrawArrays: (mode, first, count) => {
       if (s.recording) throw new Error('gl: glDrawArrays inside a display list is not implemented');
+      if (gpuArrays(mode, count, (i) => first + i)) return;
       exec.glBegin(mode);
       for (let i = 0; i < count; i++) exec.glArrayElement(first + i);
       s.fromArrays = true; exec.glEnd(); s.fromArrays = false;
@@ -1566,6 +1753,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (s.recording) throw new Error('gl: glDrawElements inside a display list is not implemented');
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
       if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
+      if (gpuArrays(mode, count, size === 4 ? (i) => dv().getUint32(ptr + 4 * i, true) : size === 2 ? (i) => dv().getUint16(ptr + 2 * i, true) : (i) => M.u8[ptr + i])) return;
       exec.glBegin(mode);
       /*
        * One index is one vertex: within a call the arrays cannot change, so an index met again reuses
@@ -1715,13 +1903,14 @@ function makeWebGL(w, h, stencilBuffer = false) {
     if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) throw new Error(`gl: shader: ${g.getShaderInfoLog(sh)}`);
     return sh;
   };
+  let FS_FIXED = '', FS_MULTI = '';
   const prog = g.createProgram();
   g.attachShader(prog, shader(g.VERTEX_SHADER, `#version 300 es
 in vec4 pos; in vec4 col; in vec2 tc; in float ez;
 out vec4 v; out vec2 uv; out float eyeZ;
 uniform int zFlip;     // 1 while glDepthRange is reversed (near > far); see apply()
 void main() { gl_Position = vec4(pos.xy, zFlip == 1 ? -pos.z : pos.z, pos.w); v = col; uv = tc; eyeZ = ez; }`));
-  g.attachShader(prog, shader(g.FRAGMENT_SHADER, `#version 300 es
+  g.attachShader(prog, shader(g.FRAGMENT_SHADER, FS_FIXED = `#version 300 es
 precision highp float;
 in vec4 v; in vec2 uv; in float eyeZ; out vec4 o;
 uniform sampler2D tex;
@@ -1792,7 +1981,7 @@ in vec4 pos; in vec4 col; in vec2 tc; in float ez; in vec2 tc1; in vec2 tc2;
 out vec4 v; out vec2 uv; out float eyeZ; out vec2 uv1; out vec2 uv2;
 uniform int zFlip;
 void main() { gl_Position = vec4(pos.xy, zFlip == 1 ? -pos.z : pos.z, pos.w); v = col; uv = tc; eyeZ = ez; uv1 = tc1; uv2 = tc2; }`));
-    g.attachShader(p, shader(g.FRAGMENT_SHADER, `#version 300 es
+    g.attachShader(p, shader(g.FRAGMENT_SHADER, FS_MULTI = `#version 300 es
 precision highp float;
 in vec4 v; in vec2 uv; in float eyeZ; in vec2 uv1; in vec2 uv2; out vec4 o;
 uniform sampler2D tex0, tex1, tex2;
@@ -1863,6 +2052,103 @@ void main() {
     g.uniform1i(loc('tex0'), 0); g.uniform1i(loc('tex1'), 2); g.uniform1i(loc('tex2'), 3);
     return multi;
   };
+  /*
+   * THE FIXED-FUNCTION VERTEX SHADER (P15.15): what the front end's vertex() computes, from the
+   * program's own arrays -- see gpuArrays. Its lighting is litColour's: emission and scene ambient,
+   * then each enabled light, directional or positional with 1 / (kc + kl d + kq d^2), the half vector
+   * towards +z (no local viewer), specular only where the diffuse term lights. Paired with either
+   * fragment shader, which takes the face's colour (two-sided lighting) and discards what a user clip
+   * plane removes; with `flat` varyings for flat shading, the provoking vertex last.
+   */
+  const tnlVS = (q) => `#version 300 es
+in vec4 pos; in vec4 col; in vec4 tc0; in vec3 nrm; in vec4 tc1; in vec4 tc2;
+uniform mat4 mv, proj; uniform mat3 nmat;
+// fl: lighting, normalize, two sides, colour material (1 ambient and diffuse, 2 ambient, 3 diffuse, 4 specular,
+// 5 emission), its faces (1 front, 2 back, 3 both), the lights on (bits), the clip planes on (bits), then
+// each unit's generation of s and t (1 object linear, 2 sphere map).
+uniform int fl[13];
+uniform vec4 sceneAmb, mF[4], mB[4]; uniform vec2 sh;
+uniform vec4 lPos[8], lAmb[8], lDif[8], lSpe[8], lAtt[8];
+uniform mat4 tm[3]; uniform vec4 genS[3], genT[3], clipP[6];
+uniform int zFlip;
+${q}out vec4 vF; ${q}out vec4 vB; out vec2 uv; out float eyeZ; out vec2 uv1; out vec2 uv2; out float clipD[6];
+vec4 lit(vec4 a, vec4 d, vec4 sp, vec4 e, float shin, vec3 n, vec3 p) {
+  vec3 c = e.rgb + sceneAmb.rgb * a.rgb;
+  for (int i = 0; i < 8; i++) {
+    if ((fl[5] & (1 << i)) == 0) continue;
+    vec3 dir; float att = 1.0;
+    if (lPos[i].w == 0.0) dir = normalize(lPos[i].xyz);
+    else { vec3 v = lPos[i].xyz - p; float dd = length(v); dir = dd > 0.0 ? v / dd : vec3(0.0); att = 1.0 / (lAtt[i].x + lAtt[i].y * dd + lAtt[i].z * dd * dd); }
+    float ndl = max(0.0, dot(n, dir)), spec = 0.0;
+    if (ndl > 0.0 && (sp.r != 0.0 || sp.g != 0.0 || sp.b != 0.0)) {
+      float ndh = max(0.0, dot(n, normalize(dir + vec3(0.0, 0.0, 1.0))));
+      spec = shin > 0.0 ? pow(ndh, shin) : (ndh > 0.0 ? 1.0 : 0.0);
+    }
+    c += att * (lAmb[i].rgb * a.rgb + ndl * lDif[i].rgb * d.rgb + spec * lSpe[i].rgb * sp.rgb);
+  }
+  return clamp(vec4(c, d.a), 0.0, 1.0);
+}
+vec2 coord(int k, vec4 c, vec2 sm) {
+  int gs = fl[7 + 2 * k], gt = fl[8 + 2 * k];
+  if (gs == 1) c.x = dot(genS[k], vec4(pos.xyz, 1.0)); else if (gs == 2) c.x = sm.x;
+  if (gt == 1) c.y = dot(genT[k], vec4(pos.xyz, 1.0)); else if (gt == 2) c.y = sm.y;
+  vec4 t = tm[k] * c;
+  return t.xy / t.w;
+}
+void main() {
+  vec4 eye = mv * pos, cp = proj * eye;
+  gl_Position = vec4(cp.xy, zFlip == 1 ? -cp.z : cp.z, cp.w);
+  eyeZ = abs(eye.z / eye.w);
+  vec3 p = eye.xyz / eye.w, en = nrm * nmat, n = fl[1] == 1 ? normalize(en) : en;
+  vec2 sm = vec2(0.5);
+  if (fl[7] == 2 || fl[8] == 2 || fl[9] == 2 || fl[10] == 2 || fl[11] == 2 || fl[12] == 2) {
+    vec3 un = normalize(en), u = normalize(p), r = u - 2.0 * dot(un, u) * un;
+    float m = 2.0 * sqrt(r.x * r.x + r.y * r.y + (r.z + 1.0) * (r.z + 1.0));
+    if (m == 0.0) m = 1.0;
+    sm = vec2(r.x / m + 0.5, r.y / m + 0.5);
+  }
+  if (fl[0] == 1) {
+    vec4 aF = mF[0], dF = mF[1], sF = mF[2], eF = mF[3], aB = mB[0], dB = mB[1], sB = mB[2], eB = mB[3];
+    int cm = fl[3];
+    if (cm != 0 && (fl[4] & 1) != 0) { if (cm == 1 || cm == 2) aF = col; if (cm == 1 || cm == 3) dF = col; if (cm == 4) sF = col; if (cm == 5) eF = col; }
+    if (cm != 0 && (fl[4] & 2) != 0) { if (cm == 1 || cm == 2) aB = col; if (cm == 1 || cm == 3) dB = col; if (cm == 4) sB = col; if (cm == 5) eB = col; }
+    vF = lit(aF, dF, sF, eF, sh.x, n, p);
+    vB = fl[2] == 1 ? lit(aB, dB, sB, eB, sh.y, -n, p) : vF;
+  } else { vF = clamp(col, 0.0, 1.0); vB = vF; }
+  uv = coord(0, tc0, sm); uv1 = coord(1, tc1, sm); uv2 = coord(2, tc2, sm);
+  for (int i = 0; i < 6; i++) clipD[i] = dot(clipP[i], eye);
+}`;
+  const tnlFS = (src, q) => src.replace('in vec4 v; ', `${q}in vec4 vF; ${q}in vec4 vB; in float clipD[6]; `)
+    .replace('void main() {\n', 'uniform int twoSided, clipMask;\nvoid main() {\n  for (int i = 0; i < 6; i++) if ((clipMask & (1 << i)) != 0 && clipD[i] < 0.0) discard;\n  vec4 v = twoSided == 1 && !gl_FrontFacing ? vB : vF;\n');
+  const TNL_UNIFORMS = ['mv', 'proj', 'nmat', 'fl', 'sceneAmb', 'mF', 'mB', 'sh', 'lPos', 'lAmb', 'lDif', 'lSpe', 'lAtt', 'tm', 'genS', 'genT', 'clipP'];
+  const tnlPrograms = new Map();
+  const tnlProgram = (key) => {
+    let rec = tnlPrograms.get(key);
+    if (rec) return rec;
+    const isMulti = key.includes('multi'), q = key.includes('flat') ? 'flat ' : '';
+    if (isMulti) multiProgram();                       // FS_MULTI is written when that program is made
+    const p = g.createProgram();
+    g.attachShader(p, shader(g.VERTEX_SHADER, tnlVS(q)));
+    g.attachShader(p, shader(g.FRAGMENT_SHADER, tnlFS(isMulti ? FS_MULTI : FS_FIXED, q)));
+    [['pos', 0], ['col', 1], ['tc0', 2], ['nrm', 4], ['tc1', 5], ['tc2', 6]].forEach(([nm, i]) => g.bindAttribLocation(p, i, nm));
+    g.linkProgram(p);
+    if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(p)}`);
+    const loc = (nm) => g.getUniformLocation(p, nm);
+    const common = ['alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip', 'twoSided', 'clipMask'];
+    rec = isMulti
+      ? { p, U: Object.fromEntries(common.map((nm) => [nm, loc(nm)]).concat([['textured', null], ['base', null], ['env', null]])),
+        on: loc('on'), base: loc('base'), env: loc('env'), cA: loc('cA'), cB: loc('cB'), cC: loc('cC'), kc: loc('kc'), sc: loc('sc') }
+      : { p, U: Object.fromEntries(['tex', 'textured', 'base', 'env', ...common].map((nm) => [nm, loc(nm)])) };
+    rec.vs = Object.fromEntries(TNL_UNIFORMS.map((nm) => [nm, loc(nm)]));
+    rec.last = {};
+    g.useProgram(p);
+    if (isMulti) { g.uniform1i(loc('tex0'), 0); g.uniform1i(loc('tex1'), 2); g.uniform1i(loc('tex2'), 3); } else g.uniform1i(loc('tex'), 0);
+    tnlPrograms.set(key, rec);
+    return rec;
+  };
+  const fixedRec = { p: prog, U: U0 };
+  let curRec = fixedRec;
+  const recFor = (key) => (key === 'fixed' ? fixedRec : key === 'fixed-multi' ? multiProgram() : tnlProgram(key));
   // The uniforms the two fixed programs share by name: switching between them, each is sent again.
   const FIXED_UNIFORMS = ['textured', 'base', 'env', 'alpha', 'fog', 'multi'];
   g.uniform1i(U.tex, 0);
@@ -1882,6 +2168,8 @@ void main() {
   // batch drawn with one, so a program without one sends WebGL what it always did.
   let normalBuffer = null, normals = null;
   let n = 0, mode = g.TRIANGLES, key = null, pending = null;
+  let tnlVao = null, tnlIndexBuffer = null;
+  const tnlBuffers = [];
   const BASES = { RGB: 0, RGBA: 1, L: 2, LA: 3, A: 4, I: 5 };
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
   const FILT = { 0x2600: g.NEAREST, 0x2601: g.LINEAR, 0x2700: g.NEAREST_MIPMAP_NEAREST, 0x2701: g.LINEAR_MIPMAP_NEAREST, 0x2702: g.NEAREST_MIPMAP_LINEAR, 0x2703: g.LINEAR_MIPMAP_LINEAR };
@@ -1897,17 +2185,19 @@ void main() {
   const texParams = new Map();                // texture id -> its min, mag and wraps as last set
   const gpuTex3 = new Map(), texParams3 = new Map();   // the same for GL_TEXTURE_3D (its default object is id 0)
   const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
-  function apply(st) {
+  function apply(st, tnlKey = null) {
     // The program first: a GLSL program's (its uniforms, and the depth range's flip, which its vertex
     // stage applies too) or the fixed function's, which keeps its own uniforms from before.
     // The fixed path's key never changes ('fixed', as `applied` starts and as readDepth leaves it), so a
     // program that uses no GLSL sends WebGL exactly what it sent before GLSL existed (gate-webgl-stream).
-    put('program', st.glsl ? `${st.program},${st.range},${st.cull},${st.xf ? st.xf.id : ''}` : st.multi ? 'fixed-multi' : 'fixed', () => {
+    const key = st.glsl ? `${st.program},${st.range},${st.cull},${st.xf ? st.xf.id : ''}` : tnlKey ?? (st.multi ? 'fixed-multi' : 'fixed');
+    put('program', key, () => {
       const flip = st.range.split(',').map(Number).reduce((dn, df) => (dn > df ? 1 : 0));
       if (!programs.use(st.glsl, flip, st.xf)) {
-        const m = st.multi ? multiProgram() : null, nu = m ? m.U : U0;
-        if (nu !== U) { U = nu; for (const k of FIXED_UNIFORMS) delete applied[k]; }
-        g.useProgram(m ? m.p : prog); g.uniform1i(U.zFlip, zFlip);
+        const rec = recFor(key);
+        if (rec.U !== U) { U = rec.U; for (const k of FIXED_UNIFORMS) delete applied[k]; }
+        curRec = rec;
+        g.useProgram(rec.p); g.uniform1i(U.zFlip, zFlip);
       }
       // Culling is WebGL's only under a vertex shader (gl.js culls the rest itself), so only then is it on.
       if (st.cull) { const [cf, ff] = st.cull.split(',').map(Number); g.enable(g.CULL_FACE); g.cullFace(cf); g.frontFace(ff); culling = true; }
@@ -1998,12 +2288,62 @@ void main() {
         cA.set([fr, fa, s0, s1], 4 * k); cB.set([s2, a0, a1, a2], 4 * k); cC.set([o0, o1, o2, p0 + 4 * p1 + 16 * p2], 4 * k);
         kc.set([r, gg, bb, aa], 4 * k); sc.set([scR, scA], 2 * k);
       }
-      g.uniform1iv(multi.on, on); g.uniform1iv(multi.base, base); g.uniform1iv(multi.env, env);
-      g.uniform4iv(multi.cA, cA); g.uniform4iv(multi.cB, cB); g.uniform4iv(multi.cC, cC);
-      g.uniform4fv(multi.kc, kc); g.uniform2fv(multi.sc, sc);
+      const r = curRec;
+      g.uniform1iv(r.on, on); g.uniform1iv(r.base, base); g.uniform1iv(r.env, env);
+      g.uniform4iv(r.cA, cA); g.uniform4iv(r.cB, cB); g.uniform4iv(r.cC, cC);
+      g.uniform4fv(r.kc, kc); g.uniform2fv(r.sc, sc);
     });
   }
+  /*
+   * The program, its vertex-shader uniforms and the culling, for a draw with the fixed-function
+   * vertex shader. The uniforms are sent when the state object is not the one last sent (the front end
+   * keeps one per state), and then only those that differ.
+   */
+  function tnlBind(st, progKey, vu, cull) {
+    apply(st, progKey);
+    const rec = curRec, last = rec.last;
+    if (rec.lastVu !== vu) {
+      rec.lastVu = vu;
+      for (const nm of TNL_UNIFORMS) {
+        const v = vu[nm], was = last[nm];
+        if (was && was.length === v.length && was.every((x, i) => x === v[i])) continue;
+        last[nm] = v;
+        const l = rec.vs[nm];
+        if (nm === 'mv' || nm === 'proj' || nm === 'tm') g.uniformMatrix4fv(l, false, v);
+        else if (nm === 'nmat') g.uniformMatrix3fv(l, false, v);
+        else if (nm === 'fl') { g.uniform1iv(l, v); g.uniform1i(rec.U.twoSided, v[2]); g.uniform1i(rec.U.clipMask, v[6]); }
+        else if (nm === 'sh') g.uniform2fv(l, v);
+        else g.uniform4fv(l, v);
+      }
+    }
+    if (cull) { g.enable(g.CULL_FACE); g.cullFace(cull[0]); g.frontFace(cull[1]); culling = true; }
+    else if (culling) { g.disable(g.CULL_FACE); culling = false; }
+  }
+  // The batch of immediate-mode primitives (primitive()), drawn from its own buffers and vertex array object.
+  const IMM = 23, IMMV = 65536, IMMI = 3 * 65536;
+  let imm = null, immVao = null, immBuffer = null, immIndexBuffer = null, immData_ = null, immIdx_ = null;
+  const immArrays = () => { immData_ ??= new Float32Array(IMMV * IMM); immIdx_ ??= new Uint32Array(IMMI); };
+  function drawImmediate(p) {
+    tnlBind(p.st, p.progKey, p.vu, p.cull);
+    if (!immVao) {
+      immVao = g.createVertexArray(); immBuffer = g.createBuffer(); immIndexBuffer = g.createBuffer();
+      g.bindVertexArray(immVao);
+      g.bindBuffer(g.ARRAY_BUFFER, immBuffer);
+      const S = IMM * 4;
+      for (const [loc, size, off] of [[0, 4, 0], [1, 4, 16], [2, 4, 32], [4, 3, 48], [5, 4, 60], [6, 4, 76]]) {
+        g.enableVertexAttribArray(loc); g.vertexAttribPointer(loc, size, g.FLOAT, false, S, off);
+      }
+      g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, immIndexBuffer);
+    } else g.bindVertexArray(immVao);
+    g.bindBuffer(g.ARRAY_BUFFER, immBuffer);
+    g.bufferData(g.ARRAY_BUFFER, immData_.subarray(0, p.n * IMM), g.STREAM_DRAW);
+    g.bufferData(g.ELEMENT_ARRAY_BUFFER, immIdx_.subarray(0, p.ni), g.STREAM_DRAW);
+    g.drawElements(g.TRIANGLES, p.ni, g.UNSIGNED_INT, 0);
+    g.bindVertexArray(null);
+    g.bindBuffer(g.ARRAY_BUFFER, vertexBuffer);
+  }
   const flush = () => {
+    if (imm) { const p = imm; imm = null; if (p.ni) drawImmediate(p); }
     if (!n) return;
     apply(pending);
     if (pending.multi) {
@@ -2072,6 +2412,51 @@ void main() {
       key = null;
     },
     tri(a, b, c, flat, st) { begin(st, g.TRIANGLES, 3); push(a, flat); push(b, flat); push(c, flat); },
+    /*
+     * A primitive of the program's own arrays, transformed and lit by the fixed-function vertex shader
+     * (installGL's gpuArrays): `uploads` the bytes the arrays span, `attribs` where each array is in
+     * them, `consts` the current values of the arrays that are off, `indices` the triangles. Its own
+     * vertex array object, so the batches' attribute setup is untouched.
+     */
+    drawArrays(st, progKey, vu, uploads, attribs, consts, indices, cull) {
+      flush();
+      tnlBind(st, progKey, vu, cull);
+      tnlVao ??= g.createVertexArray();
+      g.bindVertexArray(tnlVao);
+      uploads.forEach((bytes, i) => { g.bindBuffer(g.ARRAY_BUFFER, tnlBuffers[i] ??= g.createBuffer()); g.bufferData(g.ARRAY_BUFFER, bytes, g.STREAM_DRAW); });
+      const on = new Set();
+      for (const a of attribs) {
+        g.bindBuffer(g.ARRAY_BUFFER, tnlBuffers[a.range]);
+        g.enableVertexAttribArray(a.loc); g.vertexAttribPointer(a.loc, a.size, a.type, a.norm, a.stride, a.offset);
+        on.add(a.loc);
+      }
+      for (const l of [1, 2, 4, 5, 6]) if (!on.has(l)) { const c = consts[l]; g.disableVertexAttribArray(l); g.vertexAttrib4f(l, c[0], c[1], c[2] ?? 0, c[3] ?? 1); }
+      g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, tnlIndexBuffer ??= g.createBuffer());
+      g.bufferData(g.ELEMENT_ARRAY_BUFFER, indices, g.STREAM_DRAW);
+      g.drawElements(g.TRIANGLES, indices.length, indices instanceof Uint16Array ? g.UNSIGNED_SHORT : g.UNSIGNED_INT, 0);
+      g.bindVertexArray(null);
+      g.bindBuffer(g.ARRAY_BUFFER, vertexBuffer);
+      key = null;
+    },
+    /*
+     * One immediate-mode primitive, its vertices as recorded (installGL's recordVertex, IMM floats
+     * each) and its triangles: appended to the batch while the state is the same object, drawn by
+     * flush() like the batches of transformed triangles.
+     */
+    primitive(st, progKey, vu, cull, verts, nv, tri) {
+      immArrays();
+      const p = imm;
+      const sameCull = (a, b) => (a === null ? b === null : b !== null && a[0] === b[0] && a[1] === b[1]);
+      if (!p || p.st !== st || p.progKey !== progKey || p.vu !== vu || !sameCull(p.cull, cull) || p.n + nv > IMMV || p.ni + tri.length > IMMI) {
+        flush();
+        imm = { st, progKey, vu, cull, n: 0, ni: 0 };
+        key = null;                                   // the next batch of transformed triangles flushes this one
+      }
+      const q = imm;
+      immData_.set(verts, q.n * IMM);
+      for (let i = 0; i < tri.length; i++) immIdx_[q.ni + i] = q.n + tri[i];
+      q.n += nv; q.ni += tri.length;
+    },
     line(a, b, st) { begin(st, g.LINES, 2); push(a); push(b); },
     viewport(x, y, vw, vh) { flush(); g.viewport(x, y, vw, vh); view = [x, y, vw, vh]; },
     clear(mask, colour, depth, scissor, colorMask = [true, true, true, true], depthMask = true, stencil = null) {
@@ -2113,7 +2498,7 @@ void main() {
       g.useProgram(prog);
       g.bindFramebuffer(g.FRAMEBUFFER, target);
       g.viewport(...view);
-      key = null; applied = { program: 'fixed' }; U = U0;
+      key = null; applied = { program: 'fixed' }; U = U0; curRec = fixedRec; U = U0;
       const out = new Float32Array(rw * rh);
       for (let i = 0; i < rw * rh; i++) out[i] = (px[4 * i] | (px[4 * i + 1] << 8) | (px[4 * i + 2] << 16)) / 16777215;
       return out;

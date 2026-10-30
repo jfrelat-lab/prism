@@ -33,7 +33,8 @@ const CAPTURE = process.argv.includes('--capture');
 const Q3 = process.env.PRISM_QUAKE3_DATA;
 
 /** The WebGL state a draw or a clear depends on, as the recorded calls leave it. */
-const model = () => ({ caps: new Set(), set: {}, program: '', fb: '', vao: '', unit: 0, units: {}, params: {}, contents: {}, uniforms: {}, buffer: '', store: {} });
+const model = () => ({ caps: new Set(), set: {}, program: '', fb: '', vao: '', unit: 0, units: {}, params: {}, contents: {}, uniforms: {}, buffer: '', store: {},
+  bound: {}, buffers: {}, attribs: {} });
 const STATE_SETTERS = new Set(['blendFunc', 'depthFunc', 'depthMask', 'depthRange', 'scissor', 'colorMask', 'polygonOffset', 'stencilFunc',
   'stencilOp', 'stencilMask', 'viewport', 'clearColor', 'clearDepth', 'clearStencil', 'frontFace', 'cullFace']);
 function track(m, p, a, id, bytes) {
@@ -51,14 +52,25 @@ function track(m, p, a, id, bytes) {
     const t = m.units[m.unit];
     m.contents[t] = createHash('sha256').update(`${m.contents[t] ?? ''}${p}(${a.filter((v) => !ArrayBuffer.isView(v)).map(String)})${JSON.stringify(m.store)}`).update(bytes).digest('hex');
   } else if (/^uniform/.test(p)) m.uniforms[id(a[0])] = a.slice(1).map(String).join(',');
-  else if (p === 'bufferData') m.buffer = createHash('sha256').update(bytes).digest('hex');
+  else if (p === 'bufferData') {
+    // A draw's vertices and, for an indexed one, its indices: each buffer's contents by the buffer.
+    m.buffer = createHash('sha256').update(bytes).digest('hex');
+    m.buffers[m.bound[a[0]] ?? a[0]] = m.buffer;
+  } else if (p === 'bindBuffer') m.bound[a[0]] = id(a[1]);
+  // The vertex attributes, per vertex array object: where each reads (the array buffer bound when its
+  // pointer was set), whether it is on, and the constant an attribute that is off reads.
+  else if (p === 'vertexAttribPointer') m.attribs[`${m.vao}:${a[0]}:ptr`] = `${a.map(String)}@${m.bound[fnvArray] ?? ''}`;
+  else if (p === 'enableVertexAttribArray' || p === 'disableVertexAttribArray') m.attribs[`${m.vao}:${a[0]}:on`] = p[0] === 'e';
+  else if (p === 'vertexAttrib4f') m.attribs[`const:${a[0]}`] = a.slice(1).map(String).join(',');
   else return false;
   return true;
 }
+const fnvArray = String((() => { let x = 0x811c9dc5; for (const ch of 'ARRAY_BUFFER') x = Math.imul(x ^ ch.charCodeAt(0), 0x01000193) >>> 0; return x; })());
 const snapshot = (m, p, a) => JSON.stringify({
   call: `${p}(${a.map(String)})`, caps: [...m.caps].sort(), set: m.set, program: m.program, fb: m.fb, vao: m.vao, buffer: m.buffer,
   textures: Object.entries(m.units).sort().map(([u, t]) => [u, t, m.params[t] ?? {}, m.contents[t] ?? '']),
   uniforms: Object.entries(m.uniforms).sort(),
+  buffers: Object.entries(m.buffers).sort(), attribs: Object.entries(m.attribs).sort(),
 });
 
 // A WebGL2 context that does nothing but remember. Constants are numbers derived from their names,
@@ -71,7 +83,7 @@ const context = new Proxy({}, {
     if (/^[A-Z0-9_]+$/.test(p)) return fnv(p);
     return (...a) => {
       rec.calls++;
-      if (p === 'drawArrays') rec.draws++;
+      if (p === 'drawArrays' || p === 'drawElements') rec.draws++;
       const args = a.map((v) => {
         if (v && typeof v === 'object' && ArrayBuffer.isView(v)) {
           if (p !== 'readPixels') rec.h.update(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
@@ -84,7 +96,7 @@ const context = new Proxy({}, {
       const view = a.find((v) => v && typeof v === 'object' && ArrayBuffer.isView(v));
       const bytes = view ? new Uint8Array(view.buffer, view.byteOffset, view.byteLength) : new Uint8Array(0);
       const id = (o) => (o ? `#${rec.ids.get(o)}` : 'null');
-      if (p === 'drawArrays' || p === 'clear') rec.d.update(snapshot(rec.m, p, a));
+      if (p === 'drawArrays' || p === 'drawElements' || p === 'clear') rec.d.update(snapshot(rec.m, p, a));
       else track(rec.m, p, a, id, bytes);
       // What the reversed-depth-range check below reads: the ranges asked of WebGL, and the shader's
       // z-flip switch.

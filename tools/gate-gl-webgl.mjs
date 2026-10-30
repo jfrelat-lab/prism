@@ -12,7 +12,7 @@
 // run that was looked at). The budget is what this backend did when captured: a change that makes it
 // draw worse than that fails.
 //
-//   node tools/gate-gl-webgl.mjs [scene ...] [--capture] [--png=<dir>]
+//   node tools/gate-gl-webgl.mjs [scene ...] [--capture] [--png=<dir>] [--cpu]
 //   SKIP when no Chrome is found (PRISM_CHROME=<path> names one)
 import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
@@ -29,9 +29,11 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'gl-webgl.json');
 const ALL = ['tex-nearest', 'tex-linear', 'mip-nn', 'mip-ln', 'mip-ll', 'lightmap', 'alpha', 'blend', 'fog', 'clip', 'depth',
   'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect',
-  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine'];
+  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights'];
 const args = process.argv.slice(2);
 const CAPTURE = args.includes('--capture');
+// --cpu: vertices transformed in JavaScript, as before P15.15's vertex shader -- to compare the two.
+const CPU = args.includes('--cpu');
 const pngDir = args.find((a) => a.startsWith('--png='))?.slice(6);
 const SCENES = args.filter((a) => !a.startsWith('--')).length ? args.filter((a) => !a.startsWith('--')) : ALL;
 const TOL = 8;
@@ -71,12 +73,12 @@ for (const scene of ${JSON.stringify(SCENES)}) {
   let frame = null, error = null;
   try {
     const program = loadSnapshot({ meta: B.meta, factory: B.factory, image });
-    buildEnv(program.M, ${JSON.stringify(target.env)}, { gl: { backend: 'webgl' }, dl: { modules: {} },
-      glut: { frames: [0], onFrame: (_n, rgba, w, h) => { frame = { rgba: rgba.slice(), w, h, backend: program.M.gl.backend }; } } });
+    buildEnv(program.M, ${JSON.stringify(target.env)}, { gl: { backend: 'webgl', tnl: ${!CPU} }, dl: { modules: {} },
+      glut: { frames: [0], onFrame: (_n, rgba, w, h) => { frame = { rgba: rgba.slice(), w, h, backend: program.M.gl.backend, gpu: program.M.gl.state.stats.gpuDraws }; } } });
     bindLateBuiltins(program);
     program.run(['scenes', scene]);
   } catch (e) { error = String(e.stack || e.message || e); }
-  await fetch('/frame?scene=' + scene + '&w=' + (frame?.w ?? 0) + '&h=' + (frame?.h ?? 0) + '&backend=' + (frame?.backend ?? '') + (error ? '&error=' + encodeURIComponent(error.slice(0, 400)) : ''),
+  await fetch('/frame?scene=' + scene + '&w=' + (frame?.w ?? 0) + '&h=' + (frame?.h ?? 0) + '&backend=' + (frame?.backend ?? '') + '&gpu=' + (frame?.gpu ?? 0) + (error ? '&error=' + encodeURIComponent(error.slice(0, 400)) : ''),
     { method: 'POST', body: frame ? frame.rgba : new Uint8Array(0) });
 }
 await fetch('/done', { method: 'POST' });
@@ -94,7 +96,7 @@ const server = createServer((req, res) => {
     req.on('end', () => {
       if (path === '/frame') {
         const q = url.searchParams;
-        frames[q.get('scene')] = { rgba: Buffer.concat(chunks), w: +q.get('w'), h: +q.get('h'), backend: q.get('backend'), error: q.get('error') };
+        frames[q.get('scene')] = { rgba: Buffer.concat(chunks), w: +q.get('w'), h: +q.get('h'), backend: q.get('backend'), gpu: +q.get('gpu'), error: q.get('error') };
       }
       res.end('ok');
       if (path === '/done') finish();
@@ -141,7 +143,7 @@ for (const scene of SCENES) {
   const ok = budget !== undefined && off <= budget;
   if (CAPTURE) captured[scene] = off;
   else if (!ok) bad++;
-  console.log(`${CAPTURE || ok ? '  ok ' : ' BAD '} ${scene.padEnd(18)} ${String(off).padStart(6)} of ${N} pixels off by more than ${TOL} (max ${max}, mean ${(sum / N / 3).toFixed(2)}); budget ${budget ?? 'none'}`);
+  console.log(`${CAPTURE || ok ? '  ok ' : ' BAD '} ${scene.padEnd(18)} ${String(off).padStart(6)} of ${N} pixels off by more than ${TOL} (max ${max}, mean ${(sum / N / 3).toFixed(2)}); budget ${budget ?? 'none'}${f.gpu ? `; ${f.gpu} draws transformed on the GPU` : ''}`);
   if (pngDir) {
     const W = m.w, H = m.h, out = new Uint8Array(W * 3 * H * 4);
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
