@@ -7,9 +7,9 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
 
 ## 2026-10-30
 
-- **3D programs, three times less JavaScript**: OpenGL's vertex work -- moving, lighting and texturing
-  each point -- now runs on the graphics card. Neverball's intro went from 41 to 122 frames a second
-  of JavaScript; every OpenGL game on the site draws through it.
+- **Faster 3D**: OpenGL's vertex work -- moving, lighting and texturing each point -- now runs on the
+  graphics card where it pays. Frames a second of JavaScript: Neverball 40 to 142, Enemy Territory
+  101 to 192, Quake III 55 to 95, Chromium B.S.U. 143 to 246.
 
 ## 2026-10-26
 
