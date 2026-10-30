@@ -39,4 +39,14 @@ void glutPostRedisplay(void);
 int glutGet(int what);
 void glutSwapBuffers(void);
 void glutMainLoop(void);
+/*
+ * THE WINDOW IS A FRAMEBUFFER OBJECT here (glut-egl.c), so a program that binds framebuffer 0 to draw
+ * into "the window" again would draw into nothing. Its binds go through glut-egl.c, which reads 0 as
+ * that framebuffer -- for the core and the EXT name alike. glut-egl.c itself binds the real ones.
+ */
+#ifndef PRISM_GLUT_EGL_IMPL
+void prism_glutBindFramebuffer(unsigned int target, unsigned int framebuffer);
+#define glBindFramebuffer(t, f) prism_glutBindFramebuffer((t), (f))
+#define glBindFramebufferEXT(t, f) prism_glutBindFramebuffer((t), (f))
+#endif
 #endif

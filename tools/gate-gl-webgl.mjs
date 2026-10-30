@@ -29,7 +29,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'gl-webgl.json');
 const ALL = ['tex-nearest', 'tex-linear', 'mip-nn', 'mip-ln', 'mip-ll', 'lightmap', 'alpha', 'blend', 'fog', 'clip', 'depth',
   'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect',
-  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights'];
+  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo'];
 const args = process.argv.slice(2);
 const CAPTURE = args.includes('--capture');
 // --cpu: vertices transformed in JavaScript, as before P15.15's vertex shader -- to compare the two.

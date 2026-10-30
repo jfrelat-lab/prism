@@ -25,5 +25,6 @@
   "rect-forms": 0,
   "multitex-shadow": 0,
   "combine": 0,
-  "lights": 13
+  "lights": 13,
+  "fbo": 35
 }

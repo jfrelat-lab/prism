@@ -21,9 +21,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#define PRISM_GLUT_EGL_IMPL 1
 #include "GL/glut.h"
 
 static int winW = 300, winH = 300, swaps = 0, redisplay = 0, stepMs = 40, lastFrame = 0;
+static GLuint windowFb = 0;   /* the window: what framebuffer 0 means to the program */
+void prism_glutBindFramebuffer(unsigned int target, unsigned int framebuffer) { glBindFramebuffer(target, framebuffer ? framebuffer : windowFb); }
 static unsigned int displayMode = 0;
 static int want[64], nwant = 0;
 static void (*displayCb)(void), (*reshapeCb)(int, int), (*idleCb)(void), (*visibilityCb)(int);
@@ -54,8 +57,8 @@ int glutCreateWindow(const char *title) {
   if (!eglChooseConfig(d, cfg, &c, 1, &n) || n < 1) { fprintf(stderr, "glut-egl: no config\n"); exit(2); }
   EGLContext ctx = eglCreateContext(d, c, EGL_NO_CONTEXT, NULL);   /* compatibility profile */
   if (!eglMakeCurrent(d, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx)) { fprintf(stderr, "glut-egl: makeCurrent failed\n"); exit(2); }
-  GLuint fb, rb[2];
-  glGenFramebuffers(1, &fb); glBindFramebuffer(GL_FRAMEBUFFER, fb);
+  GLuint rb[2];
+  glGenFramebuffers(1, &windowFb); glBindFramebuffer(GL_FRAMEBUFFER, windowFb);
   glGenRenderbuffers(2, rb);
   glBindRenderbuffer(GL_RENDERBUFFER, rb[0]); glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, winW, winH);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb[0]);

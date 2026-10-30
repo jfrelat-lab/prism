@@ -62,6 +62,11 @@
  *                 lighting with a back material of its own, and a glMaterial between two vertices of
  *                 one strip; beside it flat shading (a fan, quads, a polygon), a user clip plane, and
  *                 face culling of one triangle of two
+ *   fbo           a framebuffer object: two triangles through each other drawn into a 64x64 texture
+ *                 with a depth renderbuffer deciding; read back with glReadPixels and copied with
+ *                 glCopyTexSubImage2D while it is bound; then in the window the three textures side by
+ *                 side, the first mipmapped by glGenerateMipmap and minified, and the framebuffer blitted
+ *                 twice its size by glBlitFramebuffer
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -549,6 +554,63 @@ static void display(void) {
     glDisable(GL_CULL_FACE); glCullFace(GL_BACK);
     glPopMatrix();
     glDisable(GL_COLOR_MATERIAL); glDisable(GL_LIGHTING);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "fbo")) {
+    static unsigned char back[64 * 64 * 4];
+    GLuint tex[3], fbo, depth;
+    int complete;
+    glGenTextures(3, tex);
+    for (int i = 0; i < 3; i++) {
+      glBindTexture(GL_TEXTURE_2D, tex[i]);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    }
+    glGenRenderbuffers(1, &depth); glBindRenderbuffer(GL_RENDERBUFFER, depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 64, 64);
+    glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex[0], 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+    complete = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glViewport(0, 0, 64, 64);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(-1, 1, -1, 1, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glClearColor(0.15f, 0.2f, 0.35f, 1); glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glBegin(GL_TRIANGLES);
+    glColor3f(1, 0.3f, 0.2f); glVertex3f(-0.9f, -0.8f, -0.5f); glColor3f(1, 0.9f, 0.2f); glVertex3f(0.9f, -0.6f, 0.5f); glColor3f(0.9f, 0.2f, 0.6f); glVertex3f(0, 0.9f, 0);
+    glColor3f(0.2f, 0.9f, 0.4f); glVertex3f(-0.8f, 0.5f, 0.4f); glColor3f(0.2f, 0.6f, 1); glVertex3f(0.8f, 0.7f, -0.4f); glColor3f(0.1f, 0.8f, 0.8f); glVertex3f(0.1f, -0.9f, 0);
+    glEnd();
+    glDisable(GL_DEPTH_TEST);
+    /* Read back, and copied into another texture, while it is bound. */
+    glReadPixels(0, 0, 64, 64, GL_RGBA, GL_UNSIGNED_BYTE, back);
+    glBindTexture(GL_TEXTURE_2D, tex[2]); glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, 32, 32);
+    glBindTexture(GL_TEXTURE_2D, tex[1]); glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 64, 64, GL_RGBA, GL_UNSIGNED_BYTE, back);
+    /* The window again. */
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, 320, 240);
+    glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glClearColor(0.1f, 0.1f, 0.2f, 1); glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_TEXTURE_2D); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    for (int i = 0; i < 3; i++) {
+      float x = 8 + i * 104, y = 160;   /* 1:1, so that an edge texel is one pixel */
+      glBindTexture(GL_TEXTURE_2D, tex[i]);
+      glBegin(GL_QUADS);
+      glTexCoord2f(0, 0); glVertex2f(x, y); glTexCoord2f(1, 0); glVertex2f(x + 64, y); glTexCoord2f(1, 1); glVertex2f(x + 64, y + 64); glTexCoord2f(0, 1); glVertex2f(x, y + 64);
+      glEnd();
+    }
+    glBindTexture(GL_TEXTURE_2D, tex[0]);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glBegin(GL_QUADS);
+    glTexCoord2f(0, 0); glVertex2f(16, 16); glTexCoord2f(1, 0); glVertex2f(32, 16); glTexCoord2f(1, 1); glVertex2f(32, 32); glTexCoord2f(0, 1); glVertex2f(16, 32);
+    glEnd();
+    glDisable(GL_TEXTURE_2D); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBlitFramebuffer(0, 0, 64, 64, 120, 4, 248, 132, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    if (!complete) { glColor3f(1, 0, 0); glRecti(0, 0, 320, 240); }
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "rect-forms")) {

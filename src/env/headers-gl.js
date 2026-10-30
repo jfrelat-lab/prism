@@ -1022,6 +1022,66 @@ void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
 #define GL_OPERAND1_ALPHA 0x8599
 #define GL_OPERAND2_ALPHA 0x859A
 #define GL_SUBTRACT 0x84E7
+/*
+ * Framebuffer objects: GL 3.0 and ARB_framebuffer_object, and the EXT_framebuffer_object names of
+ * the same calls (an intro of 2008 asks for the one, a game of 2010 for the other).
+ */
+#define GL_FRAMEBUFFER 0x8D40
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#define GL_RENDERBUFFER 0x8D41
+#define GL_COLOR_ATTACHMENT0 0x8CE0
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#define GL_STENCIL_ATTACHMENT 0x8D20
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#define GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT 0x8CD6
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_RENDERBUFFER_BINDING 0x8CA7
+#define GL_DEPTH24_STENCIL8 0x88F0
+#define GL_STENCIL_INDEX8 0x8D48
+#define GL_DEPTH_STENCIL_ATTACHMENT 0x821A
+#define GL_DEPTH_COMPONENT16 0x81A5
+#define GL_DEPTH_COMPONENT24 0x81A6
+#define GL_DEPTH_COMPONENT32 0x81A7
+#define GL_FRAMEBUFFER_EXT 0x8D40
+#define GL_READ_FRAMEBUFFER_EXT 0x8CA8
+#define GL_DRAW_FRAMEBUFFER_EXT 0x8CA9
+#define GL_RENDERBUFFER_EXT 0x8D41
+#define GL_COLOR_ATTACHMENT0_EXT 0x8CE0
+#define GL_DEPTH_ATTACHMENT_EXT 0x8D00
+#define GL_STENCIL_ATTACHMENT_EXT 0x8D20
+#define GL_FRAMEBUFFER_COMPLETE_EXT 0x8CD5
+#define GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT_EXT 0x8CD6
+#define GL_DEPTH24_STENCIL8_EXT 0x88F0
+#define GL_STENCIL_INDEX8_EXT 0x8D48
+void glGenFramebuffers(GLsizei n, GLuint *framebuffers);
+void glDeleteFramebuffers(GLsizei n, const GLuint *framebuffers);
+GLboolean glIsFramebuffer(GLuint framebuffer);
+void glBindFramebuffer(GLenum target, GLuint framebuffer);
+void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+GLenum glCheckFramebufferStatus(GLenum target);
+void glGenRenderbuffers(GLsizei n, GLuint *renderbuffers);
+void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers);
+GLboolean glIsRenderbuffer(GLuint renderbuffer);
+void glBindRenderbuffer(GLenum target, GLuint renderbuffer);
+void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+void glGenerateMipmap(GLenum target);
+void glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
+void glGenFramebuffersEXT(GLsizei n, GLuint *framebuffers);
+void glDeleteFramebuffersEXT(GLsizei n, const GLuint *framebuffers);
+GLboolean glIsFramebufferEXT(GLuint framebuffer);
+void glBindFramebufferEXT(GLenum target, GLuint framebuffer);
+void glFramebufferTexture2DEXT(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+void glFramebufferRenderbufferEXT(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
+GLenum glCheckFramebufferStatusEXT(GLenum target);
+void glGenRenderbuffersEXT(GLsizei n, GLuint *renderbuffers);
+void glDeleteRenderbuffersEXT(GLsizei n, const GLuint *renderbuffers);
+GLboolean glIsRenderbufferEXT(GLuint renderbuffer);
+void glBindRenderbufferEXT(GLenum target, GLuint renderbuffer);
+void glRenderbufferStorageEXT(GLenum target, GLenum internalformat, GLsizei width, GLsizei height);
+void glGenerateMipmapEXT(GLenum target);
+void glBlitFramebufferEXT(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
 /* GL 1.2 3D textures: sampled by GLSL programs (sampler3D), not by the fixed function. */
 #define GL_TEXTURE_BINDING_3D 0x806A
 #define GL_TEXTURE_3D 0x806F

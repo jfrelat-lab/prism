@@ -247,6 +247,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // into a bound buffer is an ordinary pointer once its base is added -- the arrays, glDrawArrays
     // and glDrawElements read it unchanged. id -> { ptr, size }; the two bindings by target.
     buffers: new Map(), nextBuffer: 1, arrayBuffer: 0, elementBuffer: 0,
+    // Framebuffer objects: id -> its attachments; renderbuffers: id -> their storage. The draw and the
+    // read framebuffer, 0 the window's (whose buffers `win` keeps while another is bound).
+    fbos: new Map(), nextFbo: 1, rbs: new Map(), nextRb: 1, boundRb: 0, drawFbo: 0, readFbo: 0, win: null,
     colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
@@ -293,14 +296,138 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     ? { ptr: s.buffers.get(s.arrayBuffer).ptr + ptr, buffer: s.arrayBuffer, offset: ptr }
     : { ptr, buffer: 0, offset: 0 });
 
+  /*
+   * FRAMEBUFFER OBJECTS (GL 3.0, ARB_framebuffer_object; the EXT names too). A framebuffer is a set of
+   * attachments -- a texture's level or a renderbuffer as its colour, a renderbuffer as its depth and
+   * stencil -- and drawing goes to the one bound: the software rasteriser draws into the arrays the
+   * attachments hold (s.color/s.depth/s.stencil and their size are the bound one's, `win` keeps the
+   * window's), the WebGL path into a WebGL framebuffer over the same texture. A texture drawn into on
+   * the GPU is the GPU's from then on (gpuOwned): its pixels here are not uploaded over it until the
+   * program writes it again itself. Without a depth attachment the depth test is off, as GL has it.
+   */
+  const FB = { FRAMEBUFFER: 0x8d40, READ: 0x8ca8, DRAW: 0x8ca9, RENDERBUFFER: 0x8d41, COLOR0: 0x8ce0, DEPTH: 0x8d00, STENCIL: 0x8d20, DEPTH_STENCIL: 0x821a, COMPLETE: 0x8cd5, INCOMPLETE: 0x8cd6 };
+  const DEPTH_FORMATS = new Set([0x1902, 0x81a5, 0x81a6, 0x81a7, 0x88f0, 0x8cac]), STENCIL_FORMATS = new Set([0x88f0, 0x8d48, 0x1901]);
+  const newFbo = () => ({ color: null, depth: null, stencil: null });
+  /** A framebuffer's buffers, as the rasteriser draws into them; null while it is incomplete. */
+  function fboBuffers(id) {
+    const fb = s.fbos.get(id);
+    if (!fb?.color) return null;
+    let color, width, height;
+    if (fb.color.tex) {
+      const L = s.textures.get(fb.color.tex)?.levels[fb.color.level];
+      if (!L) return null;
+      ({ data: color, w: width, h: height } = L);
+    } else {
+      const rb = s.rbs.get(fb.color.rb);
+      if (!rb?.color) return null;
+      ({ color, w: width, h: height } = rb);
+    }
+    const d = fb.depth && s.rbs.get(fb.depth.rb), st = fb.stencil && s.rbs.get(fb.stencil.rb);
+    return { color, depth: d?.depth ?? null, stencil: st?.stencil ?? null, width, height };
+  }
+  // What the WebGL backend needs to build the same framebuffer.
+  function fboSpec(id) {
+    const fb = s.fbos.get(id), rb = (a) => a && { ...s.rbs.get(a.rb), id: a.rb };
+    if (fb.color?.tex) {
+      const t = s.textures.get(fb.color.tex);
+      if (t.dirty && !t.gpuOwned) webgl.upload(fb.color.tex, t);
+      t.dirty = false; t.gpuOwned = true;
+    }
+    return { id, color: fb.color?.tex ? { tex: fb.color.tex, level: fb.color.level } : fb.color && { rb: rb(fb.color) }, depth: rb(fb.depth), stencil: rb(fb.stencil) };
+  }
+  /** Point drawing at the bound draw framebuffer. */
+  function drawTarget() {
+    const b = s.drawFbo ? fboBuffers(s.drawFbo) : s.win;
+    if (b) { s.color = b.color; s.depth = b.depth; s.stencil = b.stencil; s.width = b.width; s.height = b.height; }
+    if (webgl) webgl.framebuffer(s.drawFbo && b ? fboSpec(s.drawFbo) : null);
+    gpuCache = null;
+  }
+  /** The read framebuffer's colour, bottom row first, with its width and height. */
+  function readBuffer() {
+    const b = s.readFbo ? fboBuffers(s.readFbo) : s.win;
+    if (!b) throw new Error('gl: reading from an incomplete framebuffer');
+    return { data: webgl ? webgl.read(s.readFbo, b.width, b.height) : b.color, width: b.width, height: b.height };
+  }
+  const fboFor = (target) => { const id = target === FB.READ ? s.readFbo : s.drawFbo; const fb = s.fbos.get(id); if (!fb) throw new Error('gl: no framebuffer object is bound'); return fb; };
+  const attach = (target, attachment, value) => {
+    const fb = fboFor(target);
+    if (attachment === FB.COLOR0) fb.color = value;
+    else if (attachment === FB.DEPTH) fb.depth = value;
+    else if (attachment === FB.STENCIL) fb.stencil = value;
+    else if (attachment === FB.DEPTH_STENCIL) { fb.depth = value; fb.stencil = value; }
+    else throw new Error(`gl: framebuffer attachment 0x${attachment.toString(16)}`);
+    if (target !== FB.READ) drawTarget();
+  };
+  const genIds = (n, ids, make) => { for (let k = 0; k < n; k++) dv().setUint32(ids + 4 * k, make(), true); };
+  const eachId = (n, ids, fn) => { for (let k = 0; k < n; k++) { const id = dv().getUint32(ids + 4 * k, true); if (id) fn(id); } };
+  const fboApi = {
+    glGenFramebuffers: (n, ids) => genIds(n, ids, () => { const id = s.nextFbo++; s.fbos.set(id, newFbo()); return id; }),
+    glDeleteFramebuffers: (n, ids) => eachId(n, ids, (id) => {
+      s.fbos.delete(id);
+      if (s.readFbo === id) s.readFbo = 0;
+      if (s.drawFbo === id) { s.drawFbo = 0; drawTarget(); }
+    }),
+    glIsFramebuffer: (id) => (s.fbos.has(id) ? 1 : 0),
+    glBindFramebuffer: (target, id) => {
+      if (id && !s.fbos.has(id)) s.fbos.set(id, newFbo());
+      if (target !== FB.DRAW) s.readFbo = id;
+      if (target !== FB.READ) { s.drawFbo = id; drawTarget(); }
+    },
+    glFramebufferTexture2D: (target, attachment, textarget, tex, level) => {
+      if (tex && textarget !== CAP.TEXTURE_2D) throw new Error(`gl: a framebuffer attachment of texture target 0x${textarget.toString(16)}`);
+      attach(target, attachment, tex ? { tex, level } : null);
+    },
+    glFramebufferRenderbuffer: (target, attachment, _rbTarget, rb) => attach(target, attachment, rb ? { rb } : null),
+    glCheckFramebufferStatus: (target) => { const id = target === FB.READ ? s.readFbo : s.drawFbo; return !id || fboBuffers(id) ? FB.COMPLETE : FB.INCOMPLETE; },
+    glGenRenderbuffers: (n, ids) => genIds(n, ids, () => { const id = s.nextRb++; s.rbs.set(id, { w: 0, h: 0 }); return id; }),
+    glDeleteRenderbuffers: (n, ids) => eachId(n, ids, (id) => { s.rbs.delete(id); if (s.boundRb === id) s.boundRb = 0; }),
+    glIsRenderbuffer: (id) => (s.rbs.has(id) ? 1 : 0),
+    glBindRenderbuffer: (_target, id) => { if (id && !s.rbs.has(id)) s.rbs.set(id, { w: 0, h: 0 }); s.boundRb = id; },
+    glRenderbufferStorage: (_target, format, w, h) => {
+      const rb = s.rbs.get(s.boundRb);
+      if (!rb) throw new Error('gl: glRenderbufferStorage with no renderbuffer bound');
+      const depth = DEPTH_FORMATS.has(format), stencil = STENCIL_FORMATS.has(format);
+      Object.assign(rb, { format, w, h, color: depth || stencil ? null : new Uint8Array(w * h * 4),
+        depth: depth ? new Float32Array(w * h).fill(1) : null, stencil: stencil ? new Uint8Array(w * h) : null });
+      if (s.drawFbo) drawTarget();
+    },
+    // Level 0 made into the levels below: on the GPU when the GPU has the texture's pixels.
+    glGenerateMipmap: () => {
+      const id = s.activeUnit ? s.units[s.activeUnit].bound : s.bound, t = s.textures.get(id);
+      if (!t?.levels[0]) return;
+      generateMipmaps(t);
+      if (webgl && t.gpuOwned) { t.dirty = false; webgl.generateMipmap(id); }
+      gpuCache = null;
+    },
+    glBlitFramebuffer: (sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, mask, filter) => {
+      if (webgl) { webgl.blit(s.readFbo, s.drawFbo, [sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1], mask, filter); return; }
+      const src = s.readFbo ? fboBuffers(s.readFbo) : s.win;
+      const sc = s.caps.has(CAP.SCISSOR_TEST) ? s.scissor : null;
+      const xa = Math.min(dx0, dx1), xb = Math.max(dx0, dx1), ya = Math.min(dy0, dy1), yb = Math.max(dy0, dy1);
+      for (let y = Math.max(0, ya); y < Math.min(yb, s.height); y++) for (let x = Math.max(0, xa); x < Math.min(xb, s.width); x++) {
+        if (sc && (x < sc[0] || y < sc[1] || x >= sc[0] + sc[2] || y >= sc[1] + sc[3])) continue;
+        // Nearest: the source pixel whose centre the destination pixel's centre maps into.
+        const u = sx0 + (x + 0.5 - dx0) * (sx1 - sx0) / (dx1 - dx0), v = sy0 + (y + 0.5 - dy0) * (sy1 - sy0) / (dy1 - dy0);
+        const px = Math.floor(u), py = Math.floor(v);
+        if (px < 0 || py < 0 || px >= src.width || py >= src.height) continue;
+        const i = y * s.width + x, j = py * src.width + px;
+        if (mask & 0x4000) s.color.set(src.color.subarray(4 * j, 4 * j + 4), 4 * i);
+        if ((mask & 0x100) && s.depth && src.depth) s.depth[i] = src.depth[j];
+        if ((mask & 0x400) && s.stencil && src.stencil) s.stencil[i] = src.stencil[j];
+      }
+    },
+  };
+  // The EXT_framebuffer_object names of the same calls, which the programs of 2005-2010 ask for.
+  for (const name of Object.keys(fboApi)) if (name !== 'glBlitFramebuffer') fboApi[`${name}EXT`] = fboApi[name];
+  fboApi.glBlitFramebufferEXT = fboApi.glBlitFramebuffer;
+
   /** Size the framebuffer; the window system (glut.js, glx.js) calls this. */
   function resize(w, h) {
-    s.width = w; s.height = h;
-    s.color = new Uint8Array(w * h * 4); s.depth = new Float32Array(w * h).fill(1);
-    s.stencil = s.stencilBits ? new Uint8Array(w * h) : null;
+    s.win = { color: new Uint8Array(w * h * 4), depth: new Float32Array(w * h).fill(1), stencil: s.stencilBits ? new Uint8Array(w * h) : null, width: w, height: h };
     s.viewport = [0, 0, w, h];
     gpuCache = null;
-    if (backend === 'webgl') { webgl = makeWebGL(w, h, s.stencilBits > 0); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) t.dirty = true; }
+    if (backend === 'webgl') { webgl = makeWebGL(w, h, s.stencilBits > 0); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) { t.dirty = true; t.gpuOwned = false; } }
+    drawTarget();
   }
   /*
    * A LOST CONTEXT, rebuilt the way a resize builds one: everything the GPU held is a copy of state
@@ -310,10 +437,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    */
   function recoverIfLost() {
     if (!webgl?.lost) return;
-    webgl = makeWebGL(s.width, s.height, s.stencilBits > 0);
+    webgl = makeWebGL(s.win.width, s.win.height, s.stencilBits > 0);
     webgl.viewport(...s.viewport);
-    for (const t of s.textures.values()) t.dirty = true;
+    for (const t of s.textures.values()) { t.dirty = true; t.gpuOwned = false; }
     gpuCache = null;
+    drawTarget();
     onLost?.();
   }
 
@@ -911,7 +1039,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const [fn, ref, mask] = s.stencilFunc, m = mask & 0xff;
       if (!compare(fn, (ref < 0 ? 0 : ref > 255 ? 255 : ref) & m, s.stencil[i] & m)) { stencilUpdate(i, s.stencilOp[0]); return; }
     }
-    if (s.caps.has(CAP.DEPTH_TEST)) {
+    if (s.depth && s.caps.has(CAP.DEPTH_TEST)) {
       if (!compare(s.depthFunc, z, s.depth[i])) { if (stencil) stencilUpdate(i, s.stencilOp[1]); return; }
       if (s.depthMask) s.depth[i] = z;
     }
@@ -1169,7 +1297,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // A GLSL program samples the bound texture whether or not GL_TEXTURE_2D is enabled.
     const t = s.caps.has(CAP.TEXTURE_2D) || glsl.current() ? s.textures.get(s.bound) : null, textured = !!(t && complete(t));
     const stages = glsl.current() ? [] : textureStages(), multi = stages.length && !oneUnit(stages) ? multiKey(stages) : '';
-    if (textured && t.dirty) { webgl.upload(s.bound, t); t.dirty = false; }
+    if (textured && t.dirty && !t.gpuOwned) { webgl.upload(s.bound, t); t.dirty = false; }
     const t3 = glsl.current() ? texture3D() : null, textured3 = !!(t3 && complete(t3));
     if (textured3 && t3.dirty) { webgl.upload3D(s.bound3D, t3); t3.dirty = false; }
     return gpuCache = {
@@ -1200,7 +1328,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   function multiKey(stages) {
     return stages.map(({ k, t, env, combine: c }) => {
       const id = k ? s.units[k].bound : s.bound;
-      if (k && t.dirty) { webgl.upload(id, t); t.dirty = false; }
+      if (k && t.dirty && !t.gpuOwned) { webgl.upload(id, t); t.dirty = false; }
       return [k, id, BASE_N[t.base] ?? 1, ENV_N[env], COMBINE_FN[c.rgb], COMBINE_FN[c.alpha], ...c.srcRGB.map((x) => COMBINE_SRC[x]), ...c.srcA.map((x) => COMBINE_SRC[x]),
         ...c.opRGB.map((x) => COMBINE_OP[x]), ...c.opA.map((x) => COMBINE_OP[x]), c.scaleRGB, c.scaleA, ...c.colour, t.min, t.mag, t.wrapS, t.wrapT].join(',');
     }).join('|');
@@ -1268,7 +1396,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
         const i = y * s.width + x;
         if (mask & 0x4000) for (let k = 0; k < 4; k++) if (s.colorMask[k]) s.color[i * 4 + k] = c[k];
-        if ((mask & 0x100) && s.depthMask) s.depth[i] = s.clearDepth;
+        if ((mask & 0x100) && s.depthMask && s.depth) s.depth[i] = s.clearDepth;
         if ((mask & 0x400) && s.stencil) { const wm = s.stencilWriteMask & 0xff; s.stencil[i] = (s.stencil[i] & ~wm) | (s.clearStencil & wm); }
       }
     },
@@ -1561,8 +1689,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const t = texture();
       t.base = baseFormat(internal);
       t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4) };
-      t.dirty = true;
+      t.dirty = true; t.gpuOwned = false;
       written(t, level);
+      if (s.drawFbo) drawTarget();               // an attached level redefined: the target follows it
     },
     // Its texels as RGBA bytes, one w x h layer after another (read at call time, see ARRAYS).
     glTexImage3D: (target, level, internal, w, h, d, border, format, type, texels) => {
@@ -1646,13 +1775,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   // GLSL's entry points: what they change is part of the state a draw is made with.
   for (const [name, fn] of Object.entries(glsl.api)) api[name] = (...a) => { gpuCache = null; return fn(...a); };
-  const readFramebuffer = () => (webgl ? webgl.read() : s.color);  // bottom row first
   function copyFramebuffer(L, xo, yo, x, y, w, h) {
-    const fb = readFramebuffer();
+    const { data: fb, width: W, height: H } = readBuffer();
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
       const sx = x + i, sy = y + j, tx = xo + i, ty = yo + j;
-      if (sx < 0 || sy < 0 || sx >= s.width || sy >= s.height || tx >= L.w || ty >= L.h) continue;
-      L.data.set(fb.subarray((sy * s.width + sx) * 4, (sy * s.width + sx) * 4 + 4), (ty * L.w + tx) * 4);
+      if (sx < 0 || sy < 0 || sx >= W || sy >= H || tx >= L.w || ty >= L.h) continue;
+      L.data.set(fb.subarray((sy * W + sx) * 4, (sy * W + sx) * 4 + 4), (ty * L.w + tx) * 4);
     }
   }
   Object.assign(api, {
@@ -1680,6 +1808,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr, type);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
+      if (webgl && t.gpuOwned) { webgl.texSubImage(s.activeUnit ? s.units[s.activeUnit].bound : s.bound, level, x, y, w, h, src); gpuCache = null; return; }
       // A dirty texture is uploaded where the draw state is worked out: so that state is worked out again.
       written(t, level);
       t.dirty = true; gpuCache = null;
@@ -1699,6 +1828,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glCopyTexSubImage2D: (target, level, xo, yo, x, y, w, h) => {
       const t = texture(), L = t.levels[level];
       if (!L) throw new Error(`gl: glCopyTexSubImage2D into level ${level}, which has no image`);
+      if (webgl && t.gpuOwned) { webgl.copyTexSubImage(s.activeUnit ? s.units[s.activeUnit].bound : s.bound, level, xo, yo, x, y, w, h, s.readFbo); gpuCache = null; return; }
       copyFramebuffer(L, xo, yo, x, y, w, h);
       written(t, level);
       t.dirty = true; gpuCache = null;
@@ -1707,6 +1837,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const t = texture(), L = { w, h, data: new Uint8Array(w * h * 4) };
       t.base = baseFormat(internal);
       t.levels[level] = L;
+      t.gpuOwned = false;
       copyFramebuffer(L, 0, 0, x, y, w, h);
       written(t, level);
       t.dirty = true; gpuCache = null;
@@ -1714,15 +1845,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glReadPixels: (x, y, w, h, format, type, out) => {
       // The depth buffer, as floats in [0, 1]: Cube reads the one under its crosshair every frame.
       if (format === 0x1902 && type === 0x1406) {
-        readFramebuffer();                                   // whatever is pending is drawn first
+        readBuffer();                                        // whatever is pending is drawn first
         const d = webgl ? webgl.readDepth(x, y, w, h) : null;
         for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) dv().setFloat32(out + 4 * (j * w + i), d ? d[j * w + i] : s.depth[(y + j) * s.width + x + i], true);
         return;
       }
-      const fb = readFramebuffer(), n = format === FMT.RGBA ? 4 : format === FMT.RGB ? 3 : 0;
+      const { data: fb, width: W } = readBuffer(), n = format === FMT.RGBA ? 4 : format === FMT.RGB ? 3 : 0;
       if (!n || type !== 0x1401) throw new Error('gl: glReadPixels wants GL_RGB or GL_RGBA, GL_UNSIGNED_BYTE');
       for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
-        const o = ((y + j) * s.width + x + i) * 4, d = out + (j * w + i) * n;
+        const o = ((y + j) * W + x + i) * 4, d = out + (j * w + i) * n;
         for (let k = 0; k < n; k++) M.u8[d + k] = fb[o + k];
       }
     },
@@ -1843,6 +1974,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glPolygonMode: (face, mode) => { if (mode !== 0x1b02) throw new Error('gl: glPolygonMode other than GL_FILL is not implemented'); },
     glHint: () => {}, glDrawBuffer: () => {}, glReadBuffer: () => {},
+    ...fboApi,
     glFinish: () => {}, glFlush: () => {},
   });
   Object.assign(M.rt, api);
@@ -1851,8 +1983,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     state: s, resize,
     /** The picture, top row first, RGBA -- GL's framebuffer is bottom row first. */
     readPixels() {
-      const out = new Uint8Array(s.width * s.height * 4), src = readFramebuffer();
-      for (let y = 0; y < s.height; y++) out.set(src.subarray((s.height - 1 - y) * s.width * 4, (s.height - y) * s.width * 4), y * s.width * 4);
+      const { width: W, height: H } = s.win, src = webgl ? webgl.read(0, W, H) : s.win.color, out = new Uint8Array(W * H * 4);
+      for (let y = 0; y < H; y++) out.set(src.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
       return out;
     },
     onFrame,
@@ -2182,6 +2314,16 @@ void main() {
   let normalBuffer = null, normals = null;
   let n = 0, mode = g.TRIANGLES, key = null, pending = null;
   let tnlVao = null, tnlIndexBuffer = null;
+  // The framebuffer drawn into: the window's (target) or a framebuffer object's (framebuffer()).
+  let cur = target;
+  const fbos = new Map(), renderbuffers = new Map();
+  const renderbuffer = (rb, format) => {
+    const k = `${rb.id}`, want = `${rb.w}x${rb.h}:${format}`;
+    let r = renderbuffers.get(k);
+    if (!r) { r = { rb: g.createRenderbuffer(), as: '' }; renderbuffers.set(k, r); }
+    if (r.as !== want) { r.as = want; g.bindRenderbuffer(g.RENDERBUFFER, r.rb); g.renderbufferStorage(g.RENDERBUFFER, format, rb.w, rb.h); }
+    return r.rb;
+  };
   const tnlBuffers = [];
   const BASES = { RGB: 0, RGBA: 1, L: 2, LA: 3, A: 4, I: 5 };
   const ENVS = { 0x2100: 0, 0x1e01: 1, 0x2101: 2 };
@@ -2509,7 +2651,7 @@ void main() {
       g.bindVertexArray(null);
       g.bindTexture(g.TEXTURE_2D, null); g.activeTexture(g.TEXTURE0);
       g.useProgram(prog);
-      g.bindFramebuffer(g.FRAMEBUFFER, target);
+      g.bindFramebuffer(g.FRAMEBUFFER, cur);
       g.viewport(...view);
       key = null; applied = { program: 'fixed' }; U = U0; curRec = fixedRec; U = U0;
       const out = new Float32Array(rw * rh);
@@ -2524,14 +2666,87 @@ void main() {
     present() {
       flush();
       g.disable(g.SCISSOR_TEST); delete applied.scissor;
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, target);
       g.bindFramebuffer(g.DRAW_FRAMEBUFFER, null);
       g.blitFramebuffer(0, 0, w, h, 0, 0, w, h, g.COLOR_BUFFER_BIT, g.NEAREST);
-      g.bindFramebuffer(g.FRAMEBUFFER, target);
+      g.bindFramebuffer(g.FRAMEBUFFER, cur);
       key = null;
       return canvas.transferToImageBitmap();
     },
-    /** The framebuffer, bottom row first, as GL's own is. */
-    read() { flush(); const px = new Uint8Array(w * h * 4); g.readPixels(0, 0, w, h, g.RGBA, g.UNSIGNED_BYTE, px); return px; },
+    /** A framebuffer's colour (0 the window's), bottom row first, as GL's own is. */
+    read(id = 0, rw = w, rh = h) {
+      flush();
+      const px = new Uint8Array(rw * rh * 4);
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, id ? fbos.get(id).fb : target);
+      g.readPixels(0, 0, rw, rh, g.RGBA, g.UNSIGNED_BYTE, px);
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, cur);
+      return px;
+    },
+    /*
+     * Draw into a framebuffer object (installGL's fboSpec) or, with null, into the window's: its
+     * colour a texture's level (the WebGL texture of the same id) or a renderbuffer, its depth and
+     * stencil renderbuffers, each made here at the size and format the program gave.
+     */
+    framebuffer(spec) {
+      flush();
+      if (!spec) cur = target;
+      else {
+        let fo = fbos.get(spec.id);
+        if (!fo) { fo = { fb: g.createFramebuffer() }; fbos.set(spec.id, fo); }
+        g.bindFramebuffer(g.FRAMEBUFFER, fo.fb);
+        if (spec.color?.tex) g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, gpuTex.get(spec.color.tex), spec.color.level);
+        else g.framebufferRenderbuffer(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.RENDERBUFFER, spec.color ? renderbuffer(spec.color.rb, g.RGBA8) : null);
+        const ds = spec.depth && spec.stencil && spec.depth.id === spec.stencil.id;
+        if (ds) g.framebufferRenderbuffer(g.FRAMEBUFFER, g.DEPTH_STENCIL_ATTACHMENT, g.RENDERBUFFER, renderbuffer(spec.depth, g.DEPTH24_STENCIL8));
+        else {
+          g.framebufferRenderbuffer(g.FRAMEBUFFER, g.DEPTH_STENCIL_ATTACHMENT, g.RENDERBUFFER, null);
+          g.framebufferRenderbuffer(g.FRAMEBUFFER, g.DEPTH_ATTACHMENT, g.RENDERBUFFER, spec.depth ? renderbuffer(spec.depth, g.DEPTH_COMPONENT24) : null);
+          g.framebufferRenderbuffer(g.FRAMEBUFFER, g.STENCIL_ATTACHMENT, g.RENDERBUFFER, spec.stencil ? renderbuffer(spec.stencil, g.STENCIL_INDEX8) : null);
+        }
+        cur = fo.fb;
+        // A texture left bound to a unit the program samples is a FEEDBACK LOOP to WebGL when it is also
+        // the attachment, and every draw fails -- even one that does not texture (the sampler is there).
+        // So the units are emptied; the next textured batch binds what it samples.
+        for (const u of [0, 2, 3]) { g.activeTexture(g.TEXTURE0 + u); g.bindTexture(g.TEXTURE_2D, null); }
+        g.activeTexture(g.TEXTURE0);
+        delete applied.tex; delete applied.tex1; delete applied.tex2;
+      }
+      g.bindFramebuffer(g.FRAMEBUFFER, cur);
+      key = null;
+    },
+    blit(readId, drawId, c, mask, filter) {
+      flush();
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, readId ? fbos.get(readId).fb : target);
+      g.bindFramebuffer(g.DRAW_FRAMEBUFFER, drawId ? fbos.get(drawId).fb : target);
+      g.blitFramebuffer(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], mask, filter);
+      g.bindFramebuffer(g.FRAMEBUFFER, cur);
+      key = null;
+    },
+    generateMipmap(id) {
+      flush();
+      g.bindTexture(g.TEXTURE_2D, gpuTex.get(id));
+      g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAX_LEVEL, 1000);
+      g.generateMipmap(g.TEXTURE_2D);
+      delete applied.tex;
+      key = null;
+    },
+    texSubImage(id, level, x, y, sw, sh, rgba) {
+      flush();
+      g.bindTexture(g.TEXTURE_2D, gpuTex.get(id));
+      g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+      g.texSubImage2D(g.TEXTURE_2D, level, x, y, sw, sh, g.RGBA, g.UNSIGNED_BYTE, rgba);
+      delete applied.tex;
+      key = null;
+    },
+    copyTexSubImage(id, level, xo, yo, x, y, cw, ch, readId) {
+      flush();
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, readId ? fbos.get(readId).fb : target);
+      g.bindTexture(g.TEXTURE_2D, gpuTex.get(id));
+      g.copyTexSubImage2D(g.TEXTURE_2D, level, xo, yo, x, y, cw, ch);
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, cur);
+      delete applied.tex;
+      key = null;
+    },
     get lost() { return lost || !!g.isContextLost?.(); },
     /** For a test: take the context away, as the GPU would (WEBGL_lose_context). */
     lose() { g.getExtension('WEBGL_lose_context')?.loseContext(); lost = true; },
@@ -2572,6 +2787,12 @@ export function glBuiltins(T) {
     glCopyTexSubImage2D: f(V, U, I, I, I, I, I, I, I), glCopyTexImage2D: f(V, U, I, U, I, I, I, I, I),
     glReadPixels: f(V, I, I, I, I, U, U, P), glPolygonMode: f(V, U, U), glHint: f(V, U, U),
     glDrawBuffer: f(V, U), glReadBuffer: f(V, U),
+    ...Object.fromEntries(['', 'EXT'].flatMap((x) => [
+      [`glGenFramebuffers${x}`, f(V, I, P)], [`glDeleteFramebuffers${x}`, f(V, I, P)], [`glIsFramebuffer${x}`, f(U, U)], [`glBindFramebuffer${x}`, f(V, U, U)],
+      [`glFramebufferTexture2D${x}`, f(V, U, U, U, U, I)], [`glFramebufferRenderbuffer${x}`, f(V, U, U, U, U)], [`glCheckFramebufferStatus${x}`, f(U, U)],
+      [`glGenRenderbuffers${x}`, f(V, I, P)], [`glDeleteRenderbuffers${x}`, f(V, I, P)], [`glIsRenderbuffer${x}`, f(U, U)], [`glBindRenderbuffer${x}`, f(V, U, U)],
+      [`glRenderbufferStorage${x}`, f(V, U, U, I, I)], [`glGenerateMipmap${x}`, f(V, U)], [`glBlitFramebuffer${x}`, f(V, I, I, I, I, I, I, I, I, U, U)],
+    ])),
     glScissor: f(V, I, I, I, I), glPointSize: f(V, F), glColor3fv: f(V, P), glColor4ubv: f(V, P),
     glEnableClientState: f(V, U), glDisableClientState: f(V, U), glVertexPointer: f(V, I, U, I, P),
     glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I), glLockArraysEXT: f(V, I, I), glUnlockArraysEXT: f(V),
