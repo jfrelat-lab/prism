@@ -536,6 +536,18 @@ export function makeGLSL(M) {
     },
     glGetInfoLogARB: (id, max, len, log) => writeLog(max, len, log),
   });
+  /*
+   * glCreateShaderProgramv (GL 4.1): a program of one shader made as the specification defines it --
+   * create, source, compile, create a program, attach, link, detach -- and its name returned. Waillee
+   * (2017) asks for it; its programs are used with glUseProgram as any other.
+   */
+  api.glCreateShaderProgramv = (type, count, strings) => {
+    const sh = api.glCreateShader(type);
+    api.glShaderSource(sh, count, strings, 0); api.glCompileShader(sh);
+    const p = api.glCreateProgram();
+    api.glAttachShader(p, sh); api.glLinkProgram(p); api.glDetachShader(p, sh);
+    return p;
+  };
   for (const n of [1, 2, 3, 4]) for (const t of ['f', 'i', 'fv', 'iv']) api[`glUniform${n}${t}ARB`] = api[`glUniform${n}${t}`];
   api.glUniformMatrix4fvARB = api.glUniformMatrix4fv;
   return {

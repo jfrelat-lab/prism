@@ -1029,6 +1029,16 @@ void glMultiTexCoord4sv(GLenum target, const GLshort *v);
 #define GL_LIGHT_MODEL_COLOR_CONTROL 0x81F8
 #define GL_SINGLE_COLOR 0x81F9
 #define GL_SEPARATE_SPECULAR_COLOR 0x81FA
+/* ARB_texture_float (and GL 3.0's names for the same formats), ARB_half_float_pixel. */
+#define GL_RGBA32F_ARB 0x8814
+#define GL_RGB32F_ARB 0x8815
+#define GL_RGBA16F_ARB 0x881A
+#define GL_RGB16F_ARB 0x881B
+#define GL_RGBA32F 0x8814
+#define GL_RGB32F 0x8815
+#define GL_RGBA16F 0x881A
+#define GL_RGB16F 0x881B
+#define GL_HALF_FLOAT_ARB 0x140B
 #define GL_TEXTURE0 0x84C0
 #define GL_TEXTURE1 0x84C1
 #define GL_TEXTURE2 0x84C2

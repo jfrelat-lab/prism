@@ -34,5 +34,6 @@
   "raster-text": 8,
   "evaluators": 118,
   "gl11-gaps": 35,
-  "accum": 79
+  "accum": 79,
+  "float-texture": 0
 }

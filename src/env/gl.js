@@ -196,12 +196,19 @@ const compare = (fn, a, b) => {
   }
 };
 /** The base internal format a texture's internalformat names, and so which components the environment uses. */
+/*
+ * ARB_texture_float's RGBA16F/RGB16F and RGBA32F/RGB32F (kindernoiser, 2007): on the WebGL path real
+ * half-float and float textures, which a framebuffer object can render into (EXT_color_buffer_float);
+ * the software rasteriser keeps its 8-bit texels, values outside [0, 1] clamped.
+ */
+const floatFormat = (internal) => (internal === 0x881a || internal === 0x881b ? 'half' : internal === 0x8814 || internal === 0x8815 ? 'float' : null);
 function baseFormat(internal) {
   switch (internal) {
     case 1: case FMT.LUMINANCE: case 0x803f: case 0x8040: return 'L';
     case 2: case FMT.LUMINANCE_ALPHA: return 'LA';
     case 3: case FMT.RGB: case 0x8051: case 0x8050: case 0x8052: return 'RGB';
-    case 4: case FMT.RGBA: case 0x8056: case 0x8057: case 0x8058: return 'RGBA';
+    case 4: case FMT.RGBA: case 0x8056: case 0x8057: case 0x8058: case 0x881a: case 0x8814: return 'RGBA';
+    case 0x881b: case 0x8815: return 'RGB';
     case FMT.ALPHA: case 0x803c: return 'A';
     case FMT.INTENSITY: case 0x804b: return 'I';
     default: throw new Error(`gl: texture internal format 0x${internal.toString(16)}`);
@@ -2067,7 +2074,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (target === 0x8064) { const ok = w <= 16384 && h <= 16384; s.proxy2D[level] = ok ? { w, h, internal } : { w: 0, h: 0, internal: 0x1908 }; return; }
       const t = texture();
       t.base = baseFormat(internal);
-      t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4), internal };
+      t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4), internal, float: floatFormat(internal), floats: texels?.floats ?? null };
       t.dirty = true; t.gpuOwned = false;
       written(t, level);
       if (s.drawFbo) drawTarget();               // an attached level redefined: the target follows it
@@ -2202,7 +2209,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexEnvfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x2201 ? 4 : 1)],
     glPointParameterfvARB: (a) => [a[0], f32(a[1], a[0] === 0x8129 ? 3 : 1)],
     glTexImage2D: (a) => {
-      return [...a.slice(0, 8), a[8] && a[0] !== 0x8064 ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null];
+      const texels = a[8] && a[0] !== 0x8064 ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null;
+      // A float texture given floats keeps them for the GPU (RGBA or RGB, GL_FLOAT): the bytes are the software path's.
+      if (texels && floatFormat(a[2]) && a[7] === 0x1406 && (a[6] === FMT.RGBA || a[6] === FMT.RGB)) {
+        const n = a[6] === FMT.RGBA ? 4 : 3, f = new Float32Array(a[3] * a[4] * 4);
+        for (let i = 0; i < a[3] * a[4]; i++) for (let k = 0; k < 4; k++) f[i * 4 + k] = k < n ? dv().getFloat32(a[8] + 4 * (i * n + k), true) : 1;
+        texels.floats = f;
+      }
+      return [...a.slice(0, 8), texels];
     },
     glTexImage1D: (a) => [...a.slice(0, 7), a[7] ? toRGBA(a[5], a[3], 1, a[7], a[6]) : null],
     glBitmap: (a) => {
@@ -2298,7 +2312,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr, type);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
-      if (webgl && t.gpuOwned) { webgl.texSubImage(s.activeUnit ? s.units[s.activeUnit].bound : s.bound, level, x, y, w, h, src); gpuCache = null; return; }
+      if (webgl && t.gpuOwned) { webgl.texSubImage(s.activeUnit ? s.units[s.activeUnit].bound : s.bound, level, x, y, w, h, t.levels[level]?.float ? Float32Array.from(src, (b) => b / 255) : src); gpuCache = null; return; }
       // A dirty texture is uploaded where the draw state is worked out: so that state is worked out again.
       written(t, level);
       t.dirty = true; gpuCache = null;
@@ -2511,6 +2525,8 @@ function makeWebGL(w, h, stencilBuffer = false) {
   // alpha the program's fragments left (gears' lit faces are below 1) showed the page through them.
   const g = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: false, preserveDrawingBuffer: true });
   if (!g) throw new Error('gl: this browser has no WebGL2 for an OffscreenCanvas');
+  // Float textures as render targets, and linear filtering of 32-bit ones (see floatFormat).
+  g.getExtension('EXT_color_buffer_float'); g.getExtension('OES_texture_float_linear');
   // The GPU can take the context away (a driver reset, memory pressure): noticed here, rebuilt by
   // installGL at the next frame. preventDefault is what lets a context be restored at all.
   let lost = false;
@@ -3056,7 +3072,12 @@ void main() {
       g.bindTexture(g.TEXTURE_2D, tx);
       delete applied.tex;
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
-      t.levels.forEach((L, lv) => { if (L) g.texImage2D(g.TEXTURE_2D, lv, g.RGBA, L.w, L.h, 0, g.RGBA, g.UNSIGNED_BYTE, L.data); });
+      t.levels.forEach((L, lv) => {
+        if (!L) return;
+        if (!L.float) { g.texImage2D(g.TEXTURE_2D, lv, g.RGBA, L.w, L.h, 0, g.RGBA, g.UNSIGNED_BYTE, L.data); return; }
+        const f = L.floats ?? Float32Array.from(L.data, (b) => b / 255);
+        g.texImage2D(g.TEXTURE_2D, lv, L.float === 'half' ? g.RGBA16F : g.RGBA32F, L.w, L.h, 0, g.RGBA, g.FLOAT, f);
+      });
       g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAX_LEVEL, t.levels.length - 1);
       key = null;
     },
@@ -3258,7 +3279,7 @@ void main() {
       flush();
       g.bindTexture(g.TEXTURE_2D, gpuTex.get(id));
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
-      g.texSubImage2D(g.TEXTURE_2D, level, x, y, sw, sh, g.RGBA, g.UNSIGNED_BYTE, rgba);
+      g.texSubImage2D(g.TEXTURE_2D, level, x, y, sw, sh, g.RGBA, rgba instanceof Float32Array ? g.FLOAT : g.UNSIGNED_BYTE, rgba);   // a float texture takes floats
       delete applied.tex;
       key = null;
     },

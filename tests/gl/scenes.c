@@ -97,6 +97,9 @@
  *   accum         the accumulation buffer: a scene drawn 8 times jittered and averaged (GL_ACCUM 1/8,
  *                 GL_RETURN), then GL_LOAD, GL_MULT and GL_ADD (negative too) in a scissor box, a
  *                 return through a colour mask and with a scale over 1, and glClearAccum's value
+ *   float-texture ARB_texture_float: an RGBA16F texture given floats (GL_FLOAT), and an RGBA32F one as a
+ *                 framebuffer object's colour, drawn into and then textured (values within [0, 1]: the
+ *                 software rasteriser keeps 8 bits a channel)
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -1059,6 +1062,39 @@ static void display(void) {
     /* glClearAccum's value, returned. */
     glScissor(20, 180, 60, 40); glClearAccum(0.25f, -0.5f, 0.75f, 1); glClear(GL_ACCUM_BUFFER_BIT); glAccum(GL_RETURN, 1.0f);
     glDisable(GL_SCISSOR_TEST);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "float-texture")) {
+    static GLfloat texels[4 * 4 * 4];
+    GLuint tex[2], fbo;
+    for (int i = 0; i < 16; i++) { texels[i * 4] = (i % 4) / 3.0f; texels[i * 4 + 1] = (i / 4) / 3.0f; texels[i * 4 + 2] = 0.5f; texels[i * 4 + 3] = 1; }
+    glGenTextures(2, tex);
+    glBindTexture(GL_TEXTURE_2D, tex[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F_ARB, 4, 4, 0, GL_RGBA, GL_FLOAT, texels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_2D, tex[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F_ARB, 64, 64, 0, GL_RGBA, GL_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &fbo); glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex[1], 0);
+    glViewport(0, 0, 64, 64);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 64, 0, 64, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D); glDisable(GL_LIGHTING);
+    glClearColor(0.1f, 0.2f, 0.3f, 1); glClear(GL_COLOR_BUFFER_BIT);
+    glBegin(GL_TRIANGLES); glColor3f(1, 0.5f, 0); glVertex2f(4, 4); glColor3f(0, 1, 0.5f); glVertex2f(60, 10); glColor3f(0.5f, 0, 1); glVertex2f(20, 58); glEnd();
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, 320, 240); glLoadIdentity();
+    glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1); glMatrixMode(GL_MODELVIEW);
+    glClearColor(0, 0, 0, 0);
+    glEnable(GL_TEXTURE_2D); glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE); glColor3f(1, 1, 1);
+    for (int k = 0; k < 2; k++) {
+      float x = 20 + 150 * k;
+      glBindTexture(GL_TEXTURE_2D, tex[k]);
+      glBegin(GL_QUADS); glTexCoord2f(0, 0); glVertex2f(x, 40); glTexCoord2f(1, 0); glVertex2f(x + 128, 40); glTexCoord2f(1, 1); glVertex2f(x + 128, 168); glTexCoord2f(0, 1); glVertex2f(x, 168); glEnd();
+    }
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE); glDisable(GL_TEXTURE_2D);
+    glDeleteFramebuffers(1, &fbo); glDeleteTextures(2, tex);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {
