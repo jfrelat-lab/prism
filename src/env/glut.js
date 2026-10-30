@@ -15,7 +15,7 @@
 import { GLUT_H } from './headers-gl.js';
 import { GLUT_C_NAMES } from './glut-c.js';
 
-const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1, GLUT_STENCIL = 0x20, GLUT_DOUBLE = 2;
+const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1, GLUT_STENCIL = 0x20, GLUT_DOUBLE = 2, GLUT_ACCUM = 4;
 /*
  * WHAT GLUT ANSWERS ABOUT ITSELF, the same here and in tools/oracle/glut-egl.c (the reference build
  * of the GL gates), so that a program that asks takes the same path on both sides: glutGet,
@@ -66,9 +66,10 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
   Object.assign(M.rt, {
     glutInit: () => {},
     // Of the display mode, only the stencil buffer changes what gl.js allocates: 8 bits, as Mesa's.
-    glutInitDisplayMode: (mode) => { s.mode = mode; gl.stencilBits = mode & GLUT_STENCIL ? 8 : 0; s.double = (mode & GLUT_DOUBLE) !== 0; },
+    // The stencil buffer, 8 bits as Mesa's, and the accumulation buffer, 16 bits a channel as Mesa's.
+    glutInitDisplayMode: (mode) => { s.mode = mode; gl.stencilBits = mode & GLUT_STENCIL ? 8 : 0; gl.accumBits = mode & GLUT_ACCUM ? 16 : 0; s.double = (mode & GLUT_DOUBLE) !== 0; },
     // The display string's words that change something here: double and stencil (GLUT 3.7's grammar otherwise ignored).
-    glutInitDisplayString: (p) => { const w = M.mod.cstr(p).split(/\s+/).map((x) => x.split(/[=<>~!]/)[0]); M.rt.glutInitDisplayMode((w.includes('double') ? GLUT_DOUBLE : 0) | (w.includes('stencil') ? GLUT_STENCIL : 0)); },
+    glutInitDisplayString: (p) => { const w = M.mod.cstr(p).split(/\s+/).map((x) => x.split(/[=<>~!]/)[0]); M.rt.glutInitDisplayMode((w.includes('double') ? GLUT_DOUBLE : 0) | (w.includes('stencil') ? GLUT_STENCIL : 0) | (w.includes('acc') ? GLUT_ACCUM : 0)); },
     glutInitWindowSize: (w, h) => { s.w = w; s.h = h; },
     glutInitWindowPosition: () => {},
     glutCreateWindow: () => { gl.resize(s.w, s.h); return 1; },

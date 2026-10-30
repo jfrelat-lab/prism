@@ -94,6 +94,9 @@
  *                 a steep one), wide lines (3 and 6, stippled too), a stippled polygon; glDrawPixels at the
  *                 raster position with glPixelZoom (2 and 3, then -1 in y) and glCopyPixels of it; a 1D
  *                 texture under GL_EYE_LINEAR generation; glCallLists with glListBase, in two name types
+ *   accum         the accumulation buffer: a scene drawn 8 times jittered and averaged (GL_ACCUM 1/8,
+ *                 GL_RETURN), then GL_LOAD, GL_MULT and GL_ADD (negative too) in a scissor box, a
+ *                 return through a colour mask and with a scale over 1, and glClearAccum's value
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -1030,6 +1033,34 @@ static void display(void) {
     glListBase(0); glDeleteLists(base, 3);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "accum")) {
+    static const GLfloat jitter[8][2] = { { -0.334818f, 0.435331f }, { 0.286438f, -0.393495f }, { 0.459462f, 0.141540f }, { -0.414498f, -0.192829f },
+      { -0.183790f, 0.082102f }, { -0.079263f, -0.317383f }, { 0.102254f, 0.299133f }, { 0.164216f, -0.054399f } };
+    glMatrixMode(GL_PROJECTION); glPushMatrix();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_TEXTURE_2D); glDisable(GL_LIGHTING); glEnable(GL_DEPTH_TEST);
+    glClearAccum(0, 0, 0, 0); glClear(GL_ACCUM_BUFFER_BIT);
+    for (int k = 0; k < 8; k++) {
+      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+      glMatrixMode(GL_PROJECTION); glLoadIdentity();
+      glTranslatef(jitter[k][0] * 2 / 320, jitter[k][1] * 2 / 240, 0); glOrtho(0, 320, 0, 240, -1, 1);
+      glMatrixMode(GL_MODELVIEW);
+      glBegin(GL_TRIANGLES);
+      glColor3f(1, 0.3f, 0.1f); glVertex2f(20.2f, 20.7f); glColor3f(0.2f, 1, 0.3f); glVertex2f(190.4f, 60.3f); glColor3f(0.1f, 0.4f, 1); glVertex2f(70.6f, 220.1f);
+      glColor3f(1, 1, 0.2f); glVertex2f(120.3f, 30.5f); glVertex2f(300.7f, 140.2f); glVertex2f(150.1f, 200.9f);
+      glEnd();
+      glAccum(GL_ACCUM, 1.0f / 8);
+    }
+    glAccum(GL_RETURN, 1.0f);
+    /* In a scissor box: load, scale, bias, return twice as bright through a colour mask. */
+    glEnable(GL_SCISSOR_TEST); glScissor(200, 20, 100, 60);
+    glAccum(GL_LOAD, 0.5f); glAccum(GL_MULT, 0.75f); glAccum(GL_ADD, 0.1f); glAccum(GL_ADD, -0.05f);
+    glColorMask(GL_TRUE, GL_FALSE, GL_TRUE, GL_TRUE); glAccum(GL_RETURN, 2.0f); glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    /* glClearAccum's value, returned. */
+    glScissor(20, 180, 60, 40); glClearAccum(0.25f, -0.5f, 0.75f, 1); glClear(GL_ACCUM_BUFFER_BIT); glAccum(GL_RETURN, 1.0f);
+    glDisable(GL_SCISSOR_TEST);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {
     static GLfloat texels[8 * 8 * 3];
     for (int j = 0; j < 8; j++) for (int i = 0; i < 8; i++) {
@@ -1191,7 +1222,9 @@ int main(int argc, char **argv) {
   glutInit(&argc, argv);
   if (argc > 1) scene = argv[1];
   glutInitWindowSize(320, 240);
-  glutInitDisplayMode(GLUT_RGB | GLUT_DEPTH | GLUT_DOUBLE);
+  /* The accumulation scene alone asks for an accumulation buffer: its reference is built on OSMesa
+     (tools/oracle/glut-egl.c), every other scene's on EGL. */
+  glutInitDisplayMode(GLUT_RGB | GLUT_DEPTH | GLUT_DOUBLE | (!strcmp(scene, "accum") ? GLUT_ACCUM : 0));
   glutCreateWindow("scenes");
   glutReshapeFunc(reshape);
   glutDisplayFunc(display);

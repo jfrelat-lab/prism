@@ -12,8 +12,9 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
   101 to 192, Quake III 55 to 95, Chromium B.S.U. 143 to 246.
 - **More of OpenGL 1.x and GLUT**: GLUT's spheres, cones, tori, polyhedra, teapot and fonts (GLUT
   3.7's own code), curved surfaces (evaluators), bitmaps, wireframe polygons, the attribute stack,
-  every immediate-mode spelling and the multitexture coordinates, and lines drawn by the GL's own rule.
-  Of the OpenGL Red Book's 63 examples, 34 now draw what Mesa draws, up from 12. GLSL shaders that
+  every immediate-mode spelling and the multitexture coordinates, lines drawn by the GL's own rule,
+  dotted and wide lines, patterned polygons, drawn pixels, 1D textures and the accumulation buffer.
+  Of the OpenGL Red Book's 63 examples, 45 now draw what Mesa draws, up from 12. GLSL shaders that
   swizzle a scalar (`m.x`) now compile.
 
 ## 2026-10-26

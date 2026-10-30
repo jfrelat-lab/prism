@@ -29,7 +29,7 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'gl-webgl.json');
 const ALL = ['tex-nearest', 'tex-linear', 'mip-nn', 'mip-ln', 'mip-ll', 'lightmap', 'alpha', 'blend', 'fog', 'clip', 'depth',
   'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect',
-  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo', 'polygon-mode', 'push-attrib', 'immediate-forms', 'glut-shapes', 'raster-text', 'evaluators', 'gl11-gaps'];
+  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo', 'polygon-mode', 'push-attrib', 'immediate-forms', 'glut-shapes', 'raster-text', 'evaluators', 'gl11-gaps', 'accum'];
 const args = process.argv.slice(2);
 const CAPTURE = args.includes('--capture');
 // --cpu: vertices transformed in JavaScript, as before P15.15's vertex shader -- to compare the two.
@@ -47,11 +47,12 @@ const work = join(SCRATCH, 'gl-scenes');
 mkdirSync(join(work, 'GL'), { recursive: true });
 copyFileSync(join(ROOT, 'tests', 'gl', 'scenes.c'), join(work, 'scenes.c'));
 oracleGlut(work);
-const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm');
+const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm'
+  + ' && gcc -O0 -I. -DPRISM_OSMESA -o scenes-osmesa scenes.c glut-egl.c glut-c-*.c -lGLU -lOSMesa -lm');   // the accumulation scene's (see scenes.c)
 if (build.code !== 0) throw new Error(`reference build: ${build.stderr || build.stdout}`);
 const mesa = {};
 for (const scene of SCENES) {
-  const r = sh(`cd /work/gl-scenes && rm -f frame-0.ppm && PRISM_GLUT_FRAMES=0 ./scenes ${scene} && mv frame-0.ppm ${scene}.ppm`);
+  const r = sh(`cd /work/gl-scenes && rm -f frame-0.ppm && PRISM_GLUT_FRAMES=0 ./${scene === 'accum' ? 'scenes-osmesa' : 'scenes'} ${scene} && mv frame-0.ppm ${scene}.ppm`);
   if (r.code !== 0) throw new Error(`reference ${scene}: ${r.stderr || r.stdout}`);
   const b = readFileSync(join(work, `${scene}.ppm`)), m = b.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);
   mesa[scene] = { w: +m[1], h: +m[2], rgb: b.subarray(m[0].length) };

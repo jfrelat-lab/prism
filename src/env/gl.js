@@ -60,6 +60,7 @@ const ATTRIB_GROUPS = [
     caps: [0x0b50, 0x0b57, 0x4000, 0x4001, 0x4002, 0x4003, 0x4004, 0x4005, 0x4006, 0x4007] }],      // LIGHTING
   [0x80, { fields: ['fog'], caps: [0x0b60] }],                                                    // FOG
   [0x100, { fields: ['depthFunc', 'depthMask', 'clearDepth'], caps: [0x0b71] }],                  // DEPTH_BUFFER
+  [0x200, { fields: ['clearAccum'], caps: [] }],                                                  // ACCUM_BUFFER
   [0x400, { fields: ['stencilFunc', 'stencilOp', 'stencilWriteMask', 'clearStencil'], caps: [0x0b90] }],   // STENCIL_BUFFER
   [0x800, { fields: ['viewport', 'depthRange'], caps: [] }],                                      // VIEWPORT
   [0x1000, { fields: ['mode', 'clipPlanes'], caps: [0x0ba1, 0x803a, 0x3000, 0x3001, 0x3002, 0x3003, 0x3004, 0x3005] }],   // TRANSFORM
@@ -298,6 +299,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // The stencil buffer exists only when the window asked for one (glut.js: GLUT_STENCIL); with no
     // stencil bits the test passes and nothing is written (GL 1.1 4.1.4).
     stencilBits: 0, stencil: null,
+    // The accumulation buffer, when the window asked for one (glut.js: GLUT_ACCUM): the window's own.
+    accumBits: 0, clearAccum: [0, 0, 0, 0],
     stencilFunc: [0x207, 0, 0xffffffff], stencilOp: [0x1e00, 0x1e00, 0x1e00], stencilWriteMask: 0xffffffff, clearStencil: 0,
     colourMaterial: { face: 0x0408, mode: 0x1602 },    // GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE
     unknownCaps: new Set(),
@@ -417,6 +420,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     gpuCache = null;
   }
   /** The read framebuffer's colour, bottom row first, with its width and height. */
+  /** The pixels the accumulation operations and its clear act on: the window, cut by the scissor box. */
+  function accumBox() {
+    const W = s.win.width, H = s.win.height, sc = s.caps.has(CAP.SCISSOR_TEST) ? s.scissor : null;
+    return sc ? [Math.max(0, sc[0]), Math.max(0, sc[1]), Math.min(W, sc[0] + sc[2]), Math.min(H, sc[1] + sc[3])] : [0, 0, W, H];
+  }
   function readBuffer() {
     const b = s.readFbo ? fboBuffers(s.readFbo) : s.win;
     if (!b) throw new Error('gl: reading from an incomplete framebuffer');
@@ -497,7 +505,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
 
   /** Size the framebuffer; the window system (glut.js, glx.js) calls this. */
   function resize(w, h) {
-    s.win = { color: new Uint8Array(w * h * 4), depth: new Float32Array(w * h).fill(1), stencil: s.stencilBits ? new Uint8Array(w * h) : null, width: w, height: h };
+    s.win = { color: new Uint8Array(w * h * 4), depth: new Float32Array(w * h).fill(1), stencil: s.stencilBits ? new Uint8Array(w * h) : null, width: w, height: h,
+      accum: s.accumBits ? new Int16Array(w * h * 4) : null };
     s.viewport = [0, 0, w, h];
     gpuCache = null;
     if (backend === 'webgl') { webgl = makeWebGL(w, h, s.stencilBits > 0); webgl.viewport(0, 0, w, h); for (const t of s.textures.values()) { t.dirty = true; t.gpuOwned = false; } }
@@ -1593,7 +1602,47 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
 
   // --- the commands. Each runs, or is recorded into the display list being compiled.
   const exec = {
+    /*
+     * THE ACCUMULATION BUFFER, as Mesa keeps it (main/accum.c): RGBA as signed 16-bit normalised
+     * integers, every value made one by multiplying by 32767 and TRUNCATING, as its C casts do --
+     * GL_ACCUM and GL_LOAD the read buffer's colour times the value, GL_ADD the value, GL_MULT each
+     * entry times it; GL_RETURN the entries times the value over 32767, rounded to the colour buffer
+     * through the colour mask. Each over the window, or the scissor box when the test is on. A window
+     * with no accumulation buffer, or a framebuffer object bound, changes nothing (INVALID_OPERATION).
+     */
+    glAccum: (op, value) => {
+      const acc = s.win?.accum;
+      if (!acc || s.drawFbo) return;
+      const [x0, y0, x1, y1] = accumBox(), W = s.win.width, short = (v) => Math.trunc(v);
+      if (op === 0x0100 || op === 0x0101) {                                         // GL_ACCUM, GL_LOAD
+        const { data } = readBuffer(), scale = Math.fround(value * 32767);
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) for (let k = 0; k < 4; k++) {
+          const i = (y * W + x) * 4 + k, c = short(Math.fround(Math.fround(data[i] / 255) * scale));
+          acc[i] = op === 0x0100 ? acc[i] + c : c;
+        }
+      } else if (op === 0x0103 || op === 0x0104) {                                  // GL_MULT, GL_ADD
+        const incr = short(Math.fround(value * 32767));
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) for (let k = 0; k < 4; k++) {
+          const i = (y * W + x) * 4 + k;
+          acc[i] = op === 0x0104 ? acc[i] + incr : short(Math.fround(acc[i] * value));
+        }
+      } else if (op === 0x0102) {                                                    // GL_RETURN
+        const scale = Math.fround(value / 32767), m = s.colorMask;
+        const rgba = webgl ? readBuffer().data : s.color;
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) for (let k = 0; k < 4; k++) {
+          const i = (y * W + x) * 4 + k;
+          if (m[k]) rgba[i] = Math.round(clamp01(Math.fround(acc[i] * scale)) * 255);
+        }
+        if (webgl) webgl.write(rgba, x0, y0, x1 - x0, y1 - y0, W);
+      } else throw new Error(`gl: glAccum 0x${op.toString(16)}`);
+    },
+    glClearAccum: (r, g, b, a) => { s.clearAccum = [r, g, b, a].map((v) => Math.min(Math.max(v, -1), 1)); },
     glClear: (mask) => {
+      // The accumulation buffer's clear value made a 16-bit entry as Mesa makes it (truncated).
+      if ((mask & 0x200) && s.win?.accum && !s.drawFbo) {
+        const [x0, y0, x1, y1] = accumBox(), W = s.win.width, c = s.clearAccum.map((v) => Math.trunc(Math.fround(v * 32767)));
+        for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) for (let k = 0; k < 4; k++) s.win.accum[(y * W + x) * 4 + k] = c[k];
+      }
       const sc = s.caps.has(CAP.SCISSOR_TEST) ? s.scissor : null;
       if (webgl) { webgl.clear(mask, s.clear, s.clearDepth, sc, s.colorMask, s.depthMask, s.stencil ? [s.clearStencil, s.stencilWriteMask] : null); return; }
       const x0 = sc ? Math.max(0, sc[0]) : 0, y0 = sc ? Math.max(0, sc[1]) : 0;
@@ -2319,7 +2368,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glGetIntegerv: (p, out) => {
       // The pixel store: the two alignments kept, the other modes 0 (glPixelStorei accepts only that).
       const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
-      const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [UNITS]
+      const vals = store ? store : p >= 0x0d58 && p <= 0x0d5b ? [s.win?.accum ? 16 : 0] : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [UNITS]
         : p === 0x84e0 ? [0x84c0 + s.activeUnit] : p === 0x84e1 ? [0x84c0 + s.clientUnit]
         : p === 0x0b07 ? [s.raster.x, s.raster.y, s.raster.z * 2147483647, 1].map(Math.round) : p === 0x0b08 ? [s.raster.valid ? 1 : 0] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
@@ -2440,6 +2489,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     loseContext() { webgl?.lose(); },
     /** Stencil bits for the next resize: the window system's visual (glut.js on GLUT_STENCIL). */
     set stencilBits(n) { s.stencilBits = n; },
+    set accumBits(n) { s.accumBits = n; },
   };
   M.gl = gl;
   return gl;
@@ -2762,7 +2812,7 @@ void main() {
   // batch drawn with one, so a program without one sends WebGL what it always did.
   let normalBuffer = null, normals = null;
   let n = 0, mode = g.TRIANGLES, key = null, pending = null;
-  let tnlVao = null, tnlIndexBuffer = null;
+  let tnlVao = null, tnlIndexBuffer = null, writeTex = null, writeFb = null;   // write(): its texture and framebuffer
   // The framebuffer drawn into: the window's (target) or a framebuffer object's (framebuffer()).
   let cur = target;
   const fbos = new Map(), renderbuffers = new Map();
@@ -3126,6 +3176,25 @@ void main() {
       key = null;
       return canvas.transferToImageBitmap();
     },
+    /** Bytes into the current framebuffer's rectangle (x, y, rw, rh), from rows `stride` pixels wide. */
+    write(rgba, x, y, rw, rh, stride) {
+      flush();
+      const sub = new Uint8Array(rw * rh * 4);
+      for (let j = 0; j < rh; j++) sub.set(rgba.subarray(((y + j) * stride + x) * 4, ((y + j) * stride + x + rw) * 4), j * rw * 4);
+      writeTex ??= g.createTexture(); writeFb ??= g.createFramebuffer();
+      g.bindTexture(g.TEXTURE_2D, writeTex);
+      g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+      g.texImage2D(g.TEXTURE_2D, 0, g.RGBA8, rw, rh, 0, g.RGBA, g.UNSIGNED_BYTE, sub);
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, writeFb);
+      g.framebufferTexture2D(g.READ_FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, writeTex, 0);
+      g.bindFramebuffer(g.DRAW_FRAMEBUFFER, cur);
+      g.disable(g.SCISSOR_TEST); delete applied.scissor;
+      g.colorMask(true, true, true, true); delete applied.mask;
+      g.blitFramebuffer(0, 0, rw, rh, x, y, x + rw, y + rh, g.COLOR_BUFFER_BIT, g.NEAREST);
+      g.bindFramebuffer(g.FRAMEBUFFER, cur);
+      delete applied.tex;
+      key = null;
+    },
     /** A framebuffer's colour (0 the window's), bottom row first, as GL's own is. */
     read(id = 0, rw = w, rh = h) {
       flush();
@@ -3235,7 +3304,7 @@ export function glBuiltins(T) {
     glColor3d: f(V, D, D, D), glColor3ub: f(V, T.UCHAR, T.UCHAR, T.UCHAR), glVertex2i: f(V, I, I), glVertex2d: f(V, D, D), glVertex3d: f(V, D, D, D),
     glTranslated: f(V, D, D, D), glRotated: f(V, D, D, D, D), glGetDoublev: f(V, U, P), glDrawArrays: f(V, U, I, I),
     glBitmap: f(V, I, I, F, F, F, F, P), glRectf: f(V, F, F, F, F),
-    glListBase: f(V, U), glCallLists: f(V, I, U, P), glLineStipple: f(V, I, T.USHORT), glPolygonStipple: f(V, P),
+    glAccum: f(V, U, F), glClearAccum: f(V, F, F, F, F), glListBase: f(V, U), glCallLists: f(V, I, U, P), glLineStipple: f(V, I, T.USHORT), glPolygonStipple: f(V, P),
     glDrawPixels: f(V, I, I, U, U, P), glCopyPixels: f(V, I, I, I, I, U), glPixelZoom: f(V, F, F), glTexImage1D: f(V, U, I, I, I, I, U, U, P),
     glMap1f: f(V, U, F, F, I, I, P), glMap1d: f(V, U, D, D, I, I, P), glMap2f: f(V, U, F, F, I, I, F, F, I, I, P), glMap2d: f(V, U, D, D, I, I, D, D, I, I, P),
     glMapGrid1f: f(V, I, F, F), glMapGrid1d: f(V, I, D, D), glMapGrid2f: f(V, I, F, F, I, F, F), glMapGrid2d: f(V, I, D, D, I, D, D),

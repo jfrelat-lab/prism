@@ -18,7 +18,7 @@ import { writeRgbPng } from './png.mjs';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ALL = ['tex-nearest', 'tex-linear', 'mip-nn', 'mip-ln', 'mip-ll', 'lightmap', 'alpha', 'blend', 'fog', 'clip', 'depth',
   'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect',
-  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo', 'polygon-mode', 'push-attrib', 'immediate-forms', 'glut-shapes', 'raster-text', 'evaluators', 'gl11-gaps'];
+  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo', 'polygon-mode', 'push-attrib', 'immediate-forms', 'glut-shapes', 'raster-text', 'evaluators', 'gl11-gaps', 'accum'];
 const args = process.argv.slice(2);
 const pngDir = args.find((a) => a.startsWith('--png='))?.slice(6);
 const SCENES = args.filter((a) => !a.startsWith('--')).length ? args.filter((a) => !a.startsWith('--')) : ALL;
@@ -29,7 +29,8 @@ const work = join(SCRATCH, 'gl-scenes');
 mkdirSync(join(work, 'GL'), { recursive: true });
 copyFileSync(join(ROOT, 'tests', 'gl', 'scenes.c'), join(work, 'scenes.c'));
 oracleGlut(work);
-const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm');
+const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm'
+  + ' && gcc -O0 -I. -DPRISM_OSMESA -o scenes-osmesa scenes.c glut-egl.c glut-c-*.c -lGLU -lOSMesa -lm');   // the accumulation scene's (see scenes.c)
 if (build.code !== 0) throw new Error(`reference build: ${build.stderr || build.stdout}`);
 const readPpm = (p) => {
   const b = readFileSync(p), m = b.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);
@@ -41,7 +42,7 @@ let bad = 0;
 const report = (ok, what, detail = '') => { if (!ok) bad++; console.log(`${ok ? '  ok ' : ' BAD '} ${what.padEnd(34)} ${detail}`); };
 if (pngDir) mkdirSync(pngDir, { recursive: true });
 for (const scene of SCENES) {
-  const r = sh(`cd /work/gl-scenes && rm -f frame-0.ppm && PRISM_GLUT_FRAMES=0 ./scenes ${scene} && mv frame-0.ppm ${scene}.ppm`);
+  const r = sh(`cd /work/gl-scenes && rm -f frame-0.ppm && PRISM_GLUT_FRAMES=0 ./${scene === 'accum' ? 'scenes-osmesa' : 'scenes'} ${scene} && mv frame-0.ppm ${scene}.ppm`);
   if (r.code !== 0) throw new Error(`reference ${scene}: ${r.stderr || r.stdout}`);
   const mesa = readPpm(join(work, `${scene}.ppm`));
   let mine = null;

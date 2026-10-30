@@ -3,7 +3,10 @@
  *
  * The REFERENCE side of the OpenGL gates: a program's own GLUT calls, answered here, with Mesa
  * (llvmpipe, in the oracle container) doing every GL call the program makes. The window is a
- * framebuffer object on a surfaceless EGL context, so nothing needs an X server.
+ * framebuffer object on a surfaceless EGL context, so nothing needs an X server. Built with
+ * -DPRISM_OSMESA (and -lOSMesa for -lEGL -lOpenGL) it is an OSMesa context instead, the same Mesa
+ * and llvmpipe drawing into a real default framebuffer -- which, unlike a framebuffer object, can have
+ * an accumulation buffer (GLUT_ACCUM).
  *
  * The schedule is the harness's, and PRISM's GLUT (src/env/glut.js) follows the same one, which is
  * what makes the frames comparable:
@@ -14,8 +17,12 @@
  * frame-N.ppm, bottom row last; the program exits after the highest one.
  * GL/glut.h is not in this directory: tools/oracle.mjs (oracleGlut) writes PRISM's own beside this file.
  */
+#ifdef PRISM_OSMESA
+#include <GL/osmesa.h>
+#else
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#endif
 #define GL_GLEXT_PROTOTYPES 1
 #include <GL/gl.h>
 #include <GL/glext.h>
@@ -72,6 +79,14 @@ int glutCreateWindow(const char *title) {
   (void)title;
   if (created) return 1;
   created = 1;
+#ifdef PRISM_OSMESA
+  {
+    int stencil = (displayMode & GLUT_STENCIL) != 0, accum = (displayMode & GLUT_ACCUM) != 0;
+    OSMesaContext ctx = OSMesaCreateContextExt(OSMESA_RGBA, 24, stencil ? 8 : 0, accum ? 16 : 0, NULL);
+    if (!ctx || !OSMesaMakeCurrent(ctx, malloc((size_t)winW * winH * 4), GL_UNSIGNED_BYTE, winW, winH)) { fprintf(stderr, "glut-egl: OSMesa context failed\n"); exit(2); }
+    windowFb = 0;                     /* framebuffer 0 is the window itself */
+  }
+#else
   PFNEGLGETPLATFORMDISPLAYEXTPROC getDisplay = (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
   EGLDisplay d = getDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
   if (!eglInitialize(d, NULL, NULL)) { fprintf(stderr, "glut-egl: eglInitialize failed\n"); exit(2); }
@@ -91,6 +106,7 @@ int glutCreateWindow(const char *title) {
   glBindRenderbuffer(GL_RENDERBUFFER, rb[1]); glRenderbufferStorage(GL_RENDERBUFFER, stencil ? GL_DEPTH24_STENCIL8 : GL_DEPTH_COMPONENT24, winW, winH);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, stencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[1]);
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) { fprintf(stderr, "glut-egl: incomplete framebuffer\n"); exit(2); }
+#endif
   return 1;
 }
 void glutDestroyWindow(int win) { (void)win; }
@@ -256,7 +272,9 @@ static void display(void) { if (displayCb) displayCb(); if (!dbl) present(); }
 void glutSwapBuffers(void) { if (dbl) present(); }
 
 void glutMainLoop(void) {
-  if (reshapeCb) reshapeCb(winW, winH);
+  /* With no reshape callback GLUT's own sets the viewport (GLUT 3 spec 7.4); this context, with no
+     surface, starts with a 0x0 one. */
+  if (reshapeCb) reshapeCb(winW, winH); else glViewport(0, 0, winW, winH);
   if (visibilityCb) visibilityCb(GLUT_VISIBLE);
   display();
   for (;;) {

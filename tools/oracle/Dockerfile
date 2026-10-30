@@ -26,10 +26,13 @@ FROM i386/debian:bookworm-slim
 # gate-sdl2-image), and SDLPoP built against them is the pixel reference for SDLPoP on PRISM
 # (gate-sdlpop-pixels, with tools/oracle/sdl2-capture.c preloaded). So is SDL_mixer 1.2, for
 # gate-sdl-mixer. libsdl2-image-dev was added to the existing image with apt-get + docker commit.
+# OSMesa (Mesa 22.3.6, as the EGL path) gives the GL gates the one thing an EGL framebuffer object
+# lacks: an accumulation buffer (tools/oracle/glut-egl.c, GLUT_ACCUM). Added with apt-get + docker commit.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc g++ tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
       libsdl1.2-dev libsdl-mixer1.2-dev \
       libsdl2-dev libsdl2-image-dev \
+      libosmesa6-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Debian's csmith package ships the GENERATOR but none of the runtime headers its output

@@ -33,5 +33,6 @@
   "glut-shapes": 94,
   "raster-text": 8,
   "evaluators": 118,
-  "gl11-gaps": 35
+  "gl11-gaps": 35,
+  "accum": 79
 }
