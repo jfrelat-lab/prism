@@ -1302,13 +1302,28 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     if (seg.length === 2) seg = clipGuard(seg);
     if (seg.length < 2) return;
     if (webgl) { webgl.line(seg[0], seg[1], gpuState()); return; }
-    const A = toWindow(seg[0]), B = toWindow(seg[1]);
-    const n = Math.max(1, Math.ceil(Math.max(Math.abs(B.x - A.x), Math.abs(B.y - A.y))));
-    for (let k = 0; k < n; k++) {
-      const t = (k + 0.5) / n, x = Math.floor(A.x + (B.x - A.x) * t), y = Math.floor(A.y + (B.y - A.y) * t);
-      const [bx0, by0, bx1, by1] = drawBox();
+    const A = toWindow(seg[0]), B = toWindow(seg[1]), ca = seg[0].colour, cb = seg[1].colour;
+    /*
+     * GL 1.1 3.4.1's DIAMOND-EXIT rule, as Mesa (llvmpipe) draws it: a pixel is drawn when the segment
+     * leaves the diamond |x - xc| + |y - yc| < 1/2 about its centre. Along the major axis that is each
+     * column (row) whose centre the segment crosses, in the row (column) it crosses it at -- unless the
+     * segment ENDS inside that diamond; and the pixel the segment STARTS inside, whose centre it may
+     * not cross. A connected strip so draws each shared vertex's pixel once.
+     */
+    const xMajor = Math.abs(B.x - A.x) >= Math.abs(B.y - A.y);
+    const [a0, a1, b0, b1] = xMajor ? [A.x, B.x, A.y, B.y] : [A.y, B.y, A.x, B.x];
+    if (a0 === a1) return;
+    const inDiamond = (P, i, j) => Math.abs(P.x - (i + 0.5)) + Math.abs(P.y - (j + 0.5)) < 0.5;
+    const [bx0, by0, bx1, by1] = drawBox();
+    const lo = Math.floor(Math.min(a0, a1)), hi = Math.floor(Math.max(a0, a1));
+    for (let m = lo; m <= hi; m++) {
+      const t = (m + 0.5 - a0) / (a1 - a0), n = Math.floor(b0 + (b1 - b0) * t);
+      const [x, y] = xMajor ? [m, n] : [n, m];
+      if (inDiamond(B, x, y)) continue;                      // it ends inside: never left
+      if (!(t >= 0 && t < 1) && !inDiamond(A, x, y)) continue;
       if (x < bx0 || y < by0 || x > bx1 || y > by1) continue;
-      fragment(y * s.width + x, A.z + (B.z - A.z) * t, a.colour.map((v, i) => v + (b.colour[i] - v) * t), 0);
+      const u = Math.min(Math.max(t, 0), 1);
+      fragment(y * s.width + x, A.z + (B.z - A.z) * u, ca.map((v, i) => v + (cb[i] - v) * u), 0);
     }
   }
   /*

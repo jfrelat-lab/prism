@@ -79,6 +79,8 @@
  *                 d and 4 components with w = 2, glNormal in b, s, i under lighting, glTexCoord in 1, 3
  *                 and 4 components (q = 2), glMultiTexCoord on unit 1, all through glActiveTexture
  *                 (every textured quad planar in its coordinates: Mesa cuts these along 0-2)
+ *   glut-shapes   GLUT's shapes, solid and lit on the top rows, wire below: sphere, cone, cube, torus,
+ *                 dodecahedron, octahedron, tetrahedron, icosahedron (GLUT 3.7's own glut_shapes.c)
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -828,6 +830,32 @@ static void display(void) {
     glDisable(GL_TEXTURE_2D);
 #undef Q
     glDeleteTextures(1, &t);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "glut-shapes")) {
+    static const GLfloat pos[4] = { 1, 1, 2, 0 }, dif[4] = { 0.9f, 0.7f, 0.4f, 1 };
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(-4, 4, -3, 3, -10, 10);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glEnable(GL_DEPTH_TEST); glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_NORMALIZE);
+    glLightfv(GL_LIGHT0, GL_POSITION, pos); glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, dif);
+    for (int k = 0; k < 16; k++) {
+      int wire = k >= 8, n = k % 8;
+      if (wire) { glDisable(GL_LIGHTING); glColor3f(0.4f + 0.07f * n, 1, 0.6f); } else glEnable(GL_LIGHTING);
+      glLoadIdentity();
+      glTranslatef(-3.0f + 2.0f * (n % 4), (n < 4 ? 2.1f : 0.7f) - (wire ? 2.8f : 0), 0);
+      glRotatef(25, 1, 0, 0); glRotatef(35 + 10 * n, 0, 1, 0);
+      switch (n) {
+        case 0: wire ? glutWireSphere(0.6, 12, 8) : glutSolidSphere(0.6, 16, 12); break;
+        case 1: wire ? glutWireCone(0.5, 0.9, 10, 4) : glutSolidCone(0.5, 0.9, 14, 4); break;
+        case 2: wire ? glutWireCube(0.8) : glutSolidCube(0.8); break;
+        case 3: wire ? glutWireTorus(0.15, 0.45, 8, 14) : glutSolidTorus(0.15, 0.45, 10, 18); break;
+        case 4: glScalef(0.35f, 0.35f, 0.35f); wire ? glutWireDodecahedron() : glutSolidDodecahedron(); break;
+        case 5: glScalef(0.6f, 0.6f, 0.6f); wire ? glutWireOctahedron() : glutSolidOctahedron(); break;
+        case 6: glScalef(0.5f, 0.5f, 0.5f); wire ? glutWireTetrahedron() : glutSolidTetrahedron(); break;
+        case 7: glScalef(0.6f, 0.6f, 0.6f); wire ? glutWireIcosahedron() : glutSolidIcosahedron(); break;
+      }
+    }
+    glDisable(GL_LIGHTING); glDisable(GL_LIGHT0); glDisable(GL_NORMALIZE);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {

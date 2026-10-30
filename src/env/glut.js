@@ -13,6 +13,7 @@
 // a second whatever the frame rate.
 
 import { GLUT_H } from './headers-gl.js';
+import { GLUT_C_NAMES } from './glut-c.js';
 
 const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103, GLUT_VISIBLE = 1, GLUT_STENCIL = 0x20, GLUT_DOUBLE = 2;
 /*
@@ -62,18 +63,6 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
   }
   function display() { call(s.cb.display); if (!s.double) present(); }
   const call = (p, args = []) => { if (p) M.icall(p, args); };
-  const FACES = [[[-1, 0, 0], [0, 1, 2, 3]], [[0, 1, 0], [3, 2, 6, 7]], [[1, 0, 0], [7, 6, 5, 4]],
-    [[0, -1, 0], [4, 5, 1, 0]], [[0, 0, 1], [5, 6, 2, 1]], [[0, 0, -1], [7, 4, 0, 3]]];
-  function cube(size, mode) {
-    const h = size / 2;
-    const v = [[-h, -h, -h], [-h, -h, h], [-h, h, h], [-h, h, -h], [h, -h, -h], [h, -h, h], [h, h, h], [h, h, -h]];
-    for (const [n, idx] of FACES) {
-      M.rt.glBegin(mode);
-      M.rt.glNormal3f(n[0], n[1], n[2]);
-      for (const i of idx) M.rt.glVertex3f(Math.fround(v[i][0]), Math.fround(v[i][1]), Math.fround(v[i][2]));
-      M.rt.glEnd();
-    }
-  }
   Object.assign(M.rt, {
     glutInit: () => {},
     // Of the display mode, only the stencil buffer changes what gl.js allocates: 8 bits, as Mesa's.
@@ -86,12 +75,6 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
     glutDestroyWindow: () => {},
     // One window, number 1: the one glutCreateWindow made. Its title is nowhere to be shown.
     glutGetWindow: () => 1, glutSetWindow: () => {}, glutSetWindowTitle: () => {},
-    /*
-     * glutWireCube / glutSolidCube: six faces about the origin, each with its outward normal, drawn
-     * through gl.js's own immediate mode -- as GLUT's library draws them through the GL it links.
-     */
-    glutWireCube: (size) => cube(size, 0x0002 /* GL_LINE_LOOP */),
-    glutSolidCube: (size) => cube(size, 0x0007 /* GL_QUADS */),
     glutDisplayFunc: (p) => { s.cb.display = p; },
     glutReshapeFunc: (p) => { s.cb.reshape = p; },
     glutIdleFunc: (p) => { s.cb.idle = p; },
@@ -209,6 +192,7 @@ export function glutBuiltins(T) {
   };
   const out = {};
   for (const m of GLUT_H.matchAll(/^([\w ]+?\**)\s*(glut\w+)\((.*)\);$/gm)) {
+    if (GLUT_C_NAMES.includes(m[2])) continue;                                // compiled from GLUT's C (glut-c.js)
     const params = m[3].trim() === 'void' ? [] : m[3].split(/,(?![^(]*\))/).map((p) => {
       p = p.trim();
       if (p.includes('(*')) return T.ptr(T.CHAR);                           // a callback

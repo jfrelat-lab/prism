@@ -87,7 +87,7 @@ const readPpm = (p) => {
 function mesa(p) {
   const at = `/work/gl-census/${p.root.replace(/\//g, '_')}/${p.dir}`;
   const inc = (p.include ?? []).map((i) => `-I../${i}`).join(' ');
-  const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/glut-egl.c -lGLU -lEGL -lOpenGL -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
+  const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/glut-egl.c /work/gl-census/_glut/glut-c.c -lGLU -lEGL -lOpenGL -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
   r.err = (r.stdout + r.stderr).split('\n').find((l) => /error|undefined reference/.test(l))?.replace(/^.*?: /, '');
   const local = join(work, p.root.replace(/\//g, '_'), p.dir);
   const got = Object.fromEntries(FRAMES.filter((n) => existsSync(join(local, `frame-${n}.ppm`))).map((n) => [n, readPpm(join(local, `frame-${n}.ppm`))]));

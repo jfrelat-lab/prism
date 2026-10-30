@@ -54,6 +54,7 @@ import { installVgaFont } from './vgafont.js';
 import { installWsock } from './wsock.js';
 import { installGL, glBuiltins } from './gl.js';
 import { installGlut, glutBuiltins } from './glut.js';
+import { GLUT_C } from './glut-c.js';
 import { installGlu, gluBuiltins } from './glu.js';
 import { installZlib, zlibBuiltins, ZLIB_H } from './zlib.js';
 import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
@@ -229,7 +230,8 @@ export const ENV = {
    * tools/gate-gl-abi.mjs.
    */
   gl: { install: (M, _c, o) => installGL(M, o), headers: GL_HEADERS, builtins: glBuiltins(T) },
-  glut: { needs: ['gl'], install: (M, _c, o) => installGlut(M, o), builtins: glutBuiltins(T) },
+  // GLUT's shapes are GLUT 3.7's own C (glut-c.js), drawn through gl and glu as its library draws them.
+  glut: { needs: ['gl', 'glu'], install: (M, _c, o) => installGlut(M, o), vars: GLUT_C, builtins: glutBuiltins(T) },
   // GLU over that GL (src/env/glu.js): the projection helper, quadric spheres, mipmap building.
   glu: { needs: ['gl'], install: (M) => installGlu(M), builtins: gluBuiltins(T) },
   // zlib's interface, imitated (src/env/zlib.js) and held to zlib 1.1.3 compiled from its own
@@ -329,8 +331,18 @@ export function envHeaders(spec) {
  * Refused on conflict for the same reason envHeaders refuses: two environments claiming one name
  * are two versions of one library, and a build links against exactly one.
  */
+/** The names with what they need, dependencies first, as buildEnv installs them. */
+function withNeeds(names) {
+  const out = [];
+  const add = (n) => { if (out.includes(n)) return; for (const d of ENV[n]?.needs ?? []) add(d); out.push(n); };
+  names.forEach(add);
+  return out;
+}
+
 export function envBuiltins(spec) {
-  const names = Array.isArray(spec) ? spec : Object.keys(spec ?? {});
+  // What an environment needs is installed with it (buildEnv), so its entry points are builtins too:
+  // glut needs glu for the quadrics of GLUT's own shapes (glut-c.js).
+  const names = withNeeds(Array.isArray(spec) ? spec : Object.keys(spec ?? {}));
   const out = new Map(), from = new Map();
   for (const n of names) {
     for (const [sym, sig] of Object.entries(ENV[n]?.builtins ?? {})) {

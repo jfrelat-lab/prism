@@ -11,6 +11,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync } from 'node:fs';
 import { GLUT_H } from '../src/env/headers-gl.js';
+import { GLUT_C } from '../src/env/glut-c.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -221,6 +222,8 @@ void prism_glutBindFramebuffer(unsigned int target, unsigned int framebuffer);
 #endif
 `));
   copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(dir, 'glut-egl.c'));
+  // GLUT's own shapes, a unit of their own as PRISM compiles them beside the program (src/env/glut-c.js): link -lGLU.
+  writeFileSync(join(dir, 'glut-c.c'), GLUT_C);
 }
 
 export function sh(cmd, { timeout = 120000 } = {}) {

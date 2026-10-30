@@ -29,5 +29,6 @@
   "fbo": 35,
   "polygon-mode": 51,
   "push-attrib": 0,
-  "immediate-forms": 114
+  "immediate-forms": 114,
+  "glut-shapes": 94
 }
