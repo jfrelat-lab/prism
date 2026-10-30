@@ -5,6 +5,12 @@ is updated continuously, so entries are dated rather than versioned; the source 
 comes from are released as [prism-sources](https://github.com/jfrelat-lab/prism-sources/releases).
 Every change is in the [commit history](https://github.com/jfrelat-lab/prism/commits/main).
 
+## 2026-10-30
+
+- **3D programs, three times less JavaScript**: OpenGL's vertex work -- moving, lighting and texturing
+  each point -- now runs on the graphics card. Neverball's intro went from 41 to 122 frames a second
+  of JavaScript; every OpenGL game on the site draws through it.
+
 ## 2026-10-26
 
 - **Neverball plays**: [/neverball/](https://prism-compiler.pages.dev/neverball/), tilt the floor with
