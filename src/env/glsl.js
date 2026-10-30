@@ -126,6 +126,12 @@ function translate(src, stage) {
   const sig = [];                                   // indices of the significant tokens (not whitespace)
   tk.forEach((x, i) => { if (x.t !== 'ws') sig.push(i); });
   const at = (k) => (k >= 0 && k < sig.length ? tk[sig[k]] : null);
+  // The shader's own struct types declare names as the built-in types do: `X n(L v, W d)` binds v to
+  // an L, not to a global `int v` of the same name (Absolute Territory, 2017).
+  const declTypes = new Set(DECL_TYPES);
+  for (let k = 0; k + 1 < sig.length; k++) if (at(k).v === 'struct' && at(k + 1).t === 'id') declTypes.add(at(k + 1).v);
+  // A fragment shader of GLSL 1.30 that declares its own output writes that one, not gl_FragColor.
+  const ownOutput = !vertex && sig.some((_, k) => at(k).v === 'out' && (k === 0 || at(k - 1).t === 'pp' || [';', '}'].includes(at(k - 1).v)));
   // WHICH TYPE EACH NAME HAS, scope by scope: each use of a name is the declaration it sees -- a
   // global, a function's parameter in its body, a local -- so `int k` in one function and `float k` in
   // another are two (Valleyball 2009: R(vec3 n, vec3 m, int k) and F's float k).
@@ -133,6 +139,7 @@ function translate(src, stage) {
   {
     const scopes = [new Map()];
     let pending = null;                                     // a function's parameters, for its body
+    let parens = 0;                                         // open parentheses: at global scope, a parameter list
     const bind = (name, type) => scopes[scopes.length - 1].set(name, type);
     const look = (name) => { for (let i = scopes.length - 1; i >= 0; i--) if (scopes[i].has(name)) return scopes[i].get(name); return null; };
     for (let k = 0; k < sig.length; k++) {
@@ -140,9 +147,11 @@ function translate(src, stage) {
       if (x.v === '{') { scopes.push(new Map(pending || [])); pending = null; continue; }
       if (x.v === '}') { if (scopes.length > 1) scopes.pop(); continue; }
       if (x.v === ';' && scopes.length === 1) { pending = null; continue; }
+      if (x.v === '(') parens++; else if (x.v === ')') parens--;
       if (x.t !== 'id') continue;
       const next = at(k + 1), prev = at(k - 1);
-      if (DECL_TYPES.has(x.v) && next && next.t === 'id' && !(prev && prev.v === '.')) {
+      // A parameter is bound in its function's body (pending), not where its declaration is read.
+      if (declTypes.has(x.v) && next && next.t === 'id' && !(prev && prev.v === '.') && !(scopes.length === 1 && parens > 0)) {
         if (at(k + 2) && at(k + 2).v === '(' && scopes.length === 1) {
           // a function: its parameters bound in its body (a prototype's are forgotten at its `;`)
           const ps = [];
@@ -151,7 +160,7 @@ function translate(src, stage) {
             if (y.v === '(' || y.v === '[') depth++;
             else if (y.v === ')' || y.v === ']') { if (depth === 0) break; depth--; }
             else if (y.v === ',' && depth === 0) type = null;
-            else if (y.t === 'id' && depth === 0) { if (DECL_TYPES.has(y.v)) type = y.v; else if (type) ps.push([y.v, type]); }
+            else if (y.t === 'id' && depth === 0) { if (declTypes.has(y.v)) type = y.v; else if (type) ps.push([y.v, type]); }
           }
           pending = ps;
         } else {
@@ -313,7 +322,7 @@ function translate(src, stage) {
   for (let k = 1, depth = 0; k < sig.length; k++) {
     const x = at(k);
     if (x.v === '{') depth++; else if (x.v === '}') depth--;
-    if (!depth && x.t === 'id' && at(k + 1) && at(k + 1).v === '(' && at(k - 1).t === 'id' && DECL_TYPES.has(at(k - 1).v)) {
+    if (!depth && x.t === 'id' && at(k + 1) && at(k + 1).v === '(' && at(k - 1).t === 'id' && declTypes.has(at(k - 1).v)) {
       if (!returns.has(x.v)) returns.set(x.v, new Set());
       returns.get(x.v).add(at(k - 1).v);
     }
@@ -341,7 +350,9 @@ function translate(src, stage) {
     if (scalarStart.has(k)) { const n = at(scalarStart.get(k)).v.length; if (n > 1) out.push(`${SCALAR_VEC[scalarSwizzle.get(scalarStart.get(k))[1]]}${n}(`); }
     if (scalarSwizzle.has(k + 1) && x.v === '.') { if (at(k + 1).v.length > 1) out.push(')'); i = sig[k + 1]; continue; }
     if (x.t === 'pp') { if (!/^\s*#\s*version\b/.test(x.v)) out.push(x.v + '\n'); continue; }
-    if (x.t === 'num' && isIntLiteral(x.v) && !/^0[xX]/.test(x.v) && !/[uU]$/.test(x.v) && !intCtx(k)) { out.push(x.v + '.0'); continue; }
+    // An integer where a float is wanted, by its value: an OCTAL one (016 is 14 in GLSL 1.20; Paradistance
+    // writes float a=016) would read as sixteen with .0 after it.
+    if (x.t === 'num' && isIntLiteral(x.v) && !/^0[xX]/.test(x.v) && !/[uU]$/.test(x.v) && !intCtx(k)) { out.push((/^0[0-7]+$/.test(x.v) ? String(parseInt(x.v, 8)) : x.v) + '.0'); continue; }
     if (converted.has(k)) { out.push(`float(${x.v})`); continue; }
     if (x.t === 'id') {
       if (MATRIX.test(x.v)) {
@@ -403,7 +414,7 @@ function translate(src, stage) {
     return { source: head + out.join('') + tail, uniforms, matrices: [...matrices] };
   }
   const head = '#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler3D;\n' +
-    'in vec4 prism_Color;\nin vec4 prism_TexCoord0;\nin float prism_FogFragCoord;\nout vec4 prism_FragColor;\n' + decl;
+    'in vec4 prism_Color;\nin vec4 prism_TexCoord0;\nin float prism_FogFragCoord;\n' + (ownOutput ? '' : 'out vec4 prism_FragColor;\n') + decl;
   return { source: head + out.join(''), uniforms, matrices: [...matrices] };
 }
 

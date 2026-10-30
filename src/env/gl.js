@@ -633,7 +633,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     if (s.units[1].caps.has(CAP.TEXTURE_2D)) tex1 = unitCoord(s.units[1], x, y, z, w, mv, eye);
     if (s.units[2].caps.has(CAP.TEXTURE_2D)) tex2 = unitCoord(s.units[2], x, y, z, w, mv, eye);
     // Under a program with a vertex shader, the vertex as given is what the GPU gets (its attributes).
-    const vs = glsl.current()?.vertex ? { o: [x, y, z, w], c: s.colour.slice(), t: [s.tex[0], s.tex[1]], n: s.normal.slice() } : null;
+    // Under a vertex shader gl_MultiTexCoord0 carries r too (Paradistance passes its clock in it).
+    const vs = glsl.current()?.vertex ? { o: [x, y, z, w], c: s.colour.slice(), t: [s.tex[0], s.tex[1], tr], n: s.normal.slice() } : null;
     s.verts.push({ clip, colour, back, tex: [tu, tv], tex1, tex2, eyeZ: Math.abs(eye[2] / (eye[3] || 1)), eye, vs });
   }
   // GL_SPHERE_MAP (GL 1.1, 2.10.4): the eye-space reflection of the view direction about the normal.
@@ -2801,7 +2802,8 @@ void main() {
   const STRIDE = 11 * 4;
   g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 4, g.FLOAT, false, STRIDE, 0);
   g.enableVertexAttribArray(1); g.vertexAttribPointer(1, 4, g.FLOAT, false, STRIDE, 16);
-  g.enableVertexAttribArray(2); g.vertexAttribPointer(2, 2, g.FLOAT, false, STRIDE, 32);
+  // Three components: the fixed function reads two (its vec2 tc); a vertex shader's gl_MultiTexCoord0 the r beside them.
+  g.enableVertexAttribArray(2); g.vertexAttribPointer(2, 3, g.FLOAT, false, STRIDE, 32);
   g.enableVertexAttribArray(3); g.vertexAttribPointer(3, 1, g.FLOAT, false, STRIDE, 40);
   g.disable(g.CULL_FACE);
   const gpuTex = new Map();
@@ -3013,7 +3015,7 @@ void main() {
       g.drawArrays(mode, 0, n);
       g.disableVertexAttribArray(5); g.disableVertexAttribArray(6);
       g.vertexAttribPointer(0, 4, g.FLOAT, false, STRIDE, 0); g.vertexAttribPointer(1, 4, g.FLOAT, false, STRIDE, 16);
-      g.vertexAttribPointer(2, 2, g.FLOAT, false, STRIDE, 32); g.vertexAttribPointer(3, 1, g.FLOAT, false, STRIDE, 40);
+      g.vertexAttribPointer(2, 3, g.FLOAT, false, STRIDE, 32); g.vertexAttribPointer(3, 1, g.FLOAT, false, STRIDE, 40);
       n = 0;
       return;
     }
@@ -3031,7 +3033,7 @@ void main() {
   };
   const push = (v, colour) => {
     if (v.vs) {                                // under a vertex shader: the attributes as given
-      const o = n * 11; data.set(v.vs.o, o); data.set(v.vs.c, o + 4); data[o + 8] = v.vs.t[0]; data[o + 9] = v.vs.t[1]; data[o + 10] = 0;
+      const o = n * 11; data.set(v.vs.o, o); data.set(v.vs.c, o + 4); data[o + 8] = v.vs.t[0]; data[o + 9] = v.vs.t[1]; data[o + 10] = v.vs.t[2];
       (normals ??= new Float32Array(MAXV * 3)).set(v.vs.n, n * 3); n++; return;
     }
     if (pending.multi) {

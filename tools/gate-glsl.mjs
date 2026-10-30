@@ -70,6 +70,11 @@ idioms.push(['a swizzle of a scalar is the scalar, or its vector (Hartverdrahtet
 idioms.push(['an int on the right of a compound assignment to a float is converted (Hartverdrahtet 2012: y/=v)',
   'void main(){vec3 y=vec3(1);vec2 t=vec2(1);int v=4;ivec2 q=ivec2(1);int i=3;y/=v;t.x*=v;q.x*=v;i+=v;gl_FragColor=vec4(y,t.x+float(q.x+i));}',
   'void main(){vec3 y=vec3(1.0);vec2 t=vec2(1.0);int v=4;ivec2 q=ivec2(1);int i=3;y/=float(v);t.x*=float(v);q.x*=v;i+=v;prism_FragColor=vec4(y,t.x+float(q.x+i));}']);
+idioms.push(['a parameter of the shader\'s own struct type is not the global of its name (Absolute Territory 2017: X n(L v, W d) beside uniform int v)',
+  'uniform int v;struct L{float d;};float n(L v){return v.d*2;}void main(){gl_FragColor=vec4(n(L(1))+v);}',
+  'uniform int v;struct L{float d;};float n(L v){return v.d*2.0;}void main(){prism_FragColor=vec4(n(L(1.0))+float(v));}']);
+idioms.push(['an octal integer where a float is wanted is its value (Paradistance 2009: float a=016 is 14)',
+  'float a=016,b=001;void main(){gl_FragColor=vec4(a,b,0x10,010);}', 'float a, b;void main(){a=14.0;b=1.0;prism_FragColor=vec4(a,b,0x10,8.0);}']);
 idioms.push(['an empty macro tested by #ifdef stays a name there',
   '#define FAST\n#ifdef FAST\nfloat k=1.;\n#endif\nvoid main(){gl_FragColor=vec4(k);}',
   '#define FAST\n\n#ifdef FAST\n\nfloat k=1.;\n#endif\n\nvoid main(){prism_FragColor=vec4(k);}']);

@@ -2,8 +2,8 @@
   "gears": {
     "calls": 7233,
     "draws": 306,
-    "sha": "9a3b38aaa10fe1e6b7977d308aa5e3560199c3fa474a9cd2d09da745fff813fe",
-    "state": "70c53f4fd52b5c15fac07d78cc268b60e0ad469ba673ca6c10cf3520a2636ab3",
+    "sha": "2b07e7e15b1d6723921bf7c2b079bdfb35fb6ed080a6be0af0367f4ad09a805d",
+    "state": "62bc84eb42c7497ee4bafe12279150c9463a3addfce64d3b1cf4ab116dd12137",
     "ranges": [
       [
         0,
@@ -170,8 +170,8 @@
   "morph3d": {
     "calls": 10913,
     "draws": 780,
-    "sha": "f412745d271bc01bf7a09498c21a6cab74d734cc01896ef73508d55b61778088",
-    "state": "c0a8999b718ef80ae037328ae20d803b8467bbf2305372e3e6e31d475770466d",
+    "sha": "44bafefa0bd99f5ee54244adcc15a0913422e7ef1cc2cd0fd30676ed039c1f43",
+    "state": "d2546ece45236804d7407349714490718147c2398f2d896c137c834ceb54848a",
     "ranges": [
       [
         0,
@@ -185,8 +185,8 @@
   "texobj (texture objects)": {
     "calls": 876,
     "draws": 102,
-    "sha": "fe8b6b5375f7f99d7ae8d4a4251a563578da26fcc8e987206032418f8a8b7888",
-    "state": "272457466c6405c149301a80198bf621d06a66c1816b4c4bbd6bbd8bbcfc7ad2",
+    "sha": "e95b06261eb3996be08bbd2da3b7b544c123231bea092e58ae8b7ef1563b4d56",
+    "state": "2abfca28cac4bee2ef9064b4a9b25419c552218a9a22b99d10f941ebde159968",
     "ranges": [
       [
         0,
@@ -198,8 +198,8 @@
   "texobj (display lists)": {
     "calls": 1271,
     "draws": 102,
-    "sha": "8541ce8d8c18183a705f962d8af6efbb19d2c7766879b7dec419a9a1457576c5",
-    "state": "25ae56b0cce50ae74ec27e3597e78daf46f82d72622c5da6cc4ab895a0666a4f",
+    "sha": "8c28410d625fe29e0a3e4d0b2e50bbe27bb485af11b0e8cfe35fcf01e8e30101",
+    "state": "d5bab5afe25d506de37f6afee932a942558eda53bd7654a4fa08c113179a617f",
     "ranges": [
       [
         0,
