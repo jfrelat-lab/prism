@@ -363,6 +363,8 @@ export function installGlu(M) {
     },
     gluDeleteQuadric: (q) => { if (quadrics.delete(q)) rt.free(q); },
     gluQuadricDrawStyle: (q, v) => { quadrics.get(q).style = v; },
+    // GLU_ERROR's callback: kept, and never called -- no quadric operation here reports an error.
+    gluQuadricCallback: (q, which, fn) => { quadrics.get(q).onError = fn; },
     gluQuadricNormals: (q, v) => { quadrics.get(q).normals = v; },
     gluQuadricOrientation: (q, v) => { quadrics.get(q).orientation = v; },
     gluQuadricTexture: (q, v) => { quadrics.get(q).texture = !!v; },
@@ -802,7 +804,7 @@ export function gluBuiltins(T) {
     gluUnProject: f(I, D, D, D, P, P, P, P, P, P),
     gluPerspective: f(V, D, D, D, D), gluLookAt: f(V, D, D, D, D, D, D, D, D, D), gluOrtho2D: f(V, D, D, D, D),
     gluPickMatrix: f(V, D, D, D, D, P), gluProject: f(I, D, D, D, P, P, P, P, P, P), gluErrorString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
-    gluQuadricDrawStyle: f(V, P, U), gluQuadricNormals: f(V, P, U), gluQuadricOrientation: f(V, P, U), gluQuadricTexture: f(V, P, I),
+    gluQuadricDrawStyle: f(V, P, U), gluQuadricCallback: f(V, P, U, P), gluQuadricNormals: f(V, P, U), gluQuadricOrientation: f(V, P, U), gluQuadricTexture: f(V, P, I),
     gluSphere: f(V, P, D, I, I), gluCylinder: f(V, P, D, D, D, I, I), gluDisk: f(V, P, D, D, I, I), gluPartialDisk: f(V, P, D, D, I, I, D, D), gluScaleImage: f(I, U, I, I, U, P, I, I, U, P), gluBuild2DMipmaps: f(I, U, I, I, I, U, U, P),
   };
 }

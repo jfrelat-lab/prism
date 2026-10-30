@@ -90,6 +90,10 @@
  *                 bicubic patch lit under AUTO_NORMAL by glEvalMesh2 FILL, its colour and texture
  *                 coordinates mapped; the same patch by glEvalMesh2 LINE and as a rational (VERTEX_4)
  *                 surface of glEvalPoint2; then GLUT's teapot, solid and lit, and wire
+ *   gl11-gaps     stippled lines (GL_LINES restarting the pattern, a strip continuing it, a repeat factor,
+ *                 a steep one), wide lines (3 and 6, stippled too), a stippled polygon; glDrawPixels at the
+ *                 raster position with glPixelZoom (2 and 3, then -1 in y) and glCopyPixels of it; a 1D
+ *                 texture under GL_EYE_LINEAR generation; glCallLists with glListBase, in two name types
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -963,6 +967,67 @@ static void display(void) {
     glDisable(GL_LIGHTING); glDisable(GL_LIGHT0);
     glLoadIdentity(); glTranslatef(2.6f, -1.5f, 0); glRotatef(20, 1, 0, 0); glRotatef(-30, 0, 1, 0); glColor3f(1, 1, 0.5f); glutWireTeapot(0.8);
     glDeleteTextures(1, &t);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "gl11-gaps")) {
+    static GLubyte fly[128], img[6 * 5 * 3];
+    static const GLubyte ramp[8 * 3] = { 255,0,0, 255,128,0, 255,255,0, 0,255,0, 0,255,255, 0,0,255, 128,0,255, 255,255,255 };
+    static const GLfloat plane[4] = { 0.0213f, 0.0117f, 0, 0 };
+    static const GLubyte names8[3] = { 0, 2, 1 };
+    static const GLushort names16[2] = { 1, 0 };
+    GLuint t, base;
+    for (int i = 0; i < 128; i++) fly[i] = (GLubyte)((i * 37) ^ (i >> 2) ^ 0x5a);
+    for (int j = 0; j < 5; j++) for (int i = 0; i < 6; i++) { GLubyte *p = img + (j * 6 + i) * 3; p[0] = (GLubyte)(i * 50); p[1] = (GLubyte)(j * 60); p[2] = (GLubyte)((i + j) % 2 * 255); }
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D); glDisable(GL_LIGHTING);
+    /* Stippled lines. */
+    glEnable(GL_LINE_STIPPLE); glColor3f(1, 1, 1);
+    glLineStipple(1, 0x1C47);
+    glBegin(GL_LINES); glVertex2f(10.3f, 230.3f); glVertex2f(110.3f, 230.3f); glVertex2f(10.3f, 225.3f); glVertex2f(60.3f, 225.3f); glEnd();
+    glColor3f(1, 1, 0);
+    glBegin(GL_LINE_STRIP); for (int i = 0; i < 5; i++) glVertex2f(10.3f + 25 * i, 218.3f + (i & 1) * 4); glEnd();
+    glLineStipple(3, 0x00FF); glColor3f(0, 1, 1);
+    glBegin(GL_LINES); glVertex2f(10.3f, 208.3f); glVertex2f(150.3f, 208.3f); glVertex2f(130.3f, 150.3f); glVertex2f(150.3f, 200.3f); glEnd();
+    /* Wide lines, one stippled. */
+    glLineWidth(3); glColor3f(1, 0.4f, 0.4f);
+    glBegin(GL_LINES); glVertex2f(10.3f, 195.3f); glVertex2f(110.3f, 185.3f); glVertex2f(115.3f, 150.3f); glVertex2f(122.3f, 195.3f); glEnd();
+    glLineWidth(6); glLineStipple(2, 0xF0F0); glColor3f(0.4f, 1, 0.4f);
+    glBegin(GL_LINES); glVertex2f(10.3f, 170.3f); glVertex2f(105.3f, 160.3f); glEnd();
+    glDisable(GL_LINE_STIPPLE); glLineWidth(1);
+    /* A stippled polygon, and a point beside it the stipple does not touch. */
+    glEnable(GL_POLYGON_STIPPLE); glPolygonStipple(fly); glColor3f(0.6f, 0.6f, 1);
+    glBegin(GL_TRIANGLES); glVertex2f(170.3f, 150.3f); glVertex2f(310.3f, 160.3f); glVertex2f(230.3f, 235.3f); glEnd();
+    glPointSize(6); glBegin(GL_POINTS); glVertex2f(300.3f, 225.3f); glEnd(); glPointSize(1);
+    glDisable(GL_POLYGON_STIPPLE);
+    /* glDrawPixels, zoomed, and glCopyPixels of what it drew. */
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glRasterPos2f(10.3f, 100.3f); glDrawPixels(6, 5, GL_RGB, GL_UNSIGNED_BYTE, img);
+    glPixelZoom(2, 3); glRasterPos2f(30.3f, 100.3f); glDrawPixels(6, 5, GL_RGB, GL_UNSIGNED_BYTE, img);
+    glPixelZoom(3, -1); glRasterPos2f(60.3f, 140.3f); glDrawPixels(6, 5, GL_RGB, GL_UNSIGNED_BYTE, img);
+    glPixelZoom(1, 1); glRasterPos2i(90, 100); glCopyPixels(30, 100, 12, 15, GL_COLOR);
+    /* A 1D texture, its coordinate generated in eye space. */
+    glGenTextures(1, &t); glBindTexture(GL_TEXTURE_1D, t);
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, 8, 0, GL_RGB, GL_UNSIGNED_BYTE, ramp);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_1D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexGeni(GL_S, GL_TEXTURE_GEN_MODE, GL_EYE_LINEAR); glTexGenfv(GL_S, GL_EYE_PLANE, plane);
+    glEnable(GL_TEXTURE_GEN_S); glEnable(GL_TEXTURE_1D); glColor3f(1, 1, 1);
+    glPushMatrix(); glTranslatef(150, 20, 0); glRotatef(15, 0, 0, 1);
+    glBegin(GL_QUADS); glVertex2f(0, 0); glVertex2f(150, 0); glVertex2f(150, 60); glVertex2f(0, 60); glEnd();
+    glPopMatrix();
+    glDisable(GL_TEXTURE_1D); glDisable(GL_TEXTURE_GEN_S); glDeleteTextures(1, &t);
+    /* Display lists through glListBase and glCallLists. */
+    base = glGenLists(3);
+    for (int k = 0; k < 3; k++) {
+      glNewList(base + k, GL_COMPILE);
+      glColor3f(k == 0, k == 1, k == 2); glRectf(0, 0, 14, 14); glTranslatef(18, 0, 0);
+      glEndList();
+    }
+    glListBase(base);
+    glLoadIdentity(); glTranslatef(10.3f, 20.3f, 0); glCallLists(3, GL_UNSIGNED_BYTE, names8);
+    glLoadIdentity(); glTranslatef(10.3f, 40.3f, 0); glCallLists(2, GL_UNSIGNED_SHORT, names16);
+    glListBase(0); glDeleteLists(base, 3);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {

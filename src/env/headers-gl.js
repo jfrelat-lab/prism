@@ -1225,6 +1225,7 @@ void gluNextContour(GLUtesselator *tess, GLenum type);
 void gluTessBeginContour(GLUtesselator *tess);
 void gluTessBeginPolygon(GLUtesselator *tess, GLvoid *data);
 void gluTessCallback(GLUtesselator *tess, GLenum which, _GLUfuncptr CallBackFunc);
+void gluQuadricCallback(GLUquadric *quad, GLenum which, _GLUfuncptr CallBackFunc);
 void gluTessEndContour(GLUtesselator *tess);
 void gluTessEndPolygon(GLUtesselator *tess);
 void gluTessNormal(GLUtesselator *tess, GLdouble valueX, GLdouble valueY, GLdouble valueZ);

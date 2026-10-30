@@ -43,17 +43,19 @@ const CAP = {
 const MAP_SIZE = [4, 1, 3, 1, 2, 3, 4, 3, 4];    // COLOR_4, INDEX, NORMAL, TEXTURE_COORD_1..4, VERTEX_3, VERTEX_4
 const MAP_CAPS = [...MAP_SIZE.map((_, k) => 0x0d90 + k), ...MAP_SIZE.map((_, k) => 0x0db0 + k), 0x0d80];
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
-const KNOWN_CAPS = new Set([...MAP_CAPS, 0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
+const KNOWN_CAPS = new Set([...MAP_CAPS, 0x0b24, 0x0b42, 0x0de0, 0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
 /*
  * glPushAttrib's groups: the fields of the state each saves, and its enables. Texture units 1 and 2,
  * and the ENABLE group's every capability, are glPushAttrib's own (they are not plain fields).
  */
-const TEXTURE_CAPS = [0x0de1, 0x806f, 0x0c60, 0x0c61, 0x0c62, 0x0c63];
+const TEXTURE_CAPS = [0x0de0, 0x0de1, 0x806f, 0x0c60, 0x0c61, 0x0c62, 0x0c63];
 const ATTRIB_GROUPS = [
   [0x1, { fields: ['colour', 'normal', 'tex', 'raster'], caps: [] }],                                       // CURRENT
   [0x2, { fields: ['pointSize', 'pointMin', 'pointMax', 'pointAtten', 'coordReplace'], caps: [0x0b10, 0x8861] }],   // POINT
-  [0x4, { fields: ['lineWidth'], caps: [0x0b20, 0x0b24] }],                                       // LINE
+  [0x4, { fields: ['lineWidth', 'lineStipple'], caps: [0x0b20, 0x0b24] }],                                       // LINE
   [0x8, { fields: ['cullFace', 'frontFace', 'polyMode', 'polygonOffset'], caps: [0x0b44, 0x0b41, 0x0b42, 0x8037, 0x2a01, 0x2a02] }],  // POLYGON
+  [0x10, { fields: ['polyStipple'], caps: [] }],                                                  // POLYGON_STIPPLE
+  [0x20, { fields: ['pixelZoom'], caps: [] }],                                                    // PIXEL_MODE
   [0x40, { fields: ['shade', 'material', 'backMaterial', 'sceneAmbient', 'twoSide', 'lights', 'colourMaterial', 'colourControl'],
     caps: [0x0b50, 0x0b57, 0x4000, 0x4001, 0x4002, 0x4003, 0x4004, 0x4005, 0x4006, 0x4007] }],      // LIGHTING
   [0x80, { fields: ['fog'], caps: [0x0b60] }],                                                    // FOG
@@ -62,9 +64,10 @@ const ATTRIB_GROUPS = [
   [0x800, { fields: ['viewport', 'depthRange'], caps: [] }],                                      // VIEWPORT
   [0x1000, { fields: ['mode', 'clipPlanes'], caps: [0x0ba1, 0x803a, 0x3000, 0x3001, 0x3002, 0x3003, 0x3004, 0x3005] }],   // TRANSFORM
   [0x4000, { fields: ['alphaFunc', 'alphaRef', 'blend', 'colorMask', 'clear'], caps: [0x0bc0, 0x0be2, 0x0bd0, 0x0bf2] }],   // COLOR_BUFFER
-  [0x40000, { fields: ['bound', 'bound3D', 'envMode', 'combine', 'texGen', 'activeUnit'], caps: TEXTURE_CAPS }],   // TEXTURE (units 1, 2: glPushAttrib)
+  [0x40000, { fields: ['bound', 'bound3D', 'envMode', 'combine', 'texGen', 'activeUnit', 'bound1D'], caps: TEXTURE_CAPS }],   // TEXTURE (units 1, 2: glPushAttrib)
   [0x80000, { fields: ['scissor'], caps: [0x0c11] }],                                             // SCISSOR
-  [0x10000, { fields: ['grid1', 'grid2'], caps: MAP_CAPS }],                                      // EVAL
+  [0x10000, { fields: ['grid1', 'grid2'], caps: MAP_CAPS }],
+  [0x20000, { fields: ['listBase'], caps: [] }],                                                  // LIST                                      // EVAL
 ];
 /*
  * The immediate-mode spellings (GL 1.1 2.7, GL 1.3 2.7's glMultiTexCoord): each family's component
@@ -90,6 +93,11 @@ const immediateForms = () => IMM_FAMILIES.flatMap(([family, counts, types]) => c
   const base = family.replace(/ARB$/, '');
   return { name: `${base}${n}${t}${v ? 'v' : ''}${family.endsWith('ARB') ? 'ARB' : ''}`, family: base, n, t, v };
 }))));
+/*
+ * GL_TEXTURE_1D: a 1D texture is kept as a 2D one a texel high, its t wrap REPEAT whatever is asked, so
+ * that any t samples its one row. Its default object (texture name 0 of that target) is this key.
+ */
+const D1 = -2, TEX1D = 0x0de0;
 const ARRAY = { 0x8074: 'vertex', 0x8075: 'normal', 0x8076: 'color', 0x8078: 'tex' };
 // The size of one component of an array, by its type (GL_BYTE .. GL_FLOAT, GL_DOUBLE).
 const TYPE_BYTES = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x1405: 4, 0x1406: 4, 0x140a: 8 };
@@ -212,7 +220,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   M.glNames = new Set([...GL_H.matchAll(/\b(gl[A-Z]\w*)\s*\(/g)].map((m) => m[1]));
   const drawSeen = [], drawStamp = [];      // glDrawElements' vertex per index (see there)
   let drawGen = 0;
-  let gpuCache = null;                      // gpuState until a command that is not a vertex runs (see exec)
+  let gpuCache = null;
+  // While a point, a bitmap or pixels are drawn as triangles: the polygon stipple is not theirs.
+  let notPolygon = 0;
+  const noStipple = (st) => (st.stipple ? { ...st, stipple: '' } : st);
+  const polyStipple = () => (!notPolygon && s.caps.has(0x0b42) ? s.polyStipple : null);                      // gpuState until a command that is not a vertex runs (see exec)
   let webgl = null;                         // the WebGL2 rasteriser when backend is 'webgl' (makeWebGL)
   const dv = () => M.mod.dv;
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
@@ -222,7 +234,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // current coordinate (s, t, r, q) and coordinate array.
   const newUnit = () => ({
     bound: 0, envMode: TEX.MODULATE, combine: newCombine(),
-    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
+    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] }],
     matrix: [ident()], caps: new Set(), coord: [0, 0, 0, 1], array: { on: false },
   });
   const newTexture = () => ({ levels: [], base: 'RGBA', min: TEX.NL, mag: TEX.LINEAR, wrapS: TEX.REPEAT, wrapT: TEX.REPEAT, wrapR: TEX.REPEAT, gpu: null, dirty: true });
@@ -277,11 +289,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     alphaFunc: 0x207, alphaRef: 0, blend: [1, 0],
     envMode: TEX.MODULATE, combine: newCombine(),
     fog: { mode: FOG.EXP, density: 1, start: 0, end: 1, colour: [0, 0, 0, 0] },
-    textures: new Map([[0, newTexture()]]), bound: 0, nextTexture: 1, genTextures: new Set(),
+    textures: new Map([[0, newTexture()], [D1, { ...newTexture(), oneD: true }]]), bound: 0, nextTexture: 1, genTextures: new Set(),
     bound3D: 0, default3D: newTexture(),
     arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false }, normal: { on: false } },
     // glTexGen: per coordinate (s, t) its mode and object plane; the caps TEXTURE_GEN_S/T turn it on.
-    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0] }],
+    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] }],
     unpackAlign: 4, packAlign: 4,
     // The stencil buffer exists only when the window asked for one (glut.js: GLUT_STENCIL); with no
     // stencil bits the test passes and nothing is written (GL 1.1 4.1.4).
@@ -306,6 +318,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     raster: { valid: true, x: 0, y: 0, z: 0, colour: [1, 1, 1, 1], tex: [0, 0], tex1: null, tex2: null, eyeZ: 0 },
     // The evaluators: target -> { u1, u2, uorder, (v1, v2, vorder), points }; the grids of glMapGrid.
     maps: new Map(), grid1: { n: 1, u1: 0, u2: 1 }, grid2: { nu: 1, u1: 0, u2: 1, nv: 1, v1: 0, v2: 1 },
+    // glListBase; glLineStipple's factor and pattern; glPolygonStipple's 32 rows, bit 31 the leftmost
+    // pixel; glPixelZoom; the GL_TEXTURE_1D binding (its default object is D1) and GL_PROXY_TEXTURE_2D.
+    listBase: 0, lineStipple: { factor: 1, pattern: 0xffff }, polyStipple: new Array(32).fill(0xffffffff), pixelZoom: [1, 1],
+    bound1D: D1, proxy2D: [],
     colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
@@ -322,7 +338,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const xunit = () => (s.activeUnit ? s.units[s.activeUnit] : null);
   const clientTex = () => (s.clientUnit ? s.units[s.clientUnit].array : s.arrays.tex);
   const texture3D = () => (s.bound3D ? s.textures.get(s.bound3D) : s.default3D);
-  const targetTexture = (target) => (target === TEX3D ? texture3D() : texture());
+  const targetTexture = (target) => (target === TEX3D ? texture3D() : target === TEX1D ? s.textures.get(s.bound1D) : texture());
+  // The texture unit 0's fixed function samples: the 2D one if enabled, else the 1D one, else none.
+  const unit0 = () => (s.caps.has(CAP.TEXTURE_2D) ? s.bound : s.caps.has(TEX1D) ? s.bound1D : null);
   /*
    * Component k of element i of array a, as glArrayElement reads it -- defined once, not per element.
    * Every type GL 1.1 allows an array (2.8): bytes, shorts and ints, signed or not, floats and
@@ -587,6 +605,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (genT && s.texGen[1].mode === 0x2402) tv = sm[1];
     }
     if (genS && s.texGen[0].mode === 0x2401) { const p = s.texGen[0].object; tu = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
+    if (genS && s.texGen[0].mode === 0x2400) { const p = s.texGen[0].eye; tu = p[0] * eye[0] + p[1] * eye[1] + p[2] * eye[2] + p[3] * eye[3]; }
+    if (genT && s.texGen[1].mode === 0x2400) { const p = s.texGen[1].eye; tv = p[0] * eye[0] + p[1] * eye[1] + p[2] * eye[2] + p[3] * eye[3]; }
     if (genT && s.texGen[1].mode === 0x2401) { const p = s.texGen[1].object; tv = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
     // The texture matrix (2.10.2), on (s, t, r, 1) after any generation; q divided out, as a fragment
     // would. Chromium B.S.U.'s title scrolls and turns its background through it. r is 0 unless the
@@ -637,6 +657,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (genT && g[1].mode === 0x2402) ct = sm[1];
     }
     if (genS && g[0].mode === 0x2401) { const p = g[0].object; cs = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
+    if (genS && g[0].mode === 0x2400) { const p = g[0].eye; cs = p[0] * eye[0] + p[1] * eye[1] + p[2] * eye[2] + p[3] * eye[3]; }
+    if (genT && g[1].mode === 0x2400) { const p = g[1].eye; ct = p[0] * eye[0] + p[1] * eye[1] + p[2] * eye[2] + p[3] * eye[3]; }
     if (genT && g[1].mode === 0x2401) { const p = g[1].object; ct = p[0] * x + p[1] * y + p[2] * z + p[3] * w; }
     const q = tm[3] * cs + tm[7] * ct + tm[11] * cr + tm[15] * cq;
     const su = tm[0] * cs + tm[4] * ct + tm[8] * cr + tm[12] * cq, sv = tm[1] * cs + tm[5] * ct + tm[9] * cr + tm[13] * cq;
@@ -657,7 +679,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    */
   const ARRAY_TYPES = new Set([0x1400, 0x1401, 0x1402, 0x1403, 0x1404, 0x1405, 0x1406]);
   const CM_MODE = { [PNAME.AMBIENT_AND_DIFFUSE]: 1, [PNAME.AMBIENT]: 2, [PNAME.DIFFUSE]: 3, [PNAME.SPECULAR]: 4, [PNAME.EMISSION]: 5 };
-  const genMode = (caps, g, k) => (caps.has(0x0c60 + k) ? (g[k].mode === 0x2401 ? 1 : g[k].mode === 0x2402 ? 2 : 0) : 0);
+  const genMode = (caps, g, k) => (caps.has(0x0c60 + k) ? (g[k].mode === 0x2401 ? 1 : g[k].mode === 0x2402 ? 2 : 3) : 0);
   // Each primitive's triangles as index triples, the provoking vertex last (WebGL's flat varyings take it).
   // A quad is cut as assemble() cuts it: along 0-2 from arrays, along 1-3 in immediate mode.
   function triangleIndices(mode, el, flat, fromArrays = true) {
@@ -698,7 +720,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     for (let k = 0; k < UNITS; k++) {
       const caps = k ? s.units[k].caps : s.caps, g = k ? s.units[k].texGen : s.texGen;
       fl[7 + 2 * k] = genMode(caps, g, 0); fl[8 + 2 * k] = genMode(caps, g, 1);
-      genS.set(g[0].object, 4 * k); genT.set(g[1].object, 4 * k);
+      genS.set(g[0].mode === 0x2400 ? g[0].eye : g[0].object, 4 * k); genT.set(g[1].mode === 0x2400 ? g[1].eye : g[1].object, 4 * k);
       tm.set(k ? s.units[k].matrix.at(-1) : s.stacks[TEXTURE_MATRIX].at(-1), 16 * k);
     }
     const mat = (m) => [...m.ambient, ...m.diffuse, ...m.specular, ...m.emission];
@@ -1019,7 +1041,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    */
   function textureStages() {
     const out = [];
-    if (s.caps.has(CAP.TEXTURE_2D)) { const t = s.textures.get(s.bound); if (t && complete(t)) out.push({ k: 0, key: 'tex', t, env: s.envMode, combine: s.combine }); }
+    const id0 = unit0();
+    if (id0 !== null) { const t = s.textures.get(id0); if (t && complete(t)) out.push({ k: 0, key: 'tex', t, env: s.envMode, combine: s.combine }); }
     for (let k = 1; k < UNITS; k++) {
       const u = s.units[k];
       if (!u.caps.has(CAP.TEXTURE_2D)) continue;
@@ -1210,9 +1233,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const dudy = (texAt(qx, qy + 1, 0) - u0) * L0.w, dvdy = (texAt(qx, qy + 1, 1) - v0) * L0.h;
       return Math.max(Math.hypot(dudx, dvdx), Math.hypot(dudy, dvdy));
     };
+    const stip = polyStipple();
     for (let py = y0; py <= y1; py++) {
       const cy = py + 0.5, row = py >> 1;
       for (let px = x0; px <= x1; px++) {
+        if (stip && !((stip[py & 31] >>> (31 - (px & 31))) & 1)) continue;
         const cx = px + 0.5;
         const w0 = eQ(cx, cy), w1 = eR(cx, cy), w2 = eP(cx, cy);
         if (w0 < 0 || w1 < 0 || w2 < 0) continue;
@@ -1279,7 +1304,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const back = !front && p0.back;
       if (back) { p0 = asBack(p0); p1 = asBack(p1); p2 = asBack(p2); if (!webgl) { A = toWindow(p0); B = toWindow(p1); C = toWindow(p2); } }
       const flatColour = provoking ? (back ? provoking.back : provoking.colour) : null;
-      if (webgl) webgl.tri(p0, p1, p2, flatColour, gpuState());
+      if (webgl) webgl.tri(p0, p1, p2, flatColour, notPolygon ? noStipple(gpuState()) : gpuState());
       else if (glsl.current()) throw new Error('gl: GLSL programs are drawn by the WebGL rasteriser only');
       else rasterTriangle(A, B, C, flatColour);
     }
@@ -1307,8 +1332,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const q = [at(-1, -1, 0, 1), at(1, -1, 1, 1), at(1, 1, 1, 0), at(-1, 1, 0, 0)];
     // Counter-clockwise in the window; reversed under glFrontFace(GL_CW), so culling never takes a point.
     if (s.frontFace !== CCW) q.reverse();
+    notPolygon++;
     triangle(q[0], q[1], q[2], null);
     triangle(q[0], q[2], q[3], null);
+    notPolygon--;
   }
   /*
    * THE EVALUATORS (GL 1.1 5.1): a map is a Bezier curve or surface of its control points, in the
@@ -1363,16 +1390,24 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const corner = (x, y) => ({ clip: [((x - vx) / vw) * 2 - 1, ((y - vy) / vh) * 2 - 1, zc, 1], colour: at.colour, back: null,
       tex: at.tex, tex1: at.tex1, tex2: at.tex2, eyeZ: at.eyeZ, eye: null });
     const p = [corner(x0, y0), corner(x1, y0), corner(x1, y1), corner(x0, y1)];
-    if (webgl) { const st = gpuState(); webgl.tri(p[0], p[1], p[2], null, st); webgl.tri(p[0], p[2], p[3], null, st); return; }
+    if (webgl) { const st = noStipple(gpuState()); webgl.tri(p[0], p[1], p[2], null, st); webgl.tri(p[0], p[2], p[3], null, st); return; }
     const q = p.map(toWindow);
+    notPolygon++;
     rasterTriangle(q[0], q[1], q[2], null); rasterTriangle(q[0], q[2], q[3], null);
+    notPolygon--;
   }
+  let stippleAt = 0;                   // glLineStipple's counter, fragment by fragment along a primitive
   function line(a, b) {
-    if (webgl && a.vs) { webgl.line(a, b, gpuState()); return; }
+    if (webgl && a.vs) { webgl.line(a, b, noStipple(gpuState())); return; }
     let seg = clipUserSegment(clipNear([a, b]));
     if (seg.length === 2) seg = clipGuard(seg);
     if (seg.length < 2) return;
-    if (webgl) { webgl.line(seg[0], seg[1], gpuState()); return; }
+    const stipple = s.caps.has(0x0b24) ? s.lineStipple : null;
+    // A wide line: each fragment a run of the width across the major axis, the pixels whose centres are
+    // in [b - w/2, b + w/2) -- Mesa's draw module shifts the line into a quad along the minor axis; for
+    // w = 1 that is the thin line's own pixel. WebGL's own lines are one pixel wide.
+    const width = Math.max(1, Math.round(s.lineWidth));
+    if (webgl && !stipple && width === 1) { webgl.line(seg[0], seg[1], noStipple(gpuState())); return; }
     const A = toWindow(seg[0]), B = toWindow(seg[1]), ca = seg[0].colour, cb = seg[1].colour;
     /*
      * GL 1.1 3.4.1's DIAMOND-EXIT rule, as Mesa (llvmpipe) draws it: a pixel is drawn when the segment
@@ -1387,14 +1422,28 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const inDiamond = (P, i, j) => Math.abs(P.x - (i + 0.5)) + Math.abs(P.y - (j + 0.5)) < 0.5;
     const [bx0, by0, bx1, by1] = drawBox();
     const lo = Math.floor(Math.min(a0, a1)), hi = Math.floor(Math.max(a0, a1));
-    for (let m = lo; m <= hi; m++) {
-      const t = (m + 0.5 - a0) / (a1 - a0), n = Math.floor(b0 + (b1 - b0) * t);
+    /*
+     * The stipple, as Mesa's draw module applies it: the segment cut into ceil(length) steps along its
+     * major axis, step i the counter's bit, the counter then moved on by every step -- a fragment takes
+     * the bit of the step its centre falls in. (Counting fragments instead shifts the pattern by one where
+     * the first pixel's centre lies before the vertex.)
+     */
+    const len = Math.abs(a1 - a0), steps = Math.ceil(len), counter0 = stippleAt;
+    if (stipple) stippleAt += steps;
+    const forward = a1 >= a0;
+    for (let q = lo; q <= hi; q++) {
+      const m = forward ? q : lo + hi - q;
+      // The minor axis: the pixel whose centre is in [b - 1/2, b + 1/2) -- on a tie, the lower one, as Mesa.
+      const t = (m + 0.5 - a0) / (a1 - a0), bt = b0 + (b1 - b0) * t, n = Math.ceil(bt) - 1;
       const [x, y] = xMajor ? [m, n] : [n, m];
       if (inDiamond(B, x, y)) continue;                      // it ends inside: never left
       if (!(t >= 0 && t < 1) && !inDiamond(A, x, y)) continue;
-      if (x < bx0 || y < by0 || x > bx1 || y > by1) continue;
-      const u = Math.min(Math.max(t, 0), 1);
-      fragment(y * s.width + x, A.z + (B.z - A.z) * u, ca.map((v, i) => v + (cb[i] - v) * u), 0);
+      if (stipple && !((stipple.pattern >> (Math.floor((counter0 + Math.min(steps - 1, Math.max(0, Math.floor(t * len)))) / stipple.factor) & 15)) & 1)) continue;
+      const u = Math.min(Math.max(t, 0), 1), colour = ca.map((v, i) => v + (cb[i] - v) * u), z = A.z + (B.z - A.z) * u;
+      const low = width === 1 ? n : Math.ceil(bt - width / 2 - 0.5);
+      const [rx0, ry0] = xMajor ? [x, low] : [low, y], [rx1, ry1] = xMajor ? [x + 1, low + width] : [low + width, y + 1];
+      if (webgl) { windowRect(rx0, ry0, rx1, ry1, { z, colour, tex: [0, 0], tex1: null, tex2: null, eyeZ: 0 }); continue; }
+      for (let fy = Math.max(ry0, by0); fy < Math.min(ry1, by1 + 1); fy++) for (let fx = Math.max(rx0, bx0); fx < Math.min(rx1, bx1 + 1); fx++) fragment(fy * s.width + fx, z, colour, 0);
     }
   }
   /*
@@ -1426,9 +1475,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const tri = (a, b, c, provoking, edges = 7) => (fill ? triangle(v[a], v[b], v[c], flat ? v[provoking] : null)
       : unfilled(v[a], v[b], v[c], flat ? v[provoking] : null, edges));
     switch (mode) {
-      case 0x0001: for (let i = 0; i + 1 < v.length; i += 2) line(v[i], v[i + 1]); break;
-      case 0x0003: for (let i = 0; i + 1 < v.length; i++) line(v[i], v[i + 1]); break;
-      case 0x0002: for (let i = 0; i < v.length; i++) line(v[i], v[(i + 1) % v.length]); break;
+      // The stipple counter restarts with each line of GL_LINES, once for a strip or a loop (3.4.2).
+      case 0x0001: for (let i = 0; i + 1 < v.length; i += 2) { stippleAt = 0; line(v[i], v[i + 1]); } break;
+      case 0x0003: stippleAt = 0; for (let i = 0; i + 1 < v.length; i++) line(v[i], v[i + 1]); break;
+      case 0x0002: stippleAt = 0; for (let i = 0; i < v.length; i++) line(v[i], v[(i + 1) % v.length]); break;
       case 0x0004: for (let i = 0; i + 2 < v.length; i += 3) tri(i, i + 1, i + 2, i + 2); break;
       case 0x0005: for (let i = 0; i + 2 < v.length; i++) (i & 1) ? tri(i + 1, i, i + 2, i + 2) : tri(i, i + 1, i + 2, i + 2); break;
       case 0x0006: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, i + 1); break;
@@ -1450,13 +1500,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   function gpuState() {
     if (gpuCache) return gpuCache;
     // A GLSL program samples the bound texture whether or not GL_TEXTURE_2D is enabled.
-    const t = s.caps.has(CAP.TEXTURE_2D) || glsl.current() ? s.textures.get(s.bound) : null, textured = !!(t && complete(t));
+    const id0 = glsl.current() ? s.bound : unit0(), t = id0 !== null ? s.textures.get(id0) : null, textured = !!(t && complete(t));
     const stages = glsl.current() ? [] : textureStages(), multi = stages.length && !oneUnit(stages) ? multiKey(stages) : '';
-    if (textured && t.dirty && !t.gpuOwned) { webgl.upload(s.bound, t); t.dirty = false; }
+    if (textured && t.dirty && !t.gpuOwned) { webgl.upload(id0, t); t.dirty = false; }
     const t3 = glsl.current() ? texture3D() : null, textured3 = !!(t3 && complete(t3));
     if (textured3 && t3.dirty) { webgl.upload3D(s.bound3D, t3); t3.dirty = false; }
     return gpuCache = {
-      tex: textured ? s.bound : -1, base: textured ? t.base : '', env: s.envMode,
+      tex: textured ? id0 : -1, base: textured ? t.base : '', env: s.envMode,
       min: textured ? t.min : 0, mag: textured ? t.mag : 0, wrapS: textured ? t.wrapS : 0, wrapT: textured ? t.wrapT : 0,
       multi,
       tex3: textured3 ? s.bound3D : -1, params3: textured3 ? `${t3.min},${t3.mag},${t3.wrapS},${t3.wrapT},${t3.wrapR}` : '',
@@ -1468,6 +1518,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       mask: s.colorMask.join(','),
       stencil: s.stencil && s.caps.has(CAP.STENCIL_TEST) ? `${s.stencilFunc.join(',')},${s.stencilOp.join(',')},${s.stencilWriteMask}` : '',
       offset: s.caps.has(CAP.POLYGON_OFFSET_FILL) ? s.polygonOffset.join(',') : '',
+      stipple: s.caps.has(0x0b42) ? s.polyStipple.join(',') : '',
       fog: s.caps.has(CAP.FOG) ? `${s.fog.mode},${s.fog.density},${s.fog.start},${s.fog.end},${s.fog.colour.join(',')}` : '',
       program: glsl.key(), glsl: glsl.current(),
       cull: glsl.current()?.vertex && s.caps.has(CAP.CULL_FACE) ? `${s.cullFace},${s.frontFace}` : '',
@@ -1482,7 +1533,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const BASE_N = { RGB: 0, RGBA: 1, L: 2, LA: 3, A: 4, I: 5 }, ENV_N = { [TEX.MODULATE]: 0, [TEX.REPLACE]: 1, [TEX.DECAL]: 2, [TEX.COMBINE]: 3 };
   function multiKey(stages) {
     return stages.map(({ k, t, env, combine: c }) => {
-      const id = k ? s.units[k].bound : s.bound;
+      const id = k ? s.units[k].bound : unit0();
       if (k && t.dirty && !t.gpuOwned) { webgl.upload(id, t); t.dirty = false; }
       return [k, id, BASE_N[t.base] ?? 1, ENV_N[env], COMBINE_FN[c.rgb], COMBINE_FN[c.alpha], ...c.srcRGB.map((x) => COMBINE_SRC[x]), ...c.srcA.map((x) => COMBINE_SRC[x]),
         ...c.opRGB.map((x) => COMBINE_OP[x]), ...c.opA.map((x) => COMBINE_OP[x]), c.scaleRGB, c.scaleA, ...c.colour, t.min, t.mag, t.wrapS, t.wrapT].join(',');
@@ -1765,6 +1816,31 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         exec.glEnd();
       }
     },
+    /*
+     * glDrawPixels (3.6.4): pixel (i, j) of the image covers the window rectangle from
+     * (xr + zx i, yr + zy j) to (xr + zx (i + 1), yr + zy (j + 1)), its fragments those whose centres it
+     * holds, each the raster position's depth and texture coordinates with the pixel's colour. A row's
+     * runs of one colour are one rectangle. Only GL_COLOR images (the formats toRGBA reads).
+     */
+    glDrawPixels: (w, h, format, type, rgba) => {
+      const r = s.raster, [zx, zy] = s.pixelZoom;
+      if (!r.valid) return;
+      for (let j = 0; j < h; j++) for (let i = 0; i < w;) {
+        const o = (j * w + i) * 4;
+        let e = i + 1;
+        while (e < w && rgba[(j * w + e) * 4] === rgba[o] && rgba[(j * w + e) * 4 + 1] === rgba[o + 1] && rgba[(j * w + e) * 4 + 2] === rgba[o + 2] && rgba[(j * w + e) * 4 + 3] === rgba[o + 3]) e++;
+        const colour = [rgba[o] / 255, rgba[o + 1] / 255, rgba[o + 2] / 255, rgba[o + 3] / 255];
+        windowRect(r.x + zx * i, r.y + zy * j, r.x + zx * e, r.y + zy * (j + 1), { ...r, colour });
+        i = e;
+      }
+    },
+    // glCopyPixels of GL_COLOR: the read buffer's rectangle, read first, drawn as glDrawPixels draws it.
+    glCopyPixels: (x, y, w, h, type) => {
+      if (type !== 0x1800) throw new Error(`gl: glCopyPixels of 0x${type.toString(16)} (only GL_COLOR)`);
+      const { data, width: W } = readBuffer(), rgba = new Uint8Array(w * h * 4);
+      for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) for (let k = 0; k < 4; k++) rgba[(j * w + i) * 4 + k] = data[((y + j) * W + x + i) * 4 + k];
+      exec.glDrawPixels(w, h, 0x1908, 0x1401, rgba);
+    },
     glLightf: (li, pname, v) => exec.glLightfv(li, pname, [v]),
     glMaterialf: (face, pname, v) => exec.glMaterialfv(face, pname, [v]),
     // The alignments are kept; the other modes (swap, LSB first, row length, skips -- 0x0cf0-0x0cf4,
@@ -1778,14 +1854,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexGeni: (coord, pname, v) => {
       const g = (xunit()?.texGen ?? s.texGen)[coord - 0x2000];
       if (!g || pname !== 0x2500) throw new Error(`gl: glTexGeni 0x${coord.toString(16)} 0x${pname.toString(16)}`);
-      if (v !== 0x2401 && v !== 0x2402) throw new Error(`gl: texture generation mode 0x${v.toString(16)} (GL_EYE_LINEAR is not implemented)`);
+      if (v !== 0x2400 && v !== 0x2401 && v !== 0x2402) throw new Error(`gl: texture generation mode 0x${v.toString(16)}`);
       g.mode = v;
     },
     glTexGenfv: (coord, pname, v) => {
       const g = (xunit()?.texGen ?? s.texGen)[coord - 0x2000];
       if (!g) throw new Error(`gl: glTexGenfv coordinate 0x${coord.toString(16)}`);
       if (pname === 0x2501) g.object = v; else if (pname === 0x2500) exec.glTexGeni(coord, pname, v[0]);
-      else throw new Error(`gl: glTexGenfv 0x${pname.toString(16)} (eye planes are not implemented)`);
+      // GL_EYE_PLANE: kept in eye coordinates, through the inverse of the modelview at the call (2.10.4).
+      else if (pname === 0x2502) { const inv = invert4(s.stacks[MODELVIEW].at(-1)); g.eye = [0, 1, 2, 3].map((c) => v[0] * inv[c * 4] + v[1] * inv[c * 4 + 1] + v[2] * inv[c * 4 + 2] + v[3] * inv[c * 4 + 3]); }
+      else throw new Error(`gl: glTexGenfv 0x${pname.toString(16)}`);
     },
     glLightfv: (li, pname, v) => {
       const L = s.lights[li - CAP.LIGHT0];
@@ -1835,6 +1913,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glFogi: (p, v) => exec.glFogf(p, v),
     glFogfv: (p, v) => { if (p === FOG.COLOR) s.fog.colour = v.map(clamp01); else exec.glFogf(p, v[0]); },
     glBindTexture: (target, id) => {
+      if (target === TEX1D) {
+        if (s.activeUnit) throw new Error('gl: GL_TEXTURE_1D on a texture unit other than 0 is not implemented');
+        if (id && !s.textures.has(id)) s.textures.set(id, { ...newTexture(), oneD: true });
+        s.bound1D = id || D1; return;
+      }
       if (target !== CAP.TEXTURE_2D && target !== TEX3D) throw new Error(`gl: texture target 0x${target.toString(16)}`);
       if (id && !s.textures.has(id)) s.textures.set(id, newTexture());
       if (s.activeUnit) {
@@ -1846,7 +1929,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexParameterf: (target, p, v) => {
       const t = targetTexture(target);
       if (p === TEX.MIN) t.min = v; else if (p === TEX.MAG) t.mag = v;
-      else if (p === TEX.WRAP_S) t.wrapS = v; else if (p === TEX.WRAP_T) t.wrapT = v;
+      else if (p === TEX.WRAP_S) t.wrapS = v; else if (p === TEX.WRAP_T) { if (!t.oneD) t.wrapT = v; }
       else if (p === WRAP_R) t.wrapR = v;
       else if (p === GENERATE_MIPMAP) { t.generate = !!v; if (t.generate && t.levels[0]) generateMipmaps(t); }
       else throw new Error(`gl: glTexParameter 0x${p.toString(16)}`);
@@ -1918,10 +2001,23 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       (xunit()?.combine ?? s.combine).colour = v.map(clamp01);
     },
     glTexParameteri: (target, p, v) => exec.glTexParameterf(target, p, v),
+    glTexImage1D: (target, level, internal, w, border, format, type, texels) => {
+      if (target !== TEX1D) throw new Error(`gl: glTexImage1D target 0x${target.toString(16)}`);
+      const t = targetTexture(TEX1D);
+      t.base = baseFormat(internal); t.oneD = true; t.wrapT = TEX.REPEAT;
+      t.levels[level] = { w, h: 1, data: texels ?? new Uint8Array(w * 4), internal };
+      t.dirty = true; t.gpuOwned = false;
+      written(t, level);
+    },
     glTexImage2D: (target, level, internal, w, h, border, format, type, texels) => {
+      /*
+       * GL_PROXY_TEXTURE_2D: only asks whether the image would be taken -- by Mesa's llvmpipe, up to
+       * 16384 a side (MAX_TEXTURE_SIZE); refused, the level reads back 0 by 0, GL_RGBA (as Mesa's does).
+       */
+      if (target === 0x8064) { const ok = w <= 16384 && h <= 16384; s.proxy2D[level] = ok ? { w, h, internal } : { w: 0, h: 0, internal: 0x1908 }; return; }
       const t = texture();
       t.base = baseFormat(internal);
-      t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4) };
+      t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4), internal };
       t.dirty = true; t.gpuOwned = false;
       written(t, level);
       if (s.drawFbo) drawTarget();               // an attached level redefined: the target follows it
@@ -1945,6 +2041,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.clipPlanes[i] = [0, 1, 2, 3].map((c) => eq[0] * inv[c * 4] + eq[1] * inv[c * 4 + 1] + eq[2] * inv[c * 4 + 2] + eq[3] * inv[c * 4 + 3]);
     },
     glLineWidth: (w) => { s.lineWidth = w; },
+    glLineStipple: (factor, pattern) => { s.lineStipple = { factor: Math.min(Math.max(factor, 1), 256), pattern: pattern & 0xffff }; },
+    glPolygonStipple: (rows) => { s.polyStipple = rows; },
+    glPixelZoom: (x, y) => { s.pixelZoom = [x, y]; },
     // The stencil state is kept whether or not there are stencil bits; without them it changes no pixel.
     glStencilFunc: (fn, ref, mask) => { s.stencilFunc = [fn, ref, mask >>> 0]; },
     glStencilOp: (fail, zfail, zpass) => { s.stencilOp = [fail, zfail, zpass]; },
@@ -1955,6 +2054,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       exec.glTexParameterf(target, p, v[0]);
     },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
+    // glCallLists: each name offset by glListBase at EXECUTION (its names read at the call, see ARRAYS).
+    glListBase: (base) => { s.listBase = base; },
+    glCallLists: (n, type, names) => { for (const id of names) exec.glCallList(s.listBase + id); },
   };
   /*
    * The immediate-mode spellings not written above, from IMM_FAMILIES: each converts its components
@@ -2050,8 +2152,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexEnvfv: (a) => [a[0], a[1], f32(a[2], a[1] === 0x2201 ? 4 : 1)],
     glPointParameterfvARB: (a) => [a[0], f32(a[1], a[0] === 0x8129 ? 3 : 1)],
     glTexImage2D: (a) => {
-      return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null];
+      return [...a.slice(0, 8), a[8] && a[0] !== 0x8064 ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null];
     },
+    glTexImage1D: (a) => [...a.slice(0, 7), a[7] ? toRGBA(a[5], a[3], 1, a[7], a[6]) : null],
     glBitmap: (a) => {
       const [w, h, , , , , ptr] = a, stride = Math.ceil(Math.ceil(w / 8) / s.unpackAlign) * s.unpackAlign;
       const rows = ptr && w > 0 && h > 0 ? Array.from({ length: h }, (_, j) => Array.from({ length: w }, (_, i) => (M.u8[ptr + j * stride + (i >> 3)] >> (7 - (i & 7))) & 1)) : null;
@@ -2061,6 +2164,23 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glMap2f: (a) => mapPoints(a, false, 2), glMap2d: (a) => mapPoints(a, true, 2),
     glEvalCoord1fv: (a) => [f32(a[0], 1)], glEvalCoord2fv: (a) => [f32(a[0], 2)],
     glEvalCoord1dv: (a) => [[dv().getFloat64(a[0], true)]], glEvalCoord2dv: (a) => [[dv().getFloat64(a[0], true), dv().getFloat64(a[0] + 8, true)]],
+    glCallLists: (a) => {
+      const [n, type, p] = a, at = (k, size, get) => dv()[get](p + k * size, true);
+      const names = Array.from({ length: n }, (_, k) => {
+        switch (type) {
+          case 0x1400: return at(k, 1, 'getInt8'); case 0x1401: return at(k, 1, 'getUint8');
+          case 0x1402: return at(k, 2, 'getInt16'); case 0x1403: return at(k, 2, 'getUint16');
+          case 0x1404: return at(k, 4, 'getInt32'); case 0x1405: return at(k, 4, 'getUint32'); case 0x1406: return at(k, 4, 'getFloat32');
+          case 0x1407: return M.u8[p + 2 * k] * 256 + M.u8[p + 2 * k + 1];                         // GL_2_BYTES: big-endian
+          case 0x1408: return (M.u8[p + 3 * k] << 16) + M.u8[p + 3 * k + 1] * 256 + M.u8[p + 3 * k + 2];
+          case 0x1409: return ((M.u8[p + 4 * k] << 24) >>> 0) + (M.u8[p + 4 * k + 1] << 16) + M.u8[p + 4 * k + 2] * 256 + M.u8[p + 4 * k + 3];
+          default: throw new Error(`gl: glCallLists type 0x${type.toString(16)}`);
+        }
+      });
+      return [n, type, names];
+    },
+    glPolygonStipple: (a) => [Array.from({ length: 32 }, (_, j) => ((M.u8[a[0] + 4 * j] << 24) | (M.u8[a[0] + 4 * j + 1] << 16) | (M.u8[a[0] + 4 * j + 2] << 8) | M.u8[a[0] + 4 * j + 3]) >>> 0)],
+    glDrawPixels: (a) => [...a.slice(0, 4), toRGBA(a[2], a[0], a[1], a[4], a[3])],
     glTexImage3D: (a) => {
       return [...a.slice(0, 9), a[9] ? toRGBA(a[7], a[3], a[4] * a[5], a[9], a[8]) : null];
     },
@@ -2112,6 +2232,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glGetFloatv: (p, out) => {
       if (p === 0x0b07 || p === 0x0b04) { const r = s.raster; (p === 0x0b07 ? [r.x, r.y, r.z, 1] : r.colour).forEach((v, k) => dv().setFloat32(out + 4 * k, v, true)); return; }
       if (p === 0x0b08) { dv().setFloat32(out, s.raster.valid ? 1 : 0, true); return; }
+      // The widths and sizes: what Mesa 22's llvmpipe answers (asked in the oracle), and the current ones.
+      const range = { 0x0b22: [1, 255], 0x0b23: [0.1], 0x846e: [1, 255], 0x0b12: [1, 255], 0x0b13: [0.1], 0x846d: [1, 255], 0x0b21: [s.lineWidth], 0x0b11: [s.pointSize] }[p];
+      if (range) { range.forEach((v, k) => dv().setFloat32(out + 4 * k, v, true)); return; }
       const m = p === 0x0ba6 ? s.stacks[MODELVIEW].at(-1) : p === 0x0ba7 ? s.stacks[PROJECTION].at(-1) : null;
       if (!m) throw new Error(`gl: glGetFloatv 0x${p.toString(16)}`);
       for (let k = 0; k < 16; k++) dv().setFloat32(out + 4 * k, m[k], true);
@@ -2182,8 +2305,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       M.u8[out] = v;
     },
     glGetTexLevelParameteriv: (target, level, p, out) => {
-      const L = texture()?.levels[level];
-      const v = p === 0x1000 ? (L?.w ?? 0) : p === 0x1001 ? (L?.h ?? 0) : null;
+      const L = target === 0x8064 ? s.proxy2D[level] : targetTexture(target)?.levels[level];
+      // GL_TEXTURE_INTERNAL_FORMAT (GL_TEXTURE_COMPONENTS) as the program gave it, as Mesa answers.
+      const v = p === 0x1000 ? (L?.w ?? 0) : p === 0x1001 ? (L?.h ?? 0) : p === 0x1003 ? (L?.internal ?? 1) : null;
       if (v === null) throw new Error(`gl: glGetTexLevelParameteriv 0x${p.toString(16)}`);
       dv().setInt32(out, v, true);
     },
@@ -2379,6 +2503,7 @@ void main() { gl_Position = vec4(pos.xy, zFlip == 1 ? -pos.z : pos.z, pos.w); v 
   g.attachShader(prog, shader(g.FRAGMENT_SHADER, FS_FIXED = `#version 300 es
 precision highp float;
 in vec4 v; in vec2 uv; in float eyeZ; out vec4 o;
+uniform int stipOn; uniform highp uint stip[32];
 uniform sampler2D tex;
 uniform int textured, base, env, alphaFn, fogMode;   // base: 0 RGB 1 RGBA 2 L 3 LA 4 A 5 I; env: 0 MODULATE 1 REPLACE 2 DECAL
 uniform float alphaRef, fogDensity, fogStart, fogEnd;
@@ -2388,6 +2513,7 @@ bool cmp(int f, float a, float b) {
   if (f == 4) return a > b; if (f == 5) return a != b; if (f == 6) return a >= b; return true;
 }
 void main() {
+  if (stipOn == 1 && ((stip[int(gl_FragCoord.y) & 31] >> uint(31 - (int(gl_FragCoord.x) & 31))) & 1u) == 0u) discard;
   vec4 c = v;
   if (textured == 1) {
     vec4 t = texture(tex, uv);
@@ -2429,7 +2555,7 @@ void main() {
   let probeTarget = null, probeColour = null, probeVao = null, probeSize = '';
   g.useProgram(prog);
   const programs = makeGLSLWebGL(g, ['pos', 'col', 'tc', 'ez'], shader);   // GLSL programs (src/env/glsl.js)
-  const U0 = Object.fromEntries(['tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
+  const U0 = Object.fromEntries(['stipOn', 'stip', 'tex', 'textured', 'base', 'env', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip']
     .map((n) => [n, g.getUniformLocation(prog, n)]));
   let U = U0;                                 // the current fixed program's uniforms: prog's, or multi's
   /*
@@ -2450,6 +2576,7 @@ void main() { gl_Position = vec4(pos.xy, zFlip == 1 ? -pos.z : pos.z, pos.w); v 
     g.attachShader(p, shader(g.FRAGMENT_SHADER, FS_MULTI = `#version 300 es
 precision highp float;
 in vec4 v; in vec2 uv; in float eyeZ; in vec2 uv1; in vec2 uv2; out vec4 o;
+uniform int stipOn; uniform highp uint stip[32];
 uniform sampler2D tex0, tex1, tex2;
 // Per unit: on, base (0 RGB 1 RGBA 2 L 3 LA 4 A 5 I), environment (0 MODULATE 1 REPLACE 2 DECAL 3 COMBINE);
 // the combiner as cA (functions RGB, alpha; RGB sources 0, 1), cB (RGB source 2; alpha sources 0-2),
@@ -2495,6 +2622,7 @@ vec4 unit(int i, vec4 t, vec4 c, vec4 prim) {
   return b == 4 ? vec4(c.rgb, c.a * t.a) : vec4(c.rgb * t.rgb, hasA ? c.a * t.a : c.a);
 }
 void main() {
+  if (stipOn == 1 && ((stip[int(gl_FragCoord.y) & 31] >> uint(31 - (int(gl_FragCoord.x) & 31))) & 1u) == 0u) discard;
   vec4 c = v;
   if (on[0] == 1) c = unit(0, texture(tex0, uv), c, v);
   if (on[1] == 1) c = unit(1, texture(tex1, uv1), c, v);
@@ -2512,7 +2640,7 @@ void main() {
     g.linkProgram(p);
     if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(p)}`);
     const loc = (n) => g.getUniformLocation(p, n);
-    multi = { p, U: Object.fromEntries(['alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip'].map((n) => [n, loc(n)]).concat([['textured', null], ['base', null], ['env', null]])),
+    multi = { p, U: Object.fromEntries(['stipOn', 'stip', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip'].map((n) => [n, loc(n)]).concat([['textured', null], ['base', null], ['env', null]])),
       on: loc('on'), base: loc('base'), env: loc('env'), cA: loc('cA'), cB: loc('cB'), cC: loc('cC'), kc: loc('kc'), sc: loc('sc') };
     g.useProgram(p);
     g.uniform1i(loc('tex0'), 0); g.uniform1i(loc('tex1'), 2); g.uniform1i(loc('tex2'), 3);
@@ -2554,10 +2682,10 @@ vec4 lit(vec4 a, vec4 d, vec4 sp, vec4 e, float shin, vec3 n, vec3 p) {
   }
   return clamp(vec4(c, d.a), 0.0, 1.0);
 }
-vec2 coord(int k, vec4 c, vec2 sm) {
+vec2 coord(int k, vec4 c, vec2 sm, vec4 eye) {
   int gs = fl[7 + 2 * k], gt = fl[8 + 2 * k];
-  if (gs == 1) c.x = dot(genS[k], vec4(pos.xyz, 1.0)); else if (gs == 2) c.x = sm.x;
-  if (gt == 1) c.y = dot(genT[k], vec4(pos.xyz, 1.0)); else if (gt == 2) c.y = sm.y;
+  if (gs == 1) c.x = dot(genS[k], vec4(pos.xyz, 1.0)); else if (gs == 2) c.x = sm.x; else if (gs == 3) c.x = dot(genS[k], eye);
+  if (gt == 1) c.y = dot(genT[k], vec4(pos.xyz, 1.0)); else if (gt == 2) c.y = sm.y; else if (gt == 3) c.y = dot(genT[k], eye);
   vec4 t = tm[k] * c;
   return t.xy / t.w;
 }
@@ -2581,7 +2709,7 @@ void main() {
     vF = lit(aF, dF, sF, eF, sh.x, n, p);
     vB = fl[2] == 1 ? lit(aB, dB, sB, eB, sh.y, -n, p) : vF;
   } else { vF = clamp(col, 0.0, 1.0); vB = vF; }
-  uv = coord(0, tc0, sm); uv1 = coord(1, tc1, sm); uv2 = coord(2, tc2, sm);
+  uv = coord(0, tc0, sm, eye); uv1 = coord(1, tc1, sm, eye); uv2 = coord(2, tc2, sm, eye);
   for (int i = 0; i < 6; i++) clipD[i] = dot(clipP[i], eye);
 }`;
   const tnlFS = (src, q) => src.replace('in vec4 v; ', `${q}in vec4 vF; ${q}in vec4 vB; in float clipD[6]; `)
@@ -2600,7 +2728,7 @@ void main() {
     g.linkProgram(p);
     if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(p)}`);
     const loc = (nm) => g.getUniformLocation(p, nm);
-    const common = ['alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip', 'twoSided', 'clipMask'];
+    const common = ['stipOn', 'stip', 'alphaFn', 'fogMode', 'alphaRef', 'fogDensity', 'fogStart', 'fogEnd', 'fogColour', 'zFlip', 'twoSided', 'clipMask'];
     rec = isMulti
       ? { p, U: Object.fromEntries(common.map((nm) => [nm, loc(nm)]).concat([['textured', null], ['base', null], ['env', null]])),
         on: loc('on'), base: loc('base'), env: loc('env'), cA: loc('cA'), cB: loc('cB'), cC: loc('cC'), kc: loc('kc'), sc: loc('sc') }
@@ -2703,6 +2831,10 @@ void main() {
     put('base', st.base, () => g.uniform1i(U.base, BASES[st.base] ?? 0));
     put('env', st.env, () => g.uniform1i(U.env, ENVS[st.env] ?? 0));
     put('blend', st.blend, () => { if (st.blend) { const [sf, df] = st.blend.split(',').map(Number); g.enable(g.BLEND); g.blendFunc(sf, df); } else g.disable(g.BLEND); });
+    put('stipple', st.stipple, () => {
+      g.uniform1i(U.stipOn, st.stipple ? 1 : 0);
+      if (st.stipple) g.uniform1uiv(U.stip, Uint32Array.from(st.stipple.split(','), Number));
+    });
     put('alpha', st.alpha, () => { if (st.alpha) { const [f, r] = st.alpha.split(','); g.uniform1i(U.alphaFn, f - 0x200); g.uniform1f(U.alphaRef, +r); } else g.uniform1i(U.alphaFn, -1); });
     put('depth', st.depth, () => { if (st.depth) { const [f, m] = st.depth.split(','); g.enable(g.DEPTH_TEST); g.depthFunc(+f); g.depthMask(m === 'true'); } else g.disable(g.DEPTH_TEST); });
     /*
@@ -3103,6 +3235,8 @@ export function glBuiltins(T) {
     glColor3d: f(V, D, D, D), glColor3ub: f(V, T.UCHAR, T.UCHAR, T.UCHAR), glVertex2i: f(V, I, I), glVertex2d: f(V, D, D), glVertex3d: f(V, D, D, D),
     glTranslated: f(V, D, D, D), glRotated: f(V, D, D, D, D), glGetDoublev: f(V, U, P), glDrawArrays: f(V, U, I, I),
     glBitmap: f(V, I, I, F, F, F, F, P), glRectf: f(V, F, F, F, F),
+    glListBase: f(V, U), glCallLists: f(V, I, U, P), glLineStipple: f(V, I, T.USHORT), glPolygonStipple: f(V, P),
+    glDrawPixels: f(V, I, I, U, U, P), glCopyPixels: f(V, I, I, I, I, U), glPixelZoom: f(V, F, F), glTexImage1D: f(V, U, I, I, I, I, U, U, P),
     glMap1f: f(V, U, F, F, I, I, P), glMap1d: f(V, U, D, D, I, I, P), glMap2f: f(V, U, F, F, I, I, F, F, I, I, P), glMap2d: f(V, U, D, D, I, I, D, D, I, I, P),
     glMapGrid1f: f(V, I, F, F), glMapGrid1d: f(V, I, D, D), glMapGrid2f: f(V, I, F, F, I, F, F), glMapGrid2d: f(V, I, D, D, I, D, D),
     glEvalCoord1f: f(V, F), glEvalCoord1d: f(V, D), glEvalCoord2f: f(V, F, F), glEvalCoord2d: f(V, D, D),
