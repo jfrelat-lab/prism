@@ -36,15 +36,21 @@ const CAP = {
   TEXTURE_2D: 0x0de1, BLEND: 0x0be2, ALPHA_TEST: 0x0bc0, FOG: 0x0b60, SCISSOR_TEST: 0x0c11,
   POLYGON_OFFSET_FILL: 0x8037, CLIP_PLANE0: 0x3000, STENCIL_TEST: 0x0b90,
 };
+/*
+ * The evaluators' maps (GL 1.1 5.1): MAP1_* are 0x0d90.., MAP2_* 0x0db0.., in the same order; each
+ * target's components. AUTO_NORMAL is 0x0d80.
+ */
+const MAP_SIZE = [4, 1, 3, 1, 2, 3, 4, 3, 4];    // COLOR_4, INDEX, NORMAL, TEXTURE_COORD_1..4, VERTEX_3, VERTEX_4
+const MAP_CAPS = [...MAP_SIZE.map((_, k) => 0x0d90 + k), ...MAP_SIZE.map((_, k) => 0x0db0 + k), 0x0d80];
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
-const KNOWN_CAPS = new Set([0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
+const KNOWN_CAPS = new Set([...MAP_CAPS, 0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
 /*
  * glPushAttrib's groups: the fields of the state each saves, and its enables. Texture units 1 and 2,
  * and the ENABLE group's every capability, are glPushAttrib's own (they are not plain fields).
  */
 const TEXTURE_CAPS = [0x0de1, 0x806f, 0x0c60, 0x0c61, 0x0c62, 0x0c63];
 const ATTRIB_GROUPS = [
-  [0x1, { fields: ['colour', 'normal', 'tex'], caps: [] }],                                       // CURRENT
+  [0x1, { fields: ['colour', 'normal', 'tex', 'raster'], caps: [] }],                                       // CURRENT
   [0x2, { fields: ['pointSize', 'pointMin', 'pointMax', 'pointAtten', 'coordReplace'], caps: [0x0b10, 0x8861] }],   // POINT
   [0x4, { fields: ['lineWidth'], caps: [0x0b20, 0x0b24] }],                                       // LINE
   [0x8, { fields: ['cullFace', 'frontFace', 'polyMode', 'polygonOffset'], caps: [0x0b44, 0x0b41, 0x0b42, 0x8037, 0x2a01, 0x2a02] }],  // POLYGON
@@ -58,6 +64,7 @@ const ATTRIB_GROUPS = [
   [0x4000, { fields: ['alphaFunc', 'alphaRef', 'blend', 'colorMask', 'clear'], caps: [0x0bc0, 0x0be2, 0x0bd0, 0x0bf2] }],   // COLOR_BUFFER
   [0x40000, { fields: ['bound', 'bound3D', 'envMode', 'combine', 'texGen', 'activeUnit'], caps: TEXTURE_CAPS }],   // TEXTURE (units 1, 2: glPushAttrib)
   [0x80000, { fields: ['scissor'], caps: [0x0c11] }],                                             // SCISSOR
+  [0x10000, { fields: ['grid1', 'grid2'], caps: MAP_CAPS }],                                      // EVAL
 ];
 /*
  * The immediate-mode spellings (GL 1.1 2.7, GL 1.3 2.7's glMultiTexCoord): each family's component
@@ -76,6 +83,7 @@ const IMM_TYPES = {
 const IMM_FAMILIES = [
   ['glVertex', [2, 3, 4], 'sifd'], ['glColor', [3, 4], ['b', 's', 'i', 'f', 'd', 'ub', 'us', 'ui']], ['glTexCoord', [1, 2, 3, 4], 'sifd'],
   ['glNormal', [3], 'bsifd'], ['glMultiTexCoord', [1, 2, 3, 4], 'sifd'], ['glMultiTexCoordARB', [1, 2, 3, 4], 'sifd'],
+  ['glRasterPos', [2, 3, 4], 'sifd'], ['glWindowPos', [2, 3], 'sifd'],
 ];
 /** Every spelling: { name, family, n, t, v }. glMultiTexCoordARB's names end in ARB (glMultiTexCoord2fARB). */
 const immediateForms = () => IMM_FAMILIES.flatMap(([family, counts, types]) => counts.flatMap((n) => [...types].flatMap((t) => [false, true].map((v) => {
@@ -294,6 +302,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // Framebuffer objects: id -> its attachments; renderbuffers: id -> their storage. The draw and the
     // read framebuffer, 0 the window's (whose buffers `win` keeps while another is bound).
     fbos: new Map(), nextFbo: 1, rbs: new Map(), nextRb: 1, boundRb: 0, drawFbo: 0, readFbo: 0, win: null,
+    // The current raster position (GL 1.1 2.12): its window coordinates and what a vertex there carries.
+    raster: { valid: true, x: 0, y: 0, z: 0, colour: [1, 1, 1, 1], tex: [0, 0], tex1: null, tex2: null, eyeZ: 0 },
+    // The evaluators: target -> { u1, u2, uorder, (v1, v2, vorder), points }; the grids of glMapGrid.
+    maps: new Map(), grid1: { n: 1, u1: 0, u2: 1 }, grid2: { nu: 1, u1: 0, u2: 1, nv: 1, v1: 0, v2: 1 },
     colorMask: [true, true, true, true], polygonOffset: [0, 0], clipPlanes: [null, null, null, null, null, null],
     prim: null, verts: [],
     lists: new Map(), nextList: 1, recording: null, recordMode: 0,
@@ -533,6 +545,17 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     out[0] = clamp01(out[0]); out[1] = clamp01(out[1]); out[2] = clamp01(out[2]); out[3] = clamp01(out[3]);
     return out;
   }
+  /** GL_COLOR_MATERIAL: the material property it names becomes the current colour. */
+  function trackColour() {
+    const { face, mode } = s.colourMaterial;
+    for (const m of face === FRONT ? [s.material] : face === BACK ? [s.backMaterial] : [s.material, s.backMaterial]) {
+      if (mode === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = s.colour; m.diffuse = s.colour; }
+      else if (mode === PNAME.AMBIENT) m.ambient = s.colour;
+      else if (mode === PNAME.DIFFUSE) m.diffuse = s.colour;
+      else if (mode === PNAME.SPECULAR) m.specular = s.colour;
+      else if (mode === PNAME.EMISSION) m.emission = s.colour;
+    }
+  }
   function vertex(x, y, z, w = 1) {
     if (s.gpuPrim) { recordVertex(x, y, z, w); return; }
     const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
@@ -545,16 +568,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
        * 2.13.3). Tux Racer blends its terrain layers -- snow, ice, rock -- by a per-vertex alpha that
        * reaches the lit colour only this way; ignored, every layer came out opaque.
        */
-      if (s.caps.has(0x0b57)) {
-        const { face, mode } = s.colourMaterial;
-        for (const m of face === FRONT ? [s.material] : face === BACK ? [s.backMaterial] : [s.material, s.backMaterial]) {
-          if (mode === PNAME.AMBIENT_AND_DIFFUSE) { m.ambient = s.colour; m.diffuse = s.colour; }
-          else if (mode === PNAME.AMBIENT) m.ambient = s.colour;
-          else if (mode === PNAME.DIFFUSE) m.diffuse = s.colour;
-          else if (mode === PNAME.SPECULAR) m.specular = s.colour;
-          else if (mode === PNAME.EMISSION) m.emission = s.colour;
-        }
-      }
+      if (s.caps.has(0x0b57)) trackColour();
       const nm = normalMatrixOf(mv), n = s.normal;
       let en = [nm[0] * n[0] + nm[1] * n[1] + nm[2] * n[2], nm[3] * n[0] + nm[4] * n[1] + nm[5] * n[2], nm[6] * n[0] + nm[7] * n[1] + nm[8] * n[2]];
       if (s.caps.has(CAP.NORMALIZE)) en = norm3(en);
@@ -1296,6 +1310,63 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     triangle(q[0], q[1], q[2], null);
     triangle(q[0], q[2], q[3], null);
   }
+  /*
+   * THE EVALUATORS (GL 1.1 5.1): a map is a Bezier curve or surface of its control points, in the
+   * Bernstein basis of its order, over [u1, u2] (and [v1, v2]). glEvalCoord evaluates every enabled map
+   * of its dimension and issues the vertex (VERTEX_4 before VERTEX_3; none, no vertex) with the
+   * colour, the texture coordinates of the highest enabled dimension and the normal evaluated -- or,
+   * under AUTO_NORMAL, the normalised cross product of the surface's two partial derivatives, as Mesa
+   * computes it (with w for VERTEX_4). The current values themselves are left as they were.
+   */
+  const bernstein = (n, t) => {         // the n + 1 Bernstein polynomials of degree n at t, and their derivatives
+    const b = new Float64Array(n + 1), d = new Float64Array(n + 1);
+    const basis = (m) => { const r = new Float64Array(m + 1); for (let i = 0; i <= m; i++) { let c = 1; for (let k = 0; k < i; k++) c = c * (m - k) / (k + 1); r[i] = c * t ** i * (1 - t) ** (m - i); } return r; };
+    b.set(basis(n));
+    if (n > 0) { const l = basis(n - 1); for (let i = 0; i <= n; i++) d[i] = n * ((i > 0 ? l[i - 1] : 0) - (i < n ? l[i] : 0)); }
+    return [b, d];
+  };
+  function evalMap(m, u, v) {         // the value, and for a surface its two partial derivatives
+    const k = m.size, out = new Array(k).fill(0), du = new Array(k).fill(0), dv = new Array(k).fill(0);
+    const [bu, du1] = bernstein(m.uorder - 1, (u - m.u1) / (m.u2 - m.u1));
+    if (m.vorder === undefined) { for (let i = 0; i < m.uorder; i++) for (let c = 0; c < k; c++) out[c] += bu[i] * m.points[i][c]; return [out]; }
+    const [bv, dv1] = bernstein(m.vorder - 1, (v - m.v1) / (m.v2 - m.v1));
+    for (let i = 0; i < m.uorder; i++) for (let j = 0; j < m.vorder; j++) {
+      const p = m.points[i * m.vorder + j];
+      for (let c = 0; c < k; c++) { out[c] += bu[i] * bv[j] * p[c]; du[c] += du1[i] * bv[j] * p[c]; dv[c] += bu[i] * dv1[j] * p[c]; }
+    }
+    return [out, du, dv];
+  }
+  function evalCoord(dim, u, v) {
+    const base = dim === 1 ? 0x0d90 : 0x0db0, on = (k) => s.caps.has(base + k) && s.maps.has(base + k);
+    // Under COLOR_MATERIAL the material tracks the CURRENT colour, which an evaluated colour is not.
+    const keep = [s.colour, s.normal, s.tex], mats = on(0) && s.caps.has(0x0b57) ? [structuredClone(s.material), structuredClone(s.backMaterial)] : null;
+    if (on(0)) s.colour = evalMap(s.maps.get(base), u, v)[0];
+    const tc = [6, 5, 4, 3].find(on);
+    if (tc !== undefined) { const t = evalMap(s.maps.get(base + tc), u, v)[0]; s.tex = tc === 6 ? [t[0] / t[3], t[1] / t[3], t[2] / t[3]] : tc === 5 ? t : [t[0], t[1] ?? 0]; }
+    const vk = on(8) ? 8 : on(7) ? 7 : -1;
+    if (vk < 0) { [s.colour, s.normal, s.tex] = keep; return; }
+    const [p, pu, pv] = evalMap(s.maps.get(base + vk), u, v);
+    if (dim === 2 && s.caps.has(0x0d80)) {
+      const a = [...pu], b = [...pv];
+      if (vk === 8) for (let c = 0; c < 3; c++) { a[c] = pu[c] * p[3] - pu[3] * p[c]; b[c] = pv[c] * p[3] - pv[3] * p[c]; }
+      const n = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], len = Math.hypot(...n);
+      s.normal = len ? n.map((x) => x / len) : n;
+    } else if (on(2)) s.normal = evalMap(s.maps.get(base + 2), u, v)[0];
+    vertex(p[0], p[1], p[2], vk === 8 ? p[3] : 1);
+    [s.colour, s.normal, s.tex] = keep;
+    if (mats) [s.material, s.backMaterial] = mats;
+  }
+  /** A window rectangle (x0, y0)-(x1, y1) of pixels, every vertex `at` (a raster position's values). */
+  function windowRect(x0, y0, x1, y1, at) {
+    const [vx, vy, vw, vh] = s.viewport, [n, f] = s.depthRange;
+    const zc = f === n ? -1 : ((at.z - n) / (f - n)) * 2 - 1;
+    const corner = (x, y) => ({ clip: [((x - vx) / vw) * 2 - 1, ((y - vy) / vh) * 2 - 1, zc, 1], colour: at.colour, back: null,
+      tex: at.tex, tex1: at.tex1, tex2: at.tex2, eyeZ: at.eyeZ, eye: null });
+    const p = [corner(x0, y0), corner(x1, y0), corner(x1, y1), corner(x0, y1)];
+    if (webgl) { const st = gpuState(); webgl.tri(p[0], p[1], p[2], null, st); webgl.tri(p[0], p[2], p[3], null, st); return; }
+    const q = p.map(toWindow);
+    rasterTriangle(q[0], q[1], q[2], null); rasterTriangle(q[0], q[2], q[3], null);
+  }
   function line(a, b) {
     if (webgl && a.vs) { webgl.line(a, b, gpuState()); return; }
     let seg = clipUserSegment(clipNear([a, b]));
@@ -1486,6 +1557,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glClearColor: (r, g, b, a) => { s.clear = [r, g, b, a].map(clamp01); },
     glEnable: (cap) => {
+      // Enabling GL_COLOR_MATERIAL sets the material from the current colour at once, as Mesa does.
+      if (cap === 0x0b57 && !s.caps.has(cap)) { s.caps.add(cap); trackColour(); return; }
       if (s.activeUnit && UNIT_CAPS.has(cap)) { s.units[s.activeUnit].caps.add(cap); return; }
       // A capability this GL does not implement is said once, by number: enabling it changes nothing
       // here, and a picture that is wrong for that reason should be traceable to it.
@@ -1632,6 +1705,66 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glRectiv: (a, b) => exec.glRectf(a[0], a[1], b[0], b[1]),
     glRectsv: (a, b) => exec.glRectf(a[0], a[1], b[0], b[1]),
     glRectdv: (a, b) => exec.glRectd(a[0], a[1], b[0], b[1]),
+    /*
+     * glBitmap: the bitmap's set bits drawn at the raster position less the origin (GL 1.1 3.6.4,
+     * Mesa's IFLOOR), each fragment the raster position's colour, depth and texture coordinates; then
+     * the raster position moves by (xmove, ymove), valid or not -- an invalid one draws nothing. Each
+     * row's runs of set bits are rectangles through the triangle rasteriser, so texturing, fog and the
+     * per-fragment tests apply as to any fragment. Not drawn: fragments outside the viewport (Mesa
+     * draws them anywhere in the window); GLUT's text is drawn inside its viewport.
+     */
+    glBitmap: (w, h, xorig, yorig, xmove, ymove, rows) => {
+      const r = s.raster;
+      if (r.valid && rows) {
+        const x0 = Math.floor(r.x - xorig), y0 = Math.floor(r.y - yorig);
+        for (let j = 0; j < h; j++) for (let i = 0; i < w;) {
+          if (!rows[j][i]) { i++; continue; }
+          let e = i; while (e < w && rows[j][e]) e++;
+          windowRect(x0 + i, y0 + j, x0 + e, y0 + j + 1, r);
+          i = e;
+        }
+      }
+      s.raster = { ...r, x: r.x + xmove, y: r.y + ymove };
+    },
+    // glMap1/glMap2: the control points already read (ARRAYS), as size-component tuples.
+    glMap1f: (target, u1, u2, stride, order, points) => { s.maps.set(target, { size: MAP_SIZE[target - 0x0d90], u1, u2, uorder: order, points }); },
+    glMap2f: (target, u1, u2, ustride, uorder, v1, v2, vstride, vorder, points) => {
+      s.maps.set(target, { size: MAP_SIZE[target - 0x0db0], u1, u2, uorder, v1, v2, vorder, points });
+    },
+    glMapGrid1f: (n, u1, u2) => { s.grid1 = { n, u1, u2 }; },
+    glMapGrid2f: (nu, u1, u2, nv, v1, v2) => { s.grid2 = { nu, u1, u2, nv, v1, v2 }; },
+    glEvalCoord1f: (u) => evalCoord(1, u, 0),
+    glEvalCoord2f: (u, v) => evalCoord(2, u, v),
+    // glEvalPoint and glEvalMesh, as Mesa issues them: the grid's step added in floats, the last point the end itself.
+    glEvalPoint1: (i) => { const g = s.grid1; evalCoord(1, i === g.n ? g.u2 : Math.fround(g.u1 + i * Math.fround((g.u2 - g.u1) / g.n)), 0); },
+    glEvalPoint2: (i, j) => {
+      const g = s.grid2, du = Math.fround((g.u2 - g.u1) / g.nu), dv = Math.fround((g.v2 - g.v1) / g.nv);
+      evalCoord(2, i === g.nu ? g.u2 : Math.fround(g.u1 + i * du), j === g.nv ? g.v2 : Math.fround(g.v1 + j * dv));
+    },
+    glEvalMesh1: (mode, i1, i2) => {
+      const g = s.grid1, du = Math.fround((g.u2 - g.u1) / g.n);
+      exec.glBegin(mode === POINT ? 0x0000 : 0x0003);
+      for (let i = i1, u = Math.fround(g.u1 + i1 * du); i <= i2; i++, u = Math.fround(u + du)) evalCoord(1, u, 0);
+      exec.glEnd();
+    },
+    glEvalMesh2: (mode, i1, i2, j1, j2) => {
+      const g = s.grid2, du = Math.fround((g.u2 - g.u1) / g.nu), dv = Math.fround((g.v2 - g.v1) / g.nv);
+      const u1 = Math.fround(g.u1 + i1 * du), v1 = Math.fround(g.v1 + j1 * dv), add = (a, b) => Math.fround(a + b);
+      if (mode === FILL) {
+        for (let j = j1, v = v1; j < j2; j++, v = add(v, dv)) {
+          exec.glBegin(0x0005);
+          for (let i = i1, u = u1; i <= i2; i++, u = add(u, du)) { evalCoord(2, u, v); evalCoord(2, u, add(v, dv)); }
+          exec.glEnd();
+        }
+      } else if (mode === LINE) {
+        for (let j = j1, v = v1; j <= j2; j++, v = add(v, dv)) { exec.glBegin(0x0003); for (let i = i1, u = u1; i <= i2; i++, u = add(u, du)) evalCoord(2, u, v); exec.glEnd(); }
+        for (let i = i1, u = u1; i <= i2; i++, u = add(u, du)) { exec.glBegin(0x0003); for (let j = j1, v = v1; j <= j2; j++, v = add(v, dv)) evalCoord(2, u, v); exec.glEnd(); }
+      } else {
+        exec.glBegin(0x0000);
+        for (let j = j1, v = v1; j <= j2; j++, v = add(v, dv)) for (let i = i1, u = u1; i <= i2; i++, u = add(u, du)) evalCoord(2, u, v);
+        exec.glEnd();
+      }
+    },
     glLightf: (li, pname, v) => exec.glLightfv(li, pname, [v]),
     glMaterialf: (face, pname, v) => exec.glMaterialfv(face, pname, [v]),
     // The alignments are kept; the other modes (swap, LSB first, row length, skips -- 0x0cf0-0x0cf4,
@@ -1829,6 +1962,26 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * vertex, as the texture matrix's q is (vertex()). Unit 0's glMultiTexCoord is glTexCoord.
    */
   const IMM_SET = {
+    /*
+     * glRasterPos: the point goes through the vertex pipeline as a vertex would (lit, its texture
+     * coordinates generated), and the raster position is valid when the view volume and the user
+     * clip planes keep it. glWindowPos (GL 1.4): window coordinates as given, z through the depth
+     * range, the current colour and coordinates unlit.
+     */
+    glRasterPos: (c) => {
+      const keep = s.verts; s.verts = [];
+      vertex(c[0], c[1], c.length > 2 ? c[2] : 0, c.length > 3 ? c[3] : 1);
+      const v = s.verts[0]; s.verts = keep;
+      const [x, y, z, w] = v.clip;
+      const inside = w > 0 && Math.abs(x) <= w && Math.abs(y) <= w && Math.abs(z) <= w
+        && s.clipPlanes.every((p, i) => !p || !s.caps.has(CAP.CLIP_PLANE0 + i) || dotEye(p, v) >= 0);
+      const W = toWindow(v);
+      s.raster = { valid: inside, x: W.x, y: W.y, z: W.z, colour: v.colour, tex: v.tex, tex1: v.tex1, tex2: v.tex2, eyeZ: v.eyeZ };
+    },
+    glWindowPos: (c) => {
+      const [n, f] = s.depthRange, z = c.length > 2 ? Math.min(Math.max(c[2], 0), 1) : 0;
+      s.raster = { valid: true, x: c[0], y: c[1], z: n + (f - n) * z, colour: s.colour.map(clamp01), tex: [s.tex[0], s.tex[1]], tex1: null, tex2: null, eyeZ: 0 };
+    },
     glVertex: (c) => vertex(c[0], c[1], c.length > 2 ? c[2] : 0, c.length > 3 ? c[3] : 1),
     glColor: (c) => { s.colour = [c[0], c[1], c[2], c.length > 3 ? c[3] : 1]; },
     glNormal: (c) => { s.normal = [c[0], c[1], c[2]]; },
@@ -1851,7 +2004,26 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       : multi ? (unit, ...c) => set(c.map(conv), unit) : (...c) => set(c.map(conv));
   }
   exec.glActiveTexture = exec.glActiveTextureARB;
+  // The double spellings of the evaluators: their values made floats, as Mesa's entry points make them.
+  exec.glMap1d = exec.glMap1f; exec.glMap2d = exec.glMap2f;
+  exec.glMapGrid1d = (n, u1, u2) => exec.glMapGrid1f(n, Math.fround(u1), Math.fround(u2));
+  exec.glMapGrid2d = (nu, u1, u2, nv, v1, v2) => exec.glMapGrid2f(nu, Math.fround(u1), Math.fround(u2), nv, Math.fround(v1), Math.fround(v2));
+  exec.glEvalCoord1d = (u) => exec.glEvalCoord1f(Math.fround(u));
+  exec.glEvalCoord2d = (u, v) => exec.glEvalCoord2f(Math.fround(u), Math.fround(v));
+  exec.glEvalCoord1fv = exec.glEvalCoord1dv = (a) => exec.glEvalCoord1f(a[0]);
+  exec.glEvalCoord2fv = exec.glEvalCoord2dv = (a) => exec.glEvalCoord2f(a[0], a[1]);
   exec.glClientActiveTexture = exec.glClientActiveTextureARB;
+  // A map's control points: [i][j] at i * ustride + j * vstride components, each made a float.
+  const mapPoints = (a, dbl, dim) => {
+    const target = a[0], size = MAP_SIZE[target - (dim === 1 ? 0x0d90 : 0x0db0)], ptr = a.at(-1), n = dbl ? 8 : 4;
+    const at = (o) => Array.from({ length: size }, (_, c) => Math.fround(dbl ? dv().getFloat64(ptr + n * (o + c), true) : dv().getFloat32(ptr + n * (o + c), true)));
+    if (size === undefined) throw new Error(`gl: map target 0x${target.toString(16)}`);
+    if (dim === 1) { const [, u1, u2, stride, order] = a; return [target, Math.fround(u1), Math.fround(u2), stride, order, Array.from({ length: order }, (_, i) => at(i * stride))]; }
+    const [, u1, u2, us, uo, v1, v2, vs, vo] = a;
+    const pts = [];
+    for (let i = 0; i < uo; i++) for (let j = 0; j < vo; j++) pts.push(at(i * us + j * vs));
+    return [target, Math.fround(u1), Math.fround(u2), us, uo, Math.fround(v1), Math.fround(v2), vs, vo, pts];
+  };
   // Array arguments are read at CALL time, so a display list keeps the values (the spec's copy rule).
   const ARRAYS = {
     glLightfv: (a) => [a[0], a[1], f32(a[2], a[1] === PNAME.SHININESS ? 1 : 4)],
@@ -1880,6 +2052,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glTexImage2D: (a) => {
       return [...a.slice(0, 8), a[8] ? toRGBA(a[6], a[3], a[4], a[8], a[7]) : null];
     },
+    glBitmap: (a) => {
+      const [w, h, , , , , ptr] = a, stride = Math.ceil(Math.ceil(w / 8) / s.unpackAlign) * s.unpackAlign;
+      const rows = ptr && w > 0 && h > 0 ? Array.from({ length: h }, (_, j) => Array.from({ length: w }, (_, i) => (M.u8[ptr + j * stride + (i >> 3)] >> (7 - (i & 7))) & 1)) : null;
+      return [...a.slice(0, 6), rows];
+    },
+    glMap1f: (a) => mapPoints(a, false, 1), glMap1d: (a) => mapPoints(a, true, 1),
+    glMap2f: (a) => mapPoints(a, false, 2), glMap2d: (a) => mapPoints(a, true, 2),
+    glEvalCoord1fv: (a) => [f32(a[0], 1)], glEvalCoord2fv: (a) => [f32(a[0], 2)],
+    glEvalCoord1dv: (a) => [[dv().getFloat64(a[0], true)]], glEvalCoord2dv: (a) => [[dv().getFloat64(a[0], true), dv().getFloat64(a[0] + 8, true)]],
     glTexImage3D: (a) => {
       return [...a.slice(0, 9), a[9] ? toRGBA(a[7], a[3], a[4] * a[5], a[9], a[8]) : null];
     },
@@ -1929,6 +2110,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       return s.strings.get(name);
     },
     glGetFloatv: (p, out) => {
+      if (p === 0x0b07 || p === 0x0b04) { const r = s.raster; (p === 0x0b07 ? [r.x, r.y, r.z, 1] : r.colour).forEach((v, k) => dv().setFloat32(out + 4 * k, v, true)); return; }
+      if (p === 0x0b08) { dv().setFloat32(out, s.raster.valid ? 1 : 0, true); return; }
       const m = p === 0x0ba6 ? s.stacks[MODELVIEW].at(-1) : p === 0x0ba7 ? s.stacks[PROJECTION].at(-1) : null;
       if (!m) throw new Error(`gl: glGetFloatv 0x${p.toString(16)}`);
       for (let k = 0; k < 16; k++) dv().setFloat32(out + 4 * k, m[k], true);
@@ -2013,7 +2196,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       // The pixel store: the two alignments kept, the other modes 0 (glPixelStorei accepts only that).
       const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
       const vals = store ? store : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [UNITS]
-        : p === 0x84e0 ? [0x84c0 + s.activeUnit] : p === 0x84e1 ? [0x84c0 + s.clientUnit] : null;
+        : p === 0x84e0 ? [0x84c0 + s.activeUnit] : p === 0x84e1 ? [0x84c0 + s.clientUnit]
+        : p === 0x0b07 ? [s.raster.x, s.raster.y, s.raster.z * 2147483647, 1].map(Math.round) : p === 0x0b08 ? [s.raster.valid ? 1 : 0] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
     },
@@ -2918,7 +3102,12 @@ export function glBuiltins(T) {
     glColor3dv: f(V, P), glColor4dv: f(V, P), glVertex2dv: f(V, P), glVertex3dv: f(V, P), glNormal3fv: f(V, P),
     glColor3d: f(V, D, D, D), glColor3ub: f(V, T.UCHAR, T.UCHAR, T.UCHAR), glVertex2i: f(V, I, I), glVertex2d: f(V, D, D), glVertex3d: f(V, D, D, D),
     glTranslated: f(V, D, D, D), glRotated: f(V, D, D, D, D), glGetDoublev: f(V, U, P), glDrawArrays: f(V, U, I, I),
-    glRectf: f(V, F, F, F, F), glRecti: f(V, I, I, I, I), glRects: f(V, T.SHORT, T.SHORT, T.SHORT, T.SHORT), glRectd: f(V, D, D, D, D),
+    glBitmap: f(V, I, I, F, F, F, F, P), glRectf: f(V, F, F, F, F),
+    glMap1f: f(V, U, F, F, I, I, P), glMap1d: f(V, U, D, D, I, I, P), glMap2f: f(V, U, F, F, I, I, F, F, I, I, P), glMap2d: f(V, U, D, D, I, I, D, D, I, I, P),
+    glMapGrid1f: f(V, I, F, F), glMapGrid1d: f(V, I, D, D), glMapGrid2f: f(V, I, F, F, I, F, F), glMapGrid2d: f(V, I, D, D, I, D, D),
+    glEvalCoord1f: f(V, F), glEvalCoord1d: f(V, D), glEvalCoord2f: f(V, F, F), glEvalCoord2d: f(V, D, D),
+    glEvalCoord1fv: f(V, P), glEvalCoord1dv: f(V, P), glEvalCoord2fv: f(V, P), glEvalCoord2dv: f(V, P),
+    glEvalPoint1: f(V, I), glEvalPoint2: f(V, I, I), glEvalMesh1: f(V, U, I, I), glEvalMesh2: f(V, U, I, I, I, I), glRecti: f(V, I, I, I, I), glRects: f(V, T.SHORT, T.SHORT, T.SHORT, T.SHORT), glRectd: f(V, D, D, D, D),
     glRectfv: f(V, P, P), glRectiv: f(V, P, P), glRectsv: f(V, P, P), glRectdv: f(V, P, P), glLightf: f(V, U, U, F), glMaterialf: f(V, U, U, F),
     glColorMaterial: f(V, U, U), glPixelStorei: f(V, U, I), glTexGeni: f(V, U, U, I), glTexGenfv: f(V, U, U, P), glNormalPointer: f(V, U, I, P),
     glGetBooleanv: f(V, U, P), glGetTexLevelParameteriv: f(V, U, I, U, P),

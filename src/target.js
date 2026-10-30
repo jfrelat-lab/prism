@@ -343,8 +343,8 @@ export function targetUnits(target, root) {
       units.push({ file: full, source: readFileSync(full, 'latin1'), module: name, ...(m.defines ? { defines: m.defines } : {}) });
     }
   }
-  for (const { name, source } of envVars(target.env)) {
-    units.push({ file: `prism-${name}-vars.c`, source });
+  for (const { name, file, source } of envVars(target.env)) {
+    units.push({ file: file ? `prism-${name}-${file}` : `prism-${name}-vars.c`, source });
   }
   /*
    * `inline`: a declaration short enough that a separate file would hide it rather than explain it.

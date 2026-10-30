@@ -1,10 +1,18 @@
-// gen-glut-c.mjs — the parts of GLUT 3.7 that are drawing, not windowing, as C: its shapes
-// (lib/glut/glut_shapes.c), from corpus/glut-3.7-dist, written to src/env/glut-c.js.
+// gen-glut-c.mjs — the parts of GLUT 3.7 that are drawing, not windowing, as C: its shapes and its
+// fonts, from corpus/glut-3.7-dist, written to src/env/glut-c.js as one unit per GLUT source file.
 //
-// GLUT draws its spheres, cones, tori and polyhedra through the GL and GLU it links; so does PRISM,
-// by compiling GLUT's own source beside the program (the glut environment's `vars`), and the reference
-// build of the GL gates links the same text (tools/oracle.mjs's oracleGlut). What is changed: the
-// include of GLUT's private glutint.h becomes the public headers and the two error reports it supplied.
+// GLUT draws its spheres, cones, tori, polyhedra and teapot, and its bitmap and stroke characters, through the
+// GL and GLU it links; so does PRISM, by compiling GLUT's own source beside the program (the glut
+// environment's `vars`), and the reference build of the GL gates links the same units
+// (tools/oracle.mjs's oracleGlut). Units, not one file: each font's data has static names (ch33,
+// char33_stroke0) that every other font's has too. What is changed, and only that:
+//   - the include of GLUT's private glutint.h becomes the public headers and the two error reports it
+//     supplied; glutbitmap.h and glutstroke.h are written into the units that include them;
+//   - a font is GLUT's WIN32 identifier, a small integer (see gen-glut-h.mjs), so the font functions
+//     take their WIN32 branch, through __glutFont -- win32_util.c's, as a chain of comparisons where it
+//     switches on a pointer cast to int (no constant expression on a 64-bit reference build);
+//   - the fonts' data takes its non-WIN32 branch: the zero-size bitmaps that work around a Microsoft
+//     OpenGL 1.1 bug are not wanted where glBitmap advances the raster position as specified.
 //
 //   node tools/gen-glut-c.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -13,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const LIB = join(ROOT, 'corpus/glut-3.7-dist/glut-3.7/lib/glut');
+const read = (f) => readFileSync(join(LIB, f), 'latin1');
 const PRELUDE = `#include <GL/glut.h>
 #include <GL/glu.h>
 #include <stdio.h>
@@ -21,24 +30,58 @@ const PRELUDE = `#include <GL/glut.h>
 #define APIENTRY
 #endif
 static void __glutFatalError(const char *m) { fprintf(stderr, "GLUT: Fatal Error: %s\\n", m); exit(1); }
-static void __glutWarning(const char *m) { fprintf(stderr, "GLUT: Warning: %s\\n", m); }`;
+static void __glutWarning(const char *m) { fprintf(stderr, "GLUT: Warning: %s\\n", m); }
+extern void *__glutFont(void *font);`;
+const once = (src, a, b, f) => { if (src.split(a).length !== 2) throw new Error(`${f}: expected one ${a}`); return src.replace(a, b); };
+const headers = (src) => src.replace('#include "glutbitmap.h"', read('glutbitmap.h')).replace('#include "glutstroke.h"', read('glutstroke.h'));
 
-const files = ['glut_shapes.c'];
-let c = '', names = [];
-for (const f of files) {
-  const src = readFileSync(join(LIB, f), 'latin1');
-  if (!src.includes('#include "glutint.h"')) throw new Error(`${f}: no glutint.h include`);
-  c += `/* ---- GLUT 3.7 lib/glut/${f} ---- */\n` + src.replace('#include "glutint.h"', PRELUDE);
-  names.push(...[...src.matchAll(/^(glut\w+)\(/gm)].map((m) => m[1]));
+const units = [];
+const unit = (file, source) => units.push({ file: file.replace(/^glut_/, 'glut-c-'), source: `/* ---- GLUT 3.7 lib/glut/${file} ---- */\n${source}` });
+// The shapes, and the font functions in their WIN32 form.
+for (const f of ['glut_shapes.c', 'glut_teapot.c']) unit(f, once(read(f), '#include "glutint.h"', PRELUDE, f));
+for (const f of ['glut_bitmap.c', 'glut_bwidth.c', 'glut_stroke.c', 'glut_swidth.c']) {
+  let src = headers(once(read(f), '#include "glutint.h"', PRELUDE, f));
+  src = src.replace(/#if defined\(_WIN32\)|#ifdef _WIN32/g, '#if 1 /* GLUT 3.7: _WIN32 */');
+  unit(f, src);
 }
+// __glutFont, transcribed from win32_util.c: its font table and its case for each.
+{
+  const w = read('win32_util.c');
+  const externs = w.match(/^extern StrokeFontRec [^;]+;\nextern BitmapFontRec [^;]+;$/m);
+  const body = w.slice(w.indexOf('__glutFont(void *font)'), w.indexOf('NOTREACHED'));
+  const cases = [...body.matchAll(/case \(int\)(GLUT_\w+):\s*return &(\w+);/g)];
+  if (!externs || cases.length !== 9) throw new Error(`win32_util.c: font table (${cases.length} cases)`);
+  unit('glut_font.c', `/* __glutFont, from win32_util.c (WIN32 font identifiers to GLUT's font data). */
+${PRELUDE}
+${read('glutstroke.h')}
+${read('glutbitmap.h')}
+${externs[0]}
+
+void *
+__glutFont(void *font)
+{
+${cases.map(([, id, rec]) => `  if (font == ${id})\n    return &${rec};`).join('\n')}
+  __glutFatalError("out of memory.");
+  return 0;
+}
+`);
+}
+// The fonts' data.
+for (const f of ['glut_8x13.c', 'glut_9x15.c', 'glut_tr10.c', 'glut_tr24.c', 'glut_hel10.c', 'glut_hel12.c', 'glut_hel18.c', 'glut_roman.c', 'glut_mroman.c'])
+  unit(f, headers(read(f)).replace(/#ifdef _WIN32/g, '#if 0 /* GLUT 3.7: _WIN32 */'));
+
+const names = units.flatMap((u) => [...u.source.matchAll(/^(glut\w+)\s*\(/gm)].map((m) => m[1]));
 const esc = (s) => s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
 writeFileSync(join(ROOT, 'src/env/glut-c.js'), `// GENERATED by tools/gen-glut-c.mjs from GLUT 3.7 (Copyright (c) Mark J. Kilgard, 1994-1998;
-// freely distributable without licensing fees; the shapes also (c) 1993 Silicon Graphics, Inc., their\n// permission notice kept in the text). Do not edit.
+// freely distributable without licensing fees; the shapes also (c) 1993 Silicon Graphics, Inc., their
+// permission notice kept in the text). Do not edit.
 
-/** GLUT 3.7's drawing, as C compiled beside the program: ${files.join(', ')}. */
-export const GLUT_C = \`${esc(c)}\`;
+/** GLUT 3.7's drawing, as C compiled beside the program: one unit per GLUT source file. */
+export const GLUT_C = [
+${units.map((u) => `  { file: '${u.file}', source: \`${esc(u.source)}\` },`).join('\n')}
+];
 
 /** The entry points GLUT_C defines, which are therefore not builtins. */
 export const GLUT_C_NAMES = ${JSON.stringify(names)};
 `);
-console.log(`${names.length} entry points from ${files.join(', ')} -> src/env/glut-c.js`);
+console.log(`${names.length} entry points in ${units.length} units -> src/env/glut-c.js`);

@@ -88,7 +88,7 @@ function mesa(c) {
   const units = (c.sources ?? [`${c.target}.c`]).filter((f) => f.endsWith('.c')).join(' ');
   oracleGlut(work);
   const env = c.version ? `MESA_GL_VERSION_OVERRIDE=${c.version} ` : '';
-  const r = sh(`cd /work/mesademos/${dir} && rm -f frame-*.ppm prog && gcc -O0 -I. -o prog ${units} glut-egl.c glut-c.c -lGLU -lEGL -lOpenGL -lm && ${env}PRISM_GLUT_FRAMES=${c.frames.join(',')} ./prog`);
+  const r = sh(`cd /work/mesademos/${dir} && rm -f frame-*.ppm prog && gcc -O0 -I. -o prog ${units} glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm && ${env}PRISM_GLUT_FRAMES=${c.frames.join(',')} ./prog`);
   if (r.code !== 0) throw new Error(`${c.name}: reference: ${r.stderr || r.stdout}`);
   return Object.fromEntries(c.frames.map((n) => [n, readPpm(join(work, `frame-${n}.ppm`))]));
 }

@@ -18,7 +18,7 @@ import { writeRgbPng } from './png.mjs';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const ALL = ['tex-nearest', 'tex-linear', 'mip-nn', 'mip-ln', 'mip-ll', 'lightmap', 'alpha', 'blend', 'fog', 'clip', 'depth',
   'texgen-object', 'texgen-sphere', 'arrays-normal', 'colour-material', 'matrix-rect',
-  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo', 'polygon-mode', 'push-attrib', 'immediate-forms', 'glut-shapes'];
+  'vbo', 'points', 'point-sprite', 'array-types', 'copytex', 'far', 'generate-mipmap', 'rect-forms', 'multitex-shadow', 'combine', 'lights', 'fbo', 'polygon-mode', 'push-attrib', 'immediate-forms', 'glut-shapes', 'raster-text', 'evaluators'];
 const args = process.argv.slice(2);
 const pngDir = args.find((a) => a.startsWith('--png='))?.slice(6);
 const SCENES = args.filter((a) => !a.startsWith('--')).length ? args.filter((a) => !a.startsWith('--')) : ALL;
@@ -29,7 +29,7 @@ const work = join(SCRATCH, 'gl-scenes');
 mkdirSync(join(work, 'GL'), { recursive: true });
 copyFileSync(join(ROOT, 'tests', 'gl', 'scenes.c'), join(work, 'scenes.c'));
 oracleGlut(work);
-const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c glut-c.c -lGLU -lEGL -lOpenGL -lm');
+const build = sh('cd /work/gl-scenes && gcc -O0 -I. -o scenes scenes.c glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm');
 if (build.code !== 0) throw new Error(`reference build: ${build.stderr || build.stdout}`);
 const readPpm = (p) => {
   const b = readFileSync(p), m = b.toString('latin1', 0, 32).match(/^P6\n(\d+) (\d+)\n255\n/);

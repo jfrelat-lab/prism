@@ -30,5 +30,7 @@
   "polygon-mode": 51,
   "push-attrib": 0,
   "immediate-forms": 114,
-  "glut-shapes": 94
+  "glut-shapes": 94,
+  "raster-text": 8,
+  "evaluators": 118
 }

@@ -222,8 +222,8 @@ void prism_glutBindFramebuffer(unsigned int target, unsigned int framebuffer);
 #endif
 `));
   copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(dir, 'glut-egl.c'));
-  // GLUT's own shapes, a unit of their own as PRISM compiles them beside the program (src/env/glut-c.js): link -lGLU.
-  writeFileSync(join(dir, 'glut-c.c'), GLUT_C);
+  // GLUT's own shapes and fonts, units of their own as PRISM compiles them beside the program (src/env/glut-c.js): link -lGLU.
+  for (const { file, source } of GLUT_C) writeFileSync(join(dir, file), source);
 }
 
 export function sh(cmd, { timeout = 120000 } = {}) {

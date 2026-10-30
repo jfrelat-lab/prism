@@ -81,6 +81,15 @@
  *                 (every textured quad planar in its coordinates: Mesa cuts these along 0-2)
  *   glut-shapes   GLUT's shapes, solid and lit on the top rows, wire below: sphere, cone, cube, torus,
  *                 dodecahedron, octahedron, tetrahedron, icosahedron (GLUT 3.7's own glut_shapes.c)
+ *   raster-text   the raster position and glBitmap: a bitmap with the default unpack alignment of 4, its
+ *                 colour the one current at glRasterPos (not at glBitmap), a raster position through a
+ *                 rotation and a perspective, an invalid one (outside the view volume) drawing nothing
+ *                 though it still moves; then GLUT's seven bitmap fonts and its two stroke fonts, laid out
+ *                 by glutBitmapLength and glutStrokeLength
+ *   evaluators    a Bezier curve with its colour map, by glEvalMesh1 (LINE) and as glEvalCoord1 points; a
+ *                 bicubic patch lit under AUTO_NORMAL by glEvalMesh2 FILL, its colour and texture
+ *                 coordinates mapped; the same patch by glEvalMesh2 LINE and as a rational (VERTEX_4)
+ *                 surface of glEvalPoint2; then GLUT's teapot, solid and lit, and wire
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -856,6 +865,104 @@ static void display(void) {
       }
     }
     glDisable(GL_LIGHTING); glDisable(GL_LIGHT0); glDisable(GL_NORMALIZE);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "raster-text")) {
+    static const GLubyte arrow[12 * 4] = {      /* 12 rows of 10 bits, each row padded to 4 bytes */
+      0x0c,0x00,0,0, 0x0c,0x00,0,0, 0x0c,0x00,0,0, 0x0c,0x00,0,0, 0x0c,0x00,0,0, 0xff,0xc0,0,0,
+      0x7f,0x80,0,0, 0x3f,0x00,0,0, 0x1e,0x00,0,0, 0x0c,0x00,0,0, 0x8c,0x40,0,0, 0xff,0xc0,0,0 };
+    static void *const fonts[7] = { GLUT_BITMAP_8_BY_13, GLUT_BITMAP_9_BY_15, GLUT_BITMAP_TIMES_ROMAN_10, GLUT_BITMAP_TIMES_ROMAN_24,
+      GLUT_BITMAP_HELVETICA_10, GLUT_BITMAP_HELVETICA_12, GLUT_BITMAP_HELVETICA_18 };
+    static const unsigned char text[] = "Glyphs 0123 @&%!";
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D); glDisable(GL_LIGHTING);
+    /* Bitmaps: the colour latched at glRasterPos; xmove/ymove carry the next one along. */
+    glColor3f(1, 0.3f, 0.2f); glRasterPos2i(8, 210); glColor3f(0, 0, 1);
+    for (int k = 0; k < 4; k++) glBitmap(10, 12, 0, 0, 14, 3, arrow);
+    glColor3f(0.3f, 1, 0.3f); glRasterPos2f(80.6f, 208.4f); glBitmap(10, 12, 4.5f, 2.5f, 0, 0, arrow);
+    /* Through a rotation and a perspective. */
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-1, 1, -0.75, 0.75, 1, 10);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity(); glTranslatef(0, 0, -3); glRotatef(30, 0, 0, 1);
+    glColor3f(1, 1, 0); glRasterPos3f(0.8f, 1.2f, 0.5f); glBitmap(10, 12, 0, 0, 0, 0, arrow);
+    /* Outside the view volume: invalid, nothing drawn, though it moves. */
+    glColor3f(1, 0, 1); glRasterPos3f(0, 0, 5); glBitmap(10, 12, 0, 0, -200, 0, arrow); glBitmap(10, 12, 0, 0, 0, 0, arrow);
+    glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW);
+    /* GLUT's bitmap fonts, one line each, and their lengths as bars. */
+    for (int k = 0; k < 7; k++) {
+      int y = 180 - 22 * k, x = 8, len = glutBitmapLength(fonts[k], text);
+      glColor3f(0.6f + 0.05f * k, 0.9f, 1 - 0.1f * k); glRasterPos2i(x, y);
+      for (const unsigned char *c = text; *c; c++) glutBitmapCharacter(fonts[k], *c);
+      glColor3f(0.3f, 0.3f, 0.5f); glRecti(x, y - 4, x + len, y - 3);
+      glColor3f(1, 1, 1); glRecti(x + glutBitmapWidth(fonts[k], 'W'), y - 6, x + glutBitmapWidth(fonts[k], 'W') + 1, y - 5);
+    }
+    /* The stroke fonts, scaled, and their lengths. */
+    for (int k = 0; k < 2; k++) {
+      void *font = k ? GLUT_STROKE_MONO_ROMAN : GLUT_STROKE_ROMAN;
+      glLoadIdentity(); glTranslatef(170, 200 - 40 * k, 0); glScalef(0.15f, 0.15f, 1);
+      glColor3f(1, 0.8f - 0.3f * k, 0.4f);
+      for (const unsigned char *c = (const unsigned char *)"Stroke #1"; *c; c++) glutStrokeCharacter(font, *c);
+      glLoadIdentity(); glColor3f(0.5f, 0.5f, 0.5f);
+      glRecti(170, 195 - 40 * k, 170 + (int)(0.15f * glutStrokeLength(font, (const unsigned char *)"Stroke #1")), 196 - 40 * k);
+      glRecti(170, 192 - 40 * k, 170 + (int)(0.15f * glutStrokeWidth(font, 'M')), 193 - 40 * k);
+    }
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "evaluators")) {
+    static const GLfloat curve[4][3] = { { -1, -1, 0 }, { -0.4f, 1.2f, 0 }, { 0.5f, -1.1f, 0 }, { 1, 0.9f, 0 } };
+    static const GLfloat curveCol[4][4] = { { 1, 0, 0, 1 }, { 1, 1, 0, 1 }, { 0, 1, 1, 1 }, { 0.4f, 0.4f, 1, 1 } };
+    static GLfloat patch[4][4][3], patch4[4][4][4];
+    static const GLfloat patchCol[2][2][4] = { { { 1, 0.3f, 0.3f, 1 }, { 0.3f, 1, 0.3f, 1 } }, { { 0.3f, 0.3f, 1, 1 }, { 1, 1, 0.3f, 1 } } };
+    static const GLfloat patchTex[2][2][2] = { { { 0, 0 }, { 0, 2 } }, { { 2, 0 }, { 2, 2 } } };
+    static const GLubyte tex[2 * 2 * 3] = { 255, 255, 255, 120, 120, 160, 120, 120, 160, 255, 255, 255 };
+    static const GLfloat pos[4] = { 0.5f, 1, 2, 0 }, dif[4] = { 0.9f, 0.8f, 0.6f, 1 };
+    GLuint t;
+    for (int i = 0; i < 4; i++) for (int j = 0; j < 4; j++) {
+      patch[i][j][0] = -1 + i * 0.66f; patch[i][j][1] = -1 + j * 0.66f;
+      patch[i][j][2] = ((i == 1 || i == 2) && (j == 1 || j == 2)) ? 1.2f : (i + j) % 3 * 0.2f - 0.2f;
+      for (int c = 0; c < 3; c++) patch4[i][j][c] = patch[i][j][c] * (1 + (i * j) % 3 * 0.5f);
+      patch4[i][j][3] = 1 + (i * j) % 3 * 0.5f;
+    }
+    glGenTextures(1, &t); glBindTexture(GL_TEXTURE_2D, t); glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(-4, 4, -3, 3, -10, 10);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glEnable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D); glDisable(GL_LIGHTING);
+    /* The curve: a line strip through the grid, then its points. */
+    glMap1f(GL_MAP1_VERTEX_3, 0, 1, 3, 4, &curve[0][0]); glMap1f(GL_MAP1_COLOR_4, 0, 1, 4, 4, &curveCol[0][0]);
+    glEnable(GL_MAP1_VERTEX_3); glEnable(GL_MAP1_COLOR_4);
+    glTranslatef(-2.8f, 1.8f, 0);
+    glMapGrid1f(30, 0, 1); glEvalMesh1(GL_LINE, 0, 30);
+    glTranslatef(0, -0.3f, 0); glPointSize(3);
+    glBegin(GL_POINTS); for (int i = 0; i <= 8; i++) glEvalCoord1f(i / 8.0f); glEnd();
+    glPointSize(1); glDisable(GL_MAP1_COLOR_4); glDisable(GL_MAP1_VERTEX_3);
+    /* The patch, filled, lit by its automatic normals, coloured and textured by its maps. */
+    glLoadIdentity(); glTranslatef(0, 1.6f, 0); glRotatef(-50, 1, 0, 0); glRotatef(20, 0, 0, 1);
+    glMap2f(GL_MAP2_VERTEX_3, 0, 1, 3, 4, 0, 1, 12, 4, &patch[0][0][0]);
+    glMap2f(GL_MAP2_COLOR_4, 0, 1, 4, 2, 0, 1, 8, 2, &patchCol[0][0][0]);
+    glMap2f(GL_MAP2_TEXTURE_COORD_2, 0, 1, 2, 2, 0, 1, 4, 2, &patchTex[0][0][0]);
+    glEnable(GL_MAP2_VERTEX_3); glEnable(GL_MAP2_COLOR_4); glEnable(GL_MAP2_TEXTURE_COORD_2); glEnable(GL_AUTO_NORMAL);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glLightfv(GL_LIGHT0, GL_POSITION, pos);
+    glEnable(GL_COLOR_MATERIAL); glEnable(GL_TEXTURE_2D);
+    glMapGrid2f(12, 0, 1, 10, 0, 1); glEvalMesh2(GL_FILL, 0, 12, 0, 10);
+    glDisable(GL_TEXTURE_2D); glDisable(GL_COLOR_MATERIAL); glDisable(GL_LIGHTING); glDisable(GL_MAP2_COLOR_4); glDisable(GL_MAP2_TEXTURE_COORD_2);
+    /* The same patch as lines, and part of it. */
+    glLoadIdentity(); glTranslatef(2.6f, 1.6f, 0); glRotatef(-50, 1, 0, 0); glRotatef(20, 0, 0, 1);
+    glColor3f(0.6f, 1, 0.6f); glMapGrid2f(8, 0, 1, 8, 0, 1); glEvalMesh2(GL_LINE, 0, 8, 2, 7);
+    /* A rational surface, its points by glEvalPoint2. */
+    glMap2f(GL_MAP2_VERTEX_4, 0, 1, 4, 4, 0, 1, 16, 4, &patch4[0][0][0]); glEnable(GL_MAP2_VERTEX_4);
+    glLoadIdentity(); glTranslatef(-2.6f, -1.2f, 0); glRotatef(-40, 1, 0, 0);
+    glColor3f(1, 0.6f, 1); glMapGrid2f(10, 0, 1, 10, 0, 1); glPointSize(2);
+    glBegin(GL_POINTS); for (int j = 0; j <= 10; j++) for (int i = 0; i <= 10; i++) glEvalPoint2(i, j); glEnd();
+    glPointSize(1); glDisable(GL_MAP2_VERTEX_4); glDisable(GL_MAP2_VERTEX_3); glDisable(GL_AUTO_NORMAL);
+    /* GLUT's teapot. */
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, dif);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0);
+    glLoadIdentity(); glTranslatef(0, -1.5f, 0); glRotatef(20, 1, 0, 0); glRotatef(30, 0, 1, 0); glutSolidTeapot(0.9);
+    glDisable(GL_LIGHTING); glDisable(GL_LIGHT0);
+    glLoadIdentity(); glTranslatef(2.6f, -1.5f, 0); glRotatef(20, 1, 0, 0); glRotatef(-30, 0, 1, 0); glColor3f(1, 1, 0.5f); glutWireTeapot(0.8);
+    glDeleteTextures(1, &t);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "generate-mipmap")) {

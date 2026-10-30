@@ -34,7 +34,7 @@ const work = join(SCRATCH, 'gears');
 mkdirSync(join(work, 'GL'), { recursive: true });
 for (const f of ['gears.c', 'glut_wrap.h']) copyFileSync(join(ROOT, 'corpus', 'gears', f), join(work, f));
 oracleGlut(work);
-const r = sh(`cd /work/gears && rm -f frame-*.ppm gears && gcc -O0 -I. -o gears gears.c glut-egl.c glut-c.c -lGLU -lEGL -lOpenGL -lm && PRISM_GLUT_FRAMES=${FRAMES.join(',')} ./gears -info`);
+const r = sh(`cd /work/gears && rm -f frame-*.ppm gears && gcc -O0 -I. -o gears gears.c glut-egl.c glut-c-*.c -lGLU -lEGL -lOpenGL -lm && PRISM_GLUT_FRAMES=${FRAMES.join(',')} ./gears -info`);
 if (r.code !== 0) throw new Error(`reference build: ${r.stderr || r.stdout}`);
 console.log(`Mesa: ${(r.stdout.match(/GL_RENDERER\s*=\s*(.*)/) ?? [])[1] ?? '?'}`);
 const readPpm = (p) => {

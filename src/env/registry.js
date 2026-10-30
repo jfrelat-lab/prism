@@ -282,7 +282,8 @@ export function buildEnv(M, spec, extra = {}) {
 /** The C an environment supplies, for the units list, in the order the names were given. */
 export function envVars(spec) {
   const names = Array.isArray(spec) ? spec : Object.keys(spec ?? {});
-  return names.filter(n => ENV[n]?.vars).map(n => ({ name: n, source: ENV[n].vars }));
+  // `vars` is one unit's source, or a list of { file, source } units (GLUT's fonts: static names that clash).
+  return names.filter(n => ENV[n]?.vars).flatMap(n => (Array.isArray(ENV[n].vars) ? ENV[n].vars.map(u => ({ name: n, ...u })) : [{ name: n, source: ENV[n].vars }]));
 }
 
 /**
