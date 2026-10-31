@@ -56,7 +56,7 @@ const ATTRIB_GROUPS = [
   [0x8, { fields: ['cullFace', 'frontFace', 'polyMode', 'polygonOffset'], caps: [0x0b44, 0x0b41, 0x0b42, 0x8037, 0x2a01, 0x2a02] }],  // POLYGON
   [0x10, { fields: ['polyStipple'], caps: [] }],                                                  // POLYGON_STIPPLE
   [0x20, { fields: ['pixelZoom'], caps: [] }],                                                    // PIXEL_MODE
-  [0x40, { fields: ['shade', 'material', 'backMaterial', 'sceneAmbient', 'twoSide', 'lights', 'colourMaterial', 'colourControl'],
+  [0x40, { fields: ['shade', 'material', 'backMaterial', 'sceneAmbient', 'twoSide', 'localViewer', 'lights', 'colourMaterial', 'colourControl'],
     caps: [0x0b50, 0x0b57, 0x4000, 0x4001, 0x4002, 0x4003, 0x4004, 0x4005, 0x4006, 0x4007] }],      // LIGHTING
   [0x80, { fields: ['fog'], caps: [0x0b60] }],                                                    // FOG
   [0x100, { fields: ['depthFunc', 'depthMask', 'clearDepth'], caps: [0x0b71] }],                  // DEPTH_BUFFER
@@ -237,7 +237,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const dv = () => M.mod.dv;
   const f32 = (p, n) => Array.from({ length: n }, (_, k) => dv().getFloat32(p + 4 * k, true));
   const material = () => ({ ambient: [0.2, 0.2, 0.2, 1], diffuse: [0.8, 0.8, 0.8, 1], specular: [0, 0, 0, 1], emission: [0, 0, 0, 1], shininess: 0 });
-  const light = () => ({ ambient: [0, 0, 0, 1], diffuse: [0, 0, 0, 1], specular: [0, 0, 0, 1], position: [0, 0, 1, 0] });
+  const light = () => ({ ambient: [0, 0, 0, 1], diffuse: [0, 0, 0, 1], specular: [0, 0, 0, 1], position: [0, 0, 1, 0],
+    spotDirection: [0, 0, -1], spotExponent: 0, spotCutoff: 180 });
   // A texture unit other than 0: its binding, environment, coordinate generation, matrix stack, enables,
   // current coordinate (s, t, r, q) and coordinate array.
   const newUnit = () => ({
@@ -287,7 +288,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     caps: new Set(), shade: 0x1d01, frontFace: CCW, cullFace: BACK, polyMode: [FILL, FILL],
     normal: [0, 0, 1], colour: [1, 1, 1, 1], tex: [0, 0],
     material: material(), backMaterial: material(),
-    sceneAmbient: [0.2, 0.2, 0.2, 1], twoSide: false,
+    sceneAmbient: [0.2, 0.2, 0.2, 1], twoSide: false, localViewer: false,
     lights: Array.from({ length: 8 }, (_, k) => {
       const l = light();
       if (k === 0) { l.diffuse = [1, 1, 1, 1]; l.specular = [1, 1, 1, 1]; }
@@ -547,6 +548,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const lightDir = new WeakMap();      // light position array -> { dir, hv }
   function litColour(m, eyeNormal, eye) {
     const out = [0, 0, 0, m.diffuse[3]];
+    // GL 1.1 2.13.1: the direction to the viewer, (0, 0, 1) unless the viewer is local, at the eye's origin.
+    const view = s.localViewer ? norm3([-eye[0] / eye[3], -eye[1] / eye[3], -eye[2] / eye[3]]) : null;
     for (let k = 0; k < 3; k++) out[k] = m.emission[k] + s.sceneAmbient[k] * m.ambient[k];
     for (let li = 0; li < 8; li++) {
       const L = s.lights[li];
@@ -559,18 +562,25 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (L.position[3] === 0) {
         let c = lightDir.get(L.position);
         if (!c) { const d0 = norm3(L.position); c = { dir: d0, hv: norm3([d0[0], d0[1], d0[2] + 1]) }; lightDir.set(L.position, c); }
-        dir = c.dir; hvFixed = c.hv;
+        dir = c.dir; hvFixed = view ? null : c.hv;
       }
       else {
         const v = [L.position[0] - eye[0] / eye[3], L.position[1] - eye[1] / eye[3], L.position[2] - eye[2] / eye[3]];
         const d = Math.hypot(v[0], v[1], v[2]), [kc, kl, kq] = L.attenuation ?? [1, 0, 0];
         dir = d ? [v[0] / d, v[1] / d, v[2] / d] : [0, 0, 0];
         att = 1 / (kc + kl * d + kq * d * d);
+        // GL 1.1 2.13.1: outside the cone a spotlight gives nothing, ambient included; inside it scales
+        // by the cosine to the axis to the spot exponent.
+        if (L.spotCutoff !== 180) {
+          const sd = norm3(L.spotDirection), c = -(dir[0] * sd[0] + dir[1] * sd[1] + dir[2] * sd[2]);
+          if (c < Math.cos(L.spotCutoff * Math.PI / 180)) continue;
+          att *= c ** L.spotExponent;
+        }
       }
       const ndl = Math.max(0, eyeNormal[0] * dir[0] + eyeNormal[1] * dir[1] + eyeNormal[2] * dir[2]);
       let spec = 0;
       if (ndl > 0 && (m.specular[0] || m.specular[1] || m.specular[2])) {
-        const hv = hvFixed ?? norm3([dir[0], dir[1], dir[2] + 1]);
+        const hv = hvFixed ?? (view ? norm3([dir[0] + view[0], dir[1] + view[1], dir[2] + view[2]]) : norm3([dir[0], dir[1], dir[2] + 1]));
         const ndh = Math.max(0, eyeNormal[0] * hv[0] + eyeNormal[1] * hv[1] + eyeNormal[2] * hv[2]);
         spec = m.shininess ? ndh ** m.shininess : (ndh > 0 ? 1 : 0);
       }
@@ -718,18 +728,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   // What the fixed-function vertex shader needs of the state, as typed arrays (makeWebGL's drawArrays).
   function tnlUniforms() {
-    const mv = s.stacks[MODELVIEW].at(-1), lit = s.caps.has(CAP.LIGHTING), fl = new Int32Array(13);
-    fl[0] = lit ? 1 : 0; fl[1] = s.caps.has(CAP.NORMALIZE) ? 1 : 0; fl[2] = lit && s.twoSide ? 1 : 0;
+    const mv = s.stacks[MODELVIEW].at(-1), lit = s.caps.has(CAP.LIGHTING), fl = new Int32Array(14);
+    fl[0] = lit ? 1 : 0; fl[1] = s.caps.has(CAP.NORMALIZE) ? 1 : 0; fl[2] = lit && s.twoSide ? 1 : 0; fl[13] = lit && s.localViewer ? 1 : 0;
     if (lit && s.caps.has(0x0b57)) {
       const { face, mode } = s.colourMaterial;
       fl[3] = CM_MODE[mode] ?? 0; fl[4] = face === FRONT ? 1 : face === BACK ? 2 : 3;
     }
-    const lPos = new Float32Array(32), lAmb = new Float32Array(32), lDif = new Float32Array(32), lSpe = new Float32Array(32), lAtt = new Float32Array(32);
+    const lPos = new Float32Array(32), lAmb = new Float32Array(32), lDif = new Float32Array(32), lSpe = new Float32Array(32), lAtt = new Float32Array(32), lSpot = new Float32Array(32);
     for (let i = 0; i < 8; i++) {
       if (!s.caps.has(CAP.LIGHT0 + i)) continue;
       const L = s.lights[i];
       fl[5] |= 1 << i;
       lPos.set(L.position, 4 * i); lAmb.set(L.ambient, 4 * i); lDif.set(L.diffuse, 4 * i); lSpe.set(L.specular, 4 * i); lAtt.set(L.attenuation ?? [1, 0, 0], 4 * i);
+      // A cone of 180 degrees is no spotlight: a cosine below any the shader computes.
+      lSpot.set([...norm3(L.spotDirection), L.spotCutoff === 180 ? -2 : Math.cos(L.spotCutoff * Math.PI / 180)], 4 * i); lAtt[4 * i + 3] = L.spotExponent;
     }
     const clipP = new Float32Array(24);
     for (let i = 0; i < 6; i++) if (s.clipPlanes[i] && s.caps.has(CAP.CLIP_PLANE0 + i)) { fl[6] |= 1 << i; clipP.set(s.clipPlanes[i], 4 * i); }
@@ -744,7 +756,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     return {
       mv: Float32Array.from(mv), proj: Float32Array.from(s.stacks[PROJECTION].at(-1)), nmat: Float32Array.from(normalMatrixOf(mv)), fl,
       sceneAmb: Float32Array.from(s.sceneAmbient), mF: Float32Array.from(mat(s.material)), mB: Float32Array.from(mat(s.backMaterial)),
-      sh: Float32Array.of(s.material.shininess, s.backMaterial.shininess), lPos, lAmb, lDif, lSpe, lAtt, tm, genS, genT, clipP,
+      sh: Float32Array.of(s.material.shininess, s.backMaterial.shininess), lPos, lAmb, lDif, lSpe, lAtt, lSpot, tm, genS, genT, clipP,
     };
   }
   /*
@@ -1931,12 +1943,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       } else if (pname === PNAME.AMBIENT) L.ambient = v;
       else if (pname === PNAME.DIFFUSE) L.diffuse = v;
       else if (pname === PNAME.SPECULAR) L.specular = v;
-      // A spotlight's cone and a light's attenuation. A program may set them to their defaults -- Tux
-      // Racer sets every parameter of every light -- and only a cone narrower than 180 degrees would
-      // change the picture beyond what is implemented; that is refused, not approximated.
-      else if (pname === 0x1204) L.spotDirection = v;
+      // A spotlight's cone: its direction through the modelview's upper 3x3 at the call, as the position is.
+      else if (pname === 0x1204) { const m = s.stacks[MODELVIEW].at(-1); L.spotDirection = [0, 1, 2].map((r) => m[r] * v[0] + m[4 + r] * v[1] + m[8 + r] * v[2]); }
       else if (pname === 0x1205) L.spotExponent = v[0];
-      else if (pname === 0x1206) { if (v[0] !== 180) throw new Error('gl: spotlights (GL_SPOT_CUTOFF other than 180) are not implemented'); }
+      else if (pname === 0x1206) L.spotCutoff = v[0];
       else if (pname === 0x1207 || pname === 0x1208 || pname === 0x1209) (L.attenuation ??= [1, 0, 0])[pname - 0x1207] = v[0];
       else throw new Error(`gl: glLightfv pname 0x${pname.toString(16)}`);
     },
@@ -1955,7 +1965,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glLightModelfv: (pname, v) => {
       if (pname === LIGHT_MODEL.AMBIENT) s.sceneAmbient = v;
       else if (pname === LIGHT_MODEL.TWO_SIDE) s.twoSide = v[0] !== 0;
-      else if (pname === LIGHT_MODEL.LOCAL_VIEWER) { if (v[0] !== 0) throw new Error('gl: GL_LIGHT_MODEL_LOCAL_VIEWER is not implemented'); }
+      else if (pname === LIGHT_MODEL.LOCAL_VIEWER) s.localViewer = v[0] !== 0;
       /*
        * GL_SEPARATE_SPECULAR_COLOR (GL 1.2): the specular term added AFTER texturing instead of
        * before. Kept; not yet drawn so -- the specular is in the one colour as with GL_SINGLE_COLOR,
@@ -2717,7 +2727,7 @@ void main() {
    * THE FIXED-FUNCTION VERTEX SHADER (P15.15): what the front end's vertex() computes, from the
    * program's own arrays -- see gpuArrays. Its lighting is litColour's: emission and scene ambient,
    * then each enabled light, directional or positional with 1 / (kc + kl d + kq d^2), the half vector
-   * towards +z (no local viewer), specular only where the diffuse term lights. Paired with either
+   * towards +z or, for a local viewer, towards the eye's origin; specular only where the diffuse term lights. Paired with either
    * fragment shader, which takes the face's colour (two-sided lighting) and discards what a user clip
    * plane removes; with `flat` varyings for flat shading, the provoking vertex last.
    */
@@ -2726,23 +2736,24 @@ in vec4 pos; in vec4 col; in vec4 tc0; in vec3 nrm; in vec4 tc1; in vec4 tc2;
 uniform mat4 mv, proj; uniform mat3 nmat;
 // fl: lighting, normalize, two sides, colour material (1 ambient and diffuse, 2 ambient, 3 diffuse, 4 specular,
 // 5 emission), its faces (1 front, 2 back, 3 both), the lights on (bits), the clip planes on (bits), then
-// each unit's generation of s and t (1 object linear, 2 sphere map).
-uniform int fl[13];
+// each unit's generation of s and t (1 object linear, 2 sphere map), a local viewer.
+uniform int fl[14];
 uniform vec4 sceneAmb, mF[4], mB[4]; uniform vec2 sh;
-uniform vec4 lPos[8], lAmb[8], lDif[8], lSpe[8], lAtt[8];
+uniform vec4 lPos[8], lAmb[8], lDif[8], lSpe[8], lAtt[8], lSpot[8];
 uniform mat4 tm[3]; uniform vec4 genS[3], genT[3], clipP[6];
 uniform int zFlip;
 ${q}out vec4 vF; ${q}out vec4 vB; out vec2 uv; out float eyeZ; out vec2 uv1; out vec2 uv2; out float clipD[6];
 vec4 lit(vec4 a, vec4 d, vec4 sp, vec4 e, float shin, vec3 n, vec3 p) {
-  vec3 c = e.rgb + sceneAmb.rgb * a.rgb;
+  vec3 c = e.rgb + sceneAmb.rgb * a.rgb, view = fl[13] == 1 ? normalize(-p) : vec3(0.0, 0.0, 1.0);
   for (int i = 0; i < 8; i++) {
     if ((fl[5] & (1 << i)) == 0) continue;
     vec3 dir; float att = 1.0;
     if (lPos[i].w == 0.0) dir = normalize(lPos[i].xyz);
-    else { vec3 v = lPos[i].xyz - p; float dd = length(v); dir = dd > 0.0 ? v / dd : vec3(0.0); att = 1.0 / (lAtt[i].x + lAtt[i].y * dd + lAtt[i].z * dd * dd); }
+    else { vec3 v = lPos[i].xyz - p; float dd = length(v); dir = dd > 0.0 ? v / dd : vec3(0.0); att = 1.0 / (lAtt[i].x + lAtt[i].y * dd + lAtt[i].z * dd * dd);
+      if (lSpot[i].w > -2.0) { float c = -dot(dir, lSpot[i].xyz); if (c < lSpot[i].w) continue; att *= pow(c, lAtt[i].w); } }
     float ndl = max(0.0, dot(n, dir)), spec = 0.0;
     if (ndl > 0.0 && (sp.r != 0.0 || sp.g != 0.0 || sp.b != 0.0)) {
-      float ndh = max(0.0, dot(n, normalize(dir + vec3(0.0, 0.0, 1.0))));
+      float ndh = max(0.0, dot(n, normalize(dir + view)));
       spec = shin > 0.0 ? pow(ndh, shin) : (ndh > 0.0 ? 1.0 : 0.0);
     }
     c += att * (lAmb[i].rgb * a.rgb + ndl * lDif[i].rgb * d.rgb + spec * lSpe[i].rgb * sp.rgb);
@@ -2781,7 +2792,7 @@ void main() {
 }`;
   const tnlFS = (src, q) => src.replace('in vec4 v; ', `${q}in vec4 vF; ${q}in vec4 vB; in float clipD[6]; `)
     .replace('void main() {\n', 'uniform int twoSided, clipMask;\nvoid main() {\n  for (int i = 0; i < 6; i++) if ((clipMask & (1 << i)) != 0 && clipD[i] < 0.0) discard;\n  vec4 v = twoSided == 1 && !gl_FrontFacing ? vB : vF;\n');
-  const TNL_UNIFORMS = ['mv', 'proj', 'nmat', 'fl', 'sceneAmb', 'mF', 'mB', 'sh', 'lPos', 'lAmb', 'lDif', 'lSpe', 'lAtt', 'tm', 'genS', 'genT', 'clipP'];
+  const TNL_UNIFORMS = ['mv', 'proj', 'nmat', 'fl', 'sceneAmb', 'mF', 'mB', 'sh', 'lPos', 'lAmb', 'lDif', 'lSpe', 'lAtt', 'lSpot', 'tm', 'genS', 'genT', 'clipP'];
   const tnlPrograms = new Map();
   const tnlProgram = (key) => {
     let rec = tnlPrograms.get(key);

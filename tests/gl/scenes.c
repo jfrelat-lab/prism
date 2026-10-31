@@ -97,6 +97,10 @@
  *   accum         the accumulation buffer: a scene drawn 8 times jittered and averaged (GL_ACCUM 1/8,
  *                 GL_RETURN), then GL_LOAD, GL_MULT and GL_ADD (negative too) in a scissor box, a
  *                 return through a colour mask and with a scale over 1, and glClearAccum's value
+ *   local-viewer  GL_LIGHT_MODEL_LOCAL_VIEWER: wide spheres with a sharp highlight from a directional and a
+ *                 positional light, the viewer at infinity on the left and local on the right
+ *   spotlight     two spotlights on a finely divided floor: a wide cone with a soft exponent, its direction
+ *                 given under a rotation, and a narrow hard one with attenuation and some ambient
  *   float-texture ARB_texture_float: an RGBA16F texture given floats (GL_FLOAT), and an RGBA32F one as a
  *                 framebuffer object's colour, drawn into and then textured (values within [0, 1]: the
  *                 software rasteriser keeps 8 bits a channel)
@@ -1062,6 +1066,49 @@ static void display(void) {
     /* glClearAccum's value, returned. */
     glScissor(20, 180, 60, 40); glClearAccum(0.25f, -0.5f, 0.75f, 1); glClear(GL_ACCUM_BUFFER_BIT); glAccum(GL_RETURN, 1.0f);
     glDisable(GL_SCISSOR_TEST);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "local-viewer")) {
+    static const GLfloat dir[4] = { 0.3f, 0.5f, 0.8f, 0 }, at[4] = { -0.5f, 1.0f, -1.0f, 1 };
+    static const GLfloat white[4] = { 1, 1, 1, 1 }, warm[4] = { 1, 0.7f, 0.4f, 1 }, base[4] = { 0.2f, 0.3f, 0.6f, 1 };
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-1.33, 1.33, -1, 1, 1.2, 20);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_TEXTURE_2D); glEnable(GL_DEPTH_TEST);
+    glLightfv(GL_LIGHT0, GL_POSITION, dir); glLightfv(GL_LIGHT0, GL_DIFFUSE, white); glLightfv(GL_LIGHT0, GL_SPECULAR, white);
+    glLightfv(GL_LIGHT1, GL_POSITION, at); glLightfv(GL_LIGHT1, GL_DIFFUSE, warm); glLightfv(GL_LIGHT1, GL_SPECULAR, warm);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_LIGHT1);
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, base); glMaterialfv(GL_FRONT, GL_SPECULAR, white); glMaterialf(GL_FRONT, GL_SHININESS, 40);
+    for (int k = 0; k < 2; k++) {
+      glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, k);
+      glPushMatrix(); glTranslatef(k ? 1.05f : -1.05f, 0.02f, -2.6f); glutSolidSphere(0.95, 40, 30); glPopMatrix();
+    }
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, 0);
+    glDisable(GL_LIGHT1); glDisable(GL_LIGHT0); glDisable(GL_LIGHTING);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "spotlight")) {
+    static const GLfloat at0[4] = { -1.2f, 1.5f, -3.0f, 1 }, at1[4] = { 1.4f, 1.2f, -4.0f, 1 }, down[3] = { 0, -1, 0 }, aim[3] = { -0.2f, -1, -0.3f };
+    static const GLfloat white[4] = { 1, 1, 1, 1 }, warm[4] = { 1, 0.6f, 0.2f, 1 }, dim[4] = { 0.15f, 0.1f, 0.05f, 1 }, grey[4] = { 0.7f, 0.7f, 0.75f, 1 };
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-1.33, 1.33, -1, 1, 1.2, 20);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_TEXTURE_2D); glEnable(GL_DEPTH_TEST);
+    glLightfv(GL_LIGHT0, GL_POSITION, at0); glLightfv(GL_LIGHT0, GL_DIFFUSE, white); glLightfv(GL_LIGHT0, GL_SPECULAR, white);
+    glPushMatrix(); glRotatef(20, 0, 0, 1); glLightfv(GL_LIGHT0, GL_SPOT_DIRECTION, down); glPopMatrix();
+    glLightf(GL_LIGHT0, GL_SPOT_CUTOFF, 40); glLightf(GL_LIGHT0, GL_SPOT_EXPONENT, 6);
+    glLightfv(GL_LIGHT1, GL_POSITION, at1); glLightfv(GL_LIGHT1, GL_DIFFUSE, warm); glLightfv(GL_LIGHT1, GL_AMBIENT, dim);
+    glLightfv(GL_LIGHT1, GL_SPOT_DIRECTION, aim); glLightf(GL_LIGHT1, GL_SPOT_CUTOFF, 18);
+    glLightf(GL_LIGHT1, GL_LINEAR_ATTENUATION, 0.3f);
+    glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_LIGHT1);
+    glMaterialfv(GL_FRONT, GL_AMBIENT_AND_DIFFUSE, grey); glMaterialfv(GL_FRONT, GL_SPECULAR, white); glMaterialf(GL_FRONT, GL_SHININESS, 20);
+    glNormal3f(0, 1, 0);
+    for (int j = 0; j < 48; j++) {
+      glBegin(GL_QUAD_STRIP);
+      for (int i = 0; i <= 64; i++) { float x = -3.2f + i * 0.1f; glVertex3f(x, -1, -1.6f - (j + 1) * 0.1f); glVertex3f(x, -1, -1.6f - j * 0.1f); }
+      glEnd();
+    }
+    glLightf(GL_LIGHT0, GL_SPOT_CUTOFF, 180); glLightf(GL_LIGHT0, GL_SPOT_EXPONENT, 0); glLightf(GL_LIGHT1, GL_SPOT_CUTOFF, 180);
+    glLightf(GL_LIGHT1, GL_LINEAR_ATTENUATION, 0);
+    glDisable(GL_LIGHT1); glDisable(GL_LIGHT0); glDisable(GL_LIGHTING);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "float-texture")) {

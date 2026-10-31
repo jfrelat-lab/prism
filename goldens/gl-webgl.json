@@ -35,5 +35,7 @@
   "evaluators": 118,
   "gl11-gaps": 35,
   "accum": 79,
-  "float-texture": 0
+  "float-texture": 0,
+  "local-viewer": 11,
+  "spotlight": 0
 }
