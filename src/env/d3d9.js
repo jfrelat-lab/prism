@@ -123,7 +123,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     return { kind: 'surface', depth: rb, w, h };
   }
   const W = params.width || g.drawingBufferWidth, H = params.height || g.drawingBufferHeight;
-  const backTex = makeTexture(W, H, 1, USAGE_RENDERTARGET, 21);
+  const backTex = makeTexture(W, H, 1, USAGE_RENDERTARGET, params.backBufferFormat === 22 ? 22 : 21);
   const backBuffer = backTex.surfaces[0];
   const autoDepth = params.autoDepthStencilFormat ? add(makeDepth(W, H)) : 0;
 
@@ -352,6 +352,11 @@ function createDevice(g, params, { floatRT, onPresent }) {
       g.disable(g.SCISSOR_TEST);
       g.blitFramebuffer(0, 0, s.w, s.h, 0, g.drawingBufferHeight, g.drawingBufferWidth, 0, g.COLOR_BUFFER_BIT, g.LINEAR);   // D3D's rows to the canvas's
       g.bindFramebuffer(g.FRAMEBUFFER, null);
+      if (FMT[s.format]?.[4] === 'bgrx') {
+        // X8R8G8B8's X is not alpha: what the shaders left there must not make the canvas translucent
+        g.colorMask(false, false, false, true); g.clearColor(0, 0, 0, 1); g.clear(g.COLOR_BUFFER_BIT);
+        g.colorMask(true, true, true, true);
+      }
       onPresent();
       return OK;
     },
