@@ -282,6 +282,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   // After a write to a level: the chain made again when it was level 0 of a texture that asks for it.
   const written = (t, level) => { if (level === 0 && t.generate) generateMipmaps(t); };
+  /*
+   * A GPU-owned texture's mipmap levels as this side keeps them: their sizes, for complete(), with
+   * texels left as they were (stale: the GPU's are the texture's). An array is reused while its size
+   * holds, so a texture copied and mipmapped every frame allocates nothing.
+   */
+  function gpuMipLevels(t) {
+    let { w, h } = t.levels[0], lv = 0;
+    while (w > 1 || h > 1) {
+      w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); lv++;
+      const L = t.levels[lv];
+      if (!L || L.w !== w || L.h !== h || L.float || L.d) t.levels[lv] = { w, h, data: new Uint8Array(w * h * 4) };
+    }
+    t.levels.length = lv + 1;
+  }
   const s = {
     width: 0, height: 0, color: null, depth: null,
     viewport: [0, 0, 0, 0], clear: [0, 0, 0, 0], clearDepth: 1,
@@ -490,6 +504,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glGenerateMipmap: () => {
       const id = s.activeUnit ? s.units[s.activeUnit].bound : s.bound, t = s.textures.get(id);
       if (!t?.levels[0]) return;
+      if (webgl && t.gpuOwned && !t.levels[0].d) { gpuMipLevels(t); t.dirty = false; webgl.generateMipmap(id); gpuCache = null; return; }
       generateMipmaps(t);
       if (webgl && t.gpuOwned) { t.dirty = false; webgl.generateMipmap(id); }
       gpuCache = null;
@@ -2506,7 +2521,24 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       t.dirty = true; gpuCache = null;
     },
     glCopyTexImage2D: (target, level, internal, x, y, w, h, border) => {
-      const t = texture(), L = { w, h, data: new Uint8Array(w * h * 4) };
+      const t = texture(), id = s.activeUnit ? s.units[s.activeUnit].bound : s.bound;
+      /*
+       * On the WebGL path the copy stays on the GPU, the texture GPU-owned from then on: Waillee (2017)
+       * copies its 1280x720 frame and mipmaps it every frame, and reading each back to rebuild it here
+       * stalled the page. This side keeps the level's size (its array reused), not its texels.
+       */
+      if (webgl && !floatFormat(internal)) {
+        t.base = baseFormat(internal);
+        const old = t.levels[level];
+        if (t.dirty && !t.gpuOwned) webgl.upload(id, t);                     // the other levels first
+        t.levels[level] = old && old.w === w && old.h === h && !old.float && !old.d ? old : { w, h, data: new Uint8Array(w * h * 4) };
+        webgl.copyTexImage(id, level, x, y, w, h, s.readFbo);
+        t.dirty = false; t.gpuOwned = true;
+        if (level === 0 && t.generate) { gpuMipLevels(t); webgl.generateMipmap(id); }
+        gpuCache = null;
+        return;
+      }
+      const L = { w, h, data: new Uint8Array(w * h * 4) };
       t.base = baseFormat(internal);
       t.levels[level] = L;
       t.gpuOwned = false;
@@ -3451,6 +3483,18 @@ void main() {
       g.bindTexture(g.TEXTURE_2D, gpuTex.get(id));
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
       g.texSubImage2D(g.TEXTURE_2D, level, x, y, sw, sh, g.RGBA, rgba instanceof Float32Array ? g.FLOAT : g.UNSIGNED_BYTE, rgba);   // a float texture takes floats
+      delete applied.tex;
+      key = null;
+    },
+    /** A framebuffer's rectangle as a texture's level, made (or remade) on the GPU. */
+    copyTexImage(id, level, x, y, cw, ch, readId) {
+      flush();
+      let tx = gpuTex.get(id);
+      if (!tx) { tx = g.createTexture(); gpuTex.set(id, tx); }
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, readId ? fbos.get(readId).fb : target);
+      g.bindTexture(g.TEXTURE_2D, tx);
+      g.copyTexImage2D(g.TEXTURE_2D, level, g.RGBA, x, y, cw, ch, 0);
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, cur);
       delete applied.tex;
       key = null;
     },
