@@ -264,8 +264,9 @@ function translate(src, stage) {
           const decl = params.get(f.v).find((t) => t.length === n);
           if (decl && INT_TYPES.has(decl[arg])) return true;
         }
-        // plain parentheses (not a call's) around integers only: (i*i*15731+789221)
-        if (y === '(' && !(f && f.t === 'id' && !['return', 'if', 'while', 'for'].includes(f.v)) && intGroup(j, 1)) return true;
+        // plain parentheses (not a call's) around integers only: (i*i*15731+789221) -- unless the group
+        // is itself an operand of a float, where its integers are converted (groupBesideFloat)
+        if (y === '(' && !(f && f.t === 'id' && !['return', 'if', 'while', 'for'].includes(f.v)) && intGroup(j, 1) && !groupBesideFloat(j)) return true;
         break;
       } else if (y === ',' && depth === 0) arg++;
       else if ((y === ';' || y === '{' || y === '}') && depth === 0) break;
@@ -289,6 +290,29 @@ function translate(src, stage) {
   // counter) — the desktop compilers converted it, GLSL ES wants float(c). Not its declaration, not a
   // comparison or an assignment of its own (`c<200`, `c++`), not beside another integer.
   const ARITH = new Set(['*', '/', '+', '-']);
+  // A float operand beside an operator: a float literal, a name not an integer, a call or an index closing.
+  const floatSide = (side, sk) => (side.t === 'num' ? !isIntLiteral(side.v)
+    : side.t === 'id' ? !(isField(sk) ? INT_TYPES.has(typeAt[sk - 2]) : isInt(sk)) : side.v === ')' || side.v === ']');
+  // An all-integer parenthesised group opened at `open`, an operand of a float through + - * /.
+  const groupBesideFloat = (open) => {
+    let close = open + 1;
+    for (let depth = 0; close < sig.length; close++) { const y = at(close).v; if (y === '(') depth++; else if (y === ')') { if (!depth) break; depth--; } }
+    if (close >= sig.length) return false;
+    const before = at(open - 1);
+    if (before && before.t === 'id') return false;                     // a call's arguments, a constructor's
+    for (let j = open + 1; j < close; j++) {
+      const y = at(j);
+      if (y.t === 'num' ? !isIntLiteral(y.v) : y.t === 'id' ? !isInt(j) || isField(j) : !ARITH.has(y.v) && y.v !== '(' && y.v !== ')') return false;
+    }
+    const after = at(close + 1), after2 = at(close + 2), before2 = at(open - 2);
+    return !!((before && ARITH.has(before.v) && before2 && floatSide(before2, open - 2)) || (after && ARITH.has(after.v) && after2 && floatSide(after2, close + 2)));
+  };
+  // k inside such a group.
+  const intGroupBesideFloat = (k) => {
+    let open = k - 1;
+    for (let depth = 0; open >= 0; open--) { const y = at(open).v; if (y === ')') depth++; else if (y === '(') { if (!depth) break; depth--; } }
+    return open >= 0 && groupBesideFloat(open);
+  };
   const floatNeighbour = (k) => {
     const prev = at(k - 1), next = at(k + 1);
     if (prev && prev.t === 'id' && INT_TYPES.has(prev.v)) return false;            // the declaration
@@ -298,6 +322,9 @@ function translate(src, stage) {
       if (side.t === 'id' && (isField(sk) ? INT_TYPES.has(typeAt[sk - 2]) : isInt(sk))) continue;   // q.x of an ivec2 q is an int
       if (side.v === ')' || side.v === ']' || side.t === 'id') return true;
     }
+    // inside a parenthesised group of integers only that is itself beside a float: `fpar[3].x*(i-7)`
+    // (kindernoiser, 2011) -- its integers converted, the literals beside them follow.
+    if (intGroupBesideFloat(k)) return true;
     // the right side of a compound assignment to a float: `y/=v` (vec3 y, int v; Hartverdrahtet 2012)
     const op = at(k - 1), lhs = at(k - 2);
     if (op && ['+=', '-=', '*=', '/='].includes(op.v) && lhs && lhs.t === 'id') {

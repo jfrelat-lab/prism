@@ -75,6 +75,9 @@ idioms.push(['a parameter of the shader\'s own struct type is not the global of 
   'uniform int v;struct L{float d;};float n(L v){return v.d*2.0;}void main(){prism_FragColor=vec4(n(L(1.0))+float(v));}']);
 idioms.push(['an octal integer where a float is wanted is its value (Paradistance 2009: float a=016 is 14)',
   'float a=016,b=001;void main(){gl_FragColor=vec4(a,b,0x10,010);}', 'float a, b;void main(){a=14.0;b=1.0;prism_FragColor=vec4(a,b,0x10,8.0);}']);
+idioms.push(['a group of integers that is an operand of a float has its integers converted, a hash\'s stays integer (kindernoiser 2011: vec2(1.0,.0)*fpar[3].x*(i-7))',
+  'uniform vec4 f;float h(int n){return float((n*n*15731+789221)&255);}void main(){vec2 a=vec2(0);for(int i=0;i<3;i++)a+=vec2(1.0,.0)*f.x*(i-7)+vec2(.0,.75)*(i*2);gl_FragColor=vec4(a,h(2),1);}',
+  'uniform vec4 f;float h(int n){return float((n*n*15731+789221)&255);}void main(){vec2 a=vec2(0.0);for(int i=0;i<3;i++)a+=vec2(1.0,.0)*f.x*(float(i)-7.0)+vec2(.0,.75)*(float(i)*2.0);prism_FragColor=vec4(a,h(2),1.0);}']);
 idioms.push(['an empty macro tested by #ifdef stays a name there',
   '#define FAST\n#ifdef FAST\nfloat k=1.;\n#endif\nvoid main(){gl_FragColor=vec4(k);}',
   '#define FAST\n\n#ifdef FAST\n\nfloat k=1.;\n#endif\n\nvoid main(){prism_FragColor=vec4(k);}']);
