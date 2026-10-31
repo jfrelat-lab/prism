@@ -1,15 +1,20 @@
 // gate-d3d9-asm.mjs — Direct3D 9 shader BYTECODE through src/env/sm9.js and src/env/d3d9.js, held
-// pixel for pixel to Wine's d3d9 running the same bytecode.
+// pixel for pixel to two Direct3D 9 implementations running the same bytecode: Wine's own (wined3d, on
+// Mesa's llvmpipe through OpenGL) and DXVK's (on Mesa's lavapipe through Vulkan), two separate lineages.
 //
 // Each case is a shader in D3D9 assembly. `--capture-wine` has tools/oracle/d3d9ref.c assemble it with
 // Wine's D3DXAssembleShader in the oracle container, draw it (a full-screen quad on an 8x8 X8R8G8B8
 // back buffer, as gate-hlsl), and keep both the bytecode and the pixels in goldens/d3d9-asm.json. A
 // normal run hands PRISM that same bytecode, as a program would hand it to CreatePixelShader, draws,
-// and compares (within one step of 255). Wine is the semantics here: the cases need no expected values
+// and compares (within one step of 255) with each. They are the semantics here: the cases need no expected values
 // of their own, only inputs that vary across the 64 pixels (from vPos) so that signs, zeros and ranges
 // are all met, and results mapped into [0, 1] so the back buffer keeps them. Alpha is not stored, so
-// each case shows three results. Where Wine 8.0 is itself wrong, a case says why (`notWine`) and is held
-// to values worked out here (`want`) instead, Wine serving only as the assembler.
+// each case shows three results. Where Wine 8.0's d3d9 is itself wrong, a case says why (`notWine`) and is
+// held to values worked out here (`want`) and to DXVK, Wine serving only as the assembler; where DXVK
+// 1.10.3 is (`notDxvk`), it is left out. Constants read through a0 or aL come from SetVertexShaderConstantF
+// (`consts` sets both stages), not from def: whether def reaches a relative read is where the two differ.
+// DXVK 1.10.3 (x32/d3d9.dll from its release, unpacked at /opt/dxvk in the container) is loaded by name
+// (d3d9ref -dll) in a Wine prefix of its own.
 // In a headless Chrome (WebGL2 on SwiftShader), as gate-hlsl.
 //
 //   node tools/gate-d3d9-asm.mjs                 SKIP when no Chrome is found (PRISM_CHROME=<path> names one)
@@ -60,13 +65,13 @@ const cases = [
       'if_lt r0.x, r0.y', 'mov r1.z, c0.w', 'else', 'mov r1.z, c0.y', 'endif', 'mov oC0, r1') },
   { name: 'subroutines: call, callnz on a defb, ret, labels after the main body',
     // Wine 8.0 writes the pixel shader's colour at the end of the LAST subroutine instead of main, and reads defb from an unset uniform
-    notWine: 'its GLSL writes the colour out at the end of the last subroutine', want: (x, y) => [x / 8 + 0.25, y / 8, 0.25],
+    notWine: 'its GLSL writes the colour out at the end of the last subroutine', notDxvk: 'has no call, callnz, label or ret ("unhandled opcode")', want: (x, y) => [x / 8 + 0.25, y / 8, 0.25],
     ps: ps3('def c0, 0.125, 0.25, 0.5, 0', 'defb b0, true', 'defb b1, false', 'mul r0.xy, vPos, c0.x', 'mov r1, c0.w',
       'call l1', 'callnz l2, b0', 'callnz l2, b1', 'mov oC0, r1', 'ret',
       'label l1', 'add r1.x, r0.x, c0.y', 'ret', 'label l2', 'add r1.y, r1.y, r0.y', 'add r1.z, r1.z, c0.y', 'ret') },
   { name: 'predication: setp, a predicated mov, a negated predicate, if on a predicate, breakp',
     // the loop stops at the first multiple of 0.11 at or above x / 8 (none falls within 0.005 of one)
-    notWine: 'its GLSL backend has no setp ("Backend can\'t handle opcode setp")',
+    notWine: 'its GLSL backend has no setp ("Backend can\'t handle opcode setp")', notDxvk: 'has no breakp ("unhandled opcode: BreakP") and gets the predicated writes wrong',
     want: (x, y) => [x > 4 ? 1 : 0, y > 4 ? 0 : 0.25, (y > 4 ? 0.75 : 0) + 0.11 * (x + 1)],
     ps: ps3('def c0, 0.125, 0.5, 1, 0', 'def c1, 0.25, 0.75, 0.11, 0', 'defi i0, 8, 0, 0, 0', 'mul r0.xy, vPos, c0.x', 'mov r1, c0.w', 'setp_gt p0.xy, r0, c0.y',
       '(p0.x) mov r1.x, c0.z', '(!p0.y) mov r1.y, c1.x', 'if p0.y', 'mov r1.z, c1.y', 'endif',
@@ -79,20 +84,22 @@ const cases = [
   { name: 'vs_3_0: m4x4, m3x3, lit, dst, sgn, mova rounding a fraction and a constant read through a0',
     vs: ['vs_3_0', 'dcl_position v0', 'dcl_position o0', 'dcl_texcoord o1', 'dcl_texcoord1 o2',
       'def c0, 0.5, 0.25, 1, 0', 'def c1, 0.1, 0.2, 0.3, 0.4', 'def c2, 0.5, 0.6, -0.7, 0.8', 'def c3, -0.2, 0.3, 0.9, 0.1', 'def c4, 0.3, 0.1, -0.5, 0.2',
-      'def c10, 0.9, 0.1, 0.1, 0', 'def c11, 0.1, 0.9, 0.1, 0', 'def c12, 0.1, 0.1, 0.9, 0',
       'mov o0, v0', 'm4x4 r0, v0, c1', 'm3x3 r1.xyz, v0, c2', 'add r0.w, r1.x, r1.y',
       'lit r2, r0.yxzw', 'dst r3, r0, r1', 'sgn r4, v0, r5, r6',
       'def c5, 0.3, 1.6, 0, 0', 'mad r5.x, v0.x, c5.x, c5.y', 'mova a0.x, r5.x', 'mov r6, c10[a0.x]',
       'mad o1, r0, c0.y, c0.x', 'mad o2.xy, r2.yz, c0.y, c0.y', 'mad o2.z, r4.x, c0.y, c0.x', 'mad o2.w, r6.y, c0.x, r3.y', ''].join('\n'),
-    ps: ps3('dcl_texcoord v0', 'dcl_texcoord1 v1', 'def c0, 0.5, 0, 0, 0', 'add r0.xy, v0.xy, v1.zw', 'mul r0.xy, r0, c0.x', 'mov r0.z, v1.x', 'mov oC0, r0') },
+    ps: ps3('dcl_texcoord v0', 'dcl_texcoord1 v1', 'def c0, 0.5, 0, 0, 0', 'add r0.xy, v0.xy, v1.zw', 'mul r0.xy, r0, c0.x', 'mov r0.z, v1.x', 'mov oC0, r0'),
+    consts: [...Array(40).fill(0), 0.9, 0.1, 0.1, 0, 0.1, 0.9, 0.1, 0, 0.1, 0.1, 0.9, 0] },
   { name: 'vs_3_0: a loop of step 2 reading constants through aL, if on a defb, expp, logp',
     vs: ['vs_3_0', 'dcl_position v0', 'dcl_position o0', 'dcl_texcoord o1',
-      'def c0, 0.5, 0.25, 0.75, 0', 'def c4, 0.1, 0.0, 0.0, 0', 'def c5, 0.0, 0.2, 0.0, 0', 'def c6, 0.0, 0.0, 0.3, 0', 'def c8, 0.0, 0.15, 0.0, 0',
+      'def c0, 0.5, 0.25, 0.75, 0',
       'defi i0, 3, 4, 2, 0', 'defb b0, true', 'mov o0, v0', 'mov r0, c0.w',
       'loop aL, i0', 'add r0, r0, c0[aL]', 'endloop', 'if b0', 'add r0.xyz, r0, v0.x', 'endif',
       'expp r1.x, c0.y', 'logp r1.y, c0.z', 'mad o1.xyz, r0, c0.x, c0.y', 'mov o1.w, r1.x', ''].join('\n'),
-    ps: ps3('dcl_texcoord v0', 'def c0, 0.5, 0, 0, 0', 'mov oC0, v0') },
-  { name: 'vs_1_1: oPos, oT0, oT1 and a diffuse colour above one (clamped before the pixel shader), m4x3, expp and logp as vectors, an unswizzled rcp',
+    ps: ps3('dcl_texcoord v0', 'def c0, 0.5, 0, 0, 0', 'mov oC0, v0'),
+    consts: [...Array(16).fill(0), 0.1, 0, 0, 0, 0, 0.2, 0, 0, 0, 0, 0.3, 0, 0, 0, 0, 0, 0, 0.15, 0, 0] },
+  { notDxvk: 'reads x for rcp\'s unswizzled source, where wined3d and the vs_1_x documentation read w',
+    name: 'vs_1_1: oPos, oT0, oT1 and a diffuse colour above one (clamped before the pixel shader), m4x3, expp and logp as vectors, an unswizzled rcp',
     vs: ['vs_1_1', 'dcl_position v0', 'def c0, 0.5, 0.25, 2, 1', 'def c1, 0.3, 0.1, 0.2, 0.1', 'def c2, 0.1, 0.4, 0.1, 0.2', 'def c3, 0.2, 0.1, 0.3, 0.3',
       'mov oPos, v0', 'mul oD0, v0.xxyy, c0.z', 'm4x3 r0.xyz, v0, c1', 'expp r1, c0.y', 'logp r2, c0.z', 'rcp r3, c3',
       'mad oT0.xyz, r0, c0.x, c0.x', 'mul oT0.w, r1.y, r2.y', 'mul oT1, r3, c1.y', ''].join('\n'),
@@ -109,9 +116,12 @@ if (process.argv.includes('--capture-wine')) {
   const b = sh('cd /work/wine && /usr/lib/wine/winegcc -m32 -O1 -o d3d9ref.exe d3d9ref.c -ld3d9 -ld3dx9 2>&1 | grep -v warning', { timeout: 600000 });
   if (!existsSync(join(dir, 'd3d9ref.exe.so'))) { console.log(`d3d9ref did not build:\n${b.stdout}${b.stderr}`); process.exit(1); }
   sh('[ -e /tmp/.X7-lock ] || { Xvfb :7 -screen 0 640x480x24 >/dev/null 2>&1 & sleep 2; }');
+  const dxvk = sh('[ -f /opt/dxvk/x32/d3d9.dll ] && cp /opt/dxvk/x32/d3d9.dll /work/wine/dxvk_d3d9.dll && echo yes').stdout.includes('yes');
+  if (!dxvk) console.log('  no DXVK in the container (/opt/dxvk): Wine\'s d3d9 alone');
   const golden = { _doc: ['Wine 8.0 d3d9 (wined3d on Mesa llvmpipe) assembling and drawing the gate-d3d9-asm cases through',
-    'tools/oracle/d3d9ref.c. Each case: the bytecode D3DXAssembleShader produced (DWORDs) and the 8x8 back buffer,',
-    'row 0 (the top) first, R, G, B bytes. Written by node tools/gate-d3d9-asm.mjs --capture-wine.'], cases: {} };
+    'tools/oracle/d3d9ref.c, and DXVK 1.10.3 (on Mesa lavapipe) drawing them again. Each case: the bytecode D3DXAssembleShader',
+    'produced (DWORDs) and each 8x8 back buffer (pixels: Wine, dxvk: DXVK), row 0 (the top) first, R, G, B bytes.',
+    'Written by node tools/gate-d3d9-asm.mjs --capture-wine.'], cases: {} };
   const words = (f) => { const b = readFileSync(f); return Array.from(new Uint32Array(b.buffer, b.byteOffset, b.length >> 2)); };
   for (const [i, k] of cases.entries()) {
     const ps = `a${i}.asm`, vs = `a${i}-vs.asm`;
@@ -119,9 +129,14 @@ if (process.argv.includes('--capture-wine')) {
     if (k.vs) writeFileSync(join(dir, vs), k.vs);
     const flags = `-dump ${k.texture ? '-tex ' : ''}${k.vs ? `-vs ${vs} ` : ''}`;
     // through `| cat`: with its output straight on docker exec's pipe, wine returns 0 and the program writes nothing (measured)
-    const r = sh(`cd /work/wine && rm -f a${i}.rgb && DISPLAY=:7 WINEDEBUG=-all WINEDLLOVERRIDES=mscoree,mshtml= wine ./d3d9ref.exe ${flags}${ps} a${i}.rgb ${N} ${N} ${(k.consts ?? []).join(' ')} 2>&1 | cat`, { timeout: 600000 });
+    const run = (prefix, dll, out) => sh(`cd /work/wine && rm -f ${out} && WINEPREFIX=${prefix} DISPLAY=:7 WINEDEBUG=-all WINEDLLOVERRIDES=mscoree,mshtml= wine ./d3d9ref.exe ${dll}${flags}${ps} ${out} ${N} ${N} ${(k.consts ?? []).join(' ')} 2>&1 | cat`, { timeout: 600000 });
+    const r = run('/root/.wine', '', `a${i}.rgb`);
     if (!existsSync(join(dir, `a${i}.rgb`))) { check(false, `Wine drew: ${k.name}`, r.stdout.slice(-600)); continue; }
-    golden.cases[k.name] = { ps: words(join(dir, `${ps}.bin`)), ...(k.vs ? { vs: words(join(dir, `${vs}.bin`)) } : {}), ...(k.notWine ? {} : { pixels: Array.from(readFileSync(join(dir, `a${i}.rgb`))) }) };
+    const rd = dxvk ? run('/root/.wine-dxvk', '-dll dxvk_d3d9.dll ', `a${i}-dxvk.rgb`) : null;
+    if (dxvk && !existsSync(join(dir, `a${i}-dxvk.rgb`))) check(false, `DXVK drew: ${k.name}`, rd.stdout.slice(-600));
+    golden.cases[k.name] = { ps: words(join(dir, `${ps}.bin`)), ...(k.vs ? { vs: words(join(dir, `${vs}.bin`)) } : {}),
+      ...(k.notWine ? {} : { pixels: Array.from(readFileSync(join(dir, `a${i}.rgb`))) }),
+      ...(dxvk && existsSync(join(dir, `a${i}-dxvk.rgb`)) ? { dxvk: Array.from(readFileSync(join(dir, `a${i}-dxvk.rgb`))) } : {}) };
     console.log(`  captured  ${k.name}`);
   }
   writeFileSync(GOLDEN, JSON.stringify(golden) + '\n');
@@ -150,7 +165,7 @@ for (const k of cases) {
     if (!k.ps) throw new Error('not captured');
     dev.beginScene();
     dev.clear(null, 1, 0xffff00ff, 1, 0);
-    if (k.consts) dev.setPixelShaderConstantF(0, new Float32Array(k.consts));
+    if (k.consts) { dev.setPixelShaderConstantF(0, new Float32Array(k.consts)); dev.setVertexShaderConstantF(0, new Float32Array(k.consts)); }
     if (k.texture) { const t = dev.createTexture(2, 2, 1, 0, 21); dev.textureWrite(t, 0, null, new Uint8Array(tex), 8); dev.setTexture(0, t); }
     dev.setPixelShader(dev.createPixelShader(new Uint32Array(k.ps)));
     if (k.vs) { dev.setVertexShader(dev.createVertexShader(new Uint32Array(k.vs))); dev.setFVF(2); dev.drawPrimitiveUP(5, 2, clip, 12); dev.setVertexShader(0); }
@@ -182,16 +197,22 @@ const m = dom.match(/<pre id="o">([\s\S]*?)<\/pre>/);
 let res = null;
 try { res = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')); } catch { /* reported below */ }
 if (!res) { check(false, 'the WebGL2 page ran', m ? m[1].slice(0, 200) : 'no output from Chrome'); process.exit(1); }
+const rgbOf = (r) => { const got = []; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const o = ((N - 1 - y) * N + x) * 4; got.push(r.pixels[o], r.pixels[o + 1], r.pixels[o + 2]); } return got; };
 for (const k of cases) {
-  const r = res[k.name];
-  const wine = k.notWine ? (golden[k.name] && Array.from({ length: N * N }, (_, i) => k.want(i % N, (i / N) | 0)).flat().map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255))) : golden[k.name]?.pixels;
-  if (!wine) { check(false, k.name, 'no capture: node tools/gate-d3d9-asm.mjs --capture-wine'); continue; }
+  const r = res[k.name], g = golden[k.name];
+  if (!g) { check(false, k.name, 'no capture: node tools/gate-d3d9-asm.mjs --capture-wine'); continue; }
   if (!r || r.error) { check(false, k.name, r ? r.error : 'not run'); continue; }
-  const got = [];   // the canvas read back bottom row first; the capture is top row first
-  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const o = ((N - 1 - y) * N + x) * 4; got.push(r.pixels[o], r.pixels[o + 1], r.pixels[o + 2]); }
-  const { worst, at } = rgbOff(got, wine), p0 = at - (at % 3);
-  if (worst > 1 && process.argv.includes('--verbose')) for (const [what, img] of [['PRISM', got], [k.notWine ? 'want ' : 'Wine ', wine]]) for (let y = 0; y < N; y++) console.log(`        ${y ? '     ' : what} ${Array.from({ length: N }, (_, x) => img.slice((y * N + x) * 3, (y * N + x) * 3 + 3).map((v) => v.toString(16).padStart(2, '0')).join('')).join(' ')}`);
-  check(worst <= 1, `${k.name}${k.notWine ? ` (held to worked-out values: Wine 8.0 ${k.notWine})` : ''}`, `off by ${worst} at (${(at / 3 | 0) % N},${(at / 3 / N) | 0}) got ${got.slice(p0, p0 + 3)} ${k.notWine ? 'want' : 'Wine'} ${wine.slice(p0, p0 + 3)}`);
+  const got = rgbOf(r);   // the canvas read back bottom row first; the captures are top row first
+  const refs = k.notWine
+    ? [['worked-out values', Array.from({ length: N * N }, (_, i) => k.want(i % N, (i / N) | 0)).flat().map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255))], ['DXVK', g.dxvk]]
+    : [['Wine', g.pixels], ['DXVK', g.dxvk]];
+  if (k.notDxvk) { refs.pop(); console.log(`  --   ${k.name} -- not against DXVK: DXVK 1.10.3 ${k.notDxvk}`); }
+  for (const [who, ref] of refs) {
+    if (!ref) { if (who !== 'DXVK') check(false, `${k.name} -- ${who}`, 'not captured'); continue; }
+    const { worst, at } = rgbOff(got, ref), p0 = at - (at % 3);
+    if (worst > 1 && process.argv.includes('--verbose')) for (const [what, img] of [['PRISM', got], [who.slice(0, 5).padEnd(5), ref]]) for (let y = 0; y < N; y++) console.log(`        ${y ? '     ' : what} ${Array.from({ length: N }, (_, x) => img.slice((y * N + x) * 3, (y * N + x) * 3 + 3).map((v) => v.toString(16).padStart(2, '0')).join('')).join(' ')}`);
+    check(worst <= 1, `${k.name} -- against ${who}${who === 'worked-out values' ? ` (Wine 8.0 ${k.notWine})` : ''}`, `off by ${worst} at (${(at / 3 | 0) % N},${(at / 3 / N) | 0}) got ${got.slice(p0, p0 + 3)} ${who} ${ref.slice(p0, p0 + 3)}`);
+  }
 }
-console.log(bad ? `\n${bad} check(s) failed.` : '\nShader bytecode draws on the Direct3D 9 device what Wine draws with it.');
+console.log(bad ? `\n${bad} check(s) failed.` : '\nShader bytecode draws on the Direct3D 9 device what Wine and DXVK draw with it.');
 process.exit(bad ? 1 : 0);

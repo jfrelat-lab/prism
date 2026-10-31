@@ -31,13 +31,22 @@ FROM i386/debian:bookworm-slim
 # Wine 8.0 (wine, wine32): its wined3d draws Direct3D 9 through OpenGL, so on this Mesa it is the
 # reference for src/env/d3d9.js; xvfb gives wined3d an X server for its GL context, libwine-dev
 # winegcc (/usr/lib/wine/winegcc) to build the test programs. Added with apt-get + docker commit.
+# mesa-vulkan-drivers (lavapipe) and libvulkan1 carry the second Direct3D 9 reference, DXVK (below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc g++ tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
       libsdl1.2-dev libsdl-mixer1.2-dev \
       libsdl2-dev libsdl2-image-dev \
       libosmesa6-dev \
       wine wine32 xvfb libwine-dev \
+      mesa-vulkan-drivers libvulkan1 vulkan-tools \
  && rm -rf /var/lib/apt/lists/*
+
+# DXVK 1.10.3: Direct3D 9 on Vulkan, a lineage apart from wined3d; on lavapipe it is gate-d3d9-asm's second
+# reference (d3d9ref -dll loads its x32/d3d9.dll by name). 1.10.3 because it asks only Vulkan 1.1 of the driver.
+# Added with docker commit (fetched on the host, 2026-11-01).
+RUN curl -fsSL -o /tmp/dxvk.tar.gz https://github.com/doitsujin/dxvk/releases/download/v1.10.3/dxvk-1.10.3.tar.gz \
+ && echo "8d1a3c912761b450c879f98478ae64f6f6639e40ce6848170a0f6b8596fd53c6  /tmp/dxvk.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/dxvk.tar.gz -C /opt && ln -s /opt/dxvk-1.10.3 /opt/dxvk && rm /tmp/dxvk.tar.gz
 
 # Debian's csmith package ships the GENERATOR but none of the runtime headers its output
 # #includes, and three of those headers do not exist in the source tree either — they are m4

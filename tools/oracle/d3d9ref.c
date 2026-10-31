@@ -1,7 +1,7 @@
 /* d3d9ref.c -- the Direct3D 9 reference for src/env/d3d9.js: Wine's d3d9 (wined3d on Mesa llvmpipe),
  * run in the oracle container under Xvfb by tools/gate-hlsl.mjs --capture-wine.
  *
- *   d3d9ref [-dump] [-tex] [-border AARRGGBB] [-first first.asm | -mrt first.asm] [-vs vs.asm] ps.asm out.rgba w h [c0.x ... (ps constants)]
+ *   d3d9ref [-dll d3d9.dll] [-dump] [-tex] [-border AARRGGBB] [-first first.asm | -mrt first.asm] [-vs vs.asm] ps.asm out.rgba w h [c0.x ... (ps constants)]
  *
  * Draws what gate-hlsl draws, through the real API: a full-screen quad of pretransformed vertices
  * on a w x h X8R8G8B8 back buffer. -tex binds a 2x2 A8R8G8B8 texture (red, green / blue, white, its
@@ -11,7 +11,7 @@
  * (oC0, oC1), cleared to 0, with a third bound that the shader does not write, and binds the second to
  * sampler 0. -vs draws the quad through that vertex shader instead, as XYZ vertices in clip space. Shaders are ps_3_0 ASSEMBLY through D3DXAssembleShader: Wine 8.0's HLSL
  * compiler (vkd3d-shader) rejects VPOS. The back buffer is read with GetRenderTargetData and written
- * row 0 (the top) first, as R, G, B bytes. */
+ * row 0 (the top) first, as R, G, B bytes. The constants on the command line go to both stages. */
 #include <windows.h>
 #include <d3d9.h>
 #include <d3dx9shader.h>
@@ -61,7 +61,7 @@ static IDirect3DVertexShader9 *vshader(const char *path) {
 
 int main(int argc, char **argv) {
   int a = 1, tex = 0, w, h, nc = 0, x, y;
-  const char *first = NULL, *vsfile = NULL;
+  const char *first = NULL, *vsfile = NULL, *dll = NULL;
   unsigned border = 0;
   int useBorder = 0, mrt = 0;
   float consts[256], q[24];
@@ -75,6 +75,7 @@ int main(int argc, char **argv) {
   for (; a < argc && argv[a][0] == '-'; a++) {
     if (!strcmp(argv[a], "-tex")) tex = 1;
     else if (!strcmp(argv[a], "-dump")) dump = 1;
+    else if (!strcmp(argv[a], "-dll") && a + 1 < argc) dll = argv[++a];
     else if (!strcmp(argv[a], "-first") && a + 1 < argc) first = argv[++a];
     else if (!strcmp(argv[a], "-mrt") && a + 1 < argc) { first = argv[++a]; mrt = 1; }
     else if (!strcmp(argv[a], "-vs") && a + 1 < argc) vsfile = argv[++a];
@@ -90,7 +91,14 @@ int main(int argc, char **argv) {
   }
 
   wnd = CreateWindowA("STATIC", "d3d9ref", WS_POPUP, 0, 0, w, h, NULL, NULL, NULL, NULL);
-  if (!(d3d = Direct3DCreate9(D3D_SDK_VERSION))) { fprintf(stderr, "Direct3DCreate9 failed (no X server?)\n"); return 1; }
+  if (dll) {
+    /* another Direct3D 9 (DXVK's, renamed): the loader would otherwise hand this Winelib program Wine's builtin d3d9 */
+    HMODULE m = LoadLibraryA(dll);
+    IDirect3D9 *(WINAPI *create)(UINT) = m ? (void *)GetProcAddress(m, "Direct3DCreate9") : NULL;
+    if (!create) { fprintf(stderr, "%s: no Direct3DCreate9\n", dll); return 1; }
+    d3d = create(D3D_SDK_VERSION);
+    if (!d3d) { fprintf(stderr, "%s: Direct3DCreate9 failed\n", dll); return 1; }
+  } else if (!(d3d = Direct3DCreate9(D3D_SDK_VERSION))) { fprintf(stderr, "Direct3DCreate9 failed (no X server?)\n"); return 1; }
   pp.BackBufferWidth = w; pp.BackBufferHeight = h; pp.BackBufferFormat = D3DFMT_X8R8G8B8;
   pp.BackBufferCount = 1; pp.SwapEffect = D3DSWAPEFFECT_DISCARD; pp.hDeviceWindow = wnd; pp.Windowed = TRUE;
   pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
@@ -99,7 +107,10 @@ int main(int argc, char **argv) {
   CHECK(IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1));
   CHECK(IDirect3DDevice9_BeginScene(dev));
   CHECK(IDirect3DDevice9_Clear(dev, 0, NULL, D3DCLEAR_TARGET, 0xffff00ff, 1, 0));
-  if (nc) CHECK(IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, consts, (nc + 3) / 4));
+  if (nc) {                                            /* the constants go to both stages */
+    CHECK(IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, consts, (nc + 3) / 4));
+    CHECK(IDirect3DDevice9_SetVertexShaderConstantF(dev, 0, consts, (nc + 3) / 4));
+  }
   if (tex) {
     /* D3D's bytes, B, G, R, A, first row first: red, green / blue, white */
     static const unsigned char t[16] = { 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255 };
