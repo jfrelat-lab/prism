@@ -34,6 +34,17 @@ const FMT = {
   115: ['RG32F', 'RG', 'FLOAT', 8, 'copy'],               // G32R32F
   116: ['RGBA32F', 'RGBA', 'FLOAT', 16, 'copy'],          // A32B32G32R32F
 };
+// a float as IEEE half bits (round to nearest even), for reading an F16 target back
+const f32h = new Float32Array(1), u32h = new Uint32Array(f32h.buffer);
+function half(v) {
+  f32h[0] = v; const x = u32h[0], sign = (x >>> 16) & 0x8000, e = (x >>> 23) & 255, m = x & 0x7fffff;
+  if (e === 255) return sign | 0x7c00 | (m ? 0x200 : 0);
+  const he = e - 112;
+  if (he >= 31) return sign | 0x7c00;
+  if (he <= 0) { if (he < -10) return sign; const mm = (m | 0x800000) >>> (1 - he); return sign | ((mm >>> 13) + ((mm >>> 12) & 1 && ((mm & 0x1fff) !== 0x1000 || (mm >>> 13) & 1) ? 1 : 0)); }
+  const r = (he << 10) | (m >>> 13), rest = m & 0x1fff;
+  return sign | (r + (rest > 0x1000 || (rest === 0x1000 && (r & 1)) ? 1 : 0));
+}
 const DEPTH_FMT = new Set([70, 71, 75, 77, 79, 80, 82, 83]);   // D15S1 D32 D24S8 D24X8 D24X4S4 D16 D32F_LOCKABLE D24FS8
 const USAGE_RENDERTARGET = 1, USAGE_DEPTHSTENCIL = 2, USAGE_AUTOGENMIPMAP = 0x400;
 
@@ -167,8 +178,10 @@ function createDevice(g, params, { floatRT, onPresent }) {
   // ---- state ----
   const rs = new Map(Object.entries(RS_DEFAULT).map(([k, v]) => [+k, v]));
   rs.set(RS.ZENABLE, autoDepth ? 1 : 0);
-  const samp = Array.from({ length: 16 }, () => SAMP_DEFAULT.slice());
-  const textures = new Array(16).fill(0);
+  // sampler slots: 0-15 the pixel shader's, 16-19 the vertex shader's (D3DVERTEXTEXTURESAMPLER0-3, 257-260); a slot is also its texture unit
+  const slot = (s) => (s >= 0 && s < 16 ? s : s >= 257 && s <= 260 ? s - 241 : fail(`sampler ${s}`));
+  const samp = Array.from({ length: 20 }, () => SAMP_DEFAULT.slice());
+  const textures = new Array(20).fill(0);
   const vsF = new Float32Array(256 * 4), psF = new Float32Array(224 * 4);
   const vsI = new Int32Array(16 * 4), psI = new Int32Array(16 * 4), vsB = new Int32Array(16), psB = new Int32Array(16);
   let rt = [backBuffer, 0, 0, 0], depthSurface = autoDepth;
@@ -212,21 +225,36 @@ function createDevice(g, params, { floatRT, onPresent }) {
     fvfLayouts.set(f, L);
     return L;
   }
-  // A sampler at D3DTADDRESS_BORDER, which WebGL lacks: its reads in the pixel shader go through a
-  // function that returns the border colour outside [0, 1] on that axis (the GL sampler clamps). Exact
-  // with point filtering; with linear, D3D also blends the border into the outermost half texel.
+  // What a sampler read must be made into, beyond GL's own read, per draw:
+  // - D3DTADDRESS_BORDER, which WebGL lacks: the border colour outside [0, 1] on that axis (the GL sampler
+  //   clamps). Exact with point filtering; with linear, D3D also blends the border into the outermost half texel.
+  // - the channels a format does not store, which D3D9 fills where GL gives 0: R16F/R32F read (r, 1, 1, 1),
+  //   G16R16F/G32R32F (r, g, 1, 1), L8 (l, l, l, 1), A8 (0, 0, 0, a), X8R8G8B8 (r, g, b, 1). WebGL has no
+  //   texture swizzle, so the shader does it.
+  // The reads of such a sampler go through a function; the program is built per combination.
   const BORDER = 4;
-  function withBorders(glsl, mask) {
-    for (const [unit, u, v] of mask) {
+  const FILL = { 111: 'vec4(c.r, 1.0, 1.0, 1.0)', 114: 'vec4(c.r, 1.0, 1.0, 1.0)', 112: 'vec4(c.rg, 1.0, 1.0)', 115: 'vec4(c.rg, 1.0, 1.0)',
+    50: 'vec4(c.rrr, 1.0)', 28: 'vec4(0.0, 0.0, 0.0, c.r)', 22: 'vec4(c.rgb, 1.0)' };
+  function adaptations(samplers, base) {
+    const out = [];
+    for (const sm of samplers) {
+      const sl = base + sm.index, st = samp[sl], t = textures[sl] ? objects.get(textures[sl]) : null;
+      const u = sm.dim === '2D' && st[1] === BORDER, v = sm.dim === '2D' && st[2] === BORDER, fill = sm.dim === '2D' && t ? FILL[t.format] : undefined;
+      if (u || v || fill) out.push({ index: sm.index, slot: sl, u, v, fill });
+    }
+    return out;
+  }
+  function adapt(glsl, prefix, list) {
+    for (const { index, u, v, fill } of list) {
       const out = [u && 'uv.x < 0.0 || uv.x > 1.0', v && 'uv.y < 0.0 || uv.y > 1.0'].filter(Boolean).join(' || ');
-      const fn = (name, args, call) => `vec4 ${name}${unit}(${args}) { vec4 c = ${call}; return (${out}) ? prism_bc${unit} : c; }`;
-      const s = `prism_s${unit}`;
+      const id = `${prefix}${index}`, s = `prism_${id}`;
+      const fn = (name, args, call) => `vec4 ${name}${id}(${args}) { vec4 c = ${call};${fill ? ` c = ${fill};` : ''} return ${out ? `(${out}) ? prism_bc${id} : c` : 'c'}; }`;
       // the reads first, then the functions (whose own reads must stay plain) after the sampler's declaration
-      for (const [call, name] of [['texture', 'bt'], ['textureLod', 'btl'], ['textureGrad', 'btg'], ['textureProj', 'btp']]) glsl = glsl.replace(new RegExp(`\\b${call}\\(${s}, `, 'g'), `prism_${name}${unit}(`);
-      glsl = glsl.replace(`uniform highp sampler2D ${s};`, (d) => [d, `uniform vec4 prism_bc${unit};`,
-        fn('prism_bt', 'vec2 uv', `texture(${s}, uv)`), fn('prism_bt', 'vec2 uv, float bias', `texture(${s}, uv, bias)`),
+      for (const [call, name] of [['texture', 'bt'], ['textureLod', 'btl'], ['textureGrad', 'btg'], ['textureProj', 'btp']]) glsl = glsl.replace(new RegExp(`\\b${call}\\(${s}, `, 'g'), `prism_${name}${id}(`);
+      glsl = glsl.replace(`uniform highp sampler2D ${s};`, (d) => [d, ...(out ? [`uniform vec4 prism_bc${id};`] : []),
+        fn('prism_bt', 'vec2 uv', `texture(${s}, uv)`), ...(prefix === 's' ? [fn('prism_bt', 'vec2 uv, float bias', `texture(${s}, uv, bias)`)] : []),
         fn('prism_btl', 'vec2 uv, float lod', `textureLod(${s}, uv, lod)`), fn('prism_btg', 'vec2 uv, vec2 dx, vec2 dy', `textureGrad(${s}, uv, dx, dy)`),
-        `vec4 prism_btp${unit}(vec3 q) { return prism_bt${unit}(q.xy / q.z); }`, `vec4 prism_btp${unit}(vec4 q) { return prism_bt${unit}(q.xy / q.w); }`].join('\n'));
+        `vec4 prism_btp${id}(vec3 q) { return prism_bt${id}(q.xy / q.z); }`, `vec4 prism_btp${id}(vec4 q) { return prism_bt${id}(q.xy / q.w); }`].join('\n'));
     }
     return glsl;
   }
@@ -238,17 +266,16 @@ function createDevice(g, params, { floatRT, onPresent }) {
   const programs = new Map();
   function program(vsObj, psObj, L) {
     if (!psObj) fail('drawing without a pixel shader (the fixed function\'s texture stages) is not supported yet');
-    const mask = psObj.samplers.filter((s) => s.dim === '2D' && (samp[s.index][1] === BORDER || samp[s.index][2] === BORDER))
-      .map((s) => [s.index, samp[s.index][1] === BORDER, samp[s.index][2] === BORDER]);
-    const key = `${vsObj ? objectsKey(vsObj) : `t${fvf}`}|${objectsKey(psObj)}|${mask.join(';')}`;
+    const psA = adaptations(psObj.samplers, 0), vsA = vsObj ? adaptations(vsObj.samplers, 16) : [];
+    const sig = (l) => l.map((x) => `${x.index}${x.u ? 'u' : ''}${x.v ? 'v' : ''}${x.fill ? textures[x.slot] && objects.get(textures[x.slot]).format : ''}`).join(',');
+    const key = `${vsObj ? objectsKey(vsObj) : `t${fvf}`}|${objectsKey(psObj)}|${sig(psA)}|${sig(vsA)}`;
     let p = programs.get(key);
     if (p) return p;
     let vsrc;
     if (vsObj) {
       // the vertex shader's register file apart from the pixel shader's; what the pixel shader reads and it does not write, zero
-      if (vsObj.samplers.length) fail('a vertex shader sampling a texture is not supported yet');
       const missing = psObj.inputs.filter((i) => !vsObj.outputs.some((o) => o.name === i.name));
-      vsrc = vsObj.glsl.replace(/\bprism_([cib])\b/g, 'prism_v$1')
+      vsrc = vsObj.glsl.replace(/\bprism_([cib])\b/g, 'prism_v$1').replace(/\bprism_s(\d+)\b/g, 'prism_vs$1')
         .replace('void main() {', [...missing.map((i) => `out vec4 ${i.name};`), 'void main() {', ...missing.map((i) => `  ${i.name} = vec4(0.0);`)].join('\n'));
     } else {
       if (!L.E.some((e) => e.usage === 'positiont')) fail(`FVF 0x${fvf.toString(16)} without a vertex shader: the fixed function's transform is not supported yet`);
@@ -267,8 +294,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
         '}', ''].join('\n');
     }
     const prog = g.createProgram();
+    if (vsA.length) vsrc = adapt(vsrc, 'vs', vsA);
     g.attachShader(prog, compile(g.VERTEX_SHADER, vsrc, vsObj ? 'vertex shader' : 'pretransformed vertex stage'));
-    g.attachShader(prog, mask.length ? compile(g.FRAGMENT_SHADER, withBorders(psObj.glsl, mask), 'pixel shader with border addressing') : psObj.sh);
+    g.attachShader(prog, psA.length ? compile(g.FRAGMENT_SHADER, adapt(psObj.glsl, 's', psA), 'pixel shader with its sampler reads adapted') : psObj.sh);
     // attributes by semantic: prism_a_<usage><index>, matched to the vertex elements at each draw
     const attrs = [...vsrc.matchAll(/^in vec4 prism_a_([a-z]+?)(\d+);$/gm)].map((m, loc) => ({ loc, usage: m[1], index: +m[2] }));
     for (const a of attrs) g.bindAttribLocation(prog, a.loc, `prism_a_${a.usage}${a.index}`);
@@ -276,7 +304,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
     const u = (n) => g.getUniformLocation(prog, n);
     p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
-      s: psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), bc: mask.map(([unit]) => [unit, u(`prism_bc${unit}`)]) };
+      s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])], bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
     programs.set(key, p);
     return p;
   }
@@ -289,7 +317,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     9: 'DST_COLOR', 10: 'ONE_MINUS_DST_COLOR', 11: 'SRC_ALPHA_SATURATE', 14: 'CONSTANT_COLOR', 15: 'ONE_MINUS_CONSTANT_COLOR' };
   const BLENDOP = { 1: 'FUNC_ADD', 2: 'FUNC_SUBTRACT', 3: 'FUNC_REVERSE_SUBTRACT', 4: 'MIN', 5: 'MAX' };
   const blend = (v) => g[BLEND[v] ?? fail(`blend factor ${v}`)];
-  const ADDRESS = { 1: 'REPEAT', 2: 'MIRRORED_REPEAT', 3: 'CLAMP_TO_EDGE', 4: 'CLAMP_TO_EDGE' };   // BORDER: see withBorders
+  const ADDRESS = { 1: 'REPEAT', 2: 'MIRRORED_REPEAT', 3: 'CLAMP_TO_EDGE', 4: 'CLAMP_TO_EDGE' };   // BORDER: see adapt
   const samplerObjs = [];
   function applyState() {
     g.bindFramebuffer(g.FRAMEBUFFER, framebuffer());
@@ -344,12 +372,20 @@ function createDevice(g, params, { floatRT, onPresent }) {
   // (Photon Race 2 ends each frame with 8192 such draws.)
   const allZero = (b) => { for (let i = 0; i < b.length; i++) if (b[i]) return false; return true; };
   let maxAttrib = 0;
-  function drawUP(type, primCount, bytes, stride, indexBytes = null, indexFmt = 0) {
+  // A buffer the program fills once and draws often stays in GL; the CPU copy serves LockRect-style reads and
+  // the D3DCOLOR swap, which a buffer holding colours still needs per draw.
+  function makeBuffer(kind, length) {
+    const buf = g.createBuffer(), target = kind === 'ib' ? g.ELEMENT_ARRAY_BUFFER : g.ARRAY_BUFFER;
+    g.bindVertexArray(null);
+    g.bindBuffer(target, buf); g.bufferData(target, length, g.DYNAMIC_DRAW);
+    return { kind, bytes: new Uint8Array(length), buf };
+  }
+  // v: { bytes } or { buf, base, first }; idx: null, { bytes, fmt } or { buf, offset, fmt }
+  function draw(type, primCount, stride, v, idx = null) {
     const L = fvfLayout(fvf);
     if (L.stride !== stride) fail(`stride ${stride} for FVF 0x${fvf.toString(16)} of ${L.stride} bytes`);
     const n = COUNT[type]?.(primCount) ?? fail(`primitive type ${type}`);
-    if (type >= 4 && !indexBytes && allZero(bytes.subarray(0, n * stride))) return;
-    bytes = swizzleColours(bytes, stride, L);
+    if (v.bytes && type >= 4 && !idx && allZero(v.bytes.subarray(0, n * stride))) return;
     const vsObj = vs ? get(vs, 'vertex') : null, psObj = ps ? get(ps, 'pixel') : null;
     applyState();
     // WebGL refuses a draw with a bound target the pixel shader writes nothing to; D3D leaves that target as it was
@@ -369,8 +405,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
     bindSamplers(p);
     for (const [unit, loc] of p.bc) { const c = samp[unit][4]; g.uniform4f(loc, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }
     g.bindVertexArray(vao);
-    g.bindBuffer(g.ARRAY_BUFFER, vbo);
-    g.bufferData(g.ARRAY_BUFFER, bytes, g.STREAM_DRAW);
+    let base = 0;
+    if (v.bytes) { g.bindBuffer(g.ARRAY_BUFFER, vbo); g.bufferData(g.ARRAY_BUFFER, swizzleColours(v.bytes, stride, L), g.STREAM_DRAW); }
+    else { g.bindBuffer(g.ARRAY_BUFFER, v.buf); base = v.base; }
     for (let k = 0; k < maxAttrib; k++) g.disableVertexAttribArray(k);
     maxAttrib = p.attrs.length;
     for (const a of p.attrs) {
@@ -378,13 +415,12 @@ function createDevice(g, params, { floatRT, onPresent }) {
       // an input no element feeds: D3DCOLOR's defaults for the colours, (0, 0, 0, 1) otherwise
       if (!e) { g.vertexAttrib4f(a.loc, ...(a.usage === 'color' ? (a.index ? [0, 0, 0, 0] : [1, 1, 1, 1]) : [0, 0, 0, 1])); continue; }
       g.enableVertexAttribArray(a.loc);
-      g.vertexAttribPointer(a.loc, e.size, e.color ? g.UNSIGNED_BYTE : g.FLOAT, e.color, stride, e.off);
+      g.vertexAttribPointer(a.loc, e.size, e.color ? g.UNSIGNED_BYTE : g.FLOAT, e.color, stride, base + e.off);
     }
-    if (indexBytes) {
-      g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo);
-      g.bufferData(g.ELEMENT_ARRAY_BUFFER, indexBytes, g.STREAM_DRAW);
-      g.drawElements(g[MODE[type]], n, indexFmt === 102 ? g.UNSIGNED_INT : g.UNSIGNED_SHORT, 0);
-    } else g.drawArrays(g[MODE[type]], 0, n);
+    if (idx) {
+      if (idx.bytes) { g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo); g.bufferData(g.ELEMENT_ARRAY_BUFFER, idx.bytes, g.STREAM_DRAW); } else g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, idx.buf);
+      g.drawElements(g[MODE[type]], n, idx.fmt === 102 ? g.UNSIGNED_INT : g.UNSIGNED_SHORT, idx.offset ?? 0);
+    } else g.drawArrays(g[MODE[type]], v.first ?? 0, n);
     g.bindVertexArray(null);
   }
   // D3DCOLOR's B,G,R,A bytes as GL's R,G,B,A: swapped in a copy of the vertices.
@@ -454,8 +490,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
     // state
     setRenderState: (state, value) => { rs.set(state, value >>> 0); return OK; },
     getRenderState: (state) => rs.get(state) ?? 0,
-    setSamplerState: (s, type, value) => { (samp[s] ?? fail(`sampler ${s}`))[type] = value >>> 0; return OK; },
-    getSamplerState: (s, type) => samp[s][type],
+    setSamplerState: (s, type, value) => { samp[slot(s)][type] = value >>> 0; return OK; },
+    getSamplerState: (s, type) => samp[slot(s)][type],
     setTextureStageState: () => OK,                          // the fixed function's stages: not drawn yet
     setTransform: () => OK,
     setViewport: (v) => { viewport = { ...v }; return OK; },
@@ -483,29 +519,37 @@ function createDevice(g, params, { floatRT, onPresent }) {
     setVertexDeclaration: (h) => { if (h) fail('vertex declarations are not supported yet'); decl = 0; return OK; },
 
     // buffers
-    createVertexBuffer: (length) => add({ kind: 'vb', bytes: new Uint8Array(length) }),
-    createIndexBuffer: (length, usage, format) => add({ kind: 'ib', bytes: new Uint8Array(length), format }),
-    bufferWrite: (h, offset, bytes) => { const b = objects.get(h); b.bytes.set(bytes, offset); return OK; },
+    createVertexBuffer: (length) => add(makeBuffer('vb', length)),
+    createIndexBuffer: (length, usage, format) => add({ ...makeBuffer('ib', length), format }),
+    bufferWrite: (h, offset, bytes) => {
+      const b = objects.get(h);
+      b.bytes.set(bytes, offset);
+      g.bindVertexArray(null);
+      const target = b.kind === 'ib' ? g.ELEMENT_ARRAY_BUFFER : g.ARRAY_BUFFER;
+      g.bindBuffer(target, b.buf); g.bufferSubData(target, offset, bytes);
+      return OK;
+    },
     setStreamSource: (stream, h, offset, stride) => { streams[stream] = { vb: h, offset, stride }; return OK; },
     setIndices: (h) => { indices = h; return OK; },
 
     // draws
-    drawPrimitiveUP: (type, primCount, bytes, stride) => { drawUP(type, primCount, bytes, stride); return OK; },
+    drawPrimitiveUP: (type, primCount, bytes, stride) => { draw(type, primCount, stride, { bytes }); return OK; },
     drawIndexedPrimitiveUP: (type, minIndex, numVertices, primCount, indexBytes, indexFmt, bytes, stride) => {
-      drawUP(type, primCount, bytes, stride, indexBytes, indexFmt); return OK;
+      draw(type, primCount, stride, { bytes }, { bytes: indexBytes, fmt: indexFmt }); return OK;
     },
+    // from the buffers in GL; a vertex buffer holding D3DCOLORs goes up from its CPU copy, swapped
     drawPrimitive: (type, start, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb');
-      const n = COUNT[type](primCount);
-      const bytes = b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + n) * s.stride);
-      drawUP(type, primCount, bytes, s.stride); return OK;
+      if (fvfLayout(fvf).colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + COUNT[type](primCount)) * s.stride) });
+      else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset, first: start });
+      return OK;
     },
     drawIndexedPrimitive: (type, baseVertex, minIndex, numVertices, startIndex, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb'), ib = get(indices, 'ib');
-      const size = ib.format === 102 ? 4 : 2, n = COUNT[type](primCount);
-      const idx = ib.bytes.slice(startIndex * size, (startIndex + n) * size);
-      const bytes = b.bytes.subarray(s.offset + baseVertex * s.stride);
-      drawUP(type, primCount, bytes, s.stride, idx, ib.format); return OK;
+      const size = ib.format === 102 ? 4 : 2;
+      if (fvfLayout(fvf).colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + baseVertex * s.stride) }, { bytes: ib.bytes.slice(startIndex * size, (startIndex + COUNT[type](primCount)) * size), fmt: ib.format });
+      else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset + baseVertex * s.stride }, { buf: ib.buf, offset: startIndex * size, fmt: ib.format });
+      return OK;
     },
 
     // textures and surfaces
@@ -519,8 +563,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
       if (level === 0 && (t.usage & USAGE_AUTOGENMIPMAP)) g.generateMipmap(g.TEXTURE_2D);
       return OK;
     },
-    setTexture: (s, h) => { textures[s] = h; return OK; },
-    getTexture: (s) => textures[s],
+    setTexture: (s, h) => { textures[slot(s)] = h; return OK; },
+    getTexture: (s) => textures[slot(s)],
     getSurfaceLevel: (h, level) => get(h, 'texture').surfaces[level] ?? fail(`level ${level}`),
     getLevelCount: (h) => get(h, 'texture').levels,
     getLevelDesc: (h, level) => { const s = get(get(h, 'texture').surfaces[level], 'surface'); return { width: s.w, height: s.h, format: s.format }; },
@@ -550,7 +594,27 @@ function createDevice(g, params, { floatRT, onPresent }) {
       g.bindFramebuffer(g.FRAMEBUFFER, null);
       return OK;
     },
-    surfaceRead: () => fail('reading a render target back (LockRect) is not supported yet'),
+    // LockRect of a render target: its texels in D3D's layout for its format, row 0 (the top) first
+    surfaceRead: (h) => {
+      const sf = get(h, 'surface');
+      if (!sf.tex) fail('reading a depth surface back is not supported');
+      const f = sf.tex.f, w = sf.w, ht = sf.h;
+      const save = [rt, depthSurface]; rt = [h, 0, 0, 0]; depthSurface = 0; const fb = framebuffer(); [rt, depthSurface] = save;
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, fb); g.readBuffer(g.COLOR_ATTACHMENT0);
+      const isFloat = f[2] !== 'UNSIGNED_BYTE';
+      const px = isFloat ? new Float32Array(w * ht * 4) : new Uint8Array(w * ht * 4);
+      g.readPixels(0, 0, w, ht, g.RGBA, isFloat ? g.FLOAT : g.UNSIGNED_BYTE, px);
+      g.bindFramebuffer(g.READ_FRAMEBUFFER, null);
+      const comps = { RGBA: 4, RG: 2, RED: 1 }[f[1]], pitch = w * f[3], out = new Uint8Array(pitch * ht), dv = new DataView(out.buffer);
+      for (let i = 0; i < w * ht; i++) {
+        if (!isFloat) {
+          if (f[4] === 'bgra' || f[4] === 'bgrx') { out[4 * i] = px[4 * i + 2]; out[4 * i + 1] = px[4 * i + 1]; out[4 * i + 2] = px[4 * i]; out[4 * i + 3] = f[4] === 'bgrx' ? 255 : px[4 * i + 3]; }
+          else for (let c = 0; c < comps; c++) out[comps * i + c] = px[4 * i + c];
+        } else if (f[2] === 'FLOAT') for (let c = 0; c < comps; c++) dv.setFloat32((comps * i + c) * 4, px[4 * i + c], true);
+        else for (let c = 0; c < comps; c++) dv.setUint16((comps * i + c) * 2, half(px[4 * i + c]), true);
+      }
+      return { bytes: out, pitch };
+    },
     release: (h) => {
       const o = objects.get(h);
       if (!o) return OK;

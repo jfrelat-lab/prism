@@ -29,6 +29,8 @@ const CHROME = process.env.PRISM_CHROME || ['/Applications/Google Chrome.app/Con
 if (!CHROME) skip('no Chrome for the WebGL2 part', 'install Google Chrome, or PRISM_CHROME=<path to a Chrome or Chromium>');
 
 const N = 8;
+const halfBits = (v) => { const f = new Float32Array([v]), x = new Uint32Array(f.buffer)[0], sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 255) - 112, m = x & 0x7fffff;
+  if (e >= 31) return sign | 0x7c00; if (e <= 0) return sign; const r = (e << 10) | (m >>> 13), rest = m & 0x1fff; return sign | (r + (rest > 0x1000 || (rest === 0x1000 && (r & 1)) ? 1 : 0)); };
 // M's rows, and its registers packed column-major as fxc packs a float4x4: register k is column k.
 const M = [[0.2, 0.3, 0.4, 0.5], [0.6, 0.7, 0.8, 0.9], [0.1, 0.15, 0.25, 0.35], [0.45, 0.55, 0.65, 0.75]];
 const cols = [0, 1, 2, 3].flatMap((k) => M.map((row) => row[k]));
@@ -74,6 +76,57 @@ const cases = [
     src: 'sampler s;float4 m(float2 v:vpos):color{return tex2D(s,(v+.5)/4-.5);}', texture: tex, border: 0x80402010,
     asm: 'ps_3_0\ndef c0, 0.5, 0.25, -0.5, 0\ndcl_2d s0\nadd r0.xy, vPos, c0.x\nmad r0.xy, r0, c0.y, c0.z\ntexld r0, r0, s0\nmov oC0, r0\n',
     want: (x, y) => (x < 2 || x > 5 || y < 2 || y > 5 ? [0x40 / 255, 0x20 / 255, 0x10 / 255, 1] : y < 4 ? (x < 4 ? [1, 0, 0, 1] : [0, 1, 0, 1]) : (x < 4 ? [0, 0, 1, 1] : [1, 1, 1, 1])) },
+  // Cases with a `script`: its body runs in the page with (dev, back, quad, clip, makeBlob, N, half) inside a
+  // scene on the back buffer; `want` then holds the pixels, or `expect` the value the script returns.
+  { name: 'a vertex shader reading a texture (D3DVERTEXTEXTURESAMPLER0, R16F, which D3D9 reads as (r, 1, 1, 1)), interpolated',
+    script: `
+      const t = dev.createTexture(2, 2, 1, 0, 111);                   // R16F: 0.25, 0.5 / 0.75, 1.0, first row first
+      dev.textureWrite(t, 0, null, new Uint8Array(new Uint16Array([0.25, 0.5, 0.75, 1].map(half)).buffer), 4);
+      dev.setTexture(257, t); dev.setSamplerState(257, 1, 3); dev.setSamplerState(257, 2, 3);   // CLAMP
+      dev.setVertexShader(dev.createVertexShader(makeBlob('vs_3_0', 'v', 'sampler2D h:register(s0);struct V{float4 p:POSITION;float4 c:TEXCOORD0;};V v(float4 p:POSITION){V o;o.p=p;o.c=tex2Dlod(h,float4(p.x*.5+.5,.5-p.y*.5,0,0));return o;}')));
+      dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', 'float4 m(float4 c:TEXCOORD0):color{return c;}')));
+      dev.setFVF(2); dev.drawPrimitiveUP(5, 2, clip, 12);
+      dev.setTexture(257, 0);`,
+    // the corners read the texels (top-left 0.25, top-right 0.5, bottom-left 0.75, bottom-right 1), a plane in between
+    want: (x, y) => [0.25 + 0.25 * x / N + 0.5 * y / N, 1, 1, 1] },
+  { name: 'surfaceRead (LockRect of a render target): A32B32G32R32F as floats, A16B16G16R16F as halves, A8R8G8B8 as B, G, R, A',
+    script: `
+      const out = {};
+      dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', 'float4 m(float2 v:vpos):color{return v.x<.5?float4(-3,1024,-2.5,.125):float4(997,-.0625,6e4,1.125);}')));
+      for (const fmt of [116, 113]) {
+        const rt = dev.createRenderTarget(2, 1, fmt, 0, 0, 1);
+        dev.setRenderTarget(0, rt);
+        dev.drawPrimitiveUP(5, 2, new Uint8Array(new Float32Array([-.5, -.5, 0, 1, 0, 0, 1.5, -.5, 0, 1, 1, 0, -.5, .5, 0, 1, 0, 1, 1.5, .5, 0, 1, 1, 1]).buffer), 24);
+        const r = dev.surfaceRead(rt);
+        out[fmt] = { pitch: r.pitch, v: Array.from(fmt === 116 ? new Float32Array(r.bytes.buffer) : new Uint16Array(r.bytes.buffer)) };
+      }
+      const rt = dev.createRenderTarget(1, 1, 21, 0, 0, 1);
+      dev.setRenderTarget(0, rt);
+      dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', 'float4 m():color{return float4(1,.5,0,.25);}')));
+      dev.drawPrimitiveUP(5, 2, new Uint8Array(new Float32Array([-.5, -.5, 0, 1, 0, 0, .5, -.5, 0, 1, 1, 0, -.5, .5, 0, 1, 0, 1, .5, .5, 0, 1, 1, 1]).buffer), 24);
+      const r = dev.surfaceRead(rt);
+      out[21] = { pitch: r.pitch, v: Array.from(r.bytes) };
+      dev.setRenderTarget(0, back);
+      return out;`,
+    expect: (o) => {
+      const h = (v) => halfBits(v);
+      const want = { 116: { pitch: 32, v: [-3, 1024, -2.5, 0.125, 997, -0.0625, 60000, 1.125] }, 113: { pitch: 16, v: [-3, 1024, -2.5, 0.125, 997, -0.0625, 60000, 1.125].map(h) } };
+      for (const f of [116, 113]) if (JSON.stringify(o[f]) !== JSON.stringify(want[f])) return `format ${f}: got ${JSON.stringify(o[f])} want ${JSON.stringify(want[f])}`;
+      const b = o[21].v;
+      if (o[21].pitch !== 4 || b[0] !== 0 || Math.abs(b[1] - 128) > 1 || b[2] !== 255 || Math.abs(b[3] - 64) > 1) return `A8R8G8B8: got ${JSON.stringify(o[21])}, want pitch 4 and bytes 0, 128, 255, 64 (B, G, R, A)`;
+      return '';
+    } },
+  { name: 'drawIndexedPrimitive from buffers kept in GL: 32-bit indices, baseVertex and startIndex, a partial bufferWrite after the first',
+    script: `
+      const vb = dev.createVertexBuffer(5 * 24, 0, 0x104, 0), ib = dev.createIndexBuffer(9 * 4, 0, 102, 0);
+      // a vertex before the quad (baseVertex 1), three indices before its six (startIndex 3)
+      dev.bufferWrite(vb, 0, new Uint8Array(new Float32Array([9, 9, 0, 1, 0, 0,  0, 0, 0, 1, 0, 0,  1, 0, 0, 1, 1, 0,  0, 1, 0, 1, 0, 1,  1, 1, 0, 1, 1, 1]).buffer));
+      dev.bufferWrite(vb, 24, new Uint8Array(new Float32Array([-.5, -.5, 0, 1, 0, 0, N - .5, -.5, 0, 1, 1, 0, -.5, N - .5, 0, 1, 0, 1, N - .5, N - .5, 0, 1, 1, 1]).buffer));
+      dev.bufferWrite(ib, 0, new Uint8Array(new Uint32Array([7, 7, 7, 0, 1, 2, 2, 1, 3]).buffer));
+      dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', 'float4 m(float2 t:TEXCOORD0):color{return float4(t,0,1);}')));
+      dev.setFVF(0x104); dev.setStreamSource(0, vb, 0, 24); dev.setIndices(ib);
+      dev.drawIndexedPrimitive(4, 1, 0, 4, 3, 2);`,
+    want: (x, y) => [(x + 0.5) / N, (y + 0.5) / N, 0, 1] },
   { name: 'a loop with a float counter, a comma step, an assignment in its condition (cdak\'s style), a function returning float',
     src: 'float f(float x){return x-.25;}float4 m():color{float i,a,z=0;for(i=0;i<8&&abs(a=f(i*.1))>.01;i++,z+=.125);return float4(z,a+.5,i/8,1);}',
     want: () => [1, 0.95, 1, 1] },
@@ -121,7 +174,8 @@ const page = `<!doctype html><canvas id="c" width="${N}" height="${N}"></canvas>
 <script type="module">
 import { createD3D9 } from '/src/env/d3d9.js';
 import { makeBlob } from '/src/env/hlsl.js';
-const cases = ${JSON.stringify(cases.map(({ want, ...k }) => k))};
+const cases = ${JSON.stringify(cases.map(({ want, expect, ...k }) => k))};
+const half = (v) => { const f = new Float32Array([v]), x = new Uint32Array(f.buffer)[0], sign = (x >>> 16) & 0x8000, e = ((x >>> 23) & 255) - 112, m = x & 0x7fffff; if (e >= 31) return sign | 0x7c00; if (e <= 0) return sign; const r = (e << 10) | (m >>> 13), rest = m & 0x1fff; return sign | (r + (rest > 0x1000 || (rest === 0x1000 && (r & 1)) ? 1 : 0)); };
 const out = {};
 const gl = document.getElementById('c').getContext('webgl2', { antialias: false, preserveDrawingBuffer: true });
 const d3d = createD3D9({ gl });
@@ -133,6 +187,16 @@ const quad = new Uint8Array(new Float32Array([-.5, -.5, 0, 1, 0, 0, ${N - 0.5}, 
 const clip = new Uint8Array(new Float32Array([-1, 1, .5, 1, 1, .5, -1, -1, .5, 1, -1, .5]).buffer);
 for (const k of cases) {
   try {
+    if (k.script) {
+      dev.beginScene(); dev.setRenderTarget(0, back); dev.clear(null, 1, 0, 1, 0);
+      const value = new Function('dev', 'back', 'quad', 'clip', 'makeBlob', 'N', 'half', k.script)(dev, back, quad, clip, makeBlob, ${N}, half);
+      dev.endScene(); dev.present();
+      dev.setVertexShader(0); dev.setFVF(0x104);
+      const px = new Uint8Array(${N * N * 4});
+      gl.readPixels(0, 0, ${N}, ${N}, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      out[k.name] = { pixels: Array.from(px), value };
+      continue;
+    }
     dev.setFVF(0x104);                                       // XYZRHW | TEX1
     dev.beginScene();
     dev.setRenderTarget(0, back);
@@ -201,6 +265,7 @@ if (!res) { check(false, 'the WebGL2 page ran', m ? m[1].slice(0, 200) : 'no out
 for (const k of cases) {
   const r = res[k.name];
   if (!r || r.error) { check(false, k.name, r ? r.error : 'not run'); continue; }
+  if (k.expect) { const why = k.expect(r.value); check(!why, k.name, why); continue; }
   // the canvas read back bottom row first: D3D's row y is the canvas's row N - 1 - y
   let worst = 0, at = '';
   for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {

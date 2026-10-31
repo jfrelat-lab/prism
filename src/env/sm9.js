@@ -245,7 +245,7 @@ export function translateBytecode(tokens) {
       case 'dsx': write(`dFdx(${s(0)})`); break;
       case 'dsy': write(`dFdy(${s(0)})`); break;                                   // D3D's rows are kept, so +y is down in both
       case 'texld': case 'texldl': case 'texldd': {
-        if (stage === 'vs') fail(`${profile}: texture reads in a vertex shader are not supported yet`);
+        if (stage === 'vs' && op !== 'texldl') fail(`${profile}: ${op} in a vertex shader (only texldl reads a texture there)`);
         const n = S[1].num, dim = samplerDim.get(n) ?? (major < 3 ? '2D' : fail(`s${n} without dcl`));
         samplers.set(n, dim);
         const sm = `prism_s${n}`, c = s(0), xy = dim === '2D' ? 'xy' : 'xyz';
