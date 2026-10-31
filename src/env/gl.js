@@ -714,7 +714,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const genMode = (caps, g, k) => (caps.has(0x0c60 + k) ? (g[k].mode === 0x2401 ? 1 : g[k].mode === 0x2402 ? 2 : 3) : 0);
   // Each primitive's triangles as index triples, the provoking vertex last (WebGL's flat varyings take it).
   // A quad is cut as assemble() cuts it: along 0-2 from arrays, along 1-3 in immediate mode.
-  function triangleIndices(mode, el, flat, fromArrays = true) {
+  // cut02: a quad cut along its 0-2 diagonal (see assemble).
+  function triangleIndices(mode, el, flat, cut02 = true) {
     const n = el.length, out = [];
     const t = (a, b, c) => { out.push(el[a], el[b], el[c]); };
     switch (mode) {
@@ -722,7 +723,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       case 5: for (let i = 0; i + 2 < n; i++) (i & 1) ? t(i + 1, i, i + 2) : t(i, i + 1, i + 2); break;
       case 6: for (let i = 1; i + 1 < n; i++) t(0, i, i + 1); break;
       case 7:
-        if (fromArrays) for (let i = 0; i + 3 < n; i += 4) { t(i, i + 1, i + 2); t(i, i + 2, i + 3); }
+        if (cut02) for (let i = 0; i + 3 < n; i += 4) { t(i, i + 1, i + 2); t(i, i + 2, i + 3); }
         else for (let i = 0; i + 3 < n; i += 4) { t(i, i + 1, i + 3); t(i + 1, i + 2, i + 3); }
         break;
       case 8: for (let i = 0; i + 3 < n; i += 2) { t(i, i + 1, i + 3); flat ? t(i + 2, i, i + 3) : t(i, i + 3, i + 2); } break;
@@ -825,7 +826,19 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const flat = s.shade === FLAT, n = recN;
     recN = 0;
     if ((flat && mode === 7 && s.fromArrays) || recFar) { recN = n; recFar = false; replayRecorded(); assemble(mode, s.verts); s.verts = []; return; }
-    const tri = triangleIndices(mode, Array.from({ length: n }, (_, i) => i), flat, !!s.fromArrays);
+    // A quad's diagonal follows clipping, as assemble's does: the recorded vertices transformed to ask.
+    // Flat, both triangles take the fourth vertex's colour whichever the diagonal: cut along 1-3, so
+    // that each ends with it.
+    let cut02 = !!s.fromArrays;
+    if (mode === 7 && !cut02 && !flat) {
+      const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
+      cut02 = true;
+      for (let i = 0, o = 0; i < n && cut02; i++, o += REC) {
+        const eye = xform(mv, rec[o], rec[o + 1], rec[o + 2], rec[o + 3]);
+        if (needsClip({ eye, clip: xform(pr, eye[0], eye[1], eye[2], eye[3]) })) cut02 = false;
+      }
+    }
+    const tri = triangleIndices(mode, Array.from({ length: n }, (_, i) => i), flat, cut02);
     if (!tri || !tri.length) return;
     const st = gpuState();
     webgl.primitive(st, `tnl${st.multi ? '-multi' : ''}${flat ? '-flat' : ''}`, tnlCached(), s.caps.has(CAP.CULL_FACE) ? [s.cullFace, s.frontFace] : null,
@@ -1193,7 +1206,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   /** A perspective-correct attribute from its value at the three vertices: attribute/w over 1/w. */
   const persp = (l0, l1, l2, iw, P, Q, R, aP, aQ, aR) => (l0 * aP * P.iw + l1 * aQ * Q.iw + l2 * aR * R.iw) / iw;
+  /*
+   * llvmpipe snaps a vertex to 1/256 of a pixel before it rasterises (lp_setup_tri: FIXED_ORDER 8,
+   * rounding half away from zero): 12.5000025, which -0.9f takes to on a 250-pixel viewport, is 12.5
+   * there, a centre on the edge -- whose pixel the fill rule then gives to the triangle.
+   */
+  const snap = (V) => { const r = (c) => (c >= 0 ? Math.floor(c * 256 + 0.5) : -Math.floor(-c * 256 + 0.5)) / 256; return { ...V, x: r(V.x), y: r(V.y) }; };
   function rasterTriangle(A, B, C, flatColour) {
+    A = snap(A); B = snap(B); C = snap(C);
     const area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
     if (area === 0) return;
     const [P, Q, R] = area > 0 ? [A, B, C] : [A, C, B];
@@ -1206,9 +1226,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const x0 = Math.max(bx0, Math.floor(Math.min(P.x, Q.x, R.x))), x1 = Math.min(bx1, Math.ceil(Math.max(P.x, Q.x, R.x)));
     const y0 = Math.max(by0, Math.floor(Math.min(P.y, Q.y, R.y))), y1 = Math.min(by1, Math.ceil(Math.max(P.y, Q.y, R.y)));
     if (x1 < x0 || y1 < y0) return;                     // wholly outside the viewport: no pixel
-    // Top-left rule, in GL's bottom-up window space: an edge owns its pixels if it goes down
-    // (a left edge of a CCW triangle) or is horizontal going left (a top edge).
-    const owns = (u, v) => { const dy = v.y - u.y, dx = v.x - u.x; return dy < 0 || (dy === 0 && dx < 0); };
+    // The fill rule, in GL's bottom-up window space: an edge owns its pixels if it goes down (a left
+    // edge of a CCW triangle) or is horizontal going right (a BOTTOM edge) -- llvmpipe's top-left rule
+    // in a framebuffer object, whose first row is GL's bottom one.
+    const owns = (u, v) => { const dy = v.y - u.y, dx = v.x - u.x; return dy < 0 || (dy === 0 && dx > 0); };
     const eQR = owns(Q, R), eRP = owns(R, P), ePQ = owns(P, Q);
     // The edge functions (v.x - u.x) * (py - u.y) - (v.y - u.y) * (px - u.x), their constant
     // differences taken once. An edge two triangles share is walked u->v by one and v->u by the other;
@@ -1530,7 +1551,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // w = 1 that is the thin line's own pixel. WebGL's own lines are one pixel wide.
     const width = Math.max(1, Math.round(s.lineWidth));
     if (webgl && !stipple && width === 1) { webgl.line(seg[0], seg[1], noStipple(gpuState())); return; }
-    const A = toWindow(seg[0]), B = toWindow(seg[1]), ca = seg[0].colour, cb = seg[1].colour;
+    // Snapped as a triangle is (snap); the stipple, a stage of Mesa's draw module, is cut from the unsnapped ends.
+    const A0 = toWindow(seg[0]), B0 = toWindow(seg[1]), A = snap(A0), B = snap(B0), ca = seg[0].colour, cb = seg[1].colour;
     /*
      * GL 1.1 3.4.1's DIAMOND-EXIT rule, as Mesa (llvmpipe) draws it: a pixel is drawn when the segment
      * leaves the diamond |x - xc| + |y - yc| < 1/2 about its centre. Along the major axis that is each
@@ -1550,17 +1572,18 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      * the bit of the step its centre falls in. (Counting fragments instead shifts the pattern by one where
      * the first pixel's centre lies before the vertex.)
      */
-    const len = Math.abs(a1 - a0), steps = Math.ceil(len), counter0 = stippleAt;
+    const [r0, r1] = xMajor ? [A0.x, B0.x] : [A0.y, B0.y], len = Math.abs(r1 - r0), steps = Math.ceil(len), counter0 = stippleAt;
     if (stipple) stippleAt += steps;
     const forward = a1 >= a0;
     for (let q = lo; q <= hi; q++) {
       const m = forward ? q : lo + hi - q;
-      // The minor axis: the pixel whose centre is in [b - 1/2, b + 1/2) -- on a tie, the lower one, as Mesa.
-      const t = (m + 0.5 - a0) / (a1 - a0), bt = b0 + (b1 - b0) * t, n = Math.ceil(bt) - 1;
+      // The minor axis: the pixel whose centre is in [b - 1/2, b + 1/2); on a tie, as Mesa, the higher one
+      // where the minor coordinate grows with the major one, the lower one where it falls.
+      const t = (m + 0.5 - a0) / (a1 - a0), bt = b0 + (b1 - b0) * t, n = (b1 - b0) * (a1 - a0) > 0 ? Math.floor(bt) : Math.ceil(bt) - 1;
       const [x, y] = xMajor ? [m, n] : [n, m];
       if (inDiamond(B, x, y)) continue;                      // it ends inside: never left
       if (!(t >= 0 && t < 1) && !inDiamond(A, x, y)) continue;
-      if (stipple && !((stipple.pattern >> (Math.floor((counter0 + Math.min(steps - 1, Math.max(0, Math.floor(t * len)))) / stipple.factor) & 15)) & 1)) continue;
+      if (stipple && !((stipple.pattern >> (Math.floor((counter0 + Math.min(steps - 1, Math.max(0, Math.floor((m + 0.5 - r0) / (r1 - r0) * len)))) / stipple.factor) & 15)) & 1)) continue;
       const u = Math.min(Math.max(t, 0), 1), colour = ca.map((v, i) => v + (cb[i] - v) * u), z = A.z + (B.z - A.z) * u;
       const low = width === 1 ? n : Math.ceil(bt - width / 2 - 0.5);
       const [rx0, ry0] = xMajor ? [x, low] : [low, y], [rx1, ry1] = xMajor ? [x + 1, low + width] : [low + width, y + 1];
@@ -1591,6 +1614,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const q = [as(a), as(b), as(c)];
     for (let k = 0; k < 3; k++) if (edges & (1 << k)) { if (mode === LINE) line(q[k], q[(k + 1) % 3]); else point(q[k]); }
   }
+  const needsClip = (p) => { const [x, y, z, w] = p.clip; return x < -w || x > w || y < -w || y > w || z < -w || z > w || (anyUserPlane() && userPlanes().some((q) => dotEye(q, p) < 0)); };
   function assemble(mode, v) {
     const flat = s.shade === FLAT;
     const fill = s.polyMode[0] === FILL && s.polyMode[1] === FILL;
@@ -1604,12 +1628,16 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       case 0x0004: for (let i = 0; i + 2 < v.length; i += 3) tri(i, i + 1, i + 2, i + 2); break;
       case 0x0005: for (let i = 0; i + 2 < v.length; i++) (i & 1) ? tri(i + 1, i, i + 2, i + 2) : tri(i, i + 1, i + 2, i + 2); break;
       case 0x0006: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, i + 1); break;
-      // A quad is cut along its 1-3 diagonal, as Mesa's index generation (gallium u_indices) cuts it:
-      // the spec leaves the choice to the implementation, and it decides how four colours interpolate.
-      // From ARRAYS (glDrawArrays, glDrawElements) Mesa cuts along 0-2 instead: those go through
-      // gallium's u_indices as (0,1,2),(0,2,3); immediate mode is converted by vbo_exec to (0,1,3),(1,2,3).
+      /*
+       * Which diagonal cuts a quad decides how four colours interpolate, and the spec leaves it to the
+       * implementation. Mesa's llvmpipe cuts along 0-2, (0,1,2),(0,2,3), when it draws the quads itself
+       * -- from arrays (gallium's u_indices), and in immediate mode a draw none of whose vertices needs
+       * clipping; a draw with one that does (any view-volume plane, llvmpipe has no guard band, or a
+       * user plane) goes through its draw module's pipeline, which cuts along 1-3, (0,1,3),(1,2,3) --
+       * as every quad in selection and feedback does, those being stages of that pipeline.
+       */
       case 0x0007:
-        if (s.fromArrays) for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 2, i + 3, 3); tri(i, i + 2, i + 3, i + 3, 6); }
+        if (s.renderMode === RENDER && (s.fromArrays || !v.some(needsClip))) for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 2, i + 3, 3); tri(i, i + 2, i + 3, i + 3, 6); }
         else for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3, 5); tri(i + 1, i + 2, i + 3, i + 3, 3); }
         break;
       case 0x0008: for (let i = 0; i + 3 < v.length; i += 2) { tri(i, i + 1, i + 3, i + 3, 3); tri(i, i + 3, i + 2, i + 3, 6); } break;
