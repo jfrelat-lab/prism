@@ -61,7 +61,7 @@ is supplied in JavaScript underneath it. That platform covers:
 - DOS (DJGPP, Watcom, Borland C++ 2.0 with real 16-bit segmentation);
 - Allegro, X11, svgalib, SunOS, Win32 with Winsock;
 - SDL 1.2 and SDL 2, SDL_mixer, SDL_image;
-- OpenGL 1.x with GLU, GLUT, GLX and WGL, drawn through WebGL.
+- OpenGL 1.x with GLU, GLUT, GLEW, GLX and WGL, and desktop GLSL 1.10/1.20 shaders, drawn through WebGL.
 
 Nothing in a game's tree is edited. Build switches the tree already has are configuration, not
 modification.
@@ -92,7 +92,7 @@ Per-program status, and what each one is checked against, is in
 | **Doom**, **Heretic**, **Hexen**, **Hexen II** | play; Doom with its sound server as a second process |
 | **ScummVM** 0.6.1 and 0.10.0, thirteen engines | 3,000 of 3,000 frames and every audio buffer equal to a native g++ build, for each of 20 game demos |
 | **Keen Dreams** (16-bit Borland C++ and TASM) | plays; its screens are the shipped KDREAMS.EXE's under DOSBox-X |
-| **OpenDUNE**, **Jump 'n Bump**, **SDLPoP**, **OpenTyrian**, **Tux Racer**, **Cube**, **Chromium B.S.U.** | play; most are pinned to a reference build |
+| **OpenDUNE**, **Jump 'n Bump**, **SDLPoP**, **OpenTyrian**, **Tux Racer**, **Cube**, **Chromium B.S.U.**, **Neverball** | play; most are pinned to a reference build |
 | **Lua 5.4**, **PuTTY**, **SQLite**, Tcl 8.4 | their own test suites, or gcc's output |
 
 **What does not work yet:**
@@ -194,7 +194,9 @@ underneath it.
 **Why JavaScript and not WebAssembly?** Readable output, run by the browser's own JIT: one
 JavaScript function per C function, which is what makes a defect findable by reading. The choice is
 measured, not assumed: [the comparison page](https://prism-compiler.pages.dev/compare) sets PRISM
-against Emscripten, Cheerp and an emulated x86 build, on compile time, run time and size.
+beside Emscripten, Cheerp, a native build and an emulated x86 build -- what each supports (the
+others' cells from their own documentation), and for all but Cheerp the compile time, run time and
+size of the same six Benchmarks Game programs (`tools/bench-compare.mjs`).
 
 **Is it fast enough?** For these games, yes: about 9.5× slower than `clang -O2` with no optimiser
 yet, and Quake's own timedemo reports several hundred frames a second. See [How fast](#how-fast).

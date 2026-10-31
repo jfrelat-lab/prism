@@ -15,6 +15,7 @@
 // translateHLSL) or real SM2/SM3 bytecode (not yet: refused by name). With no vertex shader the
 // vertices must be pretransformed (XYZRHW); the fixed function's transform and lighting is not yet here.
 import { translateHLSL, blobHLSL, hlslConstants } from './hlsl.js';
+import { translateBytecode, bytecodeVersion } from './sm9.js';
 
 const OK = 0, D3DERR_NOTAVAILABLE = 0x8876086a | 0, D3DERR_INVALIDCALL = 0x8876086c | 0;
 const fail = (msg) => { throw new Error(`d3d9: ${msg}`); };
@@ -169,6 +170,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
   const samp = Array.from({ length: 16 }, () => SAMP_DEFAULT.slice());
   const textures = new Array(16).fill(0);
   const vsF = new Float32Array(256 * 4), psF = new Float32Array(224 * 4);
+  const vsI = new Int32Array(16 * 4), psI = new Int32Array(16 * 4), vsB = new Int32Array(16), psB = new Int32Array(16);
   let rt = [backBuffer, 0, 0, 0], depthSurface = autoDepth;
   let viewport = { x: 0, y: 0, width: W, height: H, minZ: 0, maxZ: 1 }, scissor = [0, 0, W, H];
   let fvf = 0, decl = 0, vs = 0, ps = 0, inScene = false;
@@ -177,13 +179,14 @@ function createDevice(g, params, { floatRT, onPresent }) {
 
   // ---- shaders ----
   function makeShader(tokens, type) {
-    const h = blobHLSL(tokens);
-    if (!h) fail(`${type} shader bytecode (version 0x${(tokens[0] >>> 0).toString(16)}) is not supported yet, only the HLSL blob`);
-    if ((h.profile[0] === 'p') !== (type === 'pixel')) fail(`a ${h.profile} blob given as a ${type} shader`);
-    const t = translateHLSL(h.source, h.entry, h.profile);
+    // the HLSL source D3DXCompileShader's caller was handed (hlsl.js), or real shader bytecode (sm9.js)
+    const h = blobHLSL(tokens), v = h ? null : bytecodeVersion(tokens);
+    const profile = h ? h.profile : v ? `${v.stage}_${v.major}_${v.minor}` : fail(`${type} shader: version token 0x${(tokens[0] >>> 0).toString(16)}`);
+    if ((profile[0] === 'p') !== (type === 'pixel')) fail(`a ${profile} shader given as a ${type} shader`);
+    const t = h ? translateHLSL(h.source, h.entry, h.profile) : translateBytecode(tokens);
     const sh = g.createShader(type === 'pixel' ? g.FRAGMENT_SHADER : g.VERTEX_SHADER);
     g.shaderSource(sh, t.glsl); g.compileShader(sh);
-    if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${h.profile} ${h.entry}: ${g.getShaderInfoLog(sh)}\n${t.glsl}`);
+    if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${profile}${h ? ` ${h.entry}` : ''}: ${g.getShaderInfoLog(sh)}\n${t.glsl}`);
     return { kind: type, sh, ...t };
   }
   // An FVF as vertex elements { off, size, color, usage, index } (usage as the HLSL semantic's name,
@@ -245,7 +248,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
       // the vertex shader's register file apart from the pixel shader's; what the pixel shader reads and it does not write, zero
       if (vsObj.samplers.length) fail('a vertex shader sampling a texture is not supported yet');
       const missing = psObj.inputs.filter((i) => !vsObj.outputs.some((o) => o.name === i.name));
-      vsrc = vsObj.glsl.replace(/\bprism_c\b/g, 'prism_vc')
+      vsrc = vsObj.glsl.replace(/\bprism_([cib])\b/g, 'prism_v$1')
         .replace('void main() {', [...missing.map((i) => `out vec4 ${i.name};`), 'void main() {', ...missing.map((i) => `  ${i.name} = vec4(0.0);`)].join('\n'));
     } else {
       if (!L.E.some((e) => e.usage === 'positiont')) fail(`FVF 0x${fvf.toString(16)} without a vertex shader: the fixed function's transform is not supported yet`);
@@ -272,7 +275,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     g.linkProgram(prog);
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
     const u = (n) => g.getUniformLocation(prog, n);
-    p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
+    p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
       s: psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), bc: mask.map(([unit]) => [unit, u(`prism_bc${unit}`)]) };
     programs.set(key, p);
     return p;
@@ -355,6 +358,10 @@ function createDevice(g, params, { floatRT, onPresent }) {
     g.useProgram(p.prog);
     if (p.c) g.uniform4fv(p.c, psF);
     if (p.vc) g.uniform4fv(p.vc, vsF);
+    if (p.i) g.uniform4iv(p.i, psI);
+    if (p.vi) g.uniform4iv(p.vi, vsI);
+    if (p.b) g.uniform1iv(p.b, psB);
+    if (p.vb) g.uniform1iv(p.vb, vsB);
     // D3D9's clip space to GL's (hlsl.js): the rows kept, so y negated, and pixel centres half a pixel off GL's
     if (p.posFix) g.uniform4f(p.posFix, 1, -1, 1 / viewport.width, 1 / viewport.height);
     if (p.vp) g.uniform4f(p.vp, viewport.x, viewport.y, viewport.width, viewport.height);
@@ -464,10 +471,10 @@ function createDevice(g, params, { floatRT, onPresent }) {
     getPixelShader: () => ps,
     setVertexShaderConstantF: (start, v) => { vsF.set(v.subarray(0, Math.min(v.length, vsF.length - 4 * start)), 4 * start); return OK; },
     setPixelShaderConstantF: (start, v) => { psF.set(v.subarray(0, Math.min(v.length, psF.length - 4 * start)), 4 * start); return OK; },
-    setVertexShaderConstantI: () => fail('SetVertexShaderConstantI is not supported yet'),
-    setPixelShaderConstantI: () => fail('SetPixelShaderConstantI is not supported yet'),
-    setVertexShaderConstantB: () => fail('SetVertexShaderConstantB is not supported yet'),
-    setPixelShaderConstantB: () => fail('SetPixelShaderConstantB is not supported yet'),
+    setVertexShaderConstantI: (start, v) => { vsI.set(v.subarray(0, Math.min(v.length, vsI.length - 4 * start)), 4 * start); return OK; },
+    setPixelShaderConstantI: (start, v) => { psI.set(v.subarray(0, Math.min(v.length, psI.length - 4 * start)), 4 * start); return OK; },
+    setVertexShaderConstantB: (start, v) => { vsB.set(v.subarray(0, Math.min(v.length, vsB.length - start)), start); return OK; },
+    setPixelShaderConstantB: (start, v) => { psB.set(v.subarray(0, Math.min(v.length, psB.length - start)), start); return OK; },
 
     // vertex input
     setFVF: (f) => { fvf = f >>> 0; decl = 0; return OK; },

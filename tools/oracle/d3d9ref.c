@@ -1,7 +1,7 @@
 /* d3d9ref.c -- the Direct3D 9 reference for src/env/d3d9.js: Wine's d3d9 (wined3d on Mesa llvmpipe),
  * run in the oracle container under Xvfb by tools/gate-hlsl.mjs --capture-wine.
  *
- *   d3d9ref [-tex] [-border AARRGGBB] [-first first.asm | -mrt first.asm] [-vs vs.asm] ps.asm out.rgba w h [c0.x ... (ps constants)]
+ *   d3d9ref [-dump] [-tex] [-border AARRGGBB] [-first first.asm | -mrt first.asm] [-vs vs.asm] ps.asm out.rgba w h [c0.x ... (ps constants)]
  *
  * Draws what gate-hlsl draws, through the real API: a full-screen quad of pretransformed vertices
  * on a w x h X8R8G8B8 back buffer. -tex binds a 2x2 A8R8G8B8 texture (red, green / blue, white, its
@@ -22,6 +22,7 @@
 #define CHECK(x) do { HRESULT hr_ = (x); if (FAILED(hr_)) { fprintf(stderr, "%s: 0x%08lx\n", #x, (unsigned long)hr_); exit(1); } } while (0)
 
 static IDirect3DDevice9 *dev;
+static int dump;                                     /* -dump: each shader's bytecode beside its source, <file>.bin */
 
 static ID3DXBuffer *assemble(const char *path) {
   FILE *f = fopen(path, "rb");
@@ -34,6 +35,14 @@ static ID3DXBuffer *assemble(const char *path) {
   if (FAILED(D3DXAssembleShader(s, n, NULL, NULL, 0, &code, &errs))) {
     fprintf(stderr, "%s: %s\n", path, errs ? (char *)ID3DXBuffer_GetBufferPointer(errs) : "?");
     exit(1);
+  }
+  if (dump) {
+    char name[512];
+    FILE *o;
+    snprintf(name, sizeof name, "%s.bin", path);
+    if (!(o = fopen(name, "wb"))) { fprintf(stderr, "cannot write %s\n", name); exit(1); }
+    fwrite(ID3DXBuffer_GetBufferPointer(code), 1, ID3DXBuffer_GetBufferSize(code), o);
+    fclose(o);
   }
   return code;
 }
@@ -65,6 +74,7 @@ int main(int argc, char **argv) {
 
   for (; a < argc && argv[a][0] == '-'; a++) {
     if (!strcmp(argv[a], "-tex")) tex = 1;
+    else if (!strcmp(argv[a], "-dump")) dump = 1;
     else if (!strcmp(argv[a], "-first") && a + 1 < argc) first = argv[++a];
     else if (!strcmp(argv[a], "-mrt") && a + 1 < argc) { first = argv[++a]; mrt = 1; }
     else if (!strcmp(argv[a], "-vs") && a + 1 < argc) vsfile = argv[++a];

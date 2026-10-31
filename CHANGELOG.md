@@ -10,8 +10,11 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
 - **More of OpenGL and GLU**: picking objects with the mouse (selection) and feedback, spotlights and
   the local viewer, and GLU's tessellator, which cuts any outline -- concave, with holes -- into
   triangles (GLU 9's own code). Edges and quads are now rasterised to the pixel as Mesa's software
-  renderer does. Of the OpenGL Red Book's 63 examples, 52 now draw what Mesa draws; of GLUT's 54
-  examples, 32, among them the dinosaur and puzzle demos.
+  renderer does. GLEW's header is there for programs that load their extensions through it. Of the
+  OpenGL Red Book's 63 examples, 52 now draw what Mesa draws; of GLUT's 54 examples, 35, among them
+  the dinosaur and puzzle demos.
+- **A program that copies its frame into a texture every frame no longer freezes the page**: the copy
+  and its mipmaps stay on the graphics card (seen in Waillee, 2017, which stopped after some 120 frames).
 
 ## 2026-10-30
 
