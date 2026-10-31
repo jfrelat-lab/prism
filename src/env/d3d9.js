@@ -120,7 +120,17 @@ function createDevice(g, params, { floatRT, onPresent }) {
     const rb = g.createRenderbuffer();
     g.bindRenderbuffer(g.RENDERBUFFER, rb);
     g.renderbufferStorage(g.RENDERBUFFER, g.DEPTH24_STENCIL8, w, h);
-    return { kind: 'surface', depth: rb, w, h };
+    return { kind: 'surface', depth: rb, w, h, sized: new Map() };
+  }
+  // D3D9 draws into a render target smaller than the depth buffer through the depth buffer's top-left
+  // corner; WebGL wants attachments of one size. A depth surface met with a smaller target answers with
+  // a renderbuffer of that size, its own: what is drawn through one size is not seen through another.
+  function depthFor(d, w, h) {
+    if (d.w === w && d.h === h) return d.depth;
+    if (w > d.w || h > d.h) fail(`a ${w}x${h} render target with a ${d.w}x${d.h} depth buffer (D3D9 wants the depth buffer at least as large)`);
+    let rb = d.sized.get(`${w}x${h}`);
+    if (!rb) { rb = g.createRenderbuffer(); g.bindRenderbuffer(g.RENDERBUFFER, rb); g.renderbufferStorage(g.RENDERBUFFER, g.DEPTH24_STENCIL8, w, h); d.sized.set(`${w}x${h}`, rb); }
+    return rb;
   }
   const W = params.width || g.drawingBufferWidth, H = params.height || g.drawingBufferHeight;
   const backTex = makeTexture(W, H, 1, USAGE_RENDERTARGET, params.backBufferFormat === 22 ? 22 : 21);
@@ -128,7 +138,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
   const autoDepth = params.autoDepthStencilFormat ? add(makeDepth(W, H)) : 0;
 
   // Framebuffers, one per (colour surfaces, depth surface).
-  const fbos = new Map();
+  const fbos = new Map(), fbBufs = new Map();
   function framebuffer() {
     const key = `${rt.join(',')}/${depthSurface}`;
     let fb = fbos.get(key);
@@ -143,7 +153,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
         bufs.push(g.COLOR_ATTACHMENT0 + k);
       });
       g.drawBuffers(bufs);
-      if (depthSurface) g.framebufferRenderbuffer(g.FRAMEBUFFER, g.DEPTH_STENCIL_ATTACHMENT, g.RENDERBUFFER, get(depthSurface, 'surface').depth);
+      fbBufs.set(fb, bufs);
+      const first = rt.find(Boolean);
+      if (depthSurface && first) { const c = get(first, 'surface'); g.framebufferRenderbuffer(g.FRAMEBUFFER, g.DEPTH_STENCIL_ATTACHMENT, g.RENDERBUFFER, depthFor(get(depthSurface, 'surface'), c.w, c.h)); }
       const st = g.checkFramebufferStatus(g.FRAMEBUFFER);
       if (st !== g.FRAMEBUFFER_COMPLETE) fail(`render target incomplete (0x${st.toString(16)})`);
       fbos.set(key, fb);
@@ -174,51 +186,95 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${h.profile} ${h.entry}: ${g.getShaderInfoLog(sh)}\n${t.glsl}`);
     return { kind: type, sh, ...t };
   }
-  // The vertex stage for pretransformed vertices: each varying the pixel shader reads, from the FVF.
+  // An FVF as vertex elements { off, size, color, usage, index } (usage as the HLSL semantic's name,
+  // lower case) and its stride. D3DCOLOR elements are B,G,R,A bytes.
+  const fvfLayouts = new Map();
   function fvfLayout(f) {
+    let L = fvfLayouts.get(f);
+    if (L) return L;
+    const E = [];
+    let off = 0;
+    const el = (size, usage, index = 0, color = false) => { E.push({ off, size, color, usage, index }); off += color ? 4 : 4 * size; };
     const pos = f & 0x400e;
-    if (pos !== 0x4) fail(`FVF 0x${f.toString(16)}: only pretransformed vertices (XYZRHW) without a vertex shader, for now`);
-    let off = 16;
-    const L = { pos: 0 };
-    if (f & 0x10) off += 12;                                 // NORMAL
-    if (f & 0x20) off += 4;                                  // PSIZE
-    if (f & 0x40) { L.diffuse = off; off += 4; }
-    if (f & 0x80) { L.specular = off; off += 4; }
-    L.tex = [];
-    for (let k = 0, n = (f >> 8) & 15; k < n; k++) { const sz = [2, 3, 4, 1][(f >> (16 + 2 * k)) & 3]; L.tex.push([off, sz]); off += 4 * sz; }
-    L.stride = off;
+    if (pos === 0x4) el(4, 'positiont');                     // XYZRHW
+    else if (pos === 0x2) el(3, 'position');                 // XYZ
+    else if (pos === 0x4002) el(4, 'position');              // XYZW
+    else fail(`FVF 0x${f.toString(16)}: position type 0x${pos.toString(16)} (blend weights) is not supported yet`);
+    if (f & 0x10) el(3, 'normal');
+    if (f & 0x20) el(1, 'psize');
+    if (f & 0x40) el(4, 'color', 0, true);
+    if (f & 0x80) el(4, 'color', 1, true);
+    for (let k = 0, n = (f >> 8) & 15; k < n; k++) el([2, 3, 4, 1][(f >> (16 + 2 * k)) & 3], 'texcoord', k);
+    L = { E, stride: off, colors: E.filter((e) => e.color).map((e) => e.off) };
+    fvfLayouts.set(f, L);
     return L;
   }
+  // A sampler at D3DTADDRESS_BORDER, which WebGL lacks: its reads in the pixel shader go through a
+  // function that returns the border colour outside [0, 1] on that axis (the GL sampler clamps). Exact
+  // with point filtering; with linear, D3D also blends the border into the outermost half texel.
+  const BORDER = 4;
+  function withBorders(glsl, mask) {
+    for (const [unit, u, v] of mask) {
+      const out = [u && 'uv.x < 0.0 || uv.x > 1.0', v && 'uv.y < 0.0 || uv.y > 1.0'].filter(Boolean).join(' || ');
+      const fn = (name, args, call) => `vec4 ${name}${unit}(${args}) { vec4 c = ${call}; return (${out}) ? prism_bc${unit} : c; }`;
+      const s = `prism_s${unit}`;
+      // the reads first, then the functions (whose own reads must stay plain) after the sampler's declaration
+      for (const [call, name] of [['texture', 'bt'], ['textureLod', 'btl'], ['textureGrad', 'btg'], ['textureProj', 'btp']]) glsl = glsl.replace(new RegExp(`\\b${call}\\(${s}, `, 'g'), `prism_${name}${unit}(`);
+      glsl = glsl.replace(`uniform highp sampler2D ${s};`, (d) => [d, `uniform vec4 prism_bc${unit};`,
+        fn('prism_bt', 'vec2 uv', `texture(${s}, uv)`), fn('prism_bt', 'vec2 uv, float bias', `texture(${s}, uv, bias)`),
+        fn('prism_btl', 'vec2 uv, float lod', `textureLod(${s}, uv, lod)`), fn('prism_btg', 'vec2 uv, vec2 dx, vec2 dy', `textureGrad(${s}, uv, dx, dy)`),
+        `vec4 prism_btp${unit}(vec3 q) { return prism_bt${unit}(q.xy / q.z); }`, `vec4 prism_btp${unit}(vec4 q) { return prism_bt${unit}(q.xy / q.w); }`].join('\n'));
+    }
+    return glsl;
+  }
+  const compile = (type, src, what) => {
+    const sh = g.createShader(type); g.shaderSource(sh, src); g.compileShader(sh);
+    if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${what}: ${g.getShaderInfoLog(sh)}\n${src}`);
+    return sh;
+  };
   const programs = new Map();
-  function program(psObj, L) {
-    const key = `${psObj ? psObj.sh && objectsKey(psObj) : 'ff'}|${fvf}`;
+  function program(vsObj, psObj, L) {
+    if (!psObj) fail('drawing without a pixel shader (the fixed function\'s texture stages) is not supported yet');
+    const mask = psObj.samplers.filter((s) => s.dim === '2D' && (samp[s.index][1] === BORDER || samp[s.index][2] === BORDER))
+      .map((s) => [s.index, samp[s.index][1] === BORDER, samp[s.index][2] === BORDER]);
+    const key = `${vsObj ? objectsKey(vsObj) : `t${fvf}`}|${objectsKey(psObj)}|${mask.join(';')}`;
     let p = programs.get(key);
     if (p) return p;
-    if (!psObj) fail('drawing without a pixel shader (the fixed function\'s texture stages) is not supported yet');
-    const reads = psObj.inputs;
-    const vsrc = ['#version 300 es', 'precision highp float;', 'in vec4 a_pos;', 'in vec4 a_diffuse;', 'in vec4 a_specular;',
-      ...[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `in vec4 a_t${k};`), 'uniform vec4 u_vp;', 'uniform vec2 u_zr;',
-      ...reads.map((r) => `out vec4 ${r.name};`),
-      'void main() {',
-      // a render-target pixel position (centre at +0.5), into the viewport's normalised coordinates; w = 1/RHW for perspective
-      '  float w = a_pos.w == 0.0 ? 1.0 : 1.0 / a_pos.w;',
-      '  vec2 ndc = (a_pos.xy + 0.5 - u_vp.xy) / u_vp.zw * 2.0 - 1.0;',
-      '  float z = (a_pos.z - u_zr.x) / max(u_zr.y - u_zr.x, 1e-9) * 2.0 - 1.0;',
-      '  gl_Position = vec4(ndc * w, z * w, w);',
-      ...reads.map((r) => `  ${r.name} = ${r.semantic === 'COLOR' ? (r.index === 0 ? 'a_diffuse' : 'a_specular') : `a_t${r.index}`};`),
-      '}', ''].join('\n');
-    const vsh = g.createShader(g.VERTEX_SHADER); g.shaderSource(vsh, vsrc); g.compileShader(vsh);
-    if (!g.getShaderParameter(vsh, g.COMPILE_STATUS)) fail(`FVF vertex stage: ${g.getShaderInfoLog(vsh)}`);
+    let vsrc;
+    if (vsObj) {
+      // the vertex shader's register file apart from the pixel shader's; what the pixel shader reads and it does not write, zero
+      if (vsObj.samplers.length) fail('a vertex shader sampling a texture is not supported yet');
+      const missing = psObj.inputs.filter((i) => !vsObj.outputs.some((o) => o.name === i.name));
+      vsrc = vsObj.glsl.replace(/\bprism_c\b/g, 'prism_vc')
+        .replace('void main() {', [...missing.map((i) => `out vec4 ${i.name};`), 'void main() {', ...missing.map((i) => `  ${i.name} = vec4(0.0);`)].join('\n'));
+    } else {
+      if (!L.E.some((e) => e.usage === 'positiont')) fail(`FVF 0x${fvf.toString(16)} without a vertex shader: the fixed function's transform is not supported yet`);
+      const reads = psObj.inputs;
+      const attr = (r) => `prism_a_${r.semantic === 'COLOR' ? 'color' : 'texcoord'}${r.index}`;
+      vsrc = ['#version 300 es', 'precision highp float;', 'in vec4 prism_a_positiont0;', ...reads.map((r) => `in vec4 ${attr(r)};`),
+        'uniform vec4 u_vp;', 'uniform vec2 u_zr;', ...reads.map((r) => `out vec4 ${r.name};`),
+        'void main() {',
+        // a render-target pixel position (centre at +0.5), into the viewport's normalised coordinates; w = 1/RHW for perspective
+        '  vec4 p = prism_a_positiont0;',
+        '  float w = p.w == 0.0 ? 1.0 : 1.0 / p.w;',
+        '  vec2 ndc = (p.xy + 0.5 - u_vp.xy) / u_vp.zw * 2.0 - 1.0;',
+        '  float z = (p.z - u_zr.x) / max(u_zr.y - u_zr.x, 1e-9) * 2.0 - 1.0;',
+        '  gl_Position = vec4(ndc * w, z * w, w);',
+        ...reads.map((r) => `  ${r.name} = ${attr(r)};`),
+        '}', ''].join('\n');
+    }
     const prog = g.createProgram();
-    g.attachShader(prog, vsh); g.attachShader(prog, psObj.sh);
-    const names = ['a_pos', 'a_diffuse', 'a_specular', ...[0, 1, 2, 3, 4, 5, 6, 7].map((k) => `a_t${k}`)];
-    names.forEach((n, k) => g.bindAttribLocation(prog, k, n));
+    g.attachShader(prog, compile(g.VERTEX_SHADER, vsrc, vsObj ? 'vertex shader' : 'pretransformed vertex stage'));
+    g.attachShader(prog, mask.length ? compile(g.FRAGMENT_SHADER, withBorders(psObj.glsl, mask), 'pixel shader with border addressing') : psObj.sh);
+    // attributes by semantic: prism_a_<usage><index>, matched to the vertex elements at each draw
+    const attrs = [...vsrc.matchAll(/^in vec4 prism_a_([a-z]+?)(\d+);$/gm)].map((m, loc) => ({ loc, usage: m[1], index: +m[2] }));
+    for (const a of attrs) g.bindAttribLocation(prog, a.loc, `prism_a_${a.usage}${a.index}`);
     g.linkProgram(prog);
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
-    p = { prog, c: g.getUniformLocation(prog, 'prism_c'), vp: g.getUniformLocation(prog, 'u_vp'), zr: g.getUniformLocation(prog, 'u_zr'),
-      s: psObj.samplers.map((sm) => [sm.index, g.getUniformLocation(prog, `prism_s${sm.index}`)]) };
+    const u = (n) => g.getUniformLocation(prog, n);
+    p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
+      s: psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), bc: mask.map(([unit]) => [unit, u(`prism_bc${unit}`)]) };
     programs.set(key, p);
-    void L;
     return p;
   }
   const shaderIds = new WeakMap(); let shaderSeq = 0;
@@ -230,7 +286,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     9: 'DST_COLOR', 10: 'ONE_MINUS_DST_COLOR', 11: 'SRC_ALPHA_SATURATE', 14: 'CONSTANT_COLOR', 15: 'ONE_MINUS_CONSTANT_COLOR' };
   const BLENDOP = { 1: 'FUNC_ADD', 2: 'FUNC_SUBTRACT', 3: 'FUNC_REVERSE_SUBTRACT', 4: 'MIN', 5: 'MAX' };
   const blend = (v) => g[BLEND[v] ?? fail(`blend factor ${v}`)];
-  const ADDRESS = { 1: 'REPEAT', 2: 'MIRRORED_REPEAT', 3: 'CLAMP_TO_EDGE' };
+  const ADDRESS = { 1: 'REPEAT', 2: 'MIRRORED_REPEAT', 3: 'CLAMP_TO_EDGE', 4: 'CLAMP_TO_EDGE' };   // BORDER: see withBorders
   const samplerObjs = [];
   function applyState() {
     g.bindFramebuffer(g.FRAMEBUFFER, framebuffer());
@@ -281,31 +337,42 @@ function createDevice(g, params, { floatRT, onPresent }) {
   const vbo = g.createBuffer(), ibo = g.createBuffer(), vao = g.createVertexArray();
   const COUNT = { 1: (n) => n, 2: (n) => 2 * n, 3: (n) => n + 1, 4: (n) => 3 * n, 5: (n) => n + 2, 6: (n) => n + 2 };
   const MODE = { 1: 'POINTS', 2: 'LINES', 3: 'LINE_STRIP', 4: 'TRIANGLES', 5: 'TRIANGLE_STRIP', 6: 'TRIANGLE_FAN' };
+  // Vertices that are all zero bytes make triangles of no area: D3D draws nothing, so nothing is uploaded.
+  // (Photon Race 2 ends each frame with 8192 such draws.)
+  const allZero = (b) => { for (let i = 0; i < b.length; i++) if (b[i]) return false; return true; };
+  let maxAttrib = 0;
   function drawUP(type, primCount, bytes, stride, indexBytes = null, indexFmt = 0) {
-    if (vs) fail('a vertex shader is not supported yet');
-    const psObj = ps ? get(ps, 'pixel') : null;
     const L = fvfLayout(fvf);
     if (L.stride !== stride) fail(`stride ${stride} for FVF 0x${fvf.toString(16)} of ${L.stride} bytes`);
+    const n = COUNT[type]?.(primCount) ?? fail(`primitive type ${type}`);
+    if (type >= 4 && !indexBytes && allZero(bytes.subarray(0, n * stride))) return;
+    bytes = swizzleColours(bytes, stride, L);
+    const vsObj = vs ? get(vs, 'vertex') : null, psObj = ps ? get(ps, 'pixel') : null;
     applyState();
-    const p = program(psObj, L);
+    // WebGL refuses a draw with a bound target the pixel shader writes nothing to; D3D leaves that target as it was
+    g.drawBuffers(fbBufs.get(framebuffer()).map((b, k) => (b !== g.NONE && psObj?.outputs.some((o) => o.semantic === 'COLOR' && o.index === k) ? b : g.NONE)));
+    const p = program(vsObj, psObj, L);
     g.useProgram(p.prog);
     if (p.c) g.uniform4fv(p.c, psF);
-    g.uniform4f(p.vp, viewport.x, viewport.y, viewport.width, viewport.height);
-    g.uniform2f(p.zr, viewport.minZ, viewport.maxZ);
+    if (p.vc) g.uniform4fv(p.vc, vsF);
+    // D3D9's clip space to GL's (hlsl.js): the rows kept, so y negated, and pixel centres half a pixel off GL's
+    if (p.posFix) g.uniform4f(p.posFix, 1, -1, 1 / viewport.width, 1 / viewport.height);
+    if (p.vp) g.uniform4f(p.vp, viewport.x, viewport.y, viewport.width, viewport.height);
+    if (p.zr) g.uniform2f(p.zr, viewport.minZ, viewport.maxZ);
     bindSamplers(p);
+    for (const [unit, loc] of p.bc) { const c = samp[unit][4]; g.uniform4f(loc, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }
     g.bindVertexArray(vao);
     g.bindBuffer(g.ARRAY_BUFFER, vbo);
     g.bufferData(g.ARRAY_BUFFER, bytes, g.STREAM_DRAW);
-    for (let k = 0; k < 11; k++) g.disableVertexAttribArray(k);
-    g.enableVertexAttribArray(0); g.vertexAttribPointer(0, 4, g.FLOAT, false, stride, 0);
-    // D3DCOLOR is B,G,R,A in memory: read as bytes, swizzled by the shader input's declaration order
-    const color = (loc, off, dflt) => { if (off === undefined) { g.vertexAttrib4f(loc, ...dflt); return; } g.enableVertexAttribArray(loc); g.vertexAttribPointer(loc, 4, g.UNSIGNED_BYTE, true, stride, off); };
-    color(1, L.diffuse, [1, 1, 1, 1]); color(2, L.specular, [0, 0, 0, 0]);
-    for (let k = 0; k < 8; k++) {
-      if (!L.tex[k]) { g.vertexAttrib4f(3 + k, 0, 0, 0, 1); continue; }
-      g.enableVertexAttribArray(3 + k); g.vertexAttribPointer(3 + k, L.tex[k][1], g.FLOAT, false, stride, L.tex[k][0]);
+    for (let k = 0; k < maxAttrib; k++) g.disableVertexAttribArray(k);
+    maxAttrib = p.attrs.length;
+    for (const a of p.attrs) {
+      const e = L.E.find((x) => x.usage === a.usage && x.index === a.index);
+      // an input no element feeds: D3DCOLOR's defaults for the colours, (0, 0, 0, 1) otherwise
+      if (!e) { g.vertexAttrib4f(a.loc, ...(a.usage === 'color' ? (a.index ? [0, 0, 0, 0] : [1, 1, 1, 1]) : [0, 0, 0, 1])); continue; }
+      g.enableVertexAttribArray(a.loc);
+      g.vertexAttribPointer(a.loc, e.size, e.color ? g.UNSIGNED_BYTE : g.FLOAT, e.color, stride, e.off);
     }
-    const n = COUNT[type]?.(primCount) ?? fail(`primitive type ${type}`);
     if (indexBytes) {
       g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo);
       g.bufferData(g.ELEMENT_ARRAY_BUFFER, indexBytes, g.STREAM_DRAW);
@@ -315,12 +382,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
   }
   // D3DCOLOR's B,G,R,A bytes as GL's R,G,B,A: swapped in a copy of the vertices.
   function swizzleColours(bytes, stride, L) {
-    if (L.diffuse === undefined && L.specular === undefined) return bytes;
+    if (!L.colors.length) return bytes;
     const b = new Uint8Array(bytes);
-    for (let o = 0; o + stride <= b.length; o += stride) for (const off of [L.diffuse, L.specular]) {
-      if (off === undefined) continue;
-      const t = b[o + off]; b[o + off] = b[o + off + 2]; b[o + off + 2] = t;
-    }
+    for (let o = 0; o + stride <= b.length; o += stride) for (const off of L.colors) { const t = b[o + off]; b[o + off] = b[o + off + 2]; b[o + off + 2] = t; }
     return b;
   }
 
@@ -361,7 +425,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
       return OK;
     },
     clear: (rects, flags, argb, z, stencil) => {
-      g.bindFramebuffer(g.FRAMEBUFFER, framebuffer());
+      const fb = framebuffer();
+      g.bindFramebuffer(g.FRAMEBUFFER, fb);
+      g.drawBuffers(fbBufs.get(fb));                         // a draw may have narrowed them
       g.enable(g.SCISSOR_TEST);
       g.colorMask(true, true, true, true); g.depthMask(true); g.stencilMask(0xff);
       g.clearColor(((argb >> 16) & 255) / 255, ((argb >> 8) & 255) / 255, (argb & 255) / 255, (argb >>> 24) / 255);
@@ -417,22 +483,22 @@ function createDevice(g, params, { floatRT, onPresent }) {
     setIndices: (h) => { indices = h; return OK; },
 
     // draws
-    drawPrimitiveUP: (type, primCount, bytes, stride) => { drawUP(type, primCount, swizzleColours(bytes, stride, fvfLayout(fvf)), stride); return OK; },
+    drawPrimitiveUP: (type, primCount, bytes, stride) => { drawUP(type, primCount, bytes, stride); return OK; },
     drawIndexedPrimitiveUP: (type, minIndex, numVertices, primCount, indexBytes, indexFmt, bytes, stride) => {
-      drawUP(type, primCount, swizzleColours(bytes, stride, fvfLayout(fvf)), stride, indexBytes, indexFmt); return OK;
+      drawUP(type, primCount, bytes, stride, indexBytes, indexFmt); return OK;
     },
     drawPrimitive: (type, start, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb');
       const n = COUNT[type](primCount);
       const bytes = b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + n) * s.stride);
-      drawUP(type, primCount, swizzleColours(bytes, s.stride, fvfLayout(fvf)), s.stride); return OK;
+      drawUP(type, primCount, bytes, s.stride); return OK;
     },
     drawIndexedPrimitive: (type, baseVertex, minIndex, numVertices, startIndex, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb'), ib = get(indices, 'ib');
       const size = ib.format === 102 ? 4 : 2, n = COUNT[type](primCount);
       const idx = ib.bytes.slice(startIndex * size, (startIndex + n) * size);
       const bytes = b.bytes.subarray(s.offset + baseVertex * s.stride);
-      drawUP(type, primCount, swizzleColours(bytes, s.stride, fvfLayout(fvf)), s.stride, idx, ib.format); return OK;
+      drawUP(type, primCount, bytes, s.stride, idx, ib.format); return OK;
     },
 
     // textures and surfaces
@@ -483,7 +549,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
       if (!o) return OK;
       if (o.kind === 'texture') { g.deleteTexture(o.tex); for (const s of o.surfaces) objects.delete(s); }
       else if ((o.kind === 'vertex' || o.kind === 'pixel') && o.sh) g.deleteShader(o.sh);
-      else if (o.kind === 'surface' && o.depth) g.deleteRenderbuffer(o.depth);
+      else if (o.kind === 'surface' && o.depth) { g.deleteRenderbuffer(o.depth); for (const rb of o.sized.values()) g.deleteRenderbuffer(rb); }
       objects.delete(h);
       for (const [k, fb] of fbos) if (k.split(/[,/]/).includes(String(h))) { g.deleteFramebuffer(fb); fbos.delete(k); }
       return OK;

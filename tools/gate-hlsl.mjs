@@ -43,6 +43,9 @@ const cases = [
     consts: cols, want: () => [M[0][0], M[0][1], 0.6, 1] },
   { name: 'mul: a float3x3 built row by row times a column (the back buffer keeps no alpha, so a case of its own)',
     src: 'float4 m():color{float3x3 R=float3x3(.1,.2,.3,.4,.5,.6,.7,.8,.9);return float4(mul(R,float3(0,0,1)),1);}', want: () => [0.3, 0.6, 0.9, 1] },
+  { name: 'mul: a float3 by a float4x4 meets the matrix\'s first three rows, as fxc truncates (Photon Race 2); the vertex shader\'s POSITION passed to the pixel shader unread',
+    src: 'struct I{float4 p:POSITION;float2 v:VPOS;};float4x4 M:register(c0);float4 m(I i):color{return float4(mul(float3(0,1,0),M).xyz,1);}',
+    consts: cols, want: () => [M[1][0], M[1][1], M[1][2], 1] },
   { name: 'VPOS is the pixel\'s integer position, row 0 at the top',
     src: 'float4 m(float2 v:vpos):color{return float4(v/8,0,1);}', want: (x, y) => [x / N, y / N, 0, 1],
     asm: 'ps_3_0\ndef c0, 0.125, 0, 1, 0\nmul r0.xy, vPos, c0.x\nmov r0.z, c0.y\nmov r0.w, c0.z\nmov oC0, r0\n' },
@@ -56,6 +59,21 @@ const cases = [
     asm: 'ps_3_0\ndef c0, 0.5, 0.125, 1.25, -1.5\ndcl_2d s0\nadd r0.xy, vPos, c0.x\nmul r0.xy, r0, c0.y\ntexld r0, r0, s0\nadd r0.zw, r0, c0\nmov oC0, r0\n',
     src: 'sampler s;float4 m(float2 v:vpos):color{float4 t=tex2D(s,(v+.5)/8);return float4(t.x,t.y,t.z+1.25,t.w-1.5);}',
     want: (x, y) => [x * 0.1, y * 0.05, 0.25, 1] },
+  { name: 'two render targets at once (A16B16G16R16F, COLOR0 and COLOR1), drawn twice with ONE/ONE blending beside a third the shader does not write (WebGL refuses that draw unless it is left out), the second then read',
+    mrt: 'struct O{float4 a:COLOR0;float4 b:COLOR1;};O m(float2 v:vpos){O o;o.a=1;o.b=float4(v*.05,.375,-.5);return o;}',
+    mrtAsm: 'ps_3_0\ndef c0, 1, 0.05, 0.375, -0.5\nmul r0.xy, vPos, c0.y\nmov r0.z, c0.z\nmov r0.w, c0.w\nmov oC0, c0.x\nmov oC1, r0\n',
+    src: 'sampler s;float4 m(float2 v:vpos):color{return tex2D(s,(v+.5)/8);}',
+    asm: 'ps_3_0\ndef c0, 0.5, 0.125, 0, 0\ndcl_2d s0\nadd r0.xy, vPos, c0.x\nmul r0.xy, r0, c0.y\ntexld r0, r0, s0\nmov oC0, r0\n',
+    want: (x, y) => [x * 0.1, y * 0.1, 0.75, 1] },
+  { name: 'a vertex shader on XYZ vertices in clip space: pixel centres half a pixel off GL\'s, row 0 at the top, the default cull keeping a clockwise quad',
+    vs: 'struct V{float4 p:POSITION;float4 t:TEXCOORD0;};V v(float4 p:POSITION){V o;o.p=p;o.t=p*.5+.5;return o;}',
+    src: 'float4 m(float4 t:TEXCOORD0):color{return float4(t.xy,0,1);}', want: (x, y) => [x / N, 1 - y / N, 0, 1],
+    vsAsm: 'vs_3_0\ndcl_position v0\ndcl_position o0\ndcl_texcoord o1\ndef c0, 0.5, 0.5, 0.5, 0.5\nmov o0, v0\nmad o1, v0, c0, c0\n',
+    asm: 'ps_3_0\ndef c0, 0, 1, 0, 0\ndcl_texcoord v0\nmov r0.xy, v0\nmov r0.z, c0.x\nmov r0.w, c0.y\nmov oC0, r0\n' },
+  { name: 'border addressing (D3DTADDRESS_BORDER, which WebGL lacks): the border colour outside [0, 1], the texture inside',
+    src: 'sampler s;float4 m(float2 v:vpos):color{return tex2D(s,(v+.5)/4-.5);}', texture: tex, border: 0x80402010,
+    asm: 'ps_3_0\ndef c0, 0.5, 0.25, -0.5, 0\ndcl_2d s0\nadd r0.xy, vPos, c0.x\nmad r0.xy, r0, c0.y, c0.z\ntexld r0, r0, s0\nmov oC0, r0\n',
+    want: (x, y) => (x < 2 || x > 5 || y < 2 || y > 5 ? [0x40 / 255, 0x20 / 255, 0x10 / 255, 1] : y < 4 ? (x < 4 ? [1, 0, 0, 1] : [0, 1, 0, 1]) : (x < 4 ? [0, 0, 1, 1] : [1, 1, 1, 1])) },
   { name: 'a loop with a float counter, a comma step, an assignment in its condition (cdak\'s style), a function returning float',
     src: 'float f(float x){return x-.25;}float4 m():color{float i,a,z=0;for(i=0;i<8&&abs(a=f(i*.1))>.01;i++,z+=.125);return float4(z,a+.5,i/8,1);}',
     want: () => [1, 0.95, 1, 1] },
@@ -65,7 +83,7 @@ const cases = [
 // assembly; Wine 8.0's HLSL compiler rejects VPOS) are drawn once by tools/oracle/d3d9ref.c in the
 // oracle container (--capture-wine), checked there against `want`, and every run then holds PRISM's
 // pixels to Wine's. Only device behaviour is asked of Wine -- VPOS, a texture's rows, the default
-// filter, a float render target, the back buffer's X channel: an assembly twin of an HLSL rule (mul,
+// filter, a float render target, two at once with blending, the back buffer's X channel, a vertex shader's clip space, border addressing: an assembly twin of an HLSL rule (mul,
 // a conversion) would only restate this file's own reading of it.
 const GOLDEN = join(ROOT, 'goldens', 'd3d9-wine.json');
 const rgbOff = (got, want) => { let worst = 0, at = 0; for (let i = 0; i < want.length; i++) { const d = Math.abs(got[i] - want[i]); if (d > worst) { worst = d; at = i; } } return { worst, at }; };
@@ -84,8 +102,9 @@ if (process.argv.includes('--capture-wine')) {
   for (const [i, k] of cases.entries()) {
     if (!k.asm) continue;
     writeFileSync(join(dir, `c${i}.asm`), k.asm);
-    if (k.firstAsm) writeFileSync(join(dir, `c${i}-first.asm`), k.firstAsm);
-    const flags = `${k.texture ? '-tex ' : ''}${k.firstAsm ? `-first c${i}-first.asm ` : ''}`;
+    if (k.firstAsm || k.mrtAsm) writeFileSync(join(dir, `c${i}-first.asm`), k.firstAsm ?? k.mrtAsm);
+    if (k.vsAsm) writeFileSync(join(dir, `c${i}-vs.asm`), k.vsAsm);
+    const flags = `${k.texture ? '-tex ' : ''}${k.border !== undefined ? `-border ${k.border.toString(16)} ` : ''}${k.firstAsm ? `-first c${i}-first.asm ` : ''}${k.mrtAsm ? `-mrt c${i}-first.asm ` : ''}${k.vsAsm ? `-vs c${i}-vs.asm ` : ''}`;
     // through `| cat`: with its output straight on docker exec's pipe, wine returns 0 and the program writes nothing (measured)
     const r = sh(`cd /work/wine && rm -f c${i}.rgb && DISPLAY=:7 WINEDEBUG=-all WINEDLLOVERRIDES=mscoree,mshtml= wine ./d3d9ref.exe ${flags}c${i}.asm c${i}.rgb ${N} ${N} ${(k.consts ?? []).join(' ')} 2>&1 | cat`, { timeout: 600000 });
     if (!existsSync(join(dir, `c${i}.rgb`))) { check(false, `Wine drew: ${k.name}`, r.stdout.slice(-400)); continue; }
@@ -110,6 +129,8 @@ const dev = d3d.createDevice({ width: ${N}, height: ${N}, backBufferFormat: 22, 
 const back = dev.getBackBuffer(0, 0);
 // a full-screen quad: pixel centres at integer coordinates, so its corners at -0.5 and N - 0.5
 const quad = new Uint8Array(new Float32Array([-.5, -.5, 0, 1, 0, 0, ${N - 0.5}, -.5, 0, 1, 1, 0, -.5, ${N - 0.5}, 0, 1, 0, 1, ${N - 0.5}, ${N - 0.5}, 0, 1, 1, 1]).buffer);
+// clip space, clockwise on screen (D3D's default culls counter-clockwise)
+const clip = new Uint8Array(new Float32Array([-1, 1, .5, 1, 1, .5, -1, -1, .5, 1, -1, .5]).buffer);
 for (const k of cases) {
   try {
     dev.setFVF(0x104);                                       // XYZRHW | TEX1
@@ -122,6 +143,16 @@ for (const k of cases) {
       dev.textureWrite(t, 0, null, new Uint8Array(k.texture), 8);
       dev.setTexture(0, t);
     }
+    if (k.mrt) {
+      const t0 = dev.createTexture(${N}, ${N}, 1, 1, 113), t1 = dev.createTexture(${N}, ${N}, 1, 1, 113), t2 = dev.createTexture(${N}, ${N}, 1, 1, 113);
+      dev.setRenderTarget(0, dev.getSurfaceLevel(t0, 0)); dev.setRenderTarget(1, dev.getSurfaceLevel(t1, 0)); dev.setRenderTarget(2, dev.getSurfaceLevel(t2, 0));
+      dev.clear(null, 1, 0, 1, 0);
+      dev.setRenderState(27, 1); dev.setRenderState(19, 2); dev.setRenderState(20, 2);   // ALPHABLENDENABLE, ONE, ONE
+      dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', k.mrt)));
+      dev.drawPrimitiveUP(5, 2, quad, 24); dev.drawPrimitiveUP(5, 2, quad, 24);
+      dev.setRenderState(27, 0); dev.setRenderTarget(2, 0); dev.setRenderTarget(1, 0); dev.setRenderTarget(0, back);
+      dev.setTexture(0, t1);
+    }
     if (k.first) {
       const t = dev.createTexture(${N}, ${N}, 1, 1, 116), s = dev.getSurfaceLevel(t, 0);
       dev.setRenderTarget(0, s);
@@ -130,8 +161,15 @@ for (const k of cases) {
       dev.setRenderTarget(0, back);
       dev.setTexture(0, t);
     }
+    if (k.border !== undefined) { dev.setSamplerState(0, 1, 4); dev.setSamplerState(0, 2, 4); dev.setSamplerState(0, 4, k.border); }
     dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', k.src)));
-    dev.drawPrimitiveUP(5, 2, quad, 24);
+    if (k.vs) {
+      dev.setVertexShader(dev.createVertexShader(makeBlob('vs_3_0', 'v', k.vs)));
+      dev.setFVF(2);                                         // XYZ
+      dev.drawPrimitiveUP(5, 2, clip, 12);
+      dev.setVertexShader(0);
+    } else dev.drawPrimitiveUP(5, 2, quad, 24);
+    dev.setSamplerState(0, 1, 1); dev.setSamplerState(0, 2, 1); dev.setSamplerState(0, 4, 0);
     dev.endScene();
     dev.present();
     const px = new Uint8Array(${N * N * 4});

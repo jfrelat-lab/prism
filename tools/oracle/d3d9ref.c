@@ -1,12 +1,15 @@
 /* d3d9ref.c -- the Direct3D 9 reference for src/env/d3d9.js: Wine's d3d9 (wined3d on Mesa llvmpipe),
  * run in the oracle container under Xvfb by tools/gate-hlsl.mjs --capture-wine.
  *
- *   d3d9ref [-tex] [-first first.asm] ps.asm out.rgba w h [c0.x c0.y ... (pixel shader constants)]
+ *   d3d9ref [-tex] [-border AARRGGBB] [-first first.asm | -mrt first.asm] [-vs vs.asm] ps.asm out.rgba w h [c0.x ... (ps constants)]
  *
  * Draws what gate-hlsl draws, through the real API: a full-screen quad of pretransformed vertices
  * on a w x h X8R8G8B8 back buffer. -tex binds a 2x2 A8R8G8B8 texture (red, green / blue, white, its
  * first row first) to sampler 0. -first draws first.asm into an A32B32G32R32F render target and binds
- * that to sampler 0 instead. Shaders are ps_3_0 ASSEMBLY through D3DXAssembleShader: Wine 8.0's HLSL
+ * that to sampler 0 instead. -border sets sampler 0 to D3DTADDRESS_BORDER on U and V with that colour.
+ * -mrt draws first.asm TWICE with ONE/ONE blending into two A16B16G16R16F render targets at once
+ * (oC0, oC1), cleared to 0, with a third bound that the shader does not write, and binds the second to
+ * sampler 0. -vs draws the quad through that vertex shader instead, as XYZ vertices in clip space. Shaders are ps_3_0 ASSEMBLY through D3DXAssembleShader: Wine 8.0's HLSL
  * compiler (vkd3d-shader) rejects VPOS. The back buffer is read with GetRenderTargetData and written
  * row 0 (the top) first, as R, G, B bytes. */
 #include <windows.h>
@@ -20,12 +23,11 @@
 
 static IDirect3DDevice9 *dev;
 
-static IDirect3DPixelShader9 *shader(const char *path) {
+static ID3DXBuffer *assemble(const char *path) {
   FILE *f = fopen(path, "rb");
   long n;
   char *s;
   ID3DXBuffer *code = NULL, *errs = NULL;
-  IDirect3DPixelShader9 *ps;
   if (!f) { fprintf(stderr, "cannot read %s\n", path); exit(1); }
   fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
   s = malloc(n + 1); fread(s, 1, n, f); s[n] = 0; fclose(f);
@@ -33,13 +35,26 @@ static IDirect3DPixelShader9 *shader(const char *path) {
     fprintf(stderr, "%s: %s\n", path, errs ? (char *)ID3DXBuffer_GetBufferPointer(errs) : "?");
     exit(1);
   }
-  CHECK(IDirect3DDevice9_CreatePixelShader(dev, ID3DXBuffer_GetBufferPointer(code), &ps));
+  return code;
+}
+
+static IDirect3DPixelShader9 *shader(const char *path) {
+  IDirect3DPixelShader9 *ps;
+  CHECK(IDirect3DDevice9_CreatePixelShader(dev, ID3DXBuffer_GetBufferPointer(assemble(path)), &ps));
   return ps;
+}
+
+static IDirect3DVertexShader9 *vshader(const char *path) {
+  IDirect3DVertexShader9 *vs;
+  CHECK(IDirect3DDevice9_CreateVertexShader(dev, ID3DXBuffer_GetBufferPointer(assemble(path)), &vs));
+  return vs;
 }
 
 int main(int argc, char **argv) {
   int a = 1, tex = 0, w, h, nc = 0, x, y;
-  const char *first = NULL;
+  const char *first = NULL, *vsfile = NULL;
+  unsigned border = 0;
+  int useBorder = 0, mrt = 0;
   float consts[256], q[24];
   HWND wnd;
   IDirect3D9 *d3d;
@@ -51,6 +66,9 @@ int main(int argc, char **argv) {
   for (; a < argc && argv[a][0] == '-'; a++) {
     if (!strcmp(argv[a], "-tex")) tex = 1;
     else if (!strcmp(argv[a], "-first") && a + 1 < argc) first = argv[++a];
+    else if (!strcmp(argv[a], "-mrt") && a + 1 < argc) { first = argv[++a]; mrt = 1; }
+    else if (!strcmp(argv[a], "-vs") && a + 1 < argc) vsfile = argv[++a];
+    else if (!strcmp(argv[a], "-border") && a + 1 < argc) { useBorder = 1; border = (unsigned)strtoul(argv[++a], NULL, 16); }
   }
   if (argc - a < 4) { fprintf(stderr, "usage: d3d9ref [-tex] [-first first.asm] ps.asm out.rgba w h [consts...]\n"); return 2; }
   w = atoi(argv[a + 2]); h = atoi(argv[a + 3]);
@@ -82,7 +100,31 @@ int main(int argc, char **argv) {
     CHECK(IDirect3DTexture9_UnlockRect(tx, 0));
     CHECK(IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)tx));
   }
-  if (first) {
+  if (first && mrt) {
+    IDirect3DTexture9 *t0, *t1, *t2;
+    IDirect3DSurface9 *s0, *s1, *s2;
+    CHECK(IDirect3DDevice9_CreateTexture(dev, w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &t0, NULL));
+    CHECK(IDirect3DDevice9_CreateTexture(dev, w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &t1, NULL));
+    CHECK(IDirect3DTexture9_GetSurfaceLevel(t0, 0, &s0));
+    CHECK(IDirect3DTexture9_GetSurfaceLevel(t1, 0, &s1));
+    CHECK(IDirect3DDevice9_CreateTexture(dev, w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &t2, NULL));
+    CHECK(IDirect3DTexture9_GetSurfaceLevel(t2, 0, &s2));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 0, s0));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 1, s1));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 2, s2));
+    CHECK(IDirect3DDevice9_Clear(dev, 0, NULL, D3DCLEAR_TARGET, 0, 1, 0));
+    CHECK(IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHABLENDENABLE, TRUE));
+    CHECK(IDirect3DDevice9_SetRenderState(dev, D3DRS_SRCBLEND, D3DBLEND_ONE));
+    CHECK(IDirect3DDevice9_SetRenderState(dev, D3DRS_DESTBLEND, D3DBLEND_ONE));
+    CHECK(IDirect3DDevice9_SetPixelShader(dev, shader(first)));
+    CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, 24));
+    CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, 24));
+    CHECK(IDirect3DDevice9_SetRenderState(dev, D3DRS_ALPHABLENDENABLE, FALSE));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 2, NULL));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 1, NULL));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 0, back));
+    CHECK(IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)t1));
+  } else if (first) {
     IDirect3DTexture9 *rt;
     IDirect3DSurface9 *s;
     CHECK(IDirect3DDevice9_CreateTexture(dev, w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &rt, NULL));
@@ -93,8 +135,19 @@ int main(int argc, char **argv) {
     CHECK(IDirect3DDevice9_SetRenderTarget(dev, 0, back));
     CHECK(IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)rt));
   }
+  if (useBorder) {
+    CHECK(IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSU, D3DTADDRESS_BORDER));
+    CHECK(IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_ADDRESSV, D3DTADDRESS_BORDER));
+    CHECK(IDirect3DDevice9_SetSamplerState(dev, 0, D3DSAMP_BORDERCOLOR, border));
+  }
   CHECK(IDirect3DDevice9_SetPixelShader(dev, shader(argv[a])));
-  CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, 24));
+  if (vsfile) {
+    /* clip space, clockwise on screen (D3D's default culls counter-clockwise) */
+    static const float c[12] = { -1, 1, .5f,  1, 1, .5f,  -1, -1, .5f,  1, -1, .5f };
+    CHECK(IDirect3DDevice9_SetVertexShader(dev, vshader(vsfile)));
+    CHECK(IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZ));
+    CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, c, 12));
+  } else CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, 24));
   CHECK(IDirect3DDevice9_EndScene(dev));
 
   CHECK(IDirect3DDevice9_CreateOffscreenPlainSurface(dev, w, h, D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &sys, NULL));

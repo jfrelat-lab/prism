@@ -615,10 +615,13 @@ export function translateHLSL(source, entry, profile, defines = []) {
     }
     if (A.k === 'num' && B.k === 'mat') {
       if (A.n === 1) return { code: `(${conv(a, FLOAT)} * ${b.code})`, type: B };
+      // a vector shorter than M's rows meets M's first rows, as fxc truncates (with a warning): mul(float3, float4x4)
+      if (A.n < B.r) return { code: `(${glslType({ ...B, r: A.n })}(${b.code}) * ${conv(a, num('float', A.n))})`, type: num('float', B.c) };
       return { code: `(${b.code} * ${conv(a, num('float', B.r))})`, type: num('float', B.c) };          // v·M = G*v
     }
     if (A.k === 'mat' && B.k === 'num') {
       if (B.n === 1) return { code: `(${a.code} * ${conv(b, FLOAT)})`, type: A };
+      if (B.n < A.c) return { code: `(${conv(b, num('float', B.n))} * ${glslType({ ...A, c: B.n })}(${a.code}))`, type: num('float', A.r) };
       return { code: `(${conv(b, num('float', A.c))} * ${a.code})`, type: num('float', A.r) };          // M·v = v*G
     }
     if (A.k === 'mat' && B.k === 'mat') return { code: `(${b.code} * ${a.code})`, type: { k: 'mat', b: 'float', r: A.r, c: B.c } };  // (AB)^T = B^T A^T
@@ -726,7 +729,8 @@ export function translateHLSL(source, entry, profile, defines = []) {
   const inputFor = (sem, t) => {
     const m = /^([A-Z_]+?)(\d*)$/.exec(sem); const base = m[1], idx = +(m[2] || 0);
     if (stage === 'ps') {
-      if (base === 'VPOS' || base === 'SV_POSITION') return conv({ code: 'vec4(gl_FragCoord.xy - 0.5, gl_FragCoord.z, 1.0 / gl_FragCoord.w)', type: num('float', 4) }, t);
+      // POSITION: the vertex shader's output struct passed whole to the pixel shader; ps_3_0 has no such input, given as VPOS
+      if (base === 'VPOS' || base === 'SV_POSITION' || base === 'POSITION') return conv({ code: 'vec4(gl_FragCoord.xy - 0.5, gl_FragCoord.z, 1.0 / gl_FragCoord.w)', type: num('float', 4) }, t);
       if (base === 'VFACE') return conv({ code: '(gl_FrontFacing ? 1.0 : -1.0)', type: FLOAT }, t);
       if (base === 'TEXCOORD' || base === 'COLOR') {
         const name = `prism_${base === 'COLOR' ? 'col' : 't'}${idx}`;
