@@ -18,6 +18,7 @@
 import { readFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, cpSync, statSync, rmSync } from 'node:fs';
 import { join, dirname, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { buildTarget } from '../src/target.js';
 import { up, sh, SCRATCH, oracleGlut } from './oracle.mjs';
 import { writeRgbPng } from './png.mjs';
@@ -45,17 +46,28 @@ function mesaDemos(sub) {
     return { name: f.replace(/\.c$/, ''), root: MD, dir: sub, units: [f, ...util], include: ['util'], images: true };
   });
 }
+/*
+ * GLUT 3.7's demos share files with their siblings the way its makefiles do: each `copy ..\..\examples\
+ * trackball.c trackball.c` line names a unit (or a header, whose directory is then searched) another
+ * directory holds. Its examples take trackball.c when they include trackball.h, which is no program.
+ */
+function makefileCopies(dir) {
+  const mk = join(ROOT, GL37, dir, 'Makefile');
+  const from = existsSync(mk) ? [...readFileSync(mk, 'latin1').matchAll(/^\tcopy (\S+) /gm)].map((m) => join(dir, m[1].replace(/\\/g, '/'))) : [];
+  return { units: from.filter((f) => f.endsWith('.c')).map((f) => relative(dir, f)), include: [...new Set(from.filter((f) => f.endsWith('.h')).map((f) => dirname(f)))] };
+}
 function glutDemos() {
   const d = join(ROOT, GL37, 'demos');
   return readdirSync(d).filter((s) => statSync(join(d, s)).isDirectory()).sort().map((s) => {
-    const files = readdirSync(join(d, s));
-    return { name: s, root: GL37, dir: `demos/${s}`, units: files.filter((f) => f.endsWith('.c')).sort(), data: files.filter((f) => DATA.test(f)) };
+    const files = readdirSync(join(d, s)), more = makefileCopies(`demos/${s}`);
+    return { name: s, root: GL37, dir: `demos/${s}`, units: [...files.filter((f) => f.endsWith('.c')).sort(), ...more.units], include: more.include, data: files.filter((f) => DATA.test(f)) };
   });
 }
 function glutExamples() {
   const d = join(ROOT, GL37, 'examples');
   const all = readdirSync(d);
-  return all.filter((f) => f.endsWith('.c')).sort().map((f) => ({ name: f.replace(/\.c$/, ''), root: GL37, dir: 'examples', units: [f], data: all.filter((x) => DATA.test(x)) }));
+  return all.filter((f) => f.endsWith('.c') && f !== 'trackball.c').sort().map((f) => ({ name: f.replace(/\.c$/, ''), root: GL37, dir: 'examples',
+    units: [f, ...(readFileSync(join(d, f), 'latin1').includes('"trackball.h"') ? ['trackball.c'] : [])], data: all.filter((x) => DATA.test(x)) }));
 }
 const SETS = {
   redbook: () => mesaDemos('redbook'), demos: () => mesaDemos('demos'), samples: () => mesaDemos('samples'), trivial: () => mesaDemos('trivial'),
@@ -63,6 +75,23 @@ const SETS = {
 };
 if (!SETS[SET]) { console.log(`a set: ${Object.keys(SETS).join(', ')}`); process.exit(2); }
 const programs = SETS[SET]().filter((p) => !NAMES.length || NAMES.includes(p.name));
+
+/*
+ * A worker runs one program on PRISM and answers with its frames. The 30-second deadline below is
+ * only looked at between frames: a program that loops inside one callback -- gltestperf waits for
+ * GLUT_ELAPSED_TIME to pass 2 s, and that clock moves only at a swap, here as in glut-egl.c -- never
+ * reaches it, and held a census for twelve hours. The worker is stopped instead, as `timeout` stops
+ * the reference.
+ */
+if (!isMainThread) { parentPort.postMessage(prism(workerData)); process.exit(); }
+function prismBounded(p) {
+  return new Promise((done) => {
+    const w = new Worker(fileURLToPath(import.meta.url), { workerData: p, argv: process.argv.slice(2) });
+    const timer = setTimeout(() => { w.terminate(); done({ error: 'timeout' }); }, 40000);
+    w.once('message', (r) => { clearTimeout(timer); w.terminate(); done(r); });
+    w.once('error', (e) => { clearTimeout(timer); done({ error: e.message.split('\n')[0].slice(0, 140) }); });
+  });
+}
 
 // ---- the reference --------------------------------------------------------------------------------
 up();
@@ -88,7 +117,7 @@ const readPpm = (p) => {
 const osmesa = (p) => p.units.some((u) => /GLUT_ACCUM/.test(readFileSync(join(ROOT, p.root, p.dir, u), 'latin1')));
 function mesa(p) {
   const at = `/work/gl-census/${p.root.replace(/\//g, '_')}/${p.dir}`;
-  const inc = (p.include ?? []).map((i) => `-I../${i}`).join(' ');
+  const inc = (p.include ?? []).map((i) => `-I${relative(p.dir, i)}`).join(' ');
   const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/glut-egl.c /work/gl-census/_glut/glut-c-*.c -lGLU ${osmesa(p) ? "-DPRISM_OSMESA -lOSMesa" : "-lEGL -lOpenGL"} -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
   r.err = (r.stdout + r.stderr).split('\n').find((l) => /error|undefined reference/.test(l))?.replace(/^.*?: /, '');
   const local = join(work, p.root.replace(/\//g, '_'), p.dir);
@@ -107,7 +136,7 @@ function prism(p) {
   const deadline = performance.now() + 30000;
   let program;
   try {
-    ({ program } = buildTarget({ name: p.name, dir: join(p.root, p.dir), units: { list: p.units }, include: (p.include ?? []).map((i) => `../${i}`),
+    ({ program } = buildTarget({ name: p.name, dir: join(p.root, p.dir), units: { list: p.units }, include: (p.include ?? []).map((i) => relative(p.dir, i)),
       compile: { memory: 16, collect: true }, env: ['stdio', 'gl', 'glu', 'glut'] }, { root: ROOT,
       envExtra: { stdio: { files }, glut: { frames: FRAMES, onFrame: (n, rgba, w, h) => { out[n] = { w, h, rgba: rgba.slice() }; }, stop: () => performance.now() > deadline } } }));
   } catch (e) { return { error: `compile: ${e.message.split('\n')[0].slice(0, 120)}` }; }
@@ -136,7 +165,7 @@ const note = (m) => messages.set(m, (messages.get(m) ?? 0) + 1);
 if (pngDir) mkdirSync(pngDir, { recursive: true });
 for (const p of programs) {
   const ref = mesa(p);
-  const mine = prism(p);
+  const mine = await prismBounded(p);
   let line;
   if (mine.error) { tally.prism++; line = `prism: ${mine.error}`; note(mine.error.replace(/0x[0-9a-f]+/g, (h) => h).slice(0, 90)); }
   else if (ref.error) { tally.mesa++; line = `mesa: ${ref.error.slice(0, 100)}`; }

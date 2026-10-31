@@ -230,6 +230,10 @@ char *tmpnam(char *buf);
 int mkstemp(char *tmpl);
 long random(void);
 void srandom(unsigned seed);
+double drand48(void);
+long lrand48(void);
+long mrand48(void);
+void srand48(long seed);
 /*
  * RAND_MAX is glibc's, because src/runtime/runtime.js implements glibc's generator: the TYPE_3
  * additive-feedback one, whose output is 31 bits. The old ANSI sample LCG here returned 0..32767,

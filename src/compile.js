@@ -479,6 +479,8 @@ export const BUILTINS = new Map(Object.entries({
   abs: { ret: I, params: [I] },
   random: { ret: T.LONG, params: [] },
   srandom: { ret: V, params: [U] },
+  drand48: { ret: D, params: [] }, lrand48: { ret: T.LONG, params: [] }, mrand48: { ret: T.LONG, params: [] },
+  srand48: { ret: V, params: [T.LONG] },
   labs: { ret: T.LONG, params: [T.LONG] },
   strlen: { ret: U, params: [P] }, strnlen: { ret: U, params: [P, U] },
   strcpy: { ret: P, params: [P, P] },

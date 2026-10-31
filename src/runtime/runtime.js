@@ -448,6 +448,14 @@ function makeLibc(M) {
   randSeed(1);                                // the unseeded default, as glibc's is
 
   /*
+   * The drand48 family, POSIX's 48-bit linear congruential generator: X = (0x5DEECE66D X + 0xB) mod
+   * 2^48. glibc starts it at X = 0 when unseeded, srand48 sets X = seed << 16 | 0x330E, and drand48's
+   * double is exactly X / 2^48 (it fills the mantissa with X's bits).
+   */
+  let rand48 = 0n;
+  const rand48Next = () => (rand48 = (0x5DEECE66Dn * rand48 + 0xBn) & 0xFFFFFFFFFFFFn);
+
+  /*
    * Does a handler of type `h` take an exception of type `e`? (15.3/3, by their mangled names:
    * PRISM throws no class objects.) The same type; or both pointers, the handler's to the same type
    * or to void, adding a const and never dropping one.
@@ -1036,6 +1044,10 @@ function makeLibc(M) {
     random: () => randAdvance(),
     srand: (seed) => randSeed(seed),
     srandom: (seed) => randSeed(seed),
+    drand48: () => Number(rand48Next()) / 2 ** 48,
+    lrand48: () => Number(rand48Next() >> 17n),
+    mrand48: () => Number(BigInt.asIntN(32, rand48Next() >> 16n)),
+    srand48: (seed) => { rand48 = (BigInt(seed >>> 0) << 16n) | 0x330En; },
 
     // ctype, C locale. EOF (-1) must answer false everywhere except tolower/toupper, which pass it
     // through -- a program looping on getchar() relies on exactly that.
