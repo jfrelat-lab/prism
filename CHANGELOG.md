@@ -5,6 +5,14 @@ is updated continuously, so entries are dated rather than versioned; the source 
 comes from are released as [prism-sources](https://github.com/jfrelat-lab/prism-sources/releases).
 Every change is in the [commit history](https://github.com/jfrelat-lab/prism/commits/main).
 
+## 2026-10-31
+
+- **More of OpenGL and GLU**: picking objects with the mouse (selection) and feedback, spotlights and
+  the local viewer, and GLU's tessellator, which cuts any outline -- concave, with holes -- into
+  triangles (GLU 9's own code). Edges and quads are now rasterised to the pixel as Mesa's software
+  renderer does. Of the OpenGL Red Book's 63 examples, 52 now draw what Mesa draws; of GLUT's 54
+  examples, 32, among them the dinosaur and puzzle demos.
+
 ## 2026-10-30
 
 - **Faster 3D**: OpenGL's vertex work -- moving, lighting and texturing each point -- now runs on the
