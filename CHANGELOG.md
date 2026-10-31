@@ -15,6 +15,11 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
   the dinosaur and puzzle demos.
 - **A program that copies its frame into a texture every frame no longer freezes the page**: the copy
   and its mipmaps stay on the graphics card (seen in Waillee, 2017, which stopped after some 120 frames).
+- **Direct3D 9, drawn through WebGL 2** -- a first layer, which no program on this site uses yet: the
+  device (render targets, textures, vertex and index buffers, up to four targets at once, reading a
+  target back), shaders written in HLSL and compiled shaders alike, held pixel for pixel to two
+  Direct3D 9 implementations, Wine's and DXVK's. The Windows 4K intros cdak, yes we can and Photon
+  Race 2 run on it under an x86 emulator's Win32 layer; C programs written for Direct3D 9 are next.
 
 ## 2026-10-30
 
