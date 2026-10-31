@@ -1,0 +1,110 @@
+/* d3d9ref.c -- the Direct3D 9 reference for src/env/d3d9.js: Wine's d3d9 (wined3d on Mesa llvmpipe),
+ * run in the oracle container under Xvfb by tools/gate-hlsl.mjs --capture-wine.
+ *
+ *   d3d9ref [-tex] [-first first.asm] ps.asm out.rgba w h [c0.x c0.y ... (pixel shader constants)]
+ *
+ * Draws what gate-hlsl draws, through the real API: a full-screen quad of pretransformed vertices
+ * on a w x h X8R8G8B8 back buffer. -tex binds a 2x2 A8R8G8B8 texture (red, green / blue, white, its
+ * first row first) to sampler 0. -first draws first.asm into an A32B32G32R32F render target and binds
+ * that to sampler 0 instead. Shaders are ps_3_0 ASSEMBLY through D3DXAssembleShader: Wine 8.0's HLSL
+ * compiler (vkd3d-shader) rejects VPOS. The back buffer is read with GetRenderTargetData and written
+ * row 0 (the top) first, as R, G, B bytes. */
+#include <windows.h>
+#include <d3d9.h>
+#include <d3dx9shader.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CHECK(x) do { HRESULT hr_ = (x); if (FAILED(hr_)) { fprintf(stderr, "%s: 0x%08lx\n", #x, (unsigned long)hr_); exit(1); } } while (0)
+
+static IDirect3DDevice9 *dev;
+
+static IDirect3DPixelShader9 *shader(const char *path) {
+  FILE *f = fopen(path, "rb");
+  long n;
+  char *s;
+  ID3DXBuffer *code = NULL, *errs = NULL;
+  IDirect3DPixelShader9 *ps;
+  if (!f) { fprintf(stderr, "cannot read %s\n", path); exit(1); }
+  fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+  s = malloc(n + 1); fread(s, 1, n, f); s[n] = 0; fclose(f);
+  if (FAILED(D3DXAssembleShader(s, n, NULL, NULL, 0, &code, &errs))) {
+    fprintf(stderr, "%s: %s\n", path, errs ? (char *)ID3DXBuffer_GetBufferPointer(errs) : "?");
+    exit(1);
+  }
+  CHECK(IDirect3DDevice9_CreatePixelShader(dev, ID3DXBuffer_GetBufferPointer(code), &ps));
+  return ps;
+}
+
+int main(int argc, char **argv) {
+  int a = 1, tex = 0, w, h, nc = 0, x, y;
+  const char *first = NULL;
+  float consts[256], q[24];
+  HWND wnd;
+  IDirect3D9 *d3d;
+  D3DPRESENT_PARAMETERS pp = {0};
+  IDirect3DSurface9 *back, *sys;
+  D3DLOCKED_RECT lr;
+  FILE *out;
+
+  for (; a < argc && argv[a][0] == '-'; a++) {
+    if (!strcmp(argv[a], "-tex")) tex = 1;
+    else if (!strcmp(argv[a], "-first") && a + 1 < argc) first = argv[++a];
+  }
+  if (argc - a < 4) { fprintf(stderr, "usage: d3d9ref [-tex] [-first first.asm] ps.asm out.rgba w h [consts...]\n"); return 2; }
+  w = atoi(argv[a + 2]); h = atoi(argv[a + 3]);
+  for (x = a + 4; x < argc && nc < 256; x++) consts[nc++] = (float)atof(argv[x]);
+  {
+    /* pixel centres at integer coordinates, so the corners at -0.5 and w - 0.5 */
+    float v[24] = { -.5f, -.5f, 0, 1, 0, 0,  w - .5f, -.5f, 0, 1, 1, 0,  -.5f, h - .5f, 0, 1, 0, 1,  w - .5f, h - .5f, 0, 1, 1, 1 };
+    memcpy(q, v, sizeof q);
+  }
+
+  wnd = CreateWindowA("STATIC", "d3d9ref", WS_POPUP, 0, 0, w, h, NULL, NULL, NULL, NULL);
+  if (!(d3d = Direct3DCreate9(D3D_SDK_VERSION))) { fprintf(stderr, "Direct3DCreate9 failed (no X server?)\n"); return 1; }
+  pp.BackBufferWidth = w; pp.BackBufferHeight = h; pp.BackBufferFormat = D3DFMT_X8R8G8B8;
+  pp.BackBufferCount = 1; pp.SwapEffect = D3DSWAPEFFECT_DISCARD; pp.hDeviceWindow = wnd; pp.Windowed = TRUE;
+  pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+  CHECK(IDirect3D9_CreateDevice(d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, wnd, D3DCREATE_SOFTWARE_VERTEXPROCESSING, &pp, &dev));
+  CHECK(IDirect3DDevice9_GetBackBuffer(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &back));
+  CHECK(IDirect3DDevice9_SetFVF(dev, D3DFVF_XYZRHW | D3DFVF_TEX1));
+  CHECK(IDirect3DDevice9_BeginScene(dev));
+  CHECK(IDirect3DDevice9_Clear(dev, 0, NULL, D3DCLEAR_TARGET, 0xffff00ff, 1, 0));
+  if (nc) CHECK(IDirect3DDevice9_SetPixelShaderConstantF(dev, 0, consts, (nc + 3) / 4));
+  if (tex) {
+    /* D3D's bytes, B, G, R, A, first row first: red, green / blue, white */
+    static const unsigned char t[16] = { 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255 };
+    IDirect3DTexture9 *tx;
+    CHECK(IDirect3DDevice9_CreateTexture(dev, 2, 2, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tx, NULL));
+    CHECK(IDirect3DTexture9_LockRect(tx, 0, &lr, NULL, 0));
+    for (y = 0; y < 2; y++) memcpy((unsigned char *)lr.pBits + y * lr.Pitch, t + y * 8, 8);
+    CHECK(IDirect3DTexture9_UnlockRect(tx, 0));
+    CHECK(IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)tx));
+  }
+  if (first) {
+    IDirect3DTexture9 *rt;
+    IDirect3DSurface9 *s;
+    CHECK(IDirect3DDevice9_CreateTexture(dev, w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A32B32G32R32F, D3DPOOL_DEFAULT, &rt, NULL));
+    CHECK(IDirect3DTexture9_GetSurfaceLevel(rt, 0, &s));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 0, s));
+    CHECK(IDirect3DDevice9_SetPixelShader(dev, shader(first)));
+    CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, 24));
+    CHECK(IDirect3DDevice9_SetRenderTarget(dev, 0, back));
+    CHECK(IDirect3DDevice9_SetTexture(dev, 0, (IDirect3DBaseTexture9 *)rt));
+  }
+  CHECK(IDirect3DDevice9_SetPixelShader(dev, shader(argv[a])));
+  CHECK(IDirect3DDevice9_DrawPrimitiveUP(dev, D3DPT_TRIANGLESTRIP, 2, q, 24));
+  CHECK(IDirect3DDevice9_EndScene(dev));
+
+  CHECK(IDirect3DDevice9_CreateOffscreenPlainSurface(dev, w, h, D3DFMT_X8R8G8B8, D3DPOOL_SYSTEMMEM, &sys, NULL));
+  CHECK(IDirect3DDevice9_GetRenderTargetData(dev, back, sys));
+  CHECK(IDirect3DSurface9_LockRect(sys, &lr, NULL, D3DLOCK_READONLY));
+  if (!(out = fopen(argv[a + 1], "wb"))) { fprintf(stderr, "cannot write %s\n", argv[a + 1]); return 1; }
+  for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+    const unsigned char *p = (const unsigned char *)lr.pBits + y * lr.Pitch + x * 4;   /* B, G, R, X */
+    fputc(p[2], out); fputc(p[1], out); fputc(p[0], out);
+  }
+  fclose(out);
+  return 0;
+}

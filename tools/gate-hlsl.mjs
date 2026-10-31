@@ -13,9 +13,10 @@
 // float render target keeping values outside [0, 1].
 // In a headless Chrome (WebGL2 on SwiftShader, the same everywhere), as gate-glsl.
 //
-//   node tools/gate-hlsl.mjs          SKIP when no Chrome is found (PRISM_CHROME=<path> names one)
+//   node tools/gate-hlsl.mjs                 SKIP when no Chrome is found (PRISM_CHROME=<path> names one)
+//   node tools/gate-hlsl.mjs --capture-wine  draws the reference again in the oracle container first
 import { createServer } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -43,18 +44,59 @@ const cases = [
   { name: 'mul: a float3x3 built row by row times a column (the back buffer keeps no alpha, so a case of its own)',
     src: 'float4 m():color{float3x3 R=float3x3(.1,.2,.3,.4,.5,.6,.7,.8,.9);return float4(mul(R,float3(0,0,1)),1);}', want: () => [0.3, 0.6, 0.9, 1] },
   { name: 'VPOS is the pixel\'s integer position, row 0 at the top',
-    src: 'float4 m(float2 v:vpos):color{return float4(v/8,0,1);}', want: (x, y) => [x / N, y / N, 0, 1] },
+    src: 'float4 m(float2 v:vpos):color{return float4(v/8,0,1);}', want: (x, y) => [x / N, y / N, 0, 1],
+    asm: 'ps_3_0\ndef c0, 0.125, 0, 1, 0\nmul r0.xy, vPos, c0.x\nmov r0.z, c0.y\nmov r0.w, c0.z\nmov oC0, r0\n' },
   { name: 'a texture\'s first row is its top (A8R8G8B8 as D3D\'s bytes), sampled with D3D9\'s default point filter',
     src: 'sampler s;float4 m(float2 v:vpos):color{return tex2D(s,(v+.5)/8);}', texture: tex,
+    asm: 'ps_3_0\ndef c0, 0.5, 0.125, 0, 0\ndcl_2d s0\nadd r0.xy, vPos, c0.x\nmul r0.xy, r0, c0.y\ntexld r0, r0, s0\nmov oC0, r0\n',
     want: (x, y) => (y < 4 ? (x < 4 ? [1, 0, 0, 1] : [0, 1, 0, 1]) : (x < 4 ? [0, 0, 1, 1] : [1, 1, 1, 1])) },
   { name: 'two passes: a float render target (A32B32G32R32F) keeps values outside [0, 1], then is read with its first row at the top; the X8R8G8B8 back buffer shows no alpha',
     first: 'float4 m(float2 v:vpos):color{return float4(v.x*.1,v.y*.05,-1,2);}',
+    firstAsm: 'ps_3_0\ndef c0, 0.1, 0.05, -1, 2\nmul r0.xy, vPos, c0\nmov r0.zw, c0\nmov oC0, r0\n',
+    asm: 'ps_3_0\ndef c0, 0.5, 0.125, 1.25, -1.5\ndcl_2d s0\nadd r0.xy, vPos, c0.x\nmul r0.xy, r0, c0.y\ntexld r0, r0, s0\nadd r0.zw, r0, c0\nmov oC0, r0\n',
     src: 'sampler s;float4 m(float2 v:vpos):color{float4 t=tex2D(s,(v+.5)/8);return float4(t.x,t.y,t.z+1.25,t.w-1.5);}',
     want: (x, y) => [x * 0.1, y * 0.05, 0.25, 1] },
   { name: 'a loop with a float counter, a comma step, an assignment in its condition (cdak\'s style), a function returning float',
     src: 'float f(float x){return x-.25;}float4 m():color{float i,a,z=0;for(i=0;i<8&&abs(a=f(i*.1))>.01;i++,z+=.125);return float4(z,a+.5,i/8,1);}',
     want: () => [1, 0.95, 1, 1] },
 ];
+
+// Wine's d3d9 as the device's reference: the cases that carry `asm` (the same shader in ps_3_0
+// assembly; Wine 8.0's HLSL compiler rejects VPOS) are drawn once by tools/oracle/d3d9ref.c in the
+// oracle container (--capture-wine), checked there against `want`, and every run then holds PRISM's
+// pixels to Wine's. Only device behaviour is asked of Wine -- VPOS, a texture's rows, the default
+// filter, a float render target, the back buffer's X channel: an assembly twin of an HLSL rule (mul,
+// a conversion) would only restate this file's own reading of it.
+const GOLDEN = join(ROOT, 'goldens', 'd3d9-wine.json');
+const rgbOff = (got, want) => { let worst = 0, at = 0; for (let i = 0; i < want.length; i++) { const d = Math.abs(got[i] - want[i]); if (d > worst) { worst = d; at = i; } } return { worst, at }; };
+const wantRGB = (k) => { const o = []; for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) o.push(...k.want(x, y).slice(0, 3).map((v) => Math.round(Math.min(1, Math.max(0, v)) * 255))); return o; };
+if (process.argv.includes('--capture-wine')) {
+  const { sh, SCRATCH } = await import('./oracle.mjs');
+  const dir = join(SCRATCH, 'wine');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(join(ROOT, 'tools', 'oracle', 'd3d9ref.c'), join(dir, 'd3d9ref.c'));
+  const b = sh('cd /work/wine && /usr/lib/wine/winegcc -m32 -O1 -o d3d9ref.exe d3d9ref.c -ld3d9 -ld3dx9 2>&1 | grep -v warning', { timeout: 600000 });
+  if (!existsSync(join(dir, 'd3d9ref.exe.so'))) { console.log(`d3d9ref did not build:\n${b.stdout}${b.stderr}`); process.exit(1); }
+  sh('[ -e /tmp/.X7-lock ] || { Xvfb :7 -screen 0 640x480x24 >/dev/null 2>&1 & sleep 2; }');
+  const golden = { _doc: ['Wine 8.0 d3d9 (wined3d on Mesa llvmpipe) drawing the gate-hlsl cases that carry ps_3_0 assembly,',
+    'through tools/oracle/d3d9ref.c. Each case: the 8x8 back buffer, row 0 (the top) first, R, G, B bytes.',
+    'Written by node tools/gate-hlsl.mjs --capture-wine.'], cases: {} };
+  for (const [i, k] of cases.entries()) {
+    if (!k.asm) continue;
+    writeFileSync(join(dir, `c${i}.asm`), k.asm);
+    if (k.firstAsm) writeFileSync(join(dir, `c${i}-first.asm`), k.firstAsm);
+    const flags = `${k.texture ? '-tex ' : ''}${k.firstAsm ? `-first c${i}-first.asm ` : ''}`;
+    // through `| cat`: with its output straight on docker exec's pipe, wine returns 0 and the program writes nothing (measured)
+    const r = sh(`cd /work/wine && rm -f c${i}.rgb && DISPLAY=:7 WINEDEBUG=-all WINEDLLOVERRIDES=mscoree,mshtml= wine ./d3d9ref.exe ${flags}c${i}.asm c${i}.rgb ${N} ${N} ${(k.consts ?? []).join(' ')} 2>&1 | cat`, { timeout: 600000 });
+    if (!existsSync(join(dir, `c${i}.rgb`))) { check(false, `Wine drew: ${k.name}`, r.stdout.slice(-400)); continue; }
+    const px = Array.from(readFileSync(join(dir, `c${i}.rgb`)));
+    golden.cases[k.name] = px;
+    const { worst, at } = rgbOff(px, wantRGB(k));
+    check(worst <= 1, `Wine draws what this gate expects: ${k.name}`, `off by ${worst} at (${(at / 3 | 0) % N},${(at / 3 / N) | 0})`);
+  }
+  writeFileSync(GOLDEN, JSON.stringify(golden) + '\n');
+  console.log(`wrote ${GOLDEN}\n`);
+}
 
 const page = `<!doctype html><canvas id="c" width="${N}" height="${N}"></canvas><pre id="o"></pre>
 <script type="module">
@@ -128,6 +170,14 @@ for (const k of cases) {
     for (let c = 0; c < 4; c++) { const d = Math.abs(r.pixels[o + c] - want[c]); if (d > worst) { worst = d; at = `(${x},${y}) got ${r.pixels.slice(o, o + 4)} want ${want}`; } }
   }
   check(worst <= 1, k.name, `off by ${worst} at ${at}`);
+  if (k.asm) {
+    const wine = existsSync(GOLDEN) ? JSON.parse(readFileSync(GOLDEN, 'utf8')).cases[k.name] : null;
+    if (!wine) { check(false, `against Wine's d3d9: ${k.name}`, 'no capture: node tools/gate-hlsl.mjs --capture-wine'); continue; }
+    const got = [];   // top row first, as the capture
+    for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) { const o = ((N - 1 - y) * N + x) * 4; got.push(r.pixels[o], r.pixels[o + 1], r.pixels[o + 2]); }
+    const { worst: w, at: a } = rgbOff(got, wine);
+    check(w <= 1, `against Wine's d3d9: ${k.name}`, `off by ${w} at (${(a / 3 | 0) % N},${(a / 3 / N) | 0}) got ${got.slice(a - a % 3, a - a % 3 + 3)} Wine ${wine.slice(a - a % 3, a - a % 3 + 3)}`);
+  }
 }
 console.log(bad ? `\n${bad} check(s) failed.` : '\nHLSL draws on the Direct3D 9 device what HLSL and D3D9 define.');
 process.exit(bad ? 1 : 0);
