@@ -29,13 +29,14 @@ FROM i386/debian:bookworm-slim
 # OSMesa (Mesa 22.3.6, as the EGL path) gives the GL gates the one thing an EGL framebuffer object
 # lacks: an accumulation buffer (tools/oracle/glut-egl.c, GLUT_ACCUM). Added with apt-get + docker commit.
 # Wine 8.0 (wine, wine32): its wined3d draws Direct3D 9 through OpenGL, so on this Mesa it is the
-# reference for src/env/d3d9.js. Added with apt-get + docker commit.
+# reference for src/env/d3d9.js; xvfb gives wined3d an X server for its GL context, libwine-dev
+# winegcc (/usr/lib/wine/winegcc) to build the test programs. Added with apt-get + docker commit.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc g++ tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
       libsdl1.2-dev libsdl-mixer1.2-dev \
       libsdl2-dev libsdl2-image-dev \
       libosmesa6-dev \
-      wine wine32 \
+      wine wine32 xvfb libwine-dev \
  && rm -rf /var/lib/apt/lists/*
 
 # Debian's csmith package ships the GENERATOR but none of the runtime headers its output
