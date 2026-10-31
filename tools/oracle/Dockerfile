@@ -28,11 +28,14 @@ FROM i386/debian:bookworm-slim
 # gate-sdl-mixer. libsdl2-image-dev was added to the existing image with apt-get + docker commit.
 # OSMesa (Mesa 22.3.6, as the EGL path) gives the GL gates the one thing an EGL framebuffer object
 # lacks: an accumulation buffer (tools/oracle/glut-egl.c, GLUT_ACCUM). Added with apt-get + docker commit.
+# Wine 8.0 (wine, wine32): its wined3d draws Direct3D 9 through OpenGL, so on this Mesa it is the
+# reference for src/env/d3d9.js. Added with apt-get + docker commit.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc g++ tcc libc6-dev make csmith m4 curl ca-certificates xz-utils \
       libsdl1.2-dev libsdl-mixer1.2-dev \
       libsdl2-dev libsdl2-image-dev \
       libosmesa6-dev \
+      wine wine32 \
  && rm -rf /var/lib/apt/lists/*
 
 # Debian's csmith package ships the GENERATOR but none of the runtime headers its output
