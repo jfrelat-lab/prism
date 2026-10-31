@@ -386,7 +386,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (L.stride !== stride) fail(`stride ${stride} for FVF 0x${fvf.toString(16)} of ${L.stride} bytes`);
     const n = COUNT[type]?.(primCount) ?? fail(`primitive type ${type}`);
     if (v.bytes && type >= 4 && !idx && allZero(v.bytes.subarray(0, n * stride))) return;
-    const vsObj = vs ? get(vs, 'vertex') : null, psObj = ps ? get(ps, 'pixel') : null;
+    // pretransformed vertices (XYZRHW) skip vertex processing, a vertex shader that is set included (elevated draws
+    // its full-screen passes with its terrain's vertex shader still set)
+    const vsObj = vs && !L.E.some((e) => e.usage === 'positiont') ? get(vs, 'vertex') : null, psObj = ps ? get(ps, 'pixel') : null;
     applyState();
     // WebGL refuses a draw with a bound target the pixel shader writes nothing to; D3D leaves that target as it was
     g.drawBuffers(fbBufs.get(framebuffer()).map((b, k) => (b !== g.NONE && psObj?.outputs.some((o) => o.semantic === 'COLOR' && o.index === k) ? b : g.NONE)));

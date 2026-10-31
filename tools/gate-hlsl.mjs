@@ -127,6 +127,15 @@ const cases = [
       dev.setFVF(0x104); dev.setStreamSource(0, vb, 0, 24); dev.setIndices(ib);
       dev.drawIndexedPrimitive(4, 1, 0, 4, 3, 2);`,
     want: (x, y) => [(x + 0.5) / N, (y + 0.5) / N, 0, 1] },
+  { name: 'pretransformed vertices (XYZRHW) skip a vertex shader that is still set (elevated\'s full-screen passes)',
+    script: `
+      dev.setVertexShader(dev.createVertexShader(makeBlob('vs_3_0', 'v', 'float4 v(float4 p:POSITION):POSITION{return float4(9,9,9,1);}')));
+      dev.setPixelShader(dev.createPixelShader(makeBlob('ps_3_0', 'm', 'float4 m(float2 v:vpos):color{return float4(v/8,0,1);}')));
+      dev.setFVF(0x104); dev.drawPrimitiveUP(5, 2, quad, 24);`,
+    want: (x, y) => [x / N, y / N, 0, 1] },
+  { name: 'pow of a negative base as D3D9 has it: an integer literal exponent keeps the sign when odd, any other exponent takes |x|',
+    src: 'float4 c:register(c0);float4 m():color{return float4(pow(c.x,2),pow(c.x,3)+1,pow(c.y,c.z),1);}', consts: [-0.5, -0.25, 1.5, 0],
+    want: () => [0.25, 0.875, 0.125, 1] },
   { name: 'a loop with a float counter, a comma step, an assignment in its condition (cdak\'s style), a function returning float',
     src: 'float f(float x){return x-.25;}float4 m():color{float i,a,z=0;for(i=0;i<8&&abs(a=f(i*.1))>.01;i++,z+=.125);return float4(z,a+.5,i/8,1);}',
     want: () => [1, 0.95, 1, 1] },

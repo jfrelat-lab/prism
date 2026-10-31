@@ -571,6 +571,14 @@ export function translateHLSL(source, entry, profile, defines = []) {
       if (g.startsWith('prism_')) helpers.add(g);
       if (name === 'abs' && t.b === 'int') return { code: `abs(${conv(args[0], num('int', t.n))})`, type: num('int', t.n) };
       if ((name === 'max' || name === 'min' || name === 'clamp') && t.b === 'int') return { code: `${g}(${args.map((a) => conv(a, num('int', t.n))).join(', ')})`, type: num('int', t.n) };
+      // pow of a negative base, which GLSL leaves undefined (NaN in practice): fxc writes an integer literal
+      // exponent as multiplications, so an odd one keeps the sign; any other goes to D3D's pow instruction,
+      // exp2(y * log2(|x|)). Elevated's water reflects with pow(dot(...), 32) on a dot that goes negative.
+      if (name === 'pow') {
+        const lit = x.args[1].e === 'num' && /^\d+\.?0*$/.test(x.args[1].v) ? +x.args[1].v : null;
+        const [b, e] = args.map((a) => conv(a, ft));
+        return { code: lit !== null && lit % 2 ? `(sign(${b}) * pow(abs(${b}), ${e}))` : `pow(abs(${b}), ${e})`, type: ft };
+      }
       return { code: `${g}(${args.map((a) => conv(a, ft)).join(', ')})`, type: ft };
     }
     if (TEXTURE[name]) {
