@@ -80,14 +80,14 @@ const programs = SETS[SET]().filter((p) => !NAMES.length || NAMES.includes(p.nam
  * A worker runs one program on PRISM and answers with its frames. The 30-second deadline below is
  * only looked at between frames: a program that loops inside one callback -- gltestperf waits for
  * GLUT_ELAPSED_TIME to pass 2 s, and that clock moves only at a swap, here as in glut-egl.c -- never
- * reaches it, and held a census for twelve hours. The worker is stopped instead, as `timeout` stops
+ * reaches it, and held a census for twelve hours. The worker is stopped after 90 s instead, as `timeout` stops
  * the reference.
  */
 if (!isMainThread) { parentPort.postMessage(prism(workerData)); process.exit(); }
 function prismBounded(p) {
   return new Promise((done) => {
     const w = new Worker(fileURLToPath(import.meta.url), { workerData: p, argv: process.argv.slice(2) });
-    const timer = setTimeout(() => { w.terminate(); done({ error: 'timeout' }); }, 40000);
+    const timer = setTimeout(() => { w.terminate(); done({ error: 'timeout' }); }, 90000);   // past the 30 s deadline and the compile
     w.once('message', (r) => { clearTimeout(timer); w.terminate(); done(r); });
     w.once('error', (e) => { clearTimeout(timer); done({ error: e.message.split('\n')[0].slice(0, 140) }); });
   });
@@ -98,6 +98,9 @@ up();
 const work = join(SCRATCH, 'gl-census');
 mkdirSync(join(work, '_glut', 'GL'), { recursive: true });
 oracleGlut(join(work, '_glut'));
+// GLUT's units compiled once: the reference gcc is i386 under emulation here, minutes a program otherwise.
+const glutObjects = sh('cd /work/gl-census/_glut && rm -f *.o && gcc -O0 -w -I. -c glut-c-*.c && gcc -O0 -w -I. -c glut-egl.c -o egl.o && gcc -O0 -w -I. -DPRISM_OSMESA -c glut-egl.c -o osmesa.o');
+if (glutObjects.code !== 0) throw new Error(`GLUT objects: ${glutObjects.stderr}`);
 // Each program's directory and the ones it includes from, fresh (the archives' files are read-only).
 const copied = new Set();
 for (const p of programs) for (const d of [p.dir, ...(p.include ?? []), ...(p.images ? ['images'] : [])]) {
@@ -118,7 +121,7 @@ const osmesa = (p) => p.units.some((u) => /GLUT_ACCUM/.test(readFileSync(join(RO
 function mesa(p) {
   const at = `/work/gl-census/${p.root.replace(/\//g, '_')}/${p.dir}`;
   const inc = (p.include ?? []).map((i) => `-I${relative(p.dir, i)}`).join(' ');
-  const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/glut-egl.c /work/gl-census/_glut/glut-c-*.c -lGLU ${osmesa(p) ? "-DPRISM_OSMESA -lOSMesa" : "-lEGL -lOpenGL"} -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
+  const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/${osmesa(p) ? 'osmesa' : 'egl'}.o /work/gl-census/_glut/glut-c-*.o -lGLU ${osmesa(p) ? '-lOSMesa' : '-lEGL -lOpenGL'} -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
   r.err = (r.stdout + r.stderr).split('\n').find((l) => /error|undefined reference/.test(l))?.replace(/^.*?: /, '');
   const local = join(work, p.root.replace(/\//g, '_'), p.dir);
   const got = Object.fromEntries(FRAMES.filter((n) => existsSync(join(local, `frame-${n}.ppm`))).map((n) => [n, readPpm(join(local, `frame-${n}.ppm`))]));
