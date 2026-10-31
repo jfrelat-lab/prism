@@ -350,6 +350,13 @@ export function installGlu(M) {
       dv().setFloat64(winx, v[0], true); dv().setFloat64(winy, v[1], true); dv().setFloat64(winz, v[2], true);
       return 1;
     },
+    // libGLU 9's strings (libutil/registry.c).
+    gluGetString: (name) => {
+      const text = name === 100800 ? '1.3' : name === 100801 ? 'GLU_EXT_nurbs_tessellator GLU_EXT_object_space_tess ' : null;
+      if (!text) return 0;
+      if (!strings.has(name)) strings.set(name, M.mod.intern([...new TextEncoder().encode(text), 0]));
+      return strings.get(name);
+    },
     gluErrorString: (code) => {
       const text = ERRORS[code];
       if (!text) return 0;
@@ -803,7 +810,7 @@ export function gluBuiltins(T) {
   return {
     gluUnProject: f(I, D, D, D, P, P, P, P, P, P),
     gluPerspective: f(V, D, D, D, D), gluLookAt: f(V, D, D, D, D, D, D, D, D, D), gluOrtho2D: f(V, D, D, D, D),
-    gluPickMatrix: f(V, D, D, D, D, P), gluProject: f(I, D, D, D, P, P, P, P, P, P), gluErrorString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
+    gluPickMatrix: f(V, D, D, D, D, P), gluProject: f(I, D, D, D, P, P, P, P, P, P), gluErrorString: f(P, U), gluGetString: f(P, U), gluNewQuadric: f(P), gluDeleteQuadric: f(V, P),
     gluQuadricDrawStyle: f(V, P, U), gluQuadricCallback: f(V, P, U, P), gluQuadricNormals: f(V, P, U), gluQuadricOrientation: f(V, P, U), gluQuadricTexture: f(V, P, I),
     gluSphere: f(V, P, D, I, I), gluCylinder: f(V, P, D, D, D, I, I), gluDisk: f(V, P, D, D, I, I), gluPartialDisk: f(V, P, D, D, I, I, D, D), gluScaleImage: f(I, U, I, I, U, P, I, I, U, P), gluBuild2DMipmaps: f(I, U, I, I, I, U, U, P),
   };

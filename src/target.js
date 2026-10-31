@@ -343,7 +343,9 @@ export function targetUnits(target, root) {
       units.push({ file: full, source: readFileSync(full, 'latin1'), module: name, ...(m.defines ? { defines: m.defines } : {}) });
     }
   }
-  for (const { name, file, source } of envVars(target.env)) {
+  const own = [...units];
+  for (const { name, file, source, when } of envVars(target.env)) {
+    if (when && !when(own)) continue;
     units.push({ file: file ? `prism-${name}-${file}` : `prism-${name}-vars.c`, source });
   }
   /*

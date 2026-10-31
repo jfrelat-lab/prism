@@ -55,6 +55,7 @@ import { installWsock } from './wsock.js';
 import { installGL, glBuiltins } from './gl.js';
 import { installGlut, glutBuiltins } from './glut.js';
 import { GLUT_C } from './glut-c.js';
+import { GLU_C } from './glu-c.js';
 import { installGlu, gluBuiltins } from './glu.js';
 import { installZlib, zlibBuiltins, ZLIB_H } from './zlib.js';
 import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
@@ -233,7 +234,12 @@ export const ENV = {
   // GLUT's shapes are GLUT 3.7's own C (glut-c.js), drawn through gl and glu as its library draws them.
   glut: { needs: ['gl', 'glu'], install: (M, _c, o) => installGlut(M, o), vars: GLUT_C, builtins: glutBuiltins(T) },
   // GLU over that GL (src/env/glu.js): the projection helper, quadric spheres, mipmap building.
-  glu: { needs: ['gl'], install: (M) => installGlu(M), builtins: gluBuiltins(T) },
+  /*
+   * The tessellator is GLU 9's libtess as C (glu-c.js), compiled only into a program that calls it and
+   * does not compile libtess itself (Chromium B.S.U.'s target lists its units, for FTGL).
+   */
+  glu: { needs: ['gl'], install: (M) => installGlu(M), builtins: gluBuiltins(T), vars: GLU_C,
+    when: (units) => units.some((u) => /\bglu(NewTess|BeginPolygon)\b/.test(u.source)) && !units.some((u) => /^gluNewTess\s*\(/m.test(u.source)) },
   // zlib's interface, imitated (src/env/zlib.js) and held to zlib 1.1.3 compiled from its own
   // source (targets/zlib.json, tools/gate-zlib.mjs): what a program linked with -lz gets here.
   zlib: { install: (M) => installZlib(M), headers: { 'zlib.h': ZLIB_H }, builtins: zlibBuiltins(T) },
@@ -282,8 +288,9 @@ export function buildEnv(M, spec, extra = {}) {
 /** The C an environment supplies, for the units list, in the order the names were given. */
 export function envVars(spec) {
   const names = Array.isArray(spec) ? spec : Object.keys(spec ?? {});
-  // `vars` is one unit's source, or a list of { file, source } units (GLUT's fonts: static names that clash).
-  return names.filter(n => ENV[n]?.vars).flatMap(n => (Array.isArray(ENV[n].vars) ? ENV[n].vars.map(u => ({ name: n, ...u })) : [{ name: n, source: ENV[n].vars }]));
+  // `vars` is one unit's source, or a list of { file, source } units (GLUT's fonts: static names that clash);
+  // `when`, given the program's units, says whether it wants them.
+  return names.filter(n => ENV[n]?.vars).flatMap(n => (Array.isArray(ENV[n].vars) ? ENV[n].vars.map(u => ({ name: n, when: ENV[n].when, ...u })) : [{ name: n, when: ENV[n].when, source: ENV[n].vars }]));
 }
 
 /**

@@ -1143,6 +1143,14 @@ export const GLU_H = `#ifndef _PRISM_GLU_H
 #define _PRISM_GLU_H
 #include <GL/gl.h>
 /* GLU 1.2, the part src/env/glu.js implements (the glu environment). Values are SGI's. */
+/* The versions whose every entry point PRISM has (1.3's gluCheckExtension and level mipmaps it has not);
+   gluGetString answers what libGLU 9 answers. */
+#define GLU_VERSION_1_1 1
+#define GLU_VERSION_1_2 1
+#define GLU_EXT_object_space_tess 1
+#define GLU_VERSION 100800
+#define GLU_EXTENSIONS 100801
+const GLubyte *gluGetString(GLenum name);
 typedef struct GLUquadric GLUquadric;
 typedef struct GLUquadric GLUquadricObj;
 #define GLU_SMOOTH 100000
