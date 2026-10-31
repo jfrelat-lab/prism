@@ -5,13 +5,10 @@ WHY THIS EXISTS. P5 (the assembly subset) is the one piece of PRISM with no orac
 i386 harness cannot serve, because the routine contains an `out`, which faults in user space.
 Unicorn runs 32-bit protected mode and hooks I/O instructions, so it can.
 
-AN EARLIER VERSION OF THIS NOTE SAID MIRAGE COULD NOT SERVE BECAUSE IT IS "REAL-MODE ONLY". That
-is false: MIRAGE's COMPAT.md records Quake playing as a DJGPP program driving its DPMI host
-directly, and its roadmap carries CR0.PE, GDT/LDT/IDT, paging and V86. The claim was read from a
-stale line in PRISM's own ARCHITECTURE.md and repeated as measured. The privileged `out` argues
-FOR an emulator rather than against one. What is actually missing is a harness: MIRAGE runs whole
-programs and exposes no way to call ONE routine with registers and a stack and read the end state
-back. Unicorn does, which is the real reason it is used here.
+A full x86 emulator is not ruled out by the mode: one that hosts DPMI runs 32-bit flat code, and
+the privileged `out` argues FOR an emulator rather than against one. What is missing is a harness:
+an emulator that runs whole programs exposes no way to call ONE routine with registers and a stack
+and read the end state back. Unicorn does, which is the real reason it is used here.
 
 WHAT IT IS NOT: it is not part of PRISM. Like Docker, DOSBox-X and gcc, it is an external reference
 this project calls and compares against. PRISM itself still has zero dependencies.

@@ -4,7 +4,7 @@
 // files inside it. So a program whose data is such an archive (a descriptor's needsData.archive)
 // receives the archive as published, and the page unpacks it here, as its installer would have.
 //
-// Ported from MIRAGE's src/zip.js (same author, MIT), the parts PRISM needs: a ZIP reader (stored and
+// Ported from the same author's ZIP reader (MIT), the parts PRISM needs: a ZIP reader (stored and
 // deflate, through the platform's DecompressionStream) and `deice`, for id Software's archives (DOOM
 // 1.9, Heretic 1.2), which hold DEICE.EXE and a self-extracting PKZIP cut into floppy-sized pieces,
 // NAME.1, NAME.2... joined back here as DEICE would, and read as the ZIP they are.

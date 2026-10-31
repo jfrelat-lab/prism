@@ -3,8 +3,8 @@
  *
  * The same source is compiled twice, once by a real i386 gcc and once by PRISM, driven from the same
  * ROM image with the same T-state budget, and the register file is printed after every step. The
- * first line that differs is the instruction PRISM gets wrong. This is the same shape as MIRAGE's
- * Unicorn co-simulator: rather than reading 2500 lines of CPU emulation, ask an oracle where the two
+ * first line that differs is the instruction PRISM gets wrong. This is the same shape as an x86
+ * emulator's Unicorn co-simulator: rather than reading 2500 lines of CPU emulation, ask an oracle where the two
  * stop agreeing.
  *
  * No ROM data lives in this file. It reads `z80rom.bin` from the working directory, so the game data

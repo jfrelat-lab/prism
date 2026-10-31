@@ -374,7 +374,7 @@ export function wake(ctrl) {
  * first would report Enter as pressed for as long as the finger is down and read it dozens of times;
  * answering it with -1, as PRISM did until now, made the program ask and ignore the answer.
  *
- * MIRAGE draws the same distinction — a scancode path for INT 9h and a (scan, ascii) queue for INT
+ * A PC BIOS draws the same distinction — a scancode path for INT 9h and a (scan, ascii) queue for INT
  * 16h — and for the same reason.
  */
 export function makeKeyboard(views) {

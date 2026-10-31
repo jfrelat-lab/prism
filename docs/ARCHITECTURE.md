@@ -3,11 +3,11 @@
 PRISM is a **C→JavaScript compiler written in pure JavaScript, that runs in the page**. It compiles
 the *unmodified source* of DOS-era games and emulators and runs them in the browser or headless in Node.
 
-Sibling project: MIRAGE recompiles a program's **x86 binary**; PRISM compiles its
-**C source**. The real difference is what each one needs: MIRAGE needs a binary and no source, PRISM
+A binary recompiler or emulator runs a program's **x86 binary**; PRISM compiles its **C source**.
+The real difference is what each one needs: a binary approach needs a binary and no source, PRISM
 needs published source and no binary. Doom qualifies for PRISM because id released the Linux tree;
-a program whose source was never published is MIRAGE's alone, and one that ships only source is
-PRISM's.
+a program whose source was never published is out of PRISM's reach, and one that ships only source
+is PRISM's.
 
 > New here? Read this file, then [TESTING.md](TESTING.md) (the oracles — read before writing any
 > code that makes a claim about C), [ROADMAP.md](ROADMAP.md) (the task menu) and
@@ -75,7 +75,7 @@ So the honest differences are narrower than "no porting", and they are these:
 * **Every layer has an external oracle**, and the invariant is *zero wrong answers*: a construct
   PRISM cannot compile is a named refusal, never a silent miscompile. See [TESTING.md](TESTING.md).
 
-**Emitted output is JavaScript, not WASM** — the same design bet MIRAGE makes: readable emitted
+**Emitted output is JavaScript, not WASM** — readable emitted
 code plus the browser's own JIT, and readability as the primary debugging lever. The IR is kept
 backend-agnostic anyway, so the decision can be revisited on a measured number rather than an
 intuition.
@@ -133,7 +133,7 @@ asm/       the program's OWN assembly, translated from its SOURCE, never emulate
 link/      symbols, static placement of globals, the function-pointer table
 runtime/   libc, malloc, setjmp/longjmp, math, printf
 env/       djgpp/ (dpmi, pc.h, farptr, movedata) - allegro/ - posix+xlib/
-host/      bridge to MIRAGE's devices (vga, bios, dos, vfs, keyboard)
+host/      bridge to an x86 emulator's devices (vga, bios, dos, vfs, keyboard)
 ```
 
 ## The six hard parts, and the position taken on each
@@ -154,7 +154,7 @@ sprites. Gated from day one — see [TESTING.md](TESTING.md).
 casting to `int` and storage in a struct all work. Doom's `void (*think)()` and MAME's opcode tables
 depend on it. A function's address is a tagged index into that table (`0x7000_0000 | index`), so it
 can never be mistaken for a data pointer. A lever for later: an inline cache at a hot indirect call
-site — precisely what MIRAGE cannot do from x86.
+site — precisely what a recompiler working from x86 cannot do.
 
 **4. Type punning, unaligned access, `volatile`.** Because every access is a `DataView` call at a
 byte offset, `*(int*)p` is one `D.getInt32(p, 1)` whatever `p`'s alignment, and reading a `float`'s
@@ -177,8 +177,8 @@ Doom's `I_Error`), never globally.
 
 ## One literal emitter, and where optimisation will live
 
-MIRAGE **measured** that compile cost tracks emitted *source volume*, not function count (Turbo
-Pascal: 151 blocks were 96.6% of 10 MB of emitted JS; 54% of one block was the inlined memory path).
+It was **measured** in an x86-to-JS recompiler that compile cost tracks emitted *source volume*, not
+function count (Turbo Pascal: 151 blocks were 96.6% of 10 MB of emitted JS; 54% of one block was the inlined memory path).
 A C compiler over Quake's 128 `.c` files hits that wall immediately, so the emitter is compact and
 LITERAL: memory access through short helper calls, every integer operation in its canonical form,
 `long long` a BigInt rather than something clever. It is called tier-0 in the code for history.
@@ -186,7 +186,7 @@ LITERAL: memory access through short helper calls, every integer operation in it
 Optimisation, when it comes, is a STATIC pass over an IR of the whole program (ROADMAP P13.2) --
 unboxed locals, memory access specialised where aliasing and alignment are proven, calls made direct
 -- not a runtime re-emission of hot code, for the reason given under *The bet*. The invariant is
-MIRAGE's `fuzz-region` one, carried over: optimised and literal output must produce identical state,
+borrowed from an x86 recompiler's region fuzzer: optimised and literal output must produce identical state,
 every pass gets a `PRISM_NO*` kill-switch, and every gate must pass with each switch on and off.
 
 ⚠️ **Status: the literal emitter only**; the IR and the optimiser do not exist. The measured
@@ -267,9 +267,8 @@ actually depend on, and the foundation the rest can be added onto.
 
 A DOS program prints a banner and then goes graphical, on one screen. The shell shows it that way: an
 80x25 text mode until the program creates a display, its framebuffer while it has one, and back to
-text if it closes it. Text is drawn with the **IBM VGA 8x16 ROM font** (`assets/`, from MIRAGE, where
-it was extracted graphically from DOSBox) — one pixel at a time into an ImageData, the same way
-MIRAGE's `video.js` does it. Canvas `fillText` was tried first and is not good enough: a proportional
+text if it closes it. Text is drawn with the **IBM VGA 8x16 ROM font** (`assets/`, extracted
+graphically from DOSBox) — one pixel at a time into an ImageData. Canvas `fillText` was tried first and is not good enough: a proportional
 fallback drifts, ASCII drawings stop lining up, and CP437's box-drawing characters — which every DOS
 program's UI is made of — do not exist in a web font.
 
@@ -279,7 +278,7 @@ side pane, because a DOS screen never showed "894 functions in 700 ms".
 ### Two kinds of keyboard, because programs ask two questions
 
 Which keys are **held** (one byte per scan code, polled every frame by a game) and which characters
-were **typed** (an ordered queue, read once each by `getchar`). MIRAGE draws the same line — a
+were **typed** (an ordered queue, read once each by `getchar`). A PC BIOS draws the same line — a
 scancode path for INT 9h, a `(scan, ascii)` queue for INT 16h — and for the same reason: answering the
 second question with the first reports Enter as pressed for as long as the finger is down.
 
@@ -405,7 +404,7 @@ to change under it*. A millisecond of iterations is far below any latency a pers
 `raven.mjs` uses 20,000 (`--budget`) because it is also counting.
 
 **What it costs, and what is not built.** A decrement and a compare on **every iteration of every
-loop** — precisely the cost MIRAGE measured on emitted-code speed, which is why this is opt-in rather
+loop** — a cost measured elsewhere as real on emitted-code speed, which is why this is opt-in rather
 than always on. And the general form is still only a form: the same mechanism with a different
 handler would let Stop interrupt a `while (1);`, and that handler is not written. Today the recourse
 for a program with no safepoints is terminating the worker.
@@ -613,9 +612,9 @@ with a `call far`; `BuildCompShape` even patches a `retf` into a routine and tak
 afterwards. No amount of work on the translator reaches that, because the bytes are a product of the
 program's execution.
 
-This is exactly the line the sibling project owns: **MIRAGE recompiles x86 as it is executed, and
-self-modifying code is its native case.** The division holds — MIRAGE owns the low level, PRISM the
-high level — and the meeting point stays the **device** boundary, not the CPU. What Catacomb's
+This is exactly the line a binary recompiler owns: **one that recompiles x86 as it is executed has
+self-modifying code as its native case.** The division holds — an emulator owns the low level, PRISM
+the high level — and the meeting point stays the **device** boundary, not the CPU. What Catacomb's
 scalers need is a seam with the shape `(memory, registers, io) => registers`, which is deliberately
 the shape `translateTasm` already produces and the shape Unicorn already has; whoever fills it is a
 dependency decision, not a compiler one.

@@ -1,6 +1,6 @@
 // gate-abi.mjs — PRISM's struct layout vs a real i386 gcc. Bar: exact, on every case.
 //
-// Two kinds of case, following MIRAGE's x86-gen lesson ("the generator does not think"): a battery
+// Two kinds of case, following an x86 instruction generator's lesson ("the generator does not think"): a battery
 // of hand-written shapes for the rules I know about, plus seeded random structs for the corners I
 // did not think of. Everything is batched into ONE C program, so the whole gate costs one compile.
 //

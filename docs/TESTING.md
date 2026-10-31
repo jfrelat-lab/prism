@@ -40,7 +40,7 @@ PRISM_REF_CACHE=0 turn them off.
 | `gate-tasm-run.mjs` | **Unicorn executing TASM's own object code** | registers, flags, 1,088 KB page by page, port writes |
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |
 | `gate-ega.mjs` | **DOSBox's VGA**, running a Borland program | the EGA's write modes, read modes and latches, eleven paths |
-| `gate-ega-rom.mjs` | **SeaVGABIOS** (QEMU's VGA ROM) setting the modes up on MIRAGE's machine | 0Dh, 0Eh, 10h, 12h: the attribute palette a mode set loads, and all 64 attribute values' colours |
+| `gate-ega-rom.mjs` | **SeaVGABIOS** (QEMU's VGA ROM) setting the modes up on an x86 emulator's machine | 0Dh, 0Eh, 10h, 12h: the attribute palette a mode set loads, and all 64 attribute values' colours |
 | `gate-dune-pixels.mjs` | **Dune II 1.07's `DUNE2.EXE`** under DOSBox-X, recorded by `DX-CAPTURE /V` | every screen OpenDUNE holds in its first 28 s is one the real binary showed, and its scenes come at the real binary's times (slope within 0.08) |
 | `gate-jnb-pixels.mjs` | **the game's own `jumpbump.exe`** (DJGPP) under DOSBox-X, DOS clock set to PRISM's | every one of 300 pages PRISM flips is a page the real binary showed |
 | `gate-mesa-demos.mjs` | **Mesa 22 (llvmpipe)** drawing mesa-demos 8.0.1's morph3d, texobj and reflect on the same GLUT harness (reflect linked against libGLU natively, glu.js here, and given a stencil buffer on both sides by GLUT_STENCIL); texobj twice, its GL_VERSION set on both sides, because "1.1" sends it to texture objects and anything else to textures compiled into display lists | per frame at most 0.1% of pixels beyond 8 levels (0-7 do); six controls red: two-sided lighting, the scene ambient, the second light, glBindTexture at draw time, NEAREST magnification, glTexImage2D in a list, and for reflect the stencil test dropped and GL_REPLACE read as GL_KEEP; `--case=<target>` runs one |
@@ -77,7 +77,7 @@ PRISM_REF_CACHE=0 turn them off.
 | `csmith-diff.mjs` | Csmith + gcc `-O0`/`-O2` | unlimited random programs, zero divergence |
 | `gate-pixels.mjs` | PRISM against ITSELF on four platform layers | `x11 == dos == win == svgalib`, pixel for pixel |
 | `gate-lua.mjs` | Lua 5.4's own test suite | 27 files of `assert()`s written by someone else |
-| `gate-sound.mjs`, `gate-ports.mjs`, `gate-vgafont.mjs` | device contracts, MIRAGE's font | the host seams |
+| `gate-sound.mjs`, `gate-ports.mjs`, `gate-vgafont.mjs` | device contracts, the VGA 8x16 font | the host seams |
 | `mamediff.mjs` | a native **gcc or tcc** build of the same MAME | frame-hash equality, whole build |
 | `bench.mjs` | clang -O2, native on this host | the speed ratio, published and never justified without it |
 
@@ -148,14 +148,14 @@ by line, so a frame caught mid-change can differ between the two lines of a doub
 
 **A second lineage for the colours (`tools/gate-ega-rom.mjs`).** DOSBox-X's video BIOS and its EGA
 model are the same code, so the two colour fixes rested on one source. SeaVGABIOS -- QEMU's
-`vgabios-stdvga.bin`, which MIRAGE already runs as its hardware oracle -- is POSTed on MIRAGE's
-machine and sets each mode through its own INT 10h, writing the attribute palette and the DAC. A VGA
+`vgabios-stdvga.bin` -- is POSTed on an x86 emulator's machine (any checkout providing
+`tools/harness.mjs`) and sets each mode through its own INT 10h, writing the attribute palette and the DAC. A VGA
 BIOS loads, per mode, the DAC table that makes a VGA show what an EGA showed, so DAC[value] must be
 the colour PRISM gives the same attribute value: for 0Dh, 0Eh, 10h and 12h, the 16 defaults and all
 64 values agree. Two controls run with it and must differ (the 64-colour reading on a 200-line mode:
 49 of 64; the 350-line palette loaded for one: 9 of 16), and removing brown from `ega200Rgb` turns
-it red on 06h, 0Eh, 26h and 2Eh. It SKIPS without MIRAGE (`PRISM_MIRAGE`) or the ROM
-(`PRISM_VGA_ROM`). PRISM has no CGA graphics mode, so there is nothing of CGA's to hold yet.
+it red on 06h, 0Eh, 26h and 2Eh. It SKIPS without that machine (`PRISM_X86_MACHINE`,
+no default) or the ROM (`PRISM_VGA_ROM`, default under the machine's `boot/`). PRISM has no CGA graphics mode, so there is nothing of CGA's to hold yet.
 
 ## The oracle (`tools/oracle.mjs`, `tools/oracle/Dockerfile`)
 
@@ -193,7 +193,7 @@ Measured cost of one Csmith differential cycle (generate → `gcc -O0` → run):
 (1.3 s generate, 1.8 s compile, 0.05 s run). A 2577-line program compiled at `-O0` *and* `-O2` cost
 16.7 s, so the per-program figure tracks program size, not a fixed overhead. 10 000 programs is
 therefore ~3 h at 8-way parallelism — and it is a **one-off capture whose result is committed**, the
-same pattern as MIRAGE's `golden-baseline.json` and its Unicorn capture. Once captured, the gate
+same pattern as a golden baseline and a Unicorn capture in an x86 recompiler. Once captured, the gate
 needs neither Docker nor gcc.
 
 ## The ABI gate (`tools/gate-abi.mjs`) — the only gate that exists today
@@ -216,7 +216,7 @@ pattern pins the placement exactly. There is no other ground truth.
 **Alignment is measured the way a struct experiences it** — the offset the type forces inside
 `struct { char pad; T inner; }` — not with `__alignof__`. See the trap below.
 
-**Generated cases, following MIRAGE's `x86-gen` lesson ("the generator does not think").** Seeded
+**Generated cases, on the lesson of an x86 instruction generator ("the generator does not think").** Seeded
 xorshift32, no `Math.random`, so a seed always yields the same structs. This was not decoration:
 the 17 hand-written cases and seed 12345 **passed on the first run**, and four other seeds then
 found 13–25 divergences each. Everything below was found that way.
@@ -428,8 +428,8 @@ Eight of the 22 failed on the first run. Six were real defects:
 - `printf("%d %d %d %d", i++, i, ++i, i)` — two unsequenced modifications of one object is
   **undefined**, not merely unspecified.
 
-Both were rewritten into sequenced statements. This is the same trap MIRAGE documents for BCD flags
-and for Unicorn's AF after a shift: **a differential gate must never compare on behaviour the
+Both were rewritten into sequenced statements. This is the same trap an x86 differential hits on BCD flags
+and on Unicorn's AF after a shift: **a differential gate must never compare on behaviour the
 standard does not define**, or it reports bugs that do not exist. Any new case here has to be checked
 for unspecified order and unsequenced modification before it is trusted.
 
@@ -460,7 +460,7 @@ npm run gate:suite:capture   # re-run gcc over the corpus (slow, one-off)
 ```
 
 The gcc side is captured once into `tools/suite-baseline.json` and committed, so daily runs are pure
-JS — the same pattern as MIRAGE's `golden-baseline.json`.
+JS — capture once, replay forever.
 
 **The gate fails on a WRONG ANSWER, not on a refusal.** A refusal is a known gap with a clear error;
 a wrong answer means PRISM claimed success and lied. Current state: **182/219 pass, 37 refused,
@@ -821,7 +821,7 @@ emit — with internal linkage mangled per unit.
 The tool the Pac-Man bug needed. It compiles `tools/z80diff/z80diff.c` plus MAME's `Z80.c` twice —
 once with the oracle's i386 gcc, once with PRISM — drives both from the same ROM image with the same
 T-state budget, and prints the register file after every step. With identical initial state, any
-divergence is a compiler bug and nothing else. Same shape as MIRAGE's Unicorn co-simulator.
+divergence is a compiler bug and nothing else. Same shape as an x86 emulator's Unicorn co-simulator.
 
 ```bash
 node tools/z80diff.mjs --roms=<dir with pacman.6e .6f .6h .6j>
@@ -883,7 +883,7 @@ pumps: the main one in `_Host_Frame`, plus `Con_NotifyBox`, `SCR_ModalMessage` a
 FIRST event of that drain. So a modal pump echoes everything after the first keystroke and redraws
 it on the next line. A live console is therefore not evidence that the main loop is running.
 
-The MIRAGE session found its Quake stuck this way: `Host_Init` had never returned, because
+An x86 emulator running the Quake binary was found stuck this way: `Host_Init` had never returned, because
 `IN_ReadJoystick` mistook a game port answering 0xF0 for a centred joystick and `WaitJoyButton` was
 waiting for a button that could not arrive. Everything downstream -- no demo, no game frame, an empty
 `cls.demos[]` reported as `No demos listed with startdemos` -- followed from that one port value.
@@ -942,7 +942,7 @@ same source saw 26 340 lit pixels. A platform backend must use the guest's own a
 
 ⚠️ **I claimed tier-0 was "pathologically" slow on the strength of that twelve-hour run.** It is not:
 121 frames of Pac-Man run in **0.31 s**. The run was a hang, not slowness, and asserting a
-performance characteristic from a hang is exactly the mistake MIRAGE's "measure, do not justify" note
+performance characteristic from a hang is exactly the mistake "measure, do not justify"
 warns about.
 
 ### The perf number (`tools/bench.mjs`), and three wrong versions of it
@@ -984,7 +984,7 @@ conclusions were reported before the numbers stopped moving.
 ## Gates still to build
 
 In the order the roadmap wants them: preprocessor vs `gcc -E`; c-testsuite; gcc torture `execute/`;
-the Csmith differential; tier-0 == tier-1; whole-program pixel diff against MIRAGE running the
+the Csmith differential; tier-0 == tier-1; whole-program pixel diff against an emulator running the
 original binary; `dbx-oracle` DOS-call sequence; and the perf ratio in one comparable unit.
 
 ## Verifying in a browser — four traps, all hit
@@ -1065,7 +1065,7 @@ Measured, unexplained, and recorded rather than guessed at.
 | the same build in a browser worker | 9.4 s |
 | MAME in the same browser worker, 0.46 MB emitted | 0.7 s |
 
-Superlinear in emitted size, which is the shape MIRAGE's D6 lesson predicts — but that lesson is about
+Superlinear in emitted size, which is the shape an earlier compile-cost lesson predicts — but that lesson is about
 emitted VOLUME, and Node compiles the same volume in a tenth of the time, so it does not explain the
 gap on its own.
 
@@ -1197,7 +1197,7 @@ Two false trails, both mine, kept because they are the shape of the mistake rath
 What was missing was not an idea but an **instrument**. Two profilers existed — one counting runtime
 services, one counting cross-unit calls — and a program spinning inside one C function is making
 neither kind of call, so both see a program doing nothing at all. The only place the host can regain
-control is the loop itself, which is what MIRAGE concluded when it studied the same problem: a
+control is the loop itself, which is what an x86 recompiler concluded when it studied the same problem: a
 safepoint **in** the emitted code, not a re-translation.
 
 `compileProgram(units, { safepoints: true })` emits, on every loop back edge,
@@ -1508,8 +1508,8 @@ which is a dictionary lookup, and there are 1,357 such sites in 516 kB of output
 
 If that is the cost, it is cheap to remove and needs no IR. But it also collides with something real:
 every harness in `tools/` rebinds `prog.F` to instrument a program, and direct calls would make that
-rebinding invisible. Measure before choosing -- the lesson of MIRAGE's three rejected memory-dispatch
-strategies is that a plausible optimisation built without a number is a plausible optimisation
+rebinding invisible. Measure before choosing -- the lesson of three memory-dispatch strategies rejected
+in an x86 recompiler is that a plausible optimisation built without a number is a plausible optimisation
 reverted.
 
 **Measured.** `bench.mjs --synthetic --direct-calls` emits a call to the emitted function's own
@@ -1740,8 +1740,8 @@ million pointers costs 49 ms. Preprocessing is about 0.6 s of a 2.2 s build, so 
 is under 1% of a build.
 
 Retracted. The value here is not the millisecond saved by not doing it; it is that an asymptotic
-argument with no constant factor attached is a hypothesis, and this is the second time in this
-project one has evaporated on contact with a measurement (the first was MIRAGE's D6). The instinct
+argument with no constant factor attached is a hypothesis, and this is the second time one has
+evaporated on contact with a measurement (the first was an x86 recompiler's compile-cost diagnosis). The instinct
 to fix a known-quadratic loop is strong enough that the entry had to warn its own author.
 
 
@@ -3279,7 +3279,7 @@ VW_ScreenToScreen, the title is identical every time. The first picture had been
 nothing is wrong with the colours.
 
 **Not yet referenced:** the pictures are held to DOSBox only through gate-ega's register paths, not
-pixel for pixel against the real KDREAMS.EXE. MIRAGE's grabber (a TSR on int 8) cannot reach Keen's
+pixel for pixel against the real KDREAMS.EXE. An emulator-side grabber (a TSR on int 8) cannot reach Keen's
 screens, because Keen replaces int 8 without chaining it.
 
 ### Keen Dreams plays -- and the data check that was too weak

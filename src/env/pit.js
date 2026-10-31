@@ -13,10 +13,10 @@
 // needs a counter, not an interrupt controller. And it reads the BIOS tick straight out of memory at
 // 0x46C — which works only because PRISM reserves the PC's low megabyte, so that address is real.
 //
-// The semantics are MIRAGE's, copied so the two agree when its own PIT is eventually shared: counter
+// The semantics are an x86 emulator's, copied so the two agree if its PIT is ever shared: counter
 // 0 counts DOWN from its reload at 1.193182 MHz, reads return LSB then MSB per the access mode, and a
-// latch command freezes the value the next reads see. What differs is the time source. MIRAGE derives
-// the count from emulated CPU cycles, because that is what it has; PRISM derives it from a clock,
+// latch command freezes the value the next reads see. What differs is the time source. An emulator
+// derives the count from emulated CPU cycles, because that is what it has; PRISM derives it from a clock,
 // because that is what IT has. Same observable device, different foundation.
 
 import { BDA } from '../link/module.js';

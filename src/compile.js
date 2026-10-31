@@ -289,7 +289,7 @@ export const BUILTINS = new Map(Object.entries({
   getitimer: { ret: I, params: [I, P, P] },
   alloca: { ret: P, params: [U] },
 
-  // I/O ports — see src/env/ports.js, the seam MIRAGE's devices plug into.
+  // I/O ports — see src/env/ports.js, the seam an emulator's devices plug into.
   inportb: { ret: I, params: [I] },
   inportw: { ret: I, params: [I] },
   outportb: { ret: V, params: [I, I] },

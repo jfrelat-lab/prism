@@ -1199,8 +1199,8 @@ function makeLibc(M) {
     /**
      * A DETERMINISTIC clock — the default, and what every gate runs against. Reading the host's real
      * time would destroy the property the whole test strategy rests on: the same input must yield
-     * byte-identical state, which is what makes a golden fingerprint possible at all (MIRAGE keeps
-     * the same rule: no Date, no Math.random).
+     * byte-identical state, which is what makes a golden fingerprint possible at all (an emulator
+     * built on the same rule reads no Date and no Math.random).
      *
      * The increments are one frame's worth per call — 16667 µs and 19886 PIT ticks are 1/60 s — which
      * has a consequence worth stating out loud rather than leaving as a happy accident. MAME 0.1
@@ -1962,12 +1962,12 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
  *
  * The threshold has to be MEASURED, not chosen. Too low and a timer-calibration loop — the kind that
  * counts iterations per tick — concludes the machine is a thousand times slower than it is, which is
- * the trap MIRAGE hit with Wolf3D. Too high and the core burns for longer than it needs to.
+ * the trap an x86 emulator hit with Wolf3D. Too high and the core burns for longer than it needs to.
  *
  * What this deliberately does NOT catch: a loop that never calls the runtime at all, `while (1);`
  * being the honest example. Nothing here can see it, because nothing here is called. The only recourse
  * is terminating the worker, and the general fix would be a safepoint on loop back-edges in the
- * emitted code — which MIRAGE measured as a real cost on emitted-code speed, so it waits until
+ * emitted code — measured elsewhere as a real cost on emitted-code speed, so it waits until
  * something needs it.
  */
 export function installSpinDamping(M, {

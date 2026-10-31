@@ -5,20 +5,16 @@
 // privileged `out`, which faults in user space. Unicorn runs the real bytes nasm produces from the
 // UNMODIFIED dos/gfx.S, and this compares PRISM's JavaScript against it.
 //
-// WHAT THIS FILE USED TO SAY, AND IT WAS WRONG: "MIRAGE cannot be one here (it is real-mode; this
-// is 32-bit flat)". MIRAGE is not real-mode only -- its COMPAT.md records Quake PLAYING as "a
-// DJGPP program [driving] our DPMI host directly", and its roadmap carries CR0.PE, GDT/LDT/IDT,
-// paging and V86. The claim came from a stale line in this project's own ARCHITECTURE.md and was
-// repeated as if measured. The privileged `out` argues FOR an emulator, not against one: MIRAGE
-// emulates ports by design. What actually stands in the way is narrower and is a harness
-// question, not a CPU one -- MIRAGE runs whole programs, and nothing there yet exposes ONE routine
-// as a callable unit: entry at a flat address, registers and stack supplied, end state read back.
-// That is what Unicorn gives for free, and why it is used here.
+// A full x86 emulator is not ruled out by the mode: being 32-bit flat is no obstacle to one that
+// hosts DPMI, and the privileged `out` argues FOR an emulator, not against one, since it emulates
+// ports by design. What stands in the way is a harness question, not a CPU one -- an emulator runs
+// whole programs, and exposing ONE routine as a callable unit (entry at a flat address, registers
+// and stack supplied, end state read back) is what Unicorn gives for free, and why it is used here.
 //
-// CAPTURE ONCE, REPLAY FOREVER -- the idea is MIRAGE's tools/uc-capture.py, and it is the reason
-// this gate is worth having rather than merely possible: `--capture` runs Unicorn and writes the
-// expected end states into goldens/, which is COMMITTED, so every later run needs neither Python
-// nor Unicorn nor nasm. The same shape as goldens/mame05.json: born against a real reference, then
+// CAPTURE ONCE, REPLAY FOREVER -- the idea comes from an x86 recompiler's Unicorn capture, and it is
+// the reason this gate is worth having rather than merely possible: `--capture` runs Unicorn and
+// writes the expected end states into goldens/, which is COMMITTED, so every later run needs neither
+// Python nor Unicorn nor nasm. The same shape as goldens/mame05.json: born against a real reference, then
 // cheap to replay on any machine.
 //
 //   node tools/gate-asm.mjs --capture     assemble, run Unicorn, record the expectations
@@ -157,8 +153,8 @@ if (CAPTURE) {
   const golden = { _doc: [
     'PRISM translating Jump n Bump\'s own dos/gfx.S, checked against Unicorn running the bytes',
     'nasm produces from the SAME unmodified file. Captured once with --capture; committed so the',
-    'gate replays with neither Python, Unicorn nor nasm installed -- the pattern MIRAGE uses for',
-    'its own x86 differential, and the same bargain as goldens/mame05.json.',
+    'gate replays with neither Python, Unicorn nor nasm installed -- the pattern of an x86 recompiler\'s',
+    'own x86 differential, and the same bargain as goldens/mame05.json.',
   ], cases: CASES.length, routines: {} };
   for (const routine of ROUTINES) golden.routines[routine] = capture(routine, obj, python);
   mkdirSync(dirname(GOLDEN), { recursive: true });

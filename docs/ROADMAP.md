@@ -213,7 +213,7 @@ each asks for. The second is the build itself: today the page compiles all 695 u
 | P16.6 | ⚪ | **Joystick and analogue controls.** The browser's Gamepad API into Allegro 3's `joy[]` table (sticks, axes with d1/d2, buttons), calibration answered as already done. | M | — |
 | P16.7 | ⚪ | **The pixel doublers.** `double_pixels` and `double_pixels16` are GCC inline assembly in video.c (`lodsl`, `bswap`, `xchgw`, `roll`, `stosl`, `loop`, a segment override): widen the subset emit.js has for rdtsc and imull, held to a real x86 as those are. Fidelity more than need -- the page scales the picture already -- but it removes `-nodouble`. | M | — |
 | P16.8 | ⚪ | **The card's scan-out.** No VGA or VESA register is modelled: the frame is the program's own bitmap, so tweaked modes, scanlines and centring do not exist here. Model the CRTC and the VESA window and present what the card would show. Its reference is the real MAME.EXE under DOSBox-X (`DX-CAPTURE`, as for Keen Dreams) -- which would also be the first thing to hold src/msdos/video.c itself. | L | — |
-| P16.9 | ⚪ | **The YM2203 through an OPL card.** `ym2203.opm` is x86 object code with no source: it would have to be translated (MIRAGE's territory) and given an OPL to drive. Little to gain -- with No_FM the core computes the chip itself. | L–XL | — |
+| P16.9 | ⚪ | **The YM2203 through an OPL card.** `ym2203.opm` is x86 object code with no source: it would have to be translated (a binary recompiler's territory) and given an OPL to drive. Little to gain -- with No_FM the core computes the chip itself. | L–XL | — |
 
 **The build, by ambition.** The static bundle is P13.1 and is not started; these are what it means
 for MAME.
@@ -243,7 +243,8 @@ presents is held to nothing.
 What was weighed and NOT kept, so it is not proposed again by drift: a catalogue of old C
 libraries as npm packages (every useful one already has a WASM port); SQLite as an alternative to
 a native or WASM build (it compiles and agrees with gcc; nothing says it competes); Android, with
-or without MIRAGE (wrong languages above the kernel, and orders of magnitude from where MIRAGE is).
+or without an x86 emulator (wrong languages above the kernel, and orders of magnitude from where
+such an emulator is).
 
 | # | | Task | Effort | |
 |---|---|---|---|---|
@@ -261,7 +262,7 @@ or without MIRAGE (wrong languages above the kernel, and orders of magnitude fro
 | P17.12 | ⚪ | **Firmware, simulated.** A microcontroller's hardware layer is a library like Allegro is: imitate it and a device's C firmware runs under Node with virtual pins, a serial port, sensors -- testable without the board, replayable. Faster and more readable than emulating the processor, and less faithful to the hardware. A whole new domain, one layer per family of boards; a bet. Several real-time kernels (FreeRTOS, Zephyr, NuttX) ship a simulator port that is an ordinary program, which is the cheap way in. | L–XL | — |
 | P17.14 | ⚪ | **`./configure && make` in PRISM.** A Unix source tree built the way its README says, by programs PRISM compiled: a shell (dash, or BusyBox's ash with the applets a configure script calls -- echo, test, cat, cut, rm, uname, sed), and PRISM itself standing as `cc`/`g++` (answering `-dumpversion`, its output a file the shell can run). What it takes, in order: (1) the shell compiled and running a script with no commands of its own; (2) **processes** -- `fork`, `exec`, `pipe`, `wait` between PRISM programs in one page or one Node process: today `fork`, `execvp` and `pipe` answer ENOSYS and `system` -1, and this is the bulk of the work; (3) the compiler as a command; (4) make. Then the program is probed by the machine that will run it, not by a container standing in for it. **First proof**: ScummVM 0.6.1's configure -- a `#!/bin/sh` script of 11 compile probes, 4 of which it also runs (endianness, alignment, type sizes) -- writing a config.h byte for byte the one the same script writes in the i386 oracle container (corpus/scummvm-0.6.1-generated/config.h, P14.6). Asked for by the owner on 2026-10-09. | L | — |
 | P17.15 | ⚪ | **AI models play, and their games are replays** (asked for 2026-10-21). On P17.5's `step` -- a frame and the program's own state out, inputs in -- a model plays: a vision-language model reading the picture, or an agent trained on the state. Because a run is deterministic, a game is just its inputs (a few kilobytes), so every AI game becomes a **replay** anyone opens in the page and watches exactly as it was played, and the same format serves people's own replays ("watch my run of E1M1"). Needs: P17.5, a replay format and a player for it in the page, then the agents. Open questions: which games (Doom and Tux Racer have a score the program keeps; Monkey Island would test reasoning, not reflexes), what a model sees (the picture alone, or also the state by name), and the cost of running hosted models. A gallery of "AI plays..." replays is a showcase of its own. | L | |
-| P17.13 | ⚪ | **A kernel compiled by PRISM, its hardware by MIRAGE.** xv6 (x86): the kernel's C becomes JavaScript one can stop in by function name, MIRAGE's devices answer its ports, and MIRAGE's CPU runs the user programs, which stay x86 binaries; a system call is where one hands over to the other. Research, and it CONTRADICTS the rule below ("they meet at the device boundary, not at the CPU") -- so it is to be decided on purpose, and Catacomb 3-D's run-time code (P11.4) is the smaller, real case to decide it on. Known walls: the kernel's assembly (boot, trap entry, context switch) has to be supplied as a layer; a context switch suspends a function mid-way, which JavaScript's stack cannot do (one thread per process, one running at a time, is the lead); kernel addresses need translation; MIRAGE has to become callable. First step, cheap: fetch xv6 and measure how much of its C compiles. Its use is teaching, not a faster Linux -- MIRAGE alone booting a period Linux is the plainer milestone, and is MIRAGE's. | XL | — |
+| P17.13 | ⚪ | **A kernel compiled by PRISM, its hardware by an x86 emulator.** xv6 (x86): the kernel's C becomes JavaScript one can stop in by function name, the emulator's devices answer its ports, and its CPU runs the user programs, which stay x86 binaries; a system call is where one hands over to the other. Research, and it CONTRADICTS the rule below ("they meet at the device boundary, not at the CPU") -- so it is to be decided on purpose, and Catacomb 3-D's run-time code (P11.4) is the smaller, real case to decide it on. Known walls: the kernel's assembly (boot, trap entry, context switch) has to be supplied as a layer; a context switch suspends a function mid-way, which JavaScript's stack cannot do (one thread per process, one running at a time, is the lead); kernel addresses need translation; the emulator has to become callable. First step, cheap: fetch xv6 and measure how much of its C compiles. Its use is teaching, not a faster Linux -- an emulator alone booting a period Linux is the plainer milestone, and is not PRISM's. | XL | — |
 
 ## P9 · One engine, more platforms: X11, Win32, SunOS, and sound
 
@@ -421,15 +422,16 @@ where each one is useful on its own and none closes a door the next needs.
 | P13.7 | ⚪ | **A project as a manifest, opened by a link** (asked for 2026-10-21). A JSON file -- a target as targets/*.json already writes one (units, defines, environment) -- plus a GitHub repository pinned to a commit and where the data comes from (a URL whose licence allows it, or "ask the visitor"). `live/?project=<url of the manifest>` fetches the tree, compiles the whole program in the page and runs it; the manifest is what people share, not a fork. **On a game's page (P13.6)** this becomes a second action beside Play -- *Compile from source* -- that fetches the tree, compiles it in the page with its progress shown (units done of units, the current file, what was refused) and then runs what it built, the bundle staying the quick way in. Builds on P13.5 (fetching a repository, inferring what a target would say). Data from third-party repositories that host game files without the right to do so is never used: Quake's `pak`s come from the official shareware archive or the visitor's copy. | M | |
 | P13.8 | ⚪ | **Change a function while the program runs** (asked for 2026-10-21). Edit one function in Live C, recompile only it, and swap it into the running program -- the game goes on with the new code, no restart. The mechanism exists: one emitted JS function per C function, and the module's rebinder already replaces one in a running program (`prog.F[name] = fn`, used for Win32's GetMessage and the MGL and Allegro presenters; see P2.6). What is new: compiling one function against the program's existing layout and symbols, and saying when a change cannot be applied live (a struct's layout, a new global, a changed signature) so a restart is asked for instead. First demo: the DOOM shareware (its data may be shipped) -- change a weapon's damage or the gravity mid-game. | M | |
 
-## MIRAGE + PRISM: where the two projects meet
+## An x86 emulator's devices: where PRISM meets the low level
 
-The division of labour, stated as the north star it is: **MIRAGE owns the low level, PRISM owns the
-high level, and they meet at the device boundary.** Not at the CPU — PRISM has none and wants none.
+The division of labour, stated as the north star it is: **an emulator owns the low level, PRISM owns
+the high level, and they meet at the device boundary.** Not at the CPU — PRISM has none and wants
+none.
 
-That boundary is more precise than it sounds, and it is already implemented on MIRAGE's side. A
-MIRAGE device installs itself with `installVGA(machine)` and asks its host for almost nothing:
+That boundary is more precise than it sounds. An emulator's device in the shape PRISM targets
+installs itself with `installVGA(machine)` and asks its host for almost nothing:
 
-| What a MIRAGE device needs | Count in `vga.js` / `keyboard.js` |
+| What such a device needs | Count in one emulator's `vga.js` / `keyboard.js` |
 | `machine.onPortWrite(port, fn)` | 7 / 4 |
 | `machine.onPortRead(port, fn)` | 3 / 4 |
 | `machine.mem` | 1 |
@@ -438,43 +440,43 @@ MIRAGE device installs itself with `installVGA(machine)` and asks its host for a
 So a **PRISM adapter is a `machine` object of about forty lines**: a port-dispatch table, and `mem`
 pointing at PRISM's guest image — whose low megabyte is already reserved, so 0xA0000 and 0xB8000 are
 already the addresses the devices expect. What feeds the dispatch is the `inportb`/`outportb`
-intrinsic, because **a port write is the universal low-level verb**: MIRAGE reaches it from an
+intrinsic, because **a port write is the universal low-level verb**: an emulator reaches it from an
 emulated `out dx, al`, PRISM reaches it from a compiled function call, and the device cannot tell.
 
 ### The recommended order
 
 | # | Step | Why it is first |
 | 1 | **P5.1 — the `inportb`/`outportb` intrinsics** | Everything hinges on this one piece. It IS the seam, and the same two intrinsics separately unlock MAME's own `msdos.c` (P1.7) and Quake's `sys_dos.c`. Nothing else in the roadmap has three payoffs. |
-| 2 | **The `machine` adapter** (~40 lines) | Lets any MIRAGE device install into PRISM unchanged. |
+| 2 | **The `machine` adapter** (~40 lines) | Lets a device written to that contract install into PRISM unchanged. |
 | 3 | **First device: the PIT** | Quake's `Sys_FloatTime` needs only channel-0 latch-and-read plus the BIOS tick at 0x46C. Small enough to prove the seam end to end, and real time is what fixes game speed from inside the program. |
-| 4 | **Keyboard** | MIRAGE's `keyboard.js` already models scancodes AND the BIOS queue — the same two-question distinction PRISM re-invented in `src/env/webhost.js`. Converging removes a duplicate, it does not add a dependency. |
-| 5 | **VGA** | **Free for mode 13h**: a linear framebuffer at an address PRISM already has, so it is only memory. **Not free for planar**: EGA/VGA latches and masks need a write barrier on the 0xA0000 window, and that is exactly the memory-dispatch cliff MIRAGE measured (three strategies built and rejected). Decide it on a number, not before. |
-| 6 | **The renderer** | PRISM's shell re-implemented MIRAGE's text mode, down to using its font ROM. Adopting `video.js` deletes that duplication outright. |
+| 4 | **Keyboard** | An emulator's keyboard models scancodes AND the BIOS queue — the same two-question distinction PRISM re-invented in `src/env/webhost.js`. Converging removes a duplicate, it does not add a dependency. |
+| 5 | **VGA** | **Free for mode 13h**: a linear framebuffer at an address PRISM already has, so it is only memory. **Not free for planar**: EGA/VGA latches and masks need a write barrier on the 0xA0000 window, and that is exactly the memory-dispatch cliff measured on an x86 recompiler (three strategies built and rejected). Decide it on a number, not before. |
+| 6 | **The renderer** | PRISM's shell re-implemented an emulator's text mode, down to using the same font ROM. Adopting an emulator's renderer would delete that duplication outright. |
 
 ### What does NOT converge, and the honest limits
 
-* **The compiler and the recompiler share nothing.** One translates C, the other x86. Do not force it.
+* **A compiler and a recompiler share nothing.** One translates C, the other x86. Do not force it.
   ⚠️ **This line is now load-bearing, and P11.4 is where it bites.** Catacomb 3-D writes x86 into
   memory at run time and calls it; a translator that reads a source file once cannot express that,
-  and MIRAGE's whole design can. So the first REAL argument for meeting at the CPU has arrived, and
-  it should be answered on purpose rather than by drifting into it: PRISM growing an x86 executor
-  and MIRAGE lending one are both defensible, and there are now **two** x86 semantics in the family
-  (MIRAGE's recompiler, PRISM's `tasm16.js`) — a third would be a fork, not an economy.
-* **The seam is asymmetric.** MIRAGE's devices assume a CPU that traps I/O and memory; PRISM traps
-  function calls. Thin for ports, thick for memory — see step 5.
-* **A DEVICE is the sanctioned borrow; a CPU is not.** If something is to be taken from MIRAGE, the
-  cheap and already-designed case is a device behind the ~40-line `machine` adapter. The first one
-  that would pay for itself is an **OPL2** for Keen Dreams' and Catacomb's sound (P11.5) — except
-  that neither project has one today, so that particular borrow does not exist yet.
-* **This does not rescue MIRAGE's blocked list in general.** MIRAGE cannot run DPMI titles, and PRISM
-  can only reach a program whose SOURCE was published. Doom qualifies (the Linux tree). OMF, Jazz and
-  Zone 66 never will. The union is "published source **and** hardware needs", not "everything".
-* **The 16-bit id titles are now in BOTH projects' reach, which is new.** MIRAGE runs them from the
-  binary; PRISM compiles them from source (P11). That makes them the one place where the two can be
-  run against each other on the same program — a comparison neither could make before.
+  and a dynamic recompiler's whole design can. So the first REAL argument for meeting at the CPU has
+  arrived, and it should be answered on purpose rather than by drifting into it: PRISM growing an x86
+  executor and borrowing one are both defensible, and PRISM already holds one x86 semantics of its
+  own (`tasm16.js`) — a further one would be a fork, not an economy.
+* **The seam is asymmetric.** An emulator's devices assume a CPU that traps I/O and memory; PRISM
+  traps function calls. Thin for ports, thick for memory — see step 5.
+* **A DEVICE is the sanctioned borrow; a CPU is not.** If something is to be taken from an emulator,
+  the cheap and already-designed case is a device behind the ~40-line `machine` adapter. The first
+  one that would pay for itself is an **OPL2** for Keen Dreams' and Catacomb's sound (P11.5) — except
+  that PRISM has none today, so that particular borrow does not exist yet.
+* **This does not rescue an emulator's blocked list in general.** PRISM can only reach a program
+  whose SOURCE was published. Doom qualifies (the Linux tree). OMF, Jazz and Zone 66 never will. The
+  union is "published source **and** hardware needs", not "everything".
+* **The 16-bit id titles are in reach both from the binary and from source.** An emulator runs them
+  from the binary; PRISM compiles them from source (P11). That makes them the one place where the
+  two can be run against each other on the same program.
 * **The dependency needs a decision that has been deferred once already.** PRISM currently vendors
-  MIRAGE's 8x16 font rather than importing it. Importing `src/vga.js` for real means committing to a
-  sibling checkout or to publishing MIRAGE as a package. Choose before step 5, not during it.
+  an 8x16 font rather than importing it. Importing an emulator's VGA for real means committing to a
+  sibling checkout or to a published package. Choose before step 5, not during it.
 
 ## Hosts — which machine PRISM pretends to be
 
@@ -487,7 +489,7 @@ The cost has a single measure, and it is worth stating as a rule:
 
 > **A host costs what the program reaches for BELOW the library boundary.**
 > Implementing an interface is a shim and is cheap. Answering a program that talks to hardware means
-> emulating a device — which is MIRAGE's job, and where PRISM stops being the cheap way round.
+> emulating a device — which is an emulator's job, and where PRISM stops being the cheap way round.
 
 Descriptors name the host (the `platform` field becomes `host`, layers move under `src/env/hosts/`).
 That is naming what already exists — `mame-osd`, `quake` — not a framework. **No host framework is to

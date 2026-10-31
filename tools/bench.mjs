@@ -1,6 +1,6 @@
 // bench.mjs — the perf ratio, in one comparable unit.
 //
-// The plan forbids writing the optimiser before there is a number, and MIRAGE's lesson is blunter:
+// The plan forbids writing the optimiser before there is a number, and a lesson learnt elsewhere is blunter:
 // never explain away a slow run without a baseline. So this measures the same work three ways and
 // prints the ratios, with nothing hidden in the framing:
 //

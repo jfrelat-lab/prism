@@ -11,7 +11,7 @@ Raven re-released under the GNU General Public License v2 on 2 September 2008 (i
 beside this file; the release is Heretic_Source.zip at sourceforge.net/projects/heretic, whose 84
 source files are byte-identical to the tree PRISM compiles), compiled to JavaScript by PRISM.
 Heretic is a trademark of Activision; this site is not affiliated with Activision, Raven Software or
-id Software. (MIRAGE serves the same archive under the same reading: examples/licenses/heretic.txt.)
+id Software.
 
 ------------------------------------------------------------------------------------------------
 

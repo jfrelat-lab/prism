@@ -66,10 +66,6 @@ is supplied in JavaScript underneath it. That platform covers:
 Nothing in a game's tree is edited. Build switches the tree already has are configuration, not
 modification.
 
-PRISM has a sibling, MIRAGE, which recompiles a
-program's x86 **binary**. MIRAGE needs a binary and no source; PRISM needs published source and no
-binary.
-
 ## What it compiles
 
 - **C89/C99 with the GNU extensions** that real code uses, for two ABIs:
@@ -193,8 +189,7 @@ without it. [docs/TESTING.md](docs/TESTING.md) has the details.
 
 **Is it an emulator?** No. Nothing x86 is executed: the game's C source is compiled to JavaScript,
 and the machine it was written for (DOS, Win32, X11, SDL, OpenGL...) is supplied as libraries
-underneath it. Its sibling project MIRAGE is the other approach: it recompiles a program's x86
-binary.
+underneath it.
 
 **Why JavaScript and not WebAssembly?** Readable output, run by the browser's own JIT: one
 JavaScript function per C function, which is what makes a defect findable by reading. The choice is

@@ -5,7 +5,7 @@
 // the gaps by how often real code hits them instead of by my intuition.
 //
 // The gcc side is captured ONCE into tools/suite-baseline.json and committed, so day-to-day runs are
-// pure JS and take seconds. Same pattern as MIRAGE's golden-baseline.json and its Unicorn capture.
+// pure JS and take seconds. Capture once, replay forever.
 //
 //   node tools/gate-suite.mjs                 # compare against the committed capture
 //   node tools/gate-suite.mjs --capture       # re-run gcc over the corpus and rewrite the capture

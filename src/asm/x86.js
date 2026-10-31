@@ -4,11 +4,11 @@
 // conditions this file needs (jge, jl, jle, jnz, jns) all sit immediately after the instruction
 // that defines them, so keeping the last comparison's two operands and deducing the answer would
 // work -- on this file. It would also be a brand-new model with nothing behind it, while a real
-// CF/PF/AF/ZF/SF/OF computed at the operation's width is the model MIRAGE already runs against
-// Unicorn over 2,228 committed cases. Borrowing the MODEL and re-deriving it here is cheap;
+// CF/PF/AF/ZF/SF/OF computed at the operation's width is the model an existing x86 recompiler
+// already runs against Unicorn over 2,228 committed cases. Borrowing the MODEL and re-deriving it here is cheap;
 // inventing a shortcut and hoping is not.
 //
-// Nothing of MIRAGE's code is imported. It emits against a `cpu` object with a register file
+// Nothing of that recompiler's code is imported. It emits against a `cpu` object with a register file
 // because it IS a processor; what PRISM needs is a plain function that will be called from compiled
 // C. Dragging a CPU into a C compiler is exactly what the roadmap means by "the compiler and the
 // recompiler share nothing".

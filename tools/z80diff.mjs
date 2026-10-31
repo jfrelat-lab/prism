@@ -2,7 +2,7 @@
 //
 // Builds tools/z80diff/z80diff.c + MAME's Z80.c twice — once with a real i386 gcc in the oracle
 // container, once with PRISM — drives both from the same ROM image, and reports the first step where
-// the register files disagree. Same shape as MIRAGE's Unicorn co-simulator: with the same initial
+// the register files disagree. Same shape as an x86 emulator's Unicorn co-simulator: with the same initial
 // state, any divergence is a compiler bug and nothing else.
 //
 //   node tools/z80diff.mjs --roms=/path/to/pacman

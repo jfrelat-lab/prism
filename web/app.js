@@ -38,8 +38,7 @@ let statTimer = 0, lastStatAt = 0, lastFrame = 0;
 //
 // A REAL text mode, not a canvas-text approximation: the guest keeps an 80x25 character+attribute
 // buffer at 0xB8000 (see src/env/console.js) and this draws it with the IBM VGA 8x16 ROM font, one
-// pixel at a time into an ImageData — the same way MIRAGE's video.js does it, because it is the same
-// problem and MIRAGE already got the details right.
+// pixel at a time into an ImageData.
 //
 // Why bother, when fillText looked almost fine: it wasn't. A proportional fallback font drifts, the
 // columns of an ASCII drawing stop lining up, and CP437's box-drawing characters — which every DOS
@@ -1034,7 +1033,7 @@ async function listData(root, under = '') {
 
 // ---------------------------------------------------------------- keyboard
 //
-// Two distinct questions, answered separately, exactly as MIRAGE does it: which keys are HELD (a byte
+// Two distinct questions, answered separately, exactly as a PC BIOS does: which keys are HELD (a byte
 // per scan code, what a game polls every frame) and which characters were TYPED (an ordered queue,
 // what getchar reads once each). Answering the second with the first reports Enter as pressed for as
 // long as the finger is down.
@@ -1882,7 +1881,7 @@ function finish(state) {
 }
 
 /**
- * Query parameters, the way MIRAGE takes them: ?machine=…&program=…&args=…&speed=…&run=1
+ * Query parameters: ?machine=…&program=…&args=…&speed=…&run=1
  *
  * The point is not convenience, it is that a run becomes a LINK — reproducible, and reportable. "It
  * is too fast" and "?machine=dos&program=mame-0.4&args=pengo&speed=50" are not the same bug report.

@@ -25,5 +25,3 @@ The program that plays it is not id's DOS executable but linuxdoom-1.10, the sou
 released under the GNU General Public License (its LICENSE.TXT is beside this file), compiled to
 JavaScript by PRISM. DOOM is a trademark of id Software; this site is not affiliated with id
 Software.
-
-(This reading is MIRAGE's, examples/licenses/doom.txt, for the same archive.)

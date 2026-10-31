@@ -2127,7 +2127,7 @@ export class FunctionEmitter {
    * there is nothing to count. A check here is the only place the host can regain control.
    *
    * It is off by default and it is not free — a decrement and a compare on every iteration of every
-   * loop, which is exactly the cost MIRAGE measured when it studied this. Emitting it as a budget
+   * loop, which is exactly the cost measured when an x86 recompiler studied this. Emitting it as a budget
    * rather than a call keeps the common case to two operations and never leaves the loop.
    *
    * The general form of this is what would let Stop interrupt a `while (1);` — the same mechanism,

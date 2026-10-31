@@ -1,4 +1,4 @@
-# Upstream sources, fetched not vendored (see docs/TESTING.md). Same rule as MIRAGE's games/ and boot/.
+# Upstream sources, fetched not vendored (see docs/TESTING.md).
 corpus/
 
 # Scratch shared with the oracle container.

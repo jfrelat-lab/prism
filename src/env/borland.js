@@ -25,7 +25,7 @@
 // WHAT ANSWERS AN INTERRUPT, in order: a handler the PROGRAM installed with setvect (called, as the
 // hardware would); else a service the harness passed in `services` ({ 0x10: (regs, M) => ... });
 // else a throw naming the vector and AH. Nothing is answered by default: a BIOS is a device model,
-// as a VGA is, and pretending one exists would hand the program invented registers. MIRAGE owns
+// as a VGA is, and pretending one exists would hand the program invented registers. An emulator owns
 // real BIOS services; this is the seam they plug into, exactly as ports.js is for ports.
 
 import { DOS_DATE_ADD } from './borland-lib.js';

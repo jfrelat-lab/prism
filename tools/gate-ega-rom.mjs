@@ -2,9 +2,9 @@
 //
 // gate-keen-pixels holds Keen's screens to the shipped binary under DOSBox-X, but DOSBox-X is one
 // lineage: its video BIOS and its EGA model are the same code. This gate asks a second one.
-// SeaVGABIOS (QEMU's pc-bios/vgabios-stdvga.bin) is loaded at C000:0 on MIRAGE's machine, POSTs, and
-// its own INT 10h code sets each mode, writing the attribute palette and the DAC through MIRAGE's
-// device model. A colour on that card is DAC[attribute value]. PRISM does not model a DAC: it keeps
+// SeaVGABIOS (QEMU's pc-bios/vgabios-stdvga.bin) is loaded at C000:0 on an x86 emulator's machine, POSTs,
+// and its own INT 10h code sets each mode, writing the attribute palette and the DAC through that
+// machine's device model. A colour on that card is DAC[attribute value]. PRISM does not model a DAC: it keeps
 // the attribute palette and reads the value as the EGA's monitor would (egaRgb for 350 lines,
 // ega200Rgb -- IRGB, brown -- for 200). A VGA BIOS loads, for each mode, the DAC table that makes a
 // VGA show what an EGA showed, so the two must agree:
@@ -18,19 +18,20 @@
 // reading applied to a 200-line mode, and the 350-line palette loaded for one. Those are the two
 // defects gate-keen-pixels found on its first run.
 //
-// MIRAGE and the ROM are outside this repository; without them the gate SKIPS.
-//   PRISM_MIRAGE   the MIRAGE checkout (default ~/Projects/mirage)
-//   PRISM_VGA_ROM  the ROM (default $PRISM_MIRAGE/boot/vgabios-stdvga.bin)
+// The machine and the ROM are outside this repository; without them the gate SKIPS.
+//   PRISM_X86_MACHINE  an x86 machine checkout that provides tools/harness.mjs (makeMachine); no default
+//   PRISM_VGA_ROM      the ROM (default $PRISM_X86_MACHINE/boot/vgabios-stdvga.bin)
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { skip } from './gate-skip.mjs';
 import { installEga, egaRgb, ega200Rgb } from '../src/env/ega.js';
 
-const MIRAGE = process.env.PRISM_MIRAGE ?? join(process.env.HOME ?? '', 'Projects', 'mirage');
-const ROM = process.env.PRISM_VGA_ROM ?? join(MIRAGE, 'boot', 'vgabios-stdvga.bin');
-const HARNESS = join(MIRAGE, 'tools', 'harness.mjs');
-if (!existsSync(HARNESS)) skip(`MIRAGE's machine at ${MIRAGE}`, 'set PRISM_MIRAGE to a MIRAGE checkout');
+const MACHINE = process.env.PRISM_X86_MACHINE;
+if (!MACHINE) skip('an x86 machine', 'set PRISM_X86_MACHINE to a checkout that provides tools/harness.mjs');
+const ROM = process.env.PRISM_VGA_ROM ?? join(MACHINE, 'boot', 'vgabios-stdvga.bin');
+const HARNESS = join(MACHINE, 'tools', 'harness.mjs');
+if (!existsSync(HARNESS)) skip(`an x86 machine at ${HARNESS}`, 'set PRISM_X86_MACHINE to a checkout that provides tools/harness.mjs');
 if (!existsSync(ROM)) skip(`a VGA BIOS at ${ROM}`, 'QEMU ships it as pc-bios/vgabios-stdvga.bin; set PRISM_VGA_ROM');
 const { makeMachine } = await import(pathToFileURL(HARNESS).href);
 const rom = new Uint8Array(readFileSync(ROM));

@@ -18,7 +18,7 @@
 // So this is not an assembler and does not pretend to be. It knows the instructions those three use,
 // and REFUSES anything else by name rather than guessing -- a wrong guess here is a wrong number in
 // a renderer, which is the hardest kind of bug to find. Roadmap P5.2 is the general path, and its
-// oracle is MIRAGE, which is already an x86-to-JS recompiler.
+// oracle is an x86-to-JS recompiler, which already exists.
 //
 // The three routines are also this file's own oracle: all three were transcribed BY HAND before it
 // existed, so what it emits can be checked against code that is known to work.
