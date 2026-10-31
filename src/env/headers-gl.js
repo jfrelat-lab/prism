@@ -6,6 +6,7 @@
 // oracle container, so a transcription slip is a red gate rather than a wrong picture. The GLUT
 // constants are GLUT 3.7's (freeglut keeps them). gl.h declares all of OpenGL 1.1 (see the prototype
 // block); what src/env/gl.js does not implement is unresolved and throws, naming itself, if called.
+import { GLEW_H } from './glew-h.js';
 
 export const GL_H = `#ifndef _PRISM_GL_H
 #define _PRISM_GL_H
@@ -1688,7 +1689,7 @@ int glutGameModeGet(GLenum mode);
  * the directory `gl/`: Rosetta Code's rotating cube includes <gl/freeglut.h>.
  */
 export const GL_HEADERS = {
-  'GL/gl.h': GL_H, 'GL/glu.h': GLU_H, 'GL/glut.h': GLUT_H, 'GL/glext.h': GLEXT_H,
+  'GL/gl.h': GL_H, 'GL/glu.h': GLU_H, 'GL/glut.h': GLUT_H, 'GL/glext.h': GLEXT_H, 'GL/glew.h': GLEW_H,
   'GL/freeglut.h': GLUT_H, 'GL/freeglut_std.h': GLUT_H,
   'gl/gl.h': GL_H, 'gl/glu.h': GLU_H, 'gl/glut.h': GLUT_H, 'gl/freeglut.h': GLUT_H,
 };

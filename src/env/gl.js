@@ -109,7 +109,7 @@ const TYPE_BYTES = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x14
  * Quake II and III take glMultiTexCoord2fARB and two units from it -- and would change its path.
  */
 const EXTENSIONS = 'GL_EXT_compiled_vertex_array';
-const OPTIONAL_EXTENSIONS = new Set(['GL_ARB_multitexture', 'GL_ARB_vertex_buffer_object', 'GL_ARB_point_parameters', 'GL_ARB_point_sprite']);
+export const OPTIONAL_EXTENSIONS = new Set(['GL_ARB_multitexture', 'GL_ARB_vertex_buffer_object', 'GL_ARB_point_parameters', 'GL_ARB_point_sprite']);
 // Capabilities that belong to a texture unit (2D texturing, coordinate generation).
 const UNIT_CAPS = new Set([0x0de1, 0x0c60, 0x0c61, 0x0c62, 0x0c63]);
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
@@ -2673,6 +2673,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     /** Stencil bits for the next resize: the window system's visual (glut.js on GLUT_STENCIL). */
     set stencilBits(n) { s.stencilBits = n; },
     set accumBits(n) { s.accumBits = n; },
+    /** What glGetString(GL_EXTENSIONS) answers (glutExtensionSupported reads it). */
+    get extensions() { return extensionString; },
   };
   M.gl = gl;
   return gl;

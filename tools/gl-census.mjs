@@ -20,6 +20,7 @@ import { join, dirname, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads';
 import { buildTarget } from '../src/target.js';
+import { OPTIONAL_EXTENSIONS } from '../src/env/gl.js';
 import { up, sh, SCRATCH, oracleGlut } from './oracle.mjs';
 import { writeRgbPng } from './png.mjs';
 
@@ -28,6 +29,8 @@ const MD = 'corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1/src', GL37 = 'corpus/g
 const TOL = 8, MAX_OFF = 0.005;
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.slice(n.length + 3);
 const FRAMES = (arg('frames') ?? '2,20').split(',').map(Number);
+// Every extension gl.js implements, advertised: a coverage instrument, against a Mesa that offers them all.
+const ALL_EXTENSIONS = [...OPTIONAL_EXTENSIONS];
 const pngDir = arg('png');
 const [SET, ...NAMES] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 
@@ -99,6 +102,8 @@ const work = join(SCRATCH, 'gl-census');
 mkdirSync(join(work, '_glut', 'GL'), { recursive: true });
 oracleGlut(join(work, '_glut'));
 // GLUT's units compiled once: the reference gcc is i386 under emulation here, minutes a program otherwise.
+// -lGL beside -lOpenGL: glvnd's libGL exports the ARB and EXT names (glPointParameterfvARB) that GLEW
+// would fetch with GetProcAddress, and dispatches them to the EGL context as libOpenGL does the core ones.
 const glutObjects = sh('cd /work/gl-census/_glut && rm -f *.o && gcc -O0 -w -I. -c glut-c-*.c && gcc -O0 -w -I. -c glut-egl.c -o egl.o && gcc -O0 -w -I. -DPRISM_OSMESA -c glut-egl.c -o osmesa.o');
 if (glutObjects.code !== 0) throw new Error(`GLUT objects: ${glutObjects.stderr}`);
 // Each program's directory and the ones it includes from, fresh (the archives' files are read-only).
@@ -121,7 +126,7 @@ const osmesa = (p) => p.units.some((u) => /GLUT_ACCUM/.test(readFileSync(join(RO
 function mesa(p) {
   const at = `/work/gl-census/${p.root.replace(/\//g, '_')}/${p.dir}`;
   const inc = (p.include ?? []).map((i) => `-I${relative(p.dir, i)}`).join(' ');
-  const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/${osmesa(p) ? 'osmesa' : 'egl'}.o /work/gl-census/_glut/glut-c-*.o -lGLU ${osmesa(p) ? '-lOSMesa' : '-lEGL -lOpenGL'} -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
+  const r = sh(`cd ${at} && rm -f frame-*.ppm census-prog && gcc -O0 -w -I/work/gl-census/_glut -I. ${inc} -o census-prog ${p.units.join(' ')} /work/gl-census/_glut/${osmesa(p) ? 'osmesa' : 'egl'}.o /work/gl-census/_glut/glut-c-*.o -lGLU ${osmesa(p) ? '-lOSMesa' : '-lEGL -lOpenGL -lGL'} -lm 2> census-cc.txt; grep -m1 -E 'error|undefined reference' census-cc.txt; test -x census-prog && PRISM_GLUT_FRAMES=${FRAMES.join(',')} timeout 30 ./census-prog > /dev/null 2>&1; ls frame-*.ppm 2>/dev/null`);
   r.err = (r.stdout + r.stderr).split('\n').find((l) => /error|undefined reference/.test(l))?.replace(/^.*?: /, '');
   const local = join(work, p.root.replace(/\//g, '_'), p.dir);
   const got = Object.fromEntries(FRAMES.filter((n) => existsSync(join(local, `frame-${n}.ppm`))).map((n) => [n, readPpm(join(local, `frame-${n}.ppm`))]));
@@ -141,7 +146,7 @@ function prism(p) {
   try {
     ({ program } = buildTarget({ name: p.name, dir: join(p.root, p.dir), units: { list: p.units }, include: (p.include ?? []).map((i) => relative(p.dir, i)),
       compile: { memory: 16, collect: true }, env: ['stdio', 'gl', 'glu', 'glut'] }, { root: ROOT,
-      envExtra: { stdio: { files }, glut: { frames: FRAMES, onFrame: (n, rgba, w, h) => { out[n] = { w, h, rgba: rgba.slice() }; }, stop: () => performance.now() > deadline } } }));
+      envExtra: { stdio: { files }, gl: { extensions: ALL_EXTENSIONS }, glut: { frames: FRAMES, onFrame: (n, rgba, w, h) => { out[n] = { w, h, rgba: rgba.slice() }; }, stop: () => performance.now() > deadline } } }));
   } catch (e) { return { error: `compile: ${e.message.split('\n')[0].slice(0, 120)}` }; }
   const failed = program.failures ?? [];
   if (failed.length) return { error: `not emitted (${failed.length}): ${failed[0].message ?? failed[0].fn}` };

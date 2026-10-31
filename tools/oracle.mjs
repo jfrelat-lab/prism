@@ -12,6 +12,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, copyFileSync } from 'node:fs';
 import { GLUT_H } from '../src/env/headers-gl.js';
 import { GLUT_C } from '../src/env/glut-c.js';
+import { GLEW_H } from '../src/env/glew-h.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -221,6 +222,8 @@ void prism_glutBindFramebuffer(unsigned int target, unsigned int framebuffer);
 #endif
 #endif
 `));
+  // GLEW's interface as PRISM gives it (src/env/glew-h.js): inline functions over GL, the oracle has no libGLEW.
+  writeFileSync(join(dir, 'GL', 'glew.h'), GLEW_H);
   copyFileSync(join(ROOT, 'tools', 'oracle', 'glut-egl.c'), join(dir, 'glut-egl.c'));
   // GLUT's own shapes and fonts, units of their own as PRISM compiles them beside the program (src/env/glut-c.js): link -lGLU.
   for (const { file, source } of GLUT_C) writeFileSync(join(dir, file), source);

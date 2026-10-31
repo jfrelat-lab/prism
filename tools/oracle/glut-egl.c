@@ -223,7 +223,15 @@ int glutGet(GLenum what) {
 int glutDeviceGet(GLenum what) { return what == GLUT_HAS_KEYBOARD || what == GLUT_HAS_MOUSE ? 1 : what == GLUT_NUM_MOUSE_BUTTONS ? 3 : 0; }
 int glutLayerGet(GLenum what) { (void)what; return 0; }
 int glutGetModifiers(void) { return 0; }
-int glutExtensionSupported(const char *name) { (void)name; return 0; }
+/* GLUT 3.7's glut_ext.c: a whole word of glGetString(GL_EXTENSIONS). */
+int glutExtensionSupported(const char *name) {
+  const char *all = (const char *)glGetString(GL_EXTENSIONS), *at;
+  size_t n = strlen(name);
+  if (!all || !n || strchr(name, ' ')) return 0;
+  for (at = strstr(all, name); at; at = strstr(at + n, name))
+    if ((at == all || at[-1] == ' ') && (at[n] == ' ' || at[n] == 0)) return 1;
+  return 0;
+}
 int glutGameModeGet(GLenum what) { return what == 0 ? gameMode : what == 1 ? 1 : what == 2 ? 640 : what == 3 ? 480 : what == 4 ? 32 : what == 5 ? 60 : 0; }
 
 /* Timers: fired at the first turn of the loop whose time has reached theirs, oldest due first. */

@@ -21,8 +21,8 @@ const GLUT_ELAPSED_TIME = 700, GLUT_WINDOW_WIDTH = 102, GLUT_WINDOW_HEIGHT = 103
  * of the GL gates), so that a program that asks takes the same path on both sides: glutGet,
  * glutDeviceGet, glutLayerGet and glutGameModeGet by their GLUT 3.7 numbers. A window of 8 bits a
  * colour channel with a 24-bit depth buffer, on a 1024x768 screen; a keyboard and a three-button
- * mouse; no overlay, no colour index, no extension claimed (glutExtensionSupported is 0, so a program
- * takes its baseline path on both sides).
+ * mouse; no overlay, no colour index. glutExtensionSupported reads each side's own GL_EXTENSIONS, as
+ * GLUT 3.7's glut_ext.c does: PRISM offers what its target asks for (gl.js, OPTIONAL_EXTENSIONS).
  */
 const GET = { 100: 0, 101: 0, 104: 32, 106: 24, 107: 8, 108: 8, 109: 8, 110: 8, 116: 1, 200: 1024, 201: 768, 202: 361, 203: 271, 400: 1 };
 const DEVICE = { 600: 1, 601: 1, 605: 3 };
@@ -100,7 +100,7 @@ export function installGlut(M, { frames = null, onFrame = null, stepMs = 40, sto
     glutDeviceGet: (what) => DEVICE[what] ?? 0,
     glutLayerGet: () => 0,
     glutGetModifiers: () => 0,
-    glutExtensionSupported: () => 0,
+    glutExtensionSupported: (p) => { const name = M.mod.cstr(p); return name && !name.includes(' ') && gl.extensions.split(' ').includes(name) ? 1 : 0; },
     glutGameModeGet: (what) => (what === 0 ? s.gameMode : what === 1 ? 1 : what === 2 ? 640 : what === 3 ? 480 : what === 4 ? 32 : what === 5 ? 60 : 0),
     glutGameModeString: () => {},
     glutTimerFunc: (ms, fn, value) => { s.timers.push({ due: time() + (ms >>> 0), fn, value, n: s.timerN++ }); },
