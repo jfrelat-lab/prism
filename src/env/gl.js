@@ -115,6 +115,7 @@ const UNIT_CAPS = new Set([0x0de1, 0x0c60, 0x0c61, 0x0c62, 0x0c63]);
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const POINT = 0x1b00, LINE = 0x1b01, FILL = 0x1b02;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
+const RENDER = 0x1c00, FEEDBACK = 0x1c01, SELECT = 0x1c02;   // glRenderMode
 const LIGHT_MODEL = { LOCAL_VIEWER: 0x0b51, TWO_SIDE: 0x0b52, AMBIENT: 0x0b53 };
 const COMPILE_AND_EXECUTE = 0x1301;
 const TEX = {
@@ -327,6 +328,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     fbos: new Map(), nextFbo: 1, rbs: new Map(), nextRb: 1, boundRb: 0, drawFbo: 0, readFbo: 0, win: null,
     // The current raster position (GL 1.1 2.12): its window coordinates and what a vertex there carries.
     raster: { valid: true, x: 0, y: 0, z: 0, colour: [1, 1, 1, 1], tex: [0, 0], tex1: null, tex2: null, eyeZ: 0 },
+    // glRenderMode's, and the selection and feedback buffers it writes when it is not GL_RENDER.
+    renderMode: RENDER,
+    select: { buf: 0, size: 0, count: 0, hits: 0, names: [], hit: false, min: 1, max: 0 },
+    feedback: { buf: 0, size: 0, type: 0, count: 0 },
     // The evaluators: target -> { u1, u2, uorder, (v1, v2, vorder), points }; the grids of glMapGrid.
     maps: new Map(), grid1: { n: 1, u1: 0, u2: 1 }, grid2: { nu: 1, u1: 0, u2: 1, nv: 1, v1: 0, v2: 1 },
     // glListBase; glLineStipple's factor and pattern; glPolygonStipple's 32 rows, bit 31 the leftmost
@@ -792,7 +797,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const vertexWork = () => s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
     || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
   const SMALL_DRAW = 128;
-  const gpuPrimitive = (mode) => !!webgl && tnl && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
+  const gpuPrimitive = (mode) => !!webgl && tnl && s.renderMode === RENDER && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
   function recordVertex(x, y, z, w) {
     if ((recN + 1) * REC > rec.length) { const r = new Float32Array(rec.length * 2); r.set(rec); rec = r; }
     if (x > FAR || x < -FAR || y > FAR || y < -FAR || z > FAR || z < -FAR) recFar = true;
@@ -840,7 +845,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   /** Draw `count` elements of the enabled arrays on the GPU; false when the state is not one it covers. */
   function gpuArrays(mode, count, indexAt) {
-    if (!webgl || !tnl || glsl.current() || s.polyMode[0] !== FILL || s.polyMode[1] !== FILL) return false;
+    if (!webgl || !tnl || s.renderMode !== RENDER || glsl.current() || s.polyMode[0] !== FILL || s.polyMode[1] !== FILL) return false;
     // A small unlit draw is cheaper batched in clip space with its neighbours (see vertexWork): Cube
     // draws its world as some 1,700 strips a frame, and one GPU draw each halved its frame rate.
     if (count < SMALL_DRAW && !vertexWork()) return false;
@@ -1304,8 +1309,94 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       }
     }
   }
+  /*
+   * SELECTION AND FEEDBACK (GL 1.1 5.2, 5.3), as Mesa's draw module gives them each primitive: clipped
+   * to the view volume and the user planes, culled, never rasterised. Selection takes the window depth
+   * of every vertex left; feedback writes a token and the vertices -- a polygon as the triangles of a
+   * fan, a clipped one fanned as gallium's clipper fans it (the last two vertices, then the first).
+   */
+  const volumePlanes = [(v) => v.clip[3] + v.clip[0], (v) => v.clip[3] - v.clip[0], (v) => v.clip[3] + v.clip[1],
+    (v) => v.clip[3] - v.clip[1], (v) => v.clip[3] + v.clip[2], (v) => v.clip[3] - v.clip[2]];
+  function clipVolume(poly) {
+    for (const d of volumePlanes) {
+      if (poly.length < 2 || poly.every((v) => d(v) >= 0)) continue;
+      const out = [];
+      if (poly.length === 2) {
+        const [a, b] = poly, da = d(a), db = d(b);
+        if (da < 0 && db < 0) return [];
+        poly = da < 0 ? [lerpV(a, b, da / (da - db)), b] : [a, lerpV(a, b, da / (da - db))];
+        continue;
+      }
+      for (let i = 0; i < poly.length; i++) {
+        const a = poly[i], b = poly[(i + 1) % poly.length], da = d(a), db = d(b);
+        if (da >= 0) out.push(a);
+        if ((da >= 0) !== (db >= 0)) out.push(lerpV(a, b, da / (da - db)));
+      }
+      poly = out;
+    }
+    return poly;
+  }
+  /** Selection: a hit, at a window depth. */
+  function hitAt(z) { const q = s.select; q.hit = true; if (z < q.min) q.min = z; if (z > q.max) q.max = z; }
+  /** Feedback: one value, counted whether or not the buffer holds it (glRenderMode answers -1 then). */
+  function fbValue(x) { const q = s.feedback; if (q.count < q.size) dv().setFloat32(q.buf + 4 * q.count, x, true); q.count++; }
+  // GL_2D, GL_3D, GL_3D_COLOR, GL_3D_COLOR_TEXTURE, GL_4D_COLOR_TEXTURE: z, w, colour, texture.
+  const FB_TYPES = { 0x0600: [0, 0, 0, 0], 0x0601: [1, 0, 0, 0], 0x0602: [1, 0, 1, 0], 0x0603: [1, 0, 1, 1], 0x0604: [1, 1, 1, 1] };
+  function fbVertex(x, y, z, w, colour, tex) {
+    const [hasZ, hasW, hasC, hasT] = FB_TYPES[s.feedback.type];
+    fbValue(x); fbValue(y);
+    if (hasZ) fbValue(z);
+    if (hasW) fbValue(w);
+    if (hasC) for (let k = 0; k < 4; k++) fbValue(colour[k]);
+    if (hasT) { fbValue(tex[0]); fbValue(tex[1]); fbValue(tex[2] ?? 0); fbValue(tex[3] ?? 1); }
+  }
+  const fbPrimVertex = (v, back) => { const W = toWindow(v); fbVertex(W.x, W.y, W.z, v.clip[3], back ? v.back : v.colour, v.tex); };
+  function record(kind, verts) {
+    if (kind === 'point') {
+      const v = verts[0];
+      if (volumePlanes.some((d) => d(v) < 0) || userPlanes().some((p) => dotEye(p, v) < 0)) return;
+      if (s.renderMode === SELECT) hitAt(toWindow(v).z);
+      else { fbValue(0x0701); fbPrimVertex(v, false); }
+      return;
+    }
+    if (kind === 'line') {
+      const seg = clipVolume(clipUserSegment(verts));
+      if (seg.length < 2) return;
+      if (s.renderMode === SELECT) { hitAt(toWindow(seg[0]).z); hitAt(toWindow(seg[1]).z); }
+      else { fbValue(0x0702); fbPrimVertex(seg[0], false); fbPrimVertex(seg[1], false); }
+      return;
+    }
+    const poly = clipVolume(clipUser(verts));
+    if (poly.length < 3) return;
+    const A = toWindow(poly[0]), B = toWindow(poly[1]), C = toWindow(poly[2]);
+    const area = (B.x - A.x) * (C.y - A.y) - (C.x - A.x) * (B.y - A.y);
+    const front = (area > 0) === (s.frontFace === CCW);
+    if (s.caps.has(CAP.CULL_FACE) && (s.cullFace === FRONT_AND_BACK || (s.cullFace === BACK) === !front)) return;
+    if (s.renderMode === SELECT) { for (const v of poly) hitAt(toWindow(v).z); return; }
+    const back = !front && !!verts[0].back;
+    const tris = poly.length === 3 && poly.every((v, k) => v === verts[k]) ? [poly] : poly.slice(2).map((v, k) => [poly[k + 1], v, poly[0]]);
+    for (const t of tris) { fbValue(0x0703); fbValue(3); for (const v of t) fbPrimVertex(v, back); }
+  }
+  /** A pixel rectangle's or bitmap's raster position, in feedback (GL_BITMAP_TOKEN, GL_DRAW_PIXEL_TOKEN, GL_COPY_PIXEL_TOKEN). */
+  function recordRaster(token) {
+    const r = s.raster;
+    if (!r.valid || s.renderMode !== FEEDBACK) return;
+    fbValue(token); fbVertex(r.x, r.y, r.z, r.w ?? 1, r.colour, r.tex);
+  }
+  /** A hit record: the names, the least and greatest depth as 32-bit integers, as Mesa writes them. */
+  function hitRecord() {
+    const q = s.select;
+    // Mesa: (GLuint)(4294967296.0f * z), the product a float, converted as i386 gcc converts it --
+    // through a 64-bit integer, keeping the low 32 bits (a depth a hair below 0 gives 0xFFFFFFC0).
+    const word = (z) => Number(BigInt(Math.trunc(Math.fround(4294967296 * Math.fround(z)))) & 0xffffffffn);
+    const put = (x) => { if (q.count < q.size) dv().setUint32(q.buf + 4 * q.count, x, true); q.count++; };
+    put(q.names.length); put(word(q.min)); put(word(q.max));
+    for (const n of q.names) put(n);
+    q.hits++; q.hit = false; q.min = 1; q.max = -1;
+  }
   function triangle(a, b, c, provoking) {
     s.stats.triangles++;
+    if (s.renderMode !== RENDER) { record('tri', [a, b, c]); return; }
     // A vertex shader positions the vertices: clipping and culling are the GPU's (the cull state goes
     // with the program, apply()).
     if (webgl && a.vs) { webgl.tri(a, b, c, null, gpuState()); return; }
@@ -1346,6 +1437,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * COORD_REPLACE its texture coordinates run 0..1 across it, t from the top (ARB_point_sprite).
    */
   function point(v) {
+    if (s.renderMode !== RENDER) { record('point', [v]); return; }
     if (v.vs) throw new Error('gl: GLSL: points drawn under a vertex shader are not implemented');
     if (v.clip[3] <= 0 || v.clip[2] < -v.clip[3]) return;      // behind the eye or the near plane
     const [a, b, c] = s.pointAtten;
@@ -1427,6 +1519,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   let stippleAt = 0;                   // glLineStipple's counter, fragment by fragment along a primitive
   function line(a, b) {
+    if (s.renderMode !== RENDER) { record('line', [a, b]); return; }
     if (webgl && a.vs) { webgl.line(a, b, noStipple(gpuState())); return; }
     let seg = clipUserSegment(clipNear([a, b]));
     if (seg.length === 2) seg = clipGuard(seg);
@@ -1520,7 +1613,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
         else for (let i = 0; i + 3 < v.length; i += 4) { tri(i, i + 1, i + 3, i + 3, 5); tri(i + 1, i + 2, i + 3, i + 3, 3); }
         break;
       case 0x0008: for (let i = 0; i + 3 < v.length; i += 2) { tri(i, i + 1, i + 3, i + 3, 3); tri(i, i + 3, i + 2, i + 3, 6); } break;
-      case 0x0009: for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, 0, 2 | (i === 1 ? 1 : 0) | (i + 2 === v.length ? 4 : 0)); break;
+      case 0x0009:
+        if (s.renderMode !== RENDER && fill) { for (let i = 1; i + 1 < v.length; i++) tri(i, i + 1, 0, 0); break; }
+        for (let i = 1; i + 1 < v.length; i++) tri(0, i, i + 1, 0, 2 | (i === 1 ? 1 : 0) | (i + 2 === v.length ? 4 : 0)); break;
       case 0x0000: for (const p of v) point(p); break;
       default: throw new Error(`gl: primitive 0x${mode.toString(16)} is not implemented`);
     }
@@ -1835,7 +1930,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      */
     glBitmap: (w, h, xorig, yorig, xmove, ymove, rows) => {
       const r = s.raster;
-      if (r.valid && rows) {
+      recordRaster(0x0704);
+      if (r.valid && rows && s.renderMode === RENDER) {
         const x0 = Math.floor(r.x - xorig), y0 = Math.floor(r.y - yorig);
         for (let j = 0; j < h; j++) for (let i = 0; i < w;) {
           if (!rows[j][i]) { i++; continue; }
@@ -1893,6 +1989,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      */
     glDrawPixels: (w, h, format, type, rgba) => {
       const r = s.raster, [zx, zy] = s.pixelZoom;
+      if (s.renderMode !== RENDER) { recordRaster(0x0705); return; }
       if (!r.valid) return;
       for (let j = 0; j < h; j++) for (let i = 0; i < w;) {
         const o = (j * w + i) * 4;
@@ -1906,6 +2003,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // glCopyPixels of GL_COLOR: the read buffer's rectangle, read first, drawn as glDrawPixels draws it.
     glCopyPixels: (x, y, w, h, type) => {
       if (type !== 0x1800) throw new Error(`gl: glCopyPixels of 0x${type.toString(16)} (only GL_COLOR)`);
+      if (s.renderMode !== RENDER) { recordRaster(0x0706); return; }
       const { data, width: W } = readBuffer(), rgba = new Uint8Array(w * h * 4);
       for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) for (let k = 0; k < 4; k++) rgba[(j * w + i) * 4 + k] = data[((y + j) * W + x + i) * 4 + k];
       exec.glDrawPixels(w, h, 0x1908, 0x1401, rgba);
@@ -2120,6 +2218,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (p === 0x1004) { targetTexture(target).border = v; return; }   // GL_TEXTURE_BORDER_COLOR, kept with the texture
       exec.glTexParameterf(target, p, v[0]);
     },
+    /*
+     * THE NAME STACK, in selection only (elsewhere these do nothing). Each change first writes the
+     * hit record of the names it replaces, if anything was hit under them.
+     */
+    glInitNames: () => { const q = s.select; if (s.renderMode !== SELECT) return; if (q.hit) hitRecord(); q.names = []; q.hit = false; q.min = 1; q.max = 0; },
+    glLoadName: (n) => { const q = s.select; if (s.renderMode !== SELECT || !q.names.length) return; if (q.hit) hitRecord(); q.names = [...q.names.slice(0, -1), n >>> 0]; },
+    glPushName: (n) => { const q = s.select; if (s.renderMode !== SELECT) return; if (q.hit) hitRecord(); if (q.names.length < 64) q.names = [...q.names, n >>> 0]; },
+    glPopName: () => { const q = s.select; if (s.renderMode !== SELECT) return; if (q.hit) hitRecord(); if (q.names.length) q.names = q.names.slice(0, -1); },
+    glPassThrough: (token) => { if (s.renderMode === FEEDBACK) { fbValue(0x0700); fbValue(token); } },
     glCallList: (n) => { for (const [name, args] of s.lists.get(n) ?? []) exec[name](...args); },
     // glCallLists: each name offset by glListBase at EXECUTION (its names read at the call, see ARRAYS).
     glListBase: (base) => { s.listBase = base; },
@@ -2145,7 +2252,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const inside = w > 0 && Math.abs(x) <= w && Math.abs(y) <= w && Math.abs(z) <= w
         && s.clipPlanes.every((p, i) => !p || !s.caps.has(CAP.CLIP_PLANE0 + i) || dotEye(p, v) >= 0);
       const W = toWindow(v);
-      s.raster = { valid: inside, x: W.x, y: W.y, z: W.z, colour: v.colour, tex: v.tex, tex1: v.tex1, tex2: v.tex2, eyeZ: v.eyeZ };
+      s.raster = { valid: inside, x: W.x, y: W.y, z: W.z, w, colour: v.colour, tex: v.tex, tex1: v.tex1, tex2: v.tex2, eyeZ: v.eyeZ };
+      if (inside && s.renderMode === SELECT) hitAt(W.z);
     },
     glWindowPos: (c) => {
       const [n, f] = s.depthRange, z = c.length > 2 ? Math.min(Math.max(c[2], 0), 1) : 0;
@@ -2293,6 +2401,28 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     }
   }
   Object.assign(api, {
+    /** The mode left answers what it wrote: the hits, the feedback values, -1 when the buffer overflowed. */
+    glRenderMode: (mode) => {
+      let result = 0;
+      if (s.renderMode === SELECT) {
+        const q = s.select;
+        if (q.hit) hitRecord();
+        result = q.count > q.size ? -1 : q.hits;
+        q.count = 0; q.hits = 0; q.names = [];
+      } else if (s.renderMode === FEEDBACK) {
+        const q = s.feedback;
+        result = q.count > q.size ? -1 : q.count;
+        q.count = 0;
+      }
+      if (mode !== RENDER && mode !== SELECT && mode !== FEEDBACK) throw new Error(`gl: glRenderMode 0x${mode.toString(16)}`);
+      s.renderMode = mode; gpuCache = null;
+      return result;
+    },
+    glSelectBuffer: (size, buf) => { Object.assign(s.select, { buf, size, count: 0 }); },
+    glFeedbackBuffer: (size, type, buf) => {
+      if (!FB_TYPES[type]) throw new Error(`gl: glFeedbackBuffer type 0x${type.toString(16)}`);
+      Object.assign(s.feedback, { buf, size, type, count: 0 });
+    },
     glGenLists: (range) => { const first = s.nextList; s.nextList += range; return first; },
     glNewList: (n, mode) => { s.recording = []; s.recordMode = mode; s.recordingId = n; },
     glEndList: () => { s.lists.set(s.recordingId, s.recording); s.recording = null; },
@@ -3372,6 +3502,8 @@ export function glBuiltins(T) {
     glDeleteBuffersARB: f(V, I, P), glIsBufferARB: f(U, U), glActiveTextureARB: f(V, U), glClientActiveTextureARB: f(V, U),
     glPointParameterfARB: f(V, U, F), glPointParameterfvARB: f(V, U, P),
     glDeleteTextures: f(V, I, P), glGenTextures: f(V, I, P), glGetError: f(U),
+    glRenderMode: f(I, U), glSelectBuffer: f(V, I, P), glFeedbackBuffer: f(V, I, U, P),
+    glInitNames: f(V), glLoadName: f(V, U), glPushName: f(V, U), glPopName: f(V), glPassThrough: f(V, F),
     glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I),
     glGetString: f(P, U), glFinish: f(V), glFlush: f(V),
   };
