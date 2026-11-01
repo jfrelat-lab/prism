@@ -673,7 +673,9 @@ export function translateHLSL(source, entry, profile, defines = []) {
   function decl(v) {
     const g = declare(v.name, v.type);
     const t = glslType(v.type), arr = v.type.k === 'array' ? `[${v.type.len}]` : '';
-    if (!v.init) return `${t} ${g}${arr}`;
+    // A local with no initialiser starts at zero: its temp registers do on D3D9's drivers (and Wine's and
+    // DXVK's), and programs count on it -- Ergon's blur accumulates into one (r+=d*p*p). GLSL leaves it undefined.
+    if (!v.init) return `${t} ${g}${arr}${(v.type.k === 'num' || v.type.k === 'mat') && !arr ? ` = ${t}(0)` : ''}`;
     return `${t} ${g}${arr} = ${v.init.e === 'list' ? listFor(v.init, v.type) : conv(emit(v.init), v.type)}`;
   }
   function stmt(s) {
