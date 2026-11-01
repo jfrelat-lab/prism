@@ -18,13 +18,11 @@ const FETCH = 'mkdir -p corpus/mesa-demos-8.0.1-dist && curl -sfL -o corpus/mesa
   + '&& echo "4bc7f2b20d17e3eebfec288f2367a435cd2db71fc5ac9ece2c14827e290d77d1  corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2" | shasum -a 256 -c - '
   + '&& tar -xjf corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2 -C corpus/mesa-demos-8.0.1-dist';
 const NOTICE = /Permission to use, copy, modify, and distribute this software for\s+\*?\s*any purpose and without fee is hereby granted/;
-// tools/gl-census.mjs redbook, 2026-10-31: the 52 of 63 equal to Mesa, less tess and tesswind. Those two hand
-// GL functions (glBegin, glVertex3dv) to GLU's tessellator as callbacks, and in the page's worker such a call
-// goes through an unbound function pointer, where Node runs them (2026-11-01); they come back when it is fixed.
+// tools/gl-census.mjs redbook, 2026-10-31: the 52 of 63 equal to Mesa.
 const EXAMPLES = ['accanti', 'accpersp', 'alpha', 'alpha3D', 'bezcurve', 'bezmesh', 'checker', 'clip', 'cube', 'dof', 'double', 'drawf', 'feedback',
   'fog', 'font', 'hello', 'image', 'light', 'lines', 'list', 'material', 'mipmap', 'model', 'movelight', 'pickdepth', 'picksquare', 'plane',
   'planet', 'polyoff', 'polys', 'quadric', 'robot', 'sccolorlight', 'scene', 'scenebamb', 'sceneflat', 'select', 'smooth', 'stencil', 'stroke',
-  'teaambient', 'teapots', 'texbind', 'texgen', 'texsub', 'texturesurf', 'torus', 'unproject', 'varray', 'wrap'];
+  'teaambient', 'teapots', 'tess', 'tesswind', 'texbind', 'texgen', 'texsub', 'texturesurf', 'torus', 'unproject', 'varray', 'wrap'];
 
 if (!existsSync(join(ROOT, DIR))) { console.log(`no ${DIR}: ${FETCH}`); process.exit(1); }
 
@@ -47,7 +45,7 @@ const entries = EXAMPLES.map((name) => {
   return { name, blurb: blurbOf(src), ...(headers.length ? { headers } : {}) };
 });
 writeFileSync(join(ROOT, 'web/live/redbook.json'), `${JSON.stringify({
-  _note: 'The OpenGL Programming Guide\'s examples as mesa-demos 8.0.1 carries them (src/redbook), the ones tools/gl-census.mjs found drawing what Mesa draws and that run in the page; written by tools/gen-live-redbook.mjs. Live C opens each from `dir`, which tools/site.mjs ships; each file carries SGI\'s permission notice.',
+  _note: 'The OpenGL Programming Guide\'s examples as mesa-demos 8.0.1 carries them (src/redbook), the ones tools/gl-census.mjs found drawing what Mesa draws; written by tools/gen-live-redbook.mjs. Live C opens each from `dir`, which tools/site.mjs ships; each file carries SGI\'s permission notice.',
   source: 'https://archive.mesa3d.org/demos/8.0.1/',
   dir: DIR,
   fetch: FETCH,

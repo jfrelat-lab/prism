@@ -939,7 +939,7 @@ const rosettaReady = fetch(new URL('./rosetta.json', import.meta.url)).then((r) 
  * served beside the page (tools/site.mjs ships them), with the headers it includes; SGI's notice is in it.
  */
 let redbook = null;
-fetch(new URL('./redbook.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((d) => {
+const redbookReady = fetch(new URL('./redbook.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((d) => {
   if (!d?.entries?.length) return;
   redbook = d;
   d.entries.forEach((e, i) => items.push({ value: `redbook:${i}`, label: `redbook/${e.name}.c`, group: 'redbook', tags: ['OpenGL'], screen: true }));
@@ -1175,6 +1175,7 @@ showFile();
   const want = q.get('example');
   if (!want) return;
   if (want.startsWith('rosetta/')) await rosettaReady;
+  if (want.startsWith('redbook/')) await redbookReady;
   const it = items.find((x) => x.label === want || x.value === want);
   if (!it) { say(`no example named "${want}" -- the picker lists them\n`, 'err'); showTab('tabBuild'); return; }
   await loadExample(it.value, it.label);

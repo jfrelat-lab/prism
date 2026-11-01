@@ -1,5 +1,5 @@
 {
- "_note": "The OpenGL Programming Guide's examples as mesa-demos 8.0.1 carries them (src/redbook), the ones tools/gl-census.mjs found drawing what Mesa draws and that run in the page; written by tools/gen-live-redbook.mjs. Live C opens each from `dir`, which tools/site.mjs ships; each file carries SGI's permission notice.",
+ "_note": "The OpenGL Programming Guide's examples as mesa-demos 8.0.1 carries them (src/redbook), the ones tools/gl-census.mjs found drawing what Mesa draws; written by tools/gen-live-redbook.mjs. Live C opens each from `dir`, which tools/site.mjs ships; each file carries SGI's permission notice.",
  "source": "https://archive.mesa3d.org/demos/8.0.1/",
  "dir": "corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1/src/redbook",
  "fetch": "mkdir -p corpus/mesa-demos-8.0.1-dist && curl -sfL -o corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2 https://archive.mesa3d.org/demos/8.0.1/mesa-demos-8.0.1.tar.bz2 && echo \"4bc7f2b20d17e3eebfec288f2367a435cd2db71fc5ac9ece2c14827e290d77d1  corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2\" | shasum -a 256 -c - && tar -xjf corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2 -C corpus/mesa-demos-8.0.1-dist",
@@ -180,6 +180,14 @@
   {
    "name": "teapots",
    "blurb": "This program demonstrates lots of material properties. A single light source illuminates the objects."
+  },
+  {
+   "name": "tess",
+   "blurb": "This program demonstrates polygon tessellation. Two tesselated objects are drawn. The first is a rectangle with a triangular hole. The second is a smooth shaded, self-intersecting star. Note the exterior rectangle is…"
+  },
+  {
+   "name": "tesswind",
+   "blurb": "This program demonstrates the winding rule polygon tessellation property. Four tessellated objects are drawn, each with very different contours. When the w key is pressed, the objects are drawn with a different…"
   },
   {
    "name": "texbind",

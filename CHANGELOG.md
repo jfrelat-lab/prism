@@ -7,7 +7,7 @@ Every change is in the [commit history](https://github.com/jfrelat-lab/prism/com
 
 ## 2026-11-01
 
-- **The OpenGL Red Book in Live C**: fifty examples of the OpenGL Programming Guide, under `redbook/` in
+- **The OpenGL Red Book in Live C**: fifty-two examples of the OpenGL Programming Guide, under `redbook/` in
   the example picker, each one measured drawing what Mesa draws; open one, change it, run it. GLUT's
   shapes and fonts and GLU's tessellator now come with any OpenGL program typed into Live C, as they do
   with the programs on the shelf.

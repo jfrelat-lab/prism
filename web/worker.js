@@ -1822,6 +1822,9 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       },
     });
     if (!env.glut) throw new Error("host 'glut' needs the gl and glut environments. Name them in the target's env list.");
+    // GL functions whose address the program took -- the Red Book's tess.c hands glBegin and glVertex3dv
+    // to GLU's tessellator as callbacks -- and those slots exist only once gl.js is installed.
+    bindLateBuiltins(prog);
 
   } else if (platform === 'sdl') {
     /*
