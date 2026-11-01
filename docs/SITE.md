@@ -16,7 +16,9 @@ turns into its catalogue. The programs are listed in `tools/site-programs.json`:
 Each program ships as a precompiled bundle (`tools/bundle.mjs`, kept between runs in
 `dist/site-bundles/`), with its licences and the **source it was built from**. Every source tree it
 reads is archived as published, beside the build scripts (`sources/`, or a release of
-`jfrelat-lab/prism-sources` with `--sources=release` and `tools/publish-sources.mjs`).
+`jfrelat-lab/prism-sources` with `--sources=release` and `tools/publish-sources.mjs`). An archive
+over the 25 MiB a static host takes (Neverball's, 36 MB) is linked to the last such release instead
+of copied, when that release holds the identical file; otherwise the export stops and says so.
 
 - Every program with a build also gets a page of its own, `<id>/index.html` (`tools/program-page.mjs`):
   it plays the program in place (the player in a frame, `&embed=1`), shows its repository with its

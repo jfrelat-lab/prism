@@ -374,6 +374,30 @@ const RELEASE = arg('sources')?.startsWith('release')
   ? (arg('sources').split(':')[1] || `site-${new Date().toISOString().slice(0, 10)}`) : null;
 const hrefOf = (name) => (RELEASE ? `https://github.com/${SOURCES_REPO}/releases/download/${RELEASE}/${encodeURIComponent(name)}` : `sources/${name}`);
 const archives = new Map();               // tree -> { href, name, bytes, sha256, fetch }
+/*
+ * AN ARCHIVE OVER 25 MIB in an export that copies its sources (Neverball's tree, data and all, is 36 MB):
+ * a static host refuses the file, so the page links the release last made with --sources=release, when
+ * that release holds this very file -- the same checksum in the SHA256SUMS it published (kept in
+ * dist/site-sources/ beside release.json), and the asset really there on GitHub, at the same size.
+ * Otherwise the export stops and says how to make such a release.
+ */
+let lastRelease;
+function publishedCopy(name, sha256) {
+  const why = (msg) => new Error(`sources/${name} is over the 25 MiB a static host takes, and ${msg}: export with --sources=release[:<tag>] and publish it (tools/publish-sources.mjs)`);
+  if (lastRelease === undefined) {
+    try {
+      const rel = JSON.parse(readFileSync(join(SRC_CACHE, 'release.json'), 'utf8'));
+      const sums = new Map(readFileSync(join(SRC_CACHE, 'SHA256SUMS'), 'utf8').trim().split('\n').map((l) => l.split(/\s+/).reverse()));
+      const r = spawnSync('gh', ['release', 'view', rel.tag, '--repo', rel.repo, '--json', 'assets'], { encoding: 'utf8' });
+      const assets = r.status === 0 ? new Map(JSON.parse(r.stdout).assets.map((x) => [x.name, x.size])) : null;
+      lastRelease = { ...rel, sums, assets };
+    } catch { lastRelease = null; }
+  }
+  if (!lastRelease) throw why('no release of the sources is recorded in dist/site-sources/');
+  if (lastRelease.sums.get(name) !== sha256) throw why(`the release ${lastRelease.tag} holds another ${name}, or none`);
+  if (lastRelease.assets?.get(name) !== statSync(join(SRC_CACHE, name)).size) throw why(`GitHub does not show ${name} in the release ${lastRelease.tag} (not published, or gh cannot reach it)`);
+  return `https://github.com/${lastRelease.repo}/releases/download/${lastRelease.tag}/${encodeURIComponent(name)}`;
+}
 function sourceArchive(tree, fetch) {
   if (archives.has(tree)) return archives.get(tree);
   const key = treeHash(join(ROOT, 'corpus', tree));
@@ -386,10 +410,11 @@ function sourceArchive(tree, fetch) {
     if (r.status !== 0) throw new Error(`sources/${tree}.tar.gz: tar failed: ${r.stderr}`);
     writeFileSync(join(SRC_CACHE, `${tree}.key`), key);
   }
-  const bytes = RELEASE ? statSync(file).size : copy(file, `sources/${tree}.tar.gz`);
-  if (!RELEASE) total += bytes;
-  const a = { href: hrefOf(`${tree}.tar.gz`), name: `${tree}.tar.gz`, file, bytes,
-    sha256: createHash('sha256').update(readFileSync(file)).digest('hex'), fetch };
+  const sha256 = createHash('sha256').update(readFileSync(file)).digest('hex');
+  const published = !RELEASE && statSync(file).size > MAX_FILE ? publishedCopy(`${tree}.tar.gz`, sha256) : null;
+  const bytes = RELEASE || published ? statSync(file).size : copy(file, `sources/${tree}.tar.gz`);
+  if (!RELEASE && !published) total += bytes;
+  const a = { href: published ?? hrefOf(`${tree}.tar.gz`), name: `${tree}.tar.gz`, file, bytes, sha256, fetch, ...(published ? { published } : {}) };
   archives.set(tree, a);
   return a;
 }
@@ -439,7 +464,7 @@ const sourcesOf = (tname) => {
   const t = targets.get(tname);
   if (!t) return null;
   const fetch = loadTarget(join(ROOT, 'targets', `${tname.split(':')[0]}.json`)).fetch ?? null;
-  return [...t.trees.map((tree) => sourceArchive(tree, fetch)), prismArchive].map(({ file, ...a }) => a);
+  return [...t.trees.map((tree) => sourceArchive(tree, fetch)), prismArchive].map(({ file, published, ...a }) => a);
 };
 for (const s of shipped) s.sources = sourcesOf(s.target);
 for (const g of gallery) if (g.run) g.sources = sourcesOf(g.target);
@@ -459,7 +484,8 @@ write('sources/README.txt', [
   ...(RELEASE ? ['', `The archives are the assets of the release ${RELEASE} of https://github.com/${SOURCES_REPO}:`,
     `  https://github.com/${SOURCES_REPO}/releases/tag/${RELEASE}`] : []),
   '',
-  ...[...archives.entries()].flatMap(([tree, a]) => [`${a.name}: corpus/${tree}/`, `  fetched with: ${a.fetch ?? '(see the target file)'}`]),
+  ...[...archives.entries()].flatMap(([tree, a]) => [`${a.name}: corpus/${tree}/`, `  fetched with: ${a.fetch ?? '(see the target file)'}`,
+    ...(a.published ? [`  over the 25 MiB a static host takes, so not here: the identical file (SHA256SUMS) is at ${a.published}`] : [])]),
   '',
 ].join('\n'));
 if (RELEASE) {
@@ -469,7 +495,8 @@ if (RELEASE) {
     files: [...[...archives.values()].map((a) => a.file), prismFile, join(SRC_CACHE, 'README.txt'), join(SRC_CACHE, 'SHA256SUMS')] }, null, 1));
   console.log(`  sources: to publish as ${SOURCES_REPO} release ${RELEASE}: node tools/publish-sources.mjs`);
 }
-console.log(`  sources: ${archives.size} trees and the build scripts (${scriptFiles.size} files), ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${dirty ? ' (built from uncommitted changes: the README says so)' : ''}`);
+console.log(`  sources: ${archives.size} trees and the build scripts (${scriptFiles.size} files), ${mb([...archives.values()].reduce((t, a) => t + a.bytes, prismBytes))}${
+  [...archives.values()].some((a) => a.published) ? ` (${[...archives.values()].filter((a) => a.published).map((a) => a.name).join(', ')} linked to its release, not copied)` : ''}${dirty ? ' (built from uncommitted changes: the README says so)' : ''}`);
 
 const runOf = (p) => `web/?machine=${encodeURIComponent(p.machine)}&program=${encodeURIComponent(p.variant ? p.file ?? p.program : p.program)}${p.args !== undefined ? `&args=${encodeURIComponent(p.args)}` : ''}&run=1`;
 
