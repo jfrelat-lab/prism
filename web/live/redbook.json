@@ -1,0 +1,217 @@
+{
+ "_note": "The OpenGL Programming Guide's examples as mesa-demos 8.0.1 carries them (src/redbook), the ones tools/gl-census.mjs found drawing what Mesa draws and that run in the page; written by tools/gen-live-redbook.mjs. Live C opens each from `dir`, which tools/site.mjs ships; each file carries SGI's permission notice.",
+ "source": "https://archive.mesa3d.org/demos/8.0.1/",
+ "dir": "corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1/src/redbook",
+ "fetch": "mkdir -p corpus/mesa-demos-8.0.1-dist && curl -sfL -o corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2 https://archive.mesa3d.org/demos/8.0.1/mesa-demos-8.0.1.tar.bz2 && echo \"4bc7f2b20d17e3eebfec288f2367a435cd2db71fc5ac9ece2c14827e290d77d1  corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2\" | shasum -a 256 -c - && tar -xjf corpus/mesa-demos-8.0.1-dist/mesa-demos-8.0.1.tar.bz2 -C corpus/mesa-demos-8.0.1-dist",
+ "entries": [
+  {
+   "name": "accanti",
+   "blurb": null,
+   "headers": [
+    "jitter.h"
+   ]
+  },
+  {
+   "name": "accpersp",
+   "blurb": "Use the accumulation buffer to do full-scene antialiasing on a scene with perspective projection, using the special routines accFrustum() and accPerspective().",
+   "headers": [
+    "jitter.h"
+   ]
+  },
+  {
+   "name": "alpha",
+   "blurb": "This program draws several overlapping filled polygons to demonstrate the effect order has on alpha blending results. Use the 't' key to toggle the order of drawing polygons."
+  },
+  {
+   "name": "alpha3D",
+   "blurb": "This program demonstrates how to intermix opaque and alpha blended polygons in the same scene, by using glDepthMask. Press the 'a' key to animate moving the transparent object through the opaque object. Press the 'r'…"
+  },
+  {
+   "name": "bezcurve",
+   "blurb": "This program uses evaluators to draw a Bezier curve."
+  },
+  {
+   "name": "bezmesh",
+   "blurb": "This program renders a lighted, filled Bezier surface, using two-dimensional evaluators."
+  },
+  {
+   "name": "checker",
+   "blurb": "This program texture maps a checkerboard image onto two rectangles. This program clamps the texture, if the texture coordinates fall outside 0.0 and 1.0."
+  },
+  {
+   "name": "clip",
+   "blurb": "This program demonstrates arbitrary clipping planes."
+  },
+  {
+   "name": "cube",
+   "blurb": "This program demonstrates a single modeling transformation, glScalef() and a single viewing transformation, gluLookAt(). A wireframe cube is rendered."
+  },
+  {
+   "name": "dof",
+   "blurb": "This program demonstrates use of the accumulation buffer to create an out-of-focus depth-of-field effect. The teapots are drawn several times into the accumulation buffer. The viewing volume is jittered, except at the…",
+   "headers": [
+    "jitter.h"
+   ]
+  },
+  {
+   "name": "double",
+   "blurb": "This is a simple double buffered program. Pressing the left mouse button rotates the rectangle. Pressing the middle mouse button stops the rotation."
+  },
+  {
+   "name": "drawf",
+   "blurb": "Draws the bitmapped letter F on the screen (several times). This demonstrates use of the glBitmap() call."
+  },
+  {
+   "name": "feedback",
+   "blurb": "This program demonstrates use of OpenGL feedback. First, a lighting environment is set up and a few lines are drawn. Then feedback mode is entered, and the same lines are drawn. The results in the feedback buffer are…"
+  },
+  {
+   "name": "fog",
+   "blurb": "This program draws 5 red teapots, each at a different z distance from the eye, in different types of fog. Pressing the left mouse button chooses between 3 types of fog: exponential, exponential squared, and linear. In…"
+  },
+  {
+   "name": "font",
+   "blurb": "Draws some text in a bitmapped font. Uses glBitmap() and other pixel routines. Also demonstrates use of display lists."
+  },
+  {
+   "name": "hello",
+   "blurb": "This is a simple, introductory OpenGL program."
+  },
+  {
+   "name": "image",
+   "blurb": "This program demonstrates drawing pixels and shows the effect of glDrawPixels(), glCopyPixels(), and glPixelZoom(). Interaction: moving the mouse while pressing the mouse button will copy the image in the lower-left…"
+  },
+  {
+   "name": "light",
+   "blurb": "This program demonstrates the use of the OpenGL lighting model. A sphere is drawn using a grey material characteristic. A single light source illuminates the object."
+  },
+  {
+   "name": "lines",
+   "blurb": "This program demonstrates geometric primitives and their attributes."
+  },
+  {
+   "name": "list",
+   "blurb": "This program demonstrates how to make and execute a display list. Note that attributes, such as current color and matrix, are changed."
+  },
+  {
+   "name": "material",
+   "blurb": "This program demonstrates the use of the GL lighting model. Several objects are drawn using different material characteristics. A single light source illuminates the objects."
+  },
+  {
+   "name": "mipmap",
+   "blurb": "This program demonstrates using mipmaps for texture maps. To overtly show the effect of mipmaps, each mipmap reduction level has a solidly colored, contrasting texture image. Thus, the quadrilateral which is drawn is…"
+  },
+  {
+   "name": "model",
+   "blurb": "This program demonstrates modeling transformations"
+  },
+  {
+   "name": "movelight",
+   "blurb": "This program demonstrates when to issue lighting and transformation commands to render a model with a light which is moved by a modeling transformation (rotate or translate). The light position is reset after the…"
+  },
+  {
+   "name": "pickdepth",
+   "blurb": "Picking is demonstrated in this program. In rendering mode, three overlapping rectangles are drawn. When the left mouse button is pressed, selection mode is entered with the picking matrix. Rectangles which are drawn…"
+  },
+  {
+   "name": "picksquare",
+   "blurb": "Use of multiple names and picking are demonstrated. A 3x3 grid of squares is drawn. When the left mouse button is pressed, all squares under the cursor position have their color changed."
+  },
+  {
+   "name": "plane",
+   "blurb": "This program demonstrates the use of local versus infinite lighting on a flat plane."
+  },
+  {
+   "name": "planet",
+   "blurb": "This program shows how to composite modeling transformations to draw translated and rotated models. Interaction: pressing the d and y keys (day and year) alters the rotation of the planet around the sun."
+  },
+  {
+   "name": "polyoff",
+   "blurb": "This program demonstrates polygon offset to draw a shaded polygon and its wireframe counterpart without ugly visual artifacts (\"stitching\")."
+  },
+  {
+   "name": "polys",
+   "blurb": "This program demonstrates polygon stippling."
+  },
+  {
+   "name": "quadric",
+   "blurb": "This program demonstrates the use of some of the gluQuadric* routines. Quadric objects are created with some quadric properties and the callback routine to handle errors. Note that the cylinder has no top or bottom…"
+  },
+  {
+   "name": "robot",
+   "blurb": "This program shows how to composite modeling transformations to draw translated and rotated hierarchical models. Interaction: pressing the s and e keys (shoulder and elbow) alters the rotation of the robot arm."
+  },
+  {
+   "name": "sccolorlight",
+   "blurb": "This program demonstrates the use of a colored (magenta, in this example) light source. Objects are drawn using a grey material characteristic. A single light source illuminates the objects."
+  },
+  {
+   "name": "scene",
+   "blurb": "This program demonstrates the use of the GL lighting model. Objects are drawn using a grey material characteristic. A single light source illuminates the objects."
+  },
+  {
+   "name": "scenebamb",
+   "blurb": "This program demonstrates use of a blue ambient light source."
+  },
+  {
+   "name": "sceneflat",
+   "blurb": "This program draws lighted objects with flat shading."
+  },
+  {
+   "name": "select",
+   "blurb": "This is an illustration of the selection mode and name stack, which detects whether objects which collide with a viewing volume. First, four triangles and a rectangular box representing a viewing volume are drawn…"
+  },
+  {
+   "name": "smooth",
+   "blurb": "This program demonstrates smooth shading. A smooth shaded polygon is drawn in a 2-D projection."
+  },
+  {
+   "name": "stencil",
+   "blurb": "This program draws two rotated tori in a window. A diamond in the center of the window masks out part of the scene. Within this mask, a different model (a sphere) is drawn in a different color."
+  },
+  {
+   "name": "stroke",
+   "blurb": "This program demonstrates some characters of a stroke (vector) font. The characters are represented by display lists, which are given numbers which correspond to the ASCII values of the characters. Use of…"
+  },
+  {
+   "name": "teaambient",
+   "blurb": "This program renders three lighted, shaded teapots, with different ambient values."
+  },
+  {
+   "name": "teapots",
+   "blurb": "This program demonstrates lots of material properties. A single light source illuminates the objects."
+  },
+  {
+   "name": "texbind",
+   "blurb": "This program demonstrates using glBindTexture() by creating and managing two textures."
+  },
+  {
+   "name": "texgen",
+   "blurb": "This program draws a texture mapped teapot with automatically generated texture coordinates. The texture is rendered as stripes on the teapot. Initially, the object is drawn with texture coordinates based upon the…"
+  },
+  {
+   "name": "texsub",
+   "blurb": "This program texture maps a checkerboard image onto two rectangles. This program clamps the texture, if the texture coordinates fall outside 0.0 and 1.0. If the s key is pressed, a texture subimage is used to alter…"
+  },
+  {
+   "name": "texturesurf",
+   "blurb": "This program uses evaluators to generate a curved surface and automatically generated texture coordinates."
+  },
+  {
+   "name": "torus",
+   "blurb": "This program demonstrates the creation of a display list."
+  },
+  {
+   "name": "unproject",
+   "blurb": "When the left mouse button is pressed, this program reads the mouse position and determines two 3D points from which it was transformed. Very little is displayed."
+  },
+  {
+   "name": "varray",
+   "blurb": "This program demonstrates vertex arrays."
+  },
+  {
+   "name": "wrap",
+   "blurb": "This program texture maps a checkerboard image onto two rectangles. This program demonstrates the wrapping modes, if the texture coordinates fall outside 0.0 and 1.0. Interaction: Pressing the 's' and 'S' keys switch…"
+  }
+ ]
+}

@@ -44,7 +44,12 @@ const OUT = resolve(arg('out') ?? join(ROOT, STANDALONE ? `dist/standalone/${STA
 const MAX_FILE = 25 * 1024 * 1024;
 
 const manifest = JSON.parse(readFileSync(join(ROOT, 'tools/site-programs.json'), 'utf8'));
-const entries = manifest.programs.filter((e) => !e._skip && (!ONLY || ONLY.includes(e.id)));
+// A COLLECTION groups programs of one origin behind one card on the project page, whose own view is the
+// catalogue filtered to them (index.html?c=<id>): its members are entries of `programs`, named by id,
+// each marked with it here. --only=<collection> takes all of them.
+const inCollection = new Map((manifest.collections ?? []).flatMap((c) => c.members.map((id) => [id, c.id])));
+const entries = manifest.programs.filter((e) => !e._skip && (!ONLY || ONLY.includes(e.id) || ONLY.includes(inCollection.get(e.id))))
+  .map((e) => (inCollection.has(e.id) ? { ...e, collection: inCollection.get(e.id) } : e));
 const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
 const write = (rel, text) => { const p = join(OUT, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, text); };
 const copy = (from, rel) => {
@@ -61,6 +66,13 @@ mkdirSync(OUT, { recursive: true });
 
 // The page, its worker and everything they import: the shell runs the same files as under serve.mjs.
 for (const d of ['web', 'src', 'assets']) cpSync(join(ROOT, d), join(OUT, d), { recursive: true });
+// Live C's Red Book examples (web/live/redbook.json) open from their files, at the same path: GitLab's raw
+// files carry no CORS header, so the page cannot fetch them from there. Each carries SGI's notice.
+{
+  const rb = JSON.parse(readFileSync(join(ROOT, 'web/live/redbook.json'), 'utf8'));
+  if (!existsSync(join(ROOT, rb.dir))) throw new Error(`no ${rb.dir} for Live C's Red Book: ${rb.fetch}`);
+  for (const f of new Set(rb.entries.flatMap((e) => [`${e.name}.c`, ...(e.headers ?? [])]))) { mkdirSync(join(OUT, rb.dir), { recursive: true }); copyFileSync(join(ROOT, rb.dir, f), join(OUT, rb.dir, f)); }
+}
 for (const f of ['index.html', 'compare.html', 'changes.html', 'CHANGELOG.md', 'LICENSE', 'THIRD-PARTY.md']) copyFileSync(join(ROOT, f), join(OUT, f));
 // The comparison page's measurements (tools/bench-compare.mjs), when they have been taken here.
 if (existsSync(join(ROOT, 'dist/bench-compare/results.json'))) copyFileSync(join(ROOT, 'dist/bench-compare/results.json'), join(OUT, 'web/bench.json'));
@@ -479,6 +491,10 @@ write('web/site.json', JSON.stringify({
   light,
   gallery,
   programs: shipped.map(({ licenseFiles, ...s }) => ({ ...s, units: targets.get(s.target)?.units ?? null, run: runOf(s) })),
+  // one card each on the project page, whose own view is the catalogue filtered to its members (?c=<id>)
+  collections: (manifest.collections ?? []).map(({ members: m, ...c }) => ({ ...c,
+    count: shipped.filter((s) => s.collection === c.id).length,
+    thumbs: shipped.filter((s) => s.collection === c.id && s.thumb).slice(0, 4).map((s) => s.thumb) })).filter((c) => c.count),
 }, null, 1));
 console.log(`\n${shipped.length} programs, ${targets.size} builds (${hits} from dist/site-bundles), ${mb(total)} of bundles, assembly and data in ${OUT}`);
 

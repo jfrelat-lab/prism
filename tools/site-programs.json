@@ -1031,5 +1031,24 @@
       }
     }
   ],
-  "_gallery": "Programs PRISM compiles whose data may NOT be passed on: the export shows a thumbnail PRISM drew from the owner's copy, what is needed, and how to run it locally; it ships neither their build nor their data."
+  "_gallery": "Programs PRISM compiles whose data may NOT be passed on: the export shows a thumbnail PRISM drew from the owner's copy, what is needed, and how to run it locally; it ships neither their build nor their data.",
+  "_collections": "A collection groups programs of one origin behind one card on the project page, whose own view is the catalogue filtered to them (index.html?c=<id>); `members` names entries of `programs` by id (tools/site.mjs marks each).",
+  "collections": [
+    {
+      "id": "scummvm",
+      "title": "ScummVM",
+      "author": "The ScummVM project",
+      "year": 2004,
+      "kind": "Adventure games",
+      "machine": "linux",
+      "blurb": "Five point-and-click adventures on ScummVM, the engine compiled by PRISM from its C++ source (0.6.1 and 0.10.0): two freeware games in full and three LucasArts demos as the ScummVM project distributes them.",
+      "members": [
+        "bass",
+        "fotaq",
+        "monkey",
+        "dott",
+        "samnmax"
+      ]
+    }
+  ]
 }

@@ -933,6 +933,20 @@ const rosettaReady = fetch(new URL('./rosetta.json', import.meta.url)).then((r) 
   if (!$('picker').hidden) renderPicker();
 }).catch(() => { /* no list, no group: the page's own examples still work */ });
 
+/*
+ * THE OPENGL RED BOOK'S, listed from web/live/redbook.json (tools/gen-live-redbook.mjs): the examples of
+ * the OpenGL Programming Guide that draw what Mesa draws. Each opens from its file in mesa-demos 8.0.1,
+ * served beside the page (tools/site.mjs ships them), with the headers it includes; SGI's notice is in it.
+ */
+let redbook = null;
+fetch(new URL('./redbook.json', import.meta.url)).then((r) => (r.ok ? r.json() : null)).then((d) => {
+  if (!d?.entries?.length) return;
+  redbook = d;
+  d.entries.forEach((e, i) => items.push({ value: `redbook:${i}`, label: `redbook/${e.name}.c`, group: 'redbook', tags: ['OpenGL'], screen: true }));
+  if (!$('picker').hidden) renderPicker();
+}).catch(() => { /* no list, no group */ });
+const GROUPS = { prism: 'prism/ -- PRISM’s own', redbook: 'redbook/ -- the OpenGL Red Book’s examples, SGI’s notice in each', rosetta: 'rosetta/ -- loaded from rosettacode.org, GNU FDL' };
+
 const FILTERS = [['all', 'All'], ['screen', 'Graphical'], ['OpenGL', 'OpenGL'], ['SDL', 'SDL'], ['Win32', 'Win32'], ['X11', 'X11'], ['console', 'Console']];
 let filter = 'all', cursor = 0, shown = [];
 const matches = (it, words) => (filter === 'all' || (filter === 'screen' ? it.screen : filter === 'console' ? !it.tags.some((t) => ENV_TAGS.has(t)) : it.tags.includes(filter)))
@@ -949,7 +963,7 @@ function renderPicker() {
     if (it.group !== last) {
       last = it.group;
       const n = shown.filter((x) => x.group === it.group).length;
-      html += `<div class="pg">${it.group === 'prism' ? 'prism/ -- PRISM’s own' : 'rosetta/ -- loaded from rosettacode.org, GNU FDL'} <span>${n}</span></div>`;
+      html += `<div class="pg">${GROUPS[it.group]} <span>${n}</span></div>`;
     }
     html += `<div class="pi" role="option" data-i="${i}" aria-selected="${i === cursor}"><span>${escHtml(it.label)}</span>` +
       `<span class="tags">${it.tags.map((t) => `<span class="tag t-${t.replace(/\W/g, '')}">${t}</span>`).join('')}</span></div>`;
@@ -1036,8 +1050,21 @@ async function loadExample(value, label, { ask = true } = {}) {
   if (ask && !untouched && !confirm('Replace what is open with the example? Your files will be lost.')) return;
   // Another program: everything the last one left goes with it, as Reset does.
   resetRun();
-  let name, source;
-  if (value.startsWith('rosetta:')) {
+  let name, source, beside = [];
+  if (value.startsWith('redbook:')) {
+    const e = redbook.entries[+value.slice(8)], at = (f) => new URL(`../../${redbook.dir}/${f}`, import.meta.url);
+    const read = (f) => fetch(at(f)).then((r) => { if (!r.ok) throw new Error(`${f}: ${r.status}`); return r.text(); });
+    try {
+      [source, ...beside] = await Promise.all([read(`${e.name}.c`), ...(e.headers ?? []).map(read)]);
+    } catch (err) {
+      say(`could not open ${e.name}.c (${err.message}): the Red Book's files are served beside the page, from ${redbook.dir}\n`, 'err');
+      showTab('tabBuild');
+      return;
+    }
+    beside = (e.headers ?? []).map((h, k) => ({ name: h, source: beside[k] }));
+    name = `${e.name}.c`;
+    setCredit({ redbook: e });
+  } else if (value.startsWith('rosetta:')) {
     const e = rosetta[+value.slice(8)];
     $('status').textContent = 'loading';
     say(`loading "${e.task}" from rosettacode.org (revision ${e.revid})...\n`);
@@ -1074,7 +1101,7 @@ async function loadExample(value, label, { ask = true } = {}) {
   lastLoaded = source;
   current = { value, label };
   try { localStorage.setItem(STORE_EXAMPLE, JSON.stringify({ value, label, source })); } catch {}
-  files = [{ name, source }];
+  files = [{ name, source }, ...beside];
   active = 0;
   $('pickName').textContent = label;
   save(); renderTabs(); showFile();
@@ -1088,6 +1115,12 @@ function setCredit(e) {
   const c = $('credit');
   c.hidden = !e;
   if (!e) { c.replaceChildren(); return; }
+  if (e.redbook) {
+    c.innerHTML = `<b>The OpenGL Red Book, ${e.redbook.name}.c</b>: an example of the OpenGL Programming Guide (Silicon Graphics), as ` +
+      `<a target="_blank" rel="noopener" href="${redbook.source}">mesa-demos 8.0.1</a> carries it, shown unchanged, under SGI's notice at its top. ` +
+      'PRISM drew what Mesa draws with it, frame for frame, when it was measured.';
+    return;
+  }
   const esc = (t) => t.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   c.innerHTML = `<b>Rosetta Code, ${esc(e.task)}</b>${e.sub ? ` (${esc(e.sub)})` : ''}, C solution ${e.block + 1}, revision ${e.revid}: ` +
     `by its authors (<a target="_blank" rel="noopener" href="${historyUrl(e.task)}">page history</a>), ` +

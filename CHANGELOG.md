@@ -5,6 +5,18 @@ is updated continuously, so entries are dated rather than versioned; the source 
 comes from are released as [prism-sources](https://github.com/jfrelat-lab/prism-sources/releases).
 Every change is in the [commit history](https://github.com/jfrelat-lab/prism/commits/main).
 
+## 2026-11-01
+
+- **The OpenGL Red Book in Live C**: fifty examples of the OpenGL Programming Guide, under `redbook/` in
+  the example picker, each one measured drawing what Mesa draws; open one, change it, run it. GLUT's
+  shapes and fonts and GLU's tessellator now come with any OpenGL program typed into Live C, as they do
+  with the programs on the shelf.
+- **ScummVM's games behind one card**: the five adventures it runs here are now a collection, with a
+  view of their own.
+- **Direct3D 9**: the 4K intro elevated draws, after two fixes found by replaying its calls --
+  pretransformed vertices no longer go through a vertex shader left set, and `pow` of a negative
+  number answers as Direct3D does.
+
 ## 2026-10-31
 
 - **More of OpenGL and GLU**: picking objects with the mouse (selection) and feedback, spotlights and

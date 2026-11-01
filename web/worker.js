@@ -19,7 +19,7 @@ import { cxxForTarget } from '../src/cxx/index.js';
  * TARGET'S OWN env list through buildEnv rather than naming them one by one, which is the same rule
  * the DOS branch's comment states and did not follow.
  */
-import { buildEnv, envHeaders, envBuiltins, envNames } from '../src/env/registry.js';
+import { buildEnv, envHeaders, envBuiltins, envNames, envVars } from '../src/env/registry.js';
 import { installAsm } from '../src/asm/link.js';
 import { asmText } from '../src/asm/gas.js';
 import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from '../src/asm/tasm-link.js';
@@ -508,6 +508,15 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
   }
   for (const [name, source] of Object.entries(program.extraUnits || {})) {
     units.push({ file: name, source });
+  }
+  /*
+   * A program with no tree (Live C's) gets its environments' own C as a target does from src/target.js:
+   * GLUT 3.7's shapes and fonts, GLU's tessellator when it is called, the data a linker would provide.
+   * A target's answer carries them already, among its extraUnits.
+   */
+  if (ownSources) {
+    const own = [...units];
+    for (const { name, file, source, when } of envVars(program.env)) if (!when || when(own)) units.push({ file: file ? `prism-${name}-${file}` : `prism-${name}-vars.c`, source });
   }
   const loc = units.reduce((n, u) => n + u.source.split('\n').length, 0);
   if (!bundle) log(`compiling ${units.length} translation units, ${loc.toLocaleString('en')} lines`);
