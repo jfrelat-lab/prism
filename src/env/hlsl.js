@@ -13,10 +13,15 @@
 // The pixel orientation is D3D's: the device draws row 0 at the top of its render targets (d3d9.js
 // flips at Present), so VPOS is gl_FragCoord.xy - 0.5 and a texture's (0,0) is its first row.
 //
+// D3DX's texture shaders (tx_1_0, run by D3DXFillTextureTX) are pixel shaders here, drawn once per level of
+// the texture they fill: POSITION is the texel's centre in [0, 1], PSIZE one texel's size, and noise() is
+// D3DX's own (d3dx-noise.js).
+//
 // What is not here is refused by name (`hlsl: ...`), never approximated.
+import { NOISE_P, NOISE_G } from './d3dx-noise.js';
 
 const SCALARS = { float: 'float', half: 'float', double: 'float', min16float: 'float', int: 'int', dword: 'uint', uint: 'uint', bool: 'bool' };
-const SAMPLER_TYPES = { sampler: null, sampler1D: '2D', sampler2D: '2D', sampler3D: '3D', samplerCUBE: 'Cube', sampler_state: null };
+const SAMPLER_TYPES = { sampler: null, SamplerState: null, sampler1D: '2D', sampler2D: '2D', sampler3D: '3D', samplerCUBE: 'Cube', sampler_state: null };
 const KEYWORDS = new Set(['if', 'else', 'for', 'while', 'do', 'return', 'break', 'continue', 'discard', 'struct', 'static', 'const', 'uniform', 'extern', 'in', 'out', 'inout', 'inline', 'shared', 'volatile', 'row_major', 'column_major', 'true', 'false', 'register', 'typedef', 'switch', 'case', 'default']);
 const PUNCT = ['<<=', '>>=', '++', '--', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '==', '!=', '<=', '>=', '&&', '||', '<<', '>>', '::'];
 const fail = (msg) => { throw new Error(`hlsl: ${msg}`); };
@@ -106,8 +111,10 @@ function expand(text, macros, depth = 0) {
       cur += c;
     }
     args.push(cur);
-    let body = mac.body;
-    mac.params.forEach((p, k) => { body = body.replace(new RegExp(`\\b${p}\\b`, 'g'), (args[k] ?? '').trim()); });
+    // every parameter in one pass: one at a time, Ergon's t2(x,y) put its x argument in and then replaced
+    // the y inside that argument (x.y) with its y argument
+    const index = new Map(mac.params.map((p, k) => [p, k]));
+    const body = mac.params.length ? mac.body.replace(new RegExp(`\\b(?:${mac.params.join('|')})\\b`, 'g'), (p) => (args[index.get(p)] ?? '').trim()) : mac.body;
     out += body; i = j + 1; changed = true;
   }
   void res;
@@ -298,6 +305,23 @@ const HELPERS = {
   prism_saturate: 'float prism_saturate(float a) { return clamp(a, 0.0, 1.0); }\nvec2 prism_saturate(vec2 a) { return clamp(a, 0.0, 1.0); }\nvec3 prism_saturate(vec3 a) { return clamp(a, 0.0, 1.0); }\nvec4 prism_saturate(vec4 a) { return clamp(a, 0.0, 1.0); }',
   prism_log10: 'float prism_log10(float a) { return log2(a) * 0.30102999566; }\nvec2 prism_log10(vec2 a) { return log2(a) * 0.30102999566; }\nvec3 prism_log10(vec3 a) { return log2(a) * 0.30102999566; }\nvec4 prism_log10(vec4 a) { return log2(a) * 0.30102999566; }',
   prism_ldexp: 'float prism_ldexp(float a, float e) { return a * exp2(e); }\nvec2 prism_ldexp(vec2 a, vec2 e) { return a * exp2(e); }\nvec3 prism_ldexp(vec3 a, vec3 e) { return a * exp2(e); }\nvec4 prism_ldexp(vec4 a, vec4 e) { return a * exp2(e); }',
+  // D3DX's noise(float3): Perlin's noise3 with D3DX's offset (10000, added in float, which quantises the
+  // fraction as D3DX's own float store does), its 1.5 scale and its tables (tools/gen-d3dx-noise.mjs).
+  prism_noise: [`const int prism_np[256] = int[256](${NOISE_P.join(', ')});`,
+    `const vec3 prism_ng[256] = vec3[256](${Array.from({ length: 256 }, (_, i) => `vec3(${NOISE_G.slice(3 * i, 3 * i + 3).map((v) => (Number.isInteger(v) ? `${v}.0` : String(v))).join(', ')})`).join(', ')});`,
+    'float prism_noise(vec3 v) {',
+    '  vec3 t = v + 10000.0;',
+    '  ivec3 i0 = ivec3(t);',
+    '  vec3 r0 = t - vec3(i0), r1 = r0 - 1.0, s = r0 * r0 * (3.0 - 2.0 * r0);',
+    '  ivec3 b0 = i0 & 255, b1 = (i0 + 1) & 255;',
+    '  int i = prism_np[b0.x], j = prism_np[b1.x];',
+    '  int b00 = prism_np[(i + b0.y) & 255], b10 = prism_np[(j + b0.y) & 255], b01 = prism_np[(i + b1.y) & 255], b11 = prism_np[(j + b1.y) & 255];',
+    '  float c = mix(mix(dot(prism_ng[(b00 + b0.z) & 255], r0), dot(prism_ng[(b10 + b0.z) & 255], vec3(r1.x, r0.yz)), s.x),',
+    '    mix(dot(prism_ng[(b01 + b0.z) & 255], vec3(r0.x, r1.y, r0.z)), dot(prism_ng[(b11 + b0.z) & 255], vec3(r1.xy, r0.z)), s.x), s.y);',
+    '  float d = mix(mix(dot(prism_ng[(b00 + b1.z) & 255], vec3(r0.xy, r1.z)), dot(prism_ng[(b10 + b1.z) & 255], vec3(r1.x, r0.y, r1.z)), s.x),',
+    '    mix(dot(prism_ng[(b01 + b1.z) & 255], vec3(r0.x, r1.yz)), dot(prism_ng[(b11 + b1.z) & 255], r1), s.x), s.y);',
+    '  return 1.5 * mix(c, d, s.z);',
+    '}'].join('\n'),
 };
 const TEXTURE = { tex1D: ['2D', 'plain'], tex2D: ['2D', 'plain'], tex3D: ['3D', 'plain'], texCUBE: ['Cube', 'plain'],
   tex2Dlod: ['2D', 'lod'], tex3Dlod: ['3D', 'lod'], texCUBElod: ['Cube', 'lod'], tex2Dbias: ['2D', 'bias'], tex3Dbias: ['3D', 'bias'], texCUBEbias: ['Cube', 'bias'],
@@ -306,7 +330,7 @@ const COORDS = { '2D': 2, '3D': 3, Cube: 3 };
 
 // ---- the translation ----------------------------------------------------------------------------------
 /** The profile's register files: [float constants, shader type]. */
-const PROFILES = { ps_2_0: [32, 'ps'], ps_2_a: [32, 'ps'], ps_2_b: [32, 'ps'], ps_3_0: [224, 'ps'], vs_2_0: [256, 'vs'], vs_2_a: [256, 'vs'], vs_3_0: [256, 'vs'] };
+const PROFILES = { tx_1_0: [32, 'ps'], ps_2_0: [32, 'ps'], ps_2_a: [32, 'ps'], ps_2_b: [32, 'ps'], ps_3_0: [224, 'ps'], vs_2_0: [256, 'vs'], vs_2_a: [256, 'vs'], vs_3_0: [256, 'vs'] };
 
 /**
  * Translate HLSL `source` with entry point `entry` for `profile` (ps_2_0 .. vs_3_0). Returns
@@ -316,7 +340,7 @@ const PROFILES = { ps_2_0: [32, 'ps'], ps_2_a: [32, 'ps'], ps_2_b: [32, 'ps'], p
  */
 export function translateHLSL(source, entry, profile, defines = []) {
   const prof = PROFILES[profile] ?? fail(`profile ${profile} is not supported`);
-  const stage = prof[1];
+  const stage = prof[1], tx = profile === 'tx_1_0';
   const ast = parse(lex(preprocess(source, defines)));
   const fn = ast.functions.filter((f) => f.name === entry);
   if (!fn.length) fail(`entry point ${entry} not found`);
@@ -597,6 +621,11 @@ export function translateHLSL(source, entry, profile, defines = []) {
     switch (name) {
       case 'dot': { const [a, b, n] = pair(); return { code: n === 1 ? `(${a} * ${b})` : `dot(${a}, ${b})`, type: FLOAT }; }
       case 'distance': { const [a, b, n] = pair(); return { code: n === 1 ? `abs(${a} - ${b})` : `distance(${a}, ${b})`, type: FLOAT }; }
+      case 'noise':
+        if (!tx) fail('noise() outside a texture shader (tx_1_0): D3DX allows it only there');
+        if (args[0].type.k !== 'num' || args[0].type.n !== 3) fail('noise() of anything but a float3 is not supported yet');
+        helpers.add('prism_noise');
+        return { code: `prism_noise(${conv(args[0], num('float', 3))})`, type: FLOAT };
       case 'length': return { code: args[0].type.n === 1 ? `abs(${conv(args[0], FLOAT)})` : `length(${conv(args[0], num('float', args[0].type.n))})`, type: FLOAT };
       case 'normalize': return { code: `normalize(${conv(args[0], num('float', args[0].type.n))})`, type: num('float', args[0].type.n) };
       case 'cross': return { code: `cross(${conv(args[0], num('float', 3))}, ${conv(args[1], num('float', 3))})`, type: num('float', 3) };
@@ -736,6 +765,12 @@ export function translateHLSL(source, entry, profile, defines = []) {
   const inputs = [], outputs = [], ins = [], mainArgs = [], outDecl = [], after = [];
   const inputFor = (sem, t) => {
     const m = /^([A-Z_]+?)(\d*)$/.exec(sem); const base = m[1], idx = +(m[2] || 0);
+    if (tx) {
+      // the texel's centre in [0, 1] as D3DXFillTextureTX gives it, ((x + 0.5) / w, (y + 0.5) / h), row 0 the first; one texel's size
+      if (base === 'POSITION') return conv({ code: '(gl_FragCoord.xy * prism_txSize)', type: num('float', 2) }, t);
+      if (base === 'PSIZE') return conv({ code: 'prism_txSize', type: num('float', 2) }, t);
+      return fail(`input semantic ${sem} in a texture shader (POSITION and PSIZE are its inputs)`);
+    }
     if (stage === 'ps') {
       // POSITION: the vertex shader's output struct passed whole to the pixel shader; ps_3_0 has no such input, given as VPOS
       if (base === 'VPOS' || base === 'SV_POSITION' || base === 'POSITION') return conv({ code: 'vec4(gl_FragCoord.xy - 0.5, gl_FragCoord.z, 1.0 / gl_FragCoord.w)', type: num('float', 4) }, t);
@@ -796,6 +831,7 @@ export function translateHLSL(source, entry, profile, defines = []) {
   if (constants.some((c) => c.regSet === 0)) files.push('uniform int prism_b[16];');
   for (const s of samplers) files.push(`uniform highp sampler${s.dim} prism_s${s.index};`);
   if (stage === 'vs') files.push('uniform vec4 prism_posFix;');
+  if (tx) files.push('uniform vec2 prism_txSize;');
   const glsl = [
     '#version 300 es', 'precision highp float;', 'precision highp int;', 'precision highp sampler3D;', 'precision highp samplerCube;',
     ...files, ...ins, ...outDecl, ...structCode, ...head, ...[...helpers].map((h) => HELPERS[h]), ...fnCode,
@@ -812,7 +848,7 @@ export function translateHLSL(source, entry, profile, defines = []) {
 // ---- the blob D3DXCompileShader returns (the host's d3dx9) --------------------------------------------
 // [version token][comment 0x0000FFFE | n << 16]['PRSM'][entry NUL source NUL, zero-padded][0x0000FFFF]
 export const PRSM = 0x4d535250;
-const PROFILE_OF = { 0xffff0200: 'ps_2_0', 0xffff0300: 'ps_3_0', 0xfffe0200: 'vs_2_0', 0xfffe0300: 'vs_3_0', 0xffff0201: 'ps_2_a', 0xfffe0201: 'vs_2_a' };
+const PROFILE_OF = { 0x54580100: 'tx_1_0', 0xffff0200: 'ps_2_0', 0xffff0300: 'ps_3_0', 0xfffe0200: 'vs_2_0', 0xfffe0300: 'vs_3_0', 0xffff0201: 'ps_2_a', 0xfffe0201: 'vs_2_a' };
 /** The HLSL a blob carries, or null for real bytecode: { profile, entry, source }. */
 export function blobHLSL(tokens) {
   if ((tokens[1] & 0xffff) !== 0xfffe || tokens[2] !== PRSM) return null;

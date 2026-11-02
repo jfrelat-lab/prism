@@ -364,6 +364,43 @@ function createDevice(g, params, { floatRT, onPresent }) {
     }
   }
 
+  // ---- D3DXFillTextureTX ----
+  // A texture shader (tx_1_0, hlsl.js) run for every texel of every level, its result written in the
+  // texture's format. D3DX runs it on the CPU, texel by texel; here each level is one full-screen draw.
+  const txVao = g.createVertexArray();
+  function fillTextureTX(h, tokens) {
+    const t = get(h, 'texture'), b = blobHLSL(tokens);
+    if (!b || b.profile !== 'tx_1_0') fail('fillTextureTX takes the blob of a tx_1_0 shader');
+    if (/F$/.test(t.f[0]) && !floatRT) fail('filling a float texture without EXT_color_buffer_float');
+    const tr = translateHLSL(b.source, b.entry, 'tx_1_0');
+    if (tr.samplers.length) fail(`tx_1_0 ${b.entry}: a texture shader that samples a texture is not supported yet`);
+    const prog = g.createProgram();
+    g.attachShader(prog, compile(g.VERTEX_SHADER, '#version 300 es\nvoid main() { gl_Position = vec4(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0, 0.0, 1.0); }\n', 'texture shader stage'));
+    g.attachShader(prog, compile(g.FRAGMENT_SHADER, tr.glsl, `tx_1_0 ${b.entry}`));
+    g.linkProgram(prog);
+    if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
+    g.useProgram(prog);
+    const size = g.getUniformLocation(prog, 'prism_txSize');
+    const fb = g.createFramebuffer();
+    g.bindFramebuffer(g.FRAMEBUFFER, fb);
+    g.disable(g.SCISSOR_TEST); g.disable(g.DEPTH_TEST); g.disable(g.BLEND); g.disable(g.CULL_FACE); g.colorMask(true, true, true, true);
+    g.bindVertexArray(txVao);
+    for (const sh of t.surfaces) {
+      const sf = get(sh, 'surface');
+      g.framebufferTexture2D(g.FRAMEBUFFER, g.COLOR_ATTACHMENT0, g.TEXTURE_2D, t.tex, sf.level);
+      g.drawBuffers([g.COLOR_ATTACHMENT0]);
+      const st = g.checkFramebufferStatus(g.FRAMEBUFFER);
+      if (st !== g.FRAMEBUFFER_COMPLETE) fail(`fillTextureTX: level ${sf.level} cannot be drawn into (0x${st.toString(16)})`);
+      g.viewport(0, 0, sf.w, sf.h);
+      g.uniform2f(size, 1 / sf.w, 1 / sf.h);
+      g.drawArrays(g.TRIANGLES, 0, 3);
+    }
+    g.bindVertexArray(null);
+    g.bindFramebuffer(g.FRAMEBUFFER, null);
+    g.deleteFramebuffer(fb); g.deleteProgram(prog);
+    return OK;
+  }
+
   // ---- drawing ----
   const vbo = g.createBuffer(), ibo = g.createBuffer(), vao = g.createVertexArray();
   const COUNT = { 1: (n) => n, 2: (n) => 2 * n, 3: (n) => n + 1, 4: (n) => 3 * n, 5: (n) => n + 2, 6: (n) => n + 2 };
@@ -556,6 +593,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
 
     // textures and surfaces
     createTexture: (w, h, levels, usage, format) => add(makeTexture(w, h, levels, usage, format)),
+    // D3DXFillTextureTX(texture, a tx_1_0 shader): the host's d3dx9 hands over the blob D3DXCompileShader made
+    fillTextureTX,
     textureWrite: (h, level, rect, bytes, pitch) => {
       const t = get(h, 'texture'), s = get(t.surfaces[level], 'surface');
       if (rect) fail('a partial texture write is not supported yet');
