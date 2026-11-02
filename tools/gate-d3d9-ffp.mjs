@@ -47,6 +47,7 @@ const cases = [
   { name: 'lighting off: the vertex\'s own colour', ...base, fvf: 0x42, rs: [[137, 0]] },
   { name: 'the diffuse material from the vertex\'s colour (D3DMCS_COLOR1, the default)', ...base, fvf: 0x52 },
   { name: 'a texture modulated by the lit colour (texture stage 0 as D3D9 sets it)', ...base, fvf: 0x112, tex: true },
+  { name: 'specular with a power of 0 (a material left at its zeros, as Stiletto\'s may be)', ...base, material: { ...MATERIAL, power: 0 }, rs: [...base.rs, [29, 1]] },
   { name: 'a view matrix: the camera moved and turned, the lights in world space', ...base, view: mul(move(0.4, -0.2, 0.5), rotY(-0.2)), rs: [...base.rs, [29, 1]] },
 ];
 const scene = (k) => [`fvf ${k.fvf.toString(16)}`, ...(k.tex ? ['tex'] : []), ...(k.rs ?? []).map(([s, v]) => `rs ${s} ${v}`),
