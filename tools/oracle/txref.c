@@ -68,6 +68,13 @@ int main(int argc, char **argv) {
     fprintf(stderr, "%s: %s\n", argv[2], errs ? (char *)ID3DXBuffer_GetBufferPointer(errs) : "?");
     return 1;
   }
+  if (getenv("TXREF_DISASM")) {                       /* the compiled shader as D3DX itself disassembles it, on stdout */
+    typedef HRESULT (WINAPI *disasm_fn)(const DWORD *, BOOL, const char *, ID3DXBuffer **);
+    disasm_fn disasm = (disasm_fn)GetProcAddress(dx, "D3DXDisassembleShader");
+    ID3DXBuffer *text = NULL;
+    if (disasm && SUCCEEDED(disasm(ID3DXBuffer_GetBufferPointer(code), FALSE, NULL, &text))) printf("%s\n", (char *)ID3DXBuffer_GetBufferPointer(text));
+    else printf("(D3DXDisassembleShader failed)\n");
+  }
   CHECK(create(ID3DXBuffer_GetBufferPointer(code), &ts));
 
   wnd = CreateWindowA("static", "txref", WS_OVERLAPPEDWINDOW, 0, 0, 64, 64, NULL, NULL, NULL, NULL);

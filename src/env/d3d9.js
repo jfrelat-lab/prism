@@ -53,11 +53,18 @@ const RS = { ZENABLE: 7, FILLMODE: 8, SHADEMODE: 9, ZWRITEENABLE: 14, ALPHATESTE
   ALPHAREF: 24, ALPHAFUNC: 25, DITHERENABLE: 26, ALPHABLENDENABLE: 27, FOGENABLE: 28, SPECULARENABLE: 29, STENCILENABLE: 52, STENCILFAIL: 53, STENCILZFAIL: 54,
   STENCILPASS: 55, STENCILFUNC: 56, STENCILREF: 57, STENCILMASK: 58, STENCILWRITEMASK: 59, TEXTUREFACTOR: 60, LIGHTING: 137, COLORWRITEENABLE: 168,
   BLENDOP: 171, SCISSORTESTENABLE: 174, SLOPESCALEDEPTHBIAS: 175, SRGBWRITEENABLE: 194, DEPTHBIAS: 195, SEPARATEALPHABLENDENABLE: 206,
-  SRCBLENDALPHA: 207, DESTBLENDALPHA: 208, BLENDOPALPHA: 209, BLENDFACTOR: 193, POINTSIZE: 154 };
+  SRCBLENDALPHA: 207, DESTBLENDALPHA: 208, BLENDOPALPHA: 209, BLENDFACTOR: 193, POINTSIZE: 154, AMBIENT: 139, COLORVERTEX: 141, LOCALVIEWER: 142,
+  NORMALIZENORMALS: 143, DIFFUSEMATERIALSOURCE: 145, SPECULARMATERIALSOURCE: 146, AMBIENTMATERIALSOURCE: 147, EMISSIVEMATERIALSOURCE: 148 };
 const RS_DEFAULT = { [RS.FILLMODE]: 3, [RS.SHADEMODE]: 2, [RS.ZWRITEENABLE]: 1, [RS.SRCBLEND]: 2, [RS.DESTBLEND]: 1, [RS.CULLMODE]: 3, [RS.ZFUNC]: 4,
   [RS.ALPHAFUNC]: 8, [RS.DITHERENABLE]: 0, [RS.STENCILFAIL]: 1, [RS.STENCILZFAIL]: 1, [RS.STENCILPASS]: 1, [RS.STENCILFUNC]: 8, [RS.STENCILMASK]: 0xffffffff,
   [RS.STENCILWRITEMASK]: 0xffffffff, [RS.TEXTUREFACTOR]: 0xffffffff, [RS.LIGHTING]: 1, [RS.COLORWRITEENABLE]: 0xf, [RS.BLENDOP]: 1, [RS.SRCBLENDALPHA]: 2,
-  [RS.DESTBLENDALPHA]: 1, [RS.BLENDOPALPHA]: 1, [RS.BLENDFACTOR]: 0xffffffff };
+  [RS.DESTBLENDALPHA]: 1, [RS.BLENDOPALPHA]: 1, [RS.BLENDFACTOR]: 0xffffffff, [RS.COLORVERTEX]: 1, [RS.LOCALVIEWER]: 1, [RS.DIFFUSEMATERIALSOURCE]: 1,
+  [RS.SPECULARMATERIALSOURCE]: 2 };
+// Texture stage states (D3DTEXTURESTAGESTATETYPE) the fixed function's pixel stage reads, and their defaults: stage 0
+// modulates its texture by the diffuse colour and takes the texture's alpha, the others are disabled.
+const TSS = { COLOROP: 1, COLORARG1: 2, COLORARG2: 3, ALPHAOP: 4, ALPHAARG1: 5, ALPHAARG2: 6, TEXCOORDINDEX: 11, TEXTURETRANSFORMFLAGS: 24 };
+const tssDefault = (k) => ({ [TSS.COLOROP]: k ? 1 : 4, [TSS.COLORARG1]: 2, [TSS.COLORARG2]: 1, [TSS.ALPHAOP]: k ? 1 : 2, [TSS.ALPHAARG1]: 2, [TSS.ALPHAARG2]: 1,
+  [TSS.TEXCOORDINDEX]: k, [TSS.TEXTURETRANSFORMFLAGS]: 0 });
 // Sampler states (D3DSAMPLERSTATETYPE): ADDRESSU/V/W, BORDERCOLOR, MAG/MIN/MIPFILTER, MIPMAPLODBIAS, MAXMIPLEVEL, MAXANISOTROPY, SRGBTEXTURE
 const SAMP_DEFAULT = [0, 1, 1, 1, 0, 1, 1, 0, 0, 0, 1, 0, 0, 0];
 
@@ -189,6 +196,13 @@ function createDevice(g, params, { floatRT, onPresent }) {
   let fvf = 0, decl = 0, vs = 0, ps = 0, inScene = false;
   const streams = Array.from({ length: 16 }, () => ({ vb: 0, offset: 0, stride: 0 }));
   let indices = 0;
+  // the fixed function's state: transforms (D3DTRANSFORMSTATETYPE, D3D's row-major matrices), lights, the material, the stages
+  const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  const transforms = new Map();
+  const transform = (t) => transforms.get(t) ?? IDENTITY;
+  const lights = new Map(), lightOn = new Set();
+  let material = { diffuse: [0, 0, 0, 0], ambient: [0, 0, 0, 0], specular: [0, 0, 0, 0], emissive: [0, 0, 0, 0], power: 0 };
+  const tss = Array.from({ length: 8 }, (_, k) => new Map(Object.entries(tssDefault(k)).map(([t, v]) => [+t, v])));
 
   // ---- shaders ----
   function makeShader(tokens, type) {
@@ -265,7 +279,6 @@ function createDevice(g, params, { floatRT, onPresent }) {
   };
   const programs = new Map();
   function program(vsObj, psObj, L) {
-    if (!psObj) fail('drawing without a pixel shader (the fixed function\'s texture stages) is not supported yet');
     const psA = adaptations(psObj.samplers, 0), vsA = vsObj ? adaptations(vsObj.samplers, 16) : [];
     const sig = (l) => l.map((x) => `${x.index}${x.u ? 'u' : ''}${x.v ? 'v' : ''}${x.fill ? textures[x.slot] && objects.get(textures[x.slot]).format : ''}`).join(',');
     const key = `${vsObj ? objectsKey(vsObj) : `t${fvf}`}|${objectsKey(psObj)}|${sig(psA)}|${sig(vsA)}`;
@@ -304,9 +317,105 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
     const u = (n) => g.getUniformLocation(prog, n);
     p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
+      ff: vsObj?.ffp ? { world: u('prism_ff_world'), view: u('prism_ff_view'), proj: u('prism_ff_proj'), mat: u('prism_ff_mat'), ambient: u('prism_ff_ambient'), light: u('prism_ff_light') } : null,
       s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])], bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
     programs.set(key, p);
     return p;
+  }
+  // ---- the fixed function ----
+  // Its vertex stage (D3D9's "Mathematics of Lighting"), generated per combination of what changes the code:
+  // the vertex's elements, lighting on or off, which lights of which types, the material's sources. Lighting is
+  // done in camera space, as D3D9 does it: D3D's row vectors, so v * World * View * Projection.
+  const ffCache = new Map();
+  function ffVertex(L) {
+    const has = (u, i = 0) => L.E.some((e) => e.usage === u && e.index === i);
+    if (has('psize')) fail('the fixed function with a point size in the vertex is not supported yet');
+    if (rs.get(RS.FOGENABLE)) fail('fog in the fixed function (D3DRS_FOGENABLE) is not supported yet');
+    const lit = !!rs.get(RS.LIGHTING);
+    const on = lit ? [...lightOn].sort((a, b) => a - b).slice(0, 8).map((i) => lights.get(i)) : [];
+    const cv = rs.get(RS.COLORVERTEX);
+    // a material colour taken from the vertex: D3DMCS_COLOR1 or COLOR2, when the vertex has that colour
+    const src = (r, fallback) => { const m = rs.get(r); return cv && m === 1 && has('color', 0) ? 'prism_a_color0' : cv && m === 2 && has('color', 1) ? 'prism_a_color1' : fallback; };
+    const tcs = [...Array(8).keys()].filter((k) => has('texcoord', k));
+    for (let k = 0; k < 8; k++) if (tss[k].get(TSS.TEXCOORDINDEX) !== k || tss[k].get(TSS.TEXTURETRANSFORMFLAGS)) fail(`texture stage ${k}: generated or transformed texture coordinates (D3DTSS_TEXCOORDINDEX, TEXTURETRANSFORMFLAGS) are not supported yet`);
+    const sig = `${L.E.map((e) => e.usage + e.index).join(',')}|${lit ? on.map((l) => l.type).join('') : 'unlit'}|${[RS.SPECULARENABLE, RS.LOCALVIEWER, RS.NORMALIZENORMALS].map((r) => rs.get(r) ? 1 : 0).join('')}|${lit ? [RS.DIFFUSEMATERIALSOURCE, RS.SPECULARMATERIALSOURCE, RS.AMBIENTMATERIALSOURCE, RS.EMISSIVEMATERIALSOURCE].map((r) => src(r, '-')).join(',') : ''}`;
+    let o = ffCache.get(`v${sig}`);
+    if (o) return o;
+    const ins = ['position0', ...(has('normal') ? ['normal0'] : []), 'color0', 'color1', ...tcs.map((k) => `texcoord${k}`)];
+    const outs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, { semantic: 'COLOR', index: 1, name: 'prism_col1' }, ...tcs.map((k) => ({ semantic: 'TEXCOORD', index: k, name: `prism_t${k}` }))];
+    const body = [];
+    if (lit) {
+      const Md = src(RS.DIFFUSEMATERIALSOURCE, 'prism_ff_mat[0]'), Ma = src(RS.AMBIENTMATERIALSOURCE, 'prism_ff_mat[1]'),
+        Ms = src(RS.SPECULARMATERIALSOURCE, 'prism_ff_mat[2]'), Me = src(RS.EMISSIVEMATERIALSOURCE, 'prism_ff_mat[3]');
+      body.push('  mat4 wv = prism_ff_view * prism_ff_world;', '  vec3 P = (wv * vec4(prism_a_position0.xyz, 1.0)).xyz;',
+        `  vec3 N = ${has('normal') ? 'transpose(inverse(mat3(wv))) * prism_a_normal0.xyz' : 'vec3(0.0)'};${rs.get(RS.NORMALIZENORMALS) && has('normal') ? ' N = normalize(N);' : ''}`,
+        '  vec3 dif = vec3(0.0), spe = vec3(0.0), amb = prism_ff_ambient.rgb;', '  vec3 L; float att, spot;');
+      on.forEach((l, i) => {
+        const b = i * 8, at = (k) => `prism_ff_light[${b + k}]`;
+        body.push('  {');
+        if (l.type === 3) body.push(`    L = normalize(-(mat3(prism_ff_view) * ${at(5)}.xyz)); att = 1.0; spot = 1.0;`);
+        else {
+          body.push(`    vec3 lv = (prism_ff_view * vec4(${at(4)}.xyz, 1.0)).xyz - P; float d = length(lv); L = lv / d;`,
+            `    att = d > ${at(0)}.y ? 0.0 : 1.0 / (${at(6)}.x + ${at(6)}.y * d + ${at(6)}.z * d * d);`);
+          // a spot: full inside theta/2, none outside phi/2, and between them ((rho - cos phi/2) / (cos theta/2 - cos phi/2))^falloff
+          if (l.type === 2) body.push(`    float rho = dot(normalize(mat3(prism_ff_view) * ${at(5)}.xyz), -L);`,
+            `    spot = rho > ${at(7)}.x ? 1.0 : rho <= ${at(7)}.y ? 0.0 : pow((rho - ${at(7)}.y) / (${at(7)}.x - ${at(7)}.y), ${at(0)}.z);`);
+          else body.push('    spot = 1.0;');
+        }
+        body.push(`    float nl = dot(N, L);`, `    amb += ${at(3)}.rgb * att * spot;`, `    dif += ${at(1)}.rgb * max(nl, 0.0) * att * spot;`);
+        if (rs.get(RS.SPECULARENABLE)) {
+          // the viewer: towards the camera, at the origin, or at infinity behind it (-z: the camera looks down +z), as Wine and DXVK both have it
+          body.push(`    vec3 H = normalize(L + ${rs.get(RS.LOCALVIEWER) ? 'normalize(-P)' : 'vec3(0.0, 0.0, -1.0)'});`,
+            `    if (nl > 0.0) spe += ${at(2)}.rgb * pow(max(dot(N, H), 0.0), prism_ff_mat[4].x) * att * spot;`);
+        }
+        body.push('  }');
+      });
+      body.push(`  prism_col0 = vec4(clamp(${Me}.rgb + ${Ma}.rgb * amb + ${Md}.rgb * dif, 0.0, 1.0), ${Md}.a);`,
+        `  prism_col1 = vec4(clamp(${Ms}.rgb * spe, 0.0, 1.0), 0.0);`);
+    } else body.push('  prism_col0 = prism_a_color0;', '  prism_col1 = prism_a_color1;');
+    const glsl = ['#version 300 es', 'precision highp float;', ...ins.map((n) => `in vec4 prism_a_${n};`),
+      'uniform mat4 prism_ff_world, prism_ff_view, prism_ff_proj;', 'uniform vec4 prism_posFix;', 'uniform vec4 prism_ff_mat[5];', 'uniform vec4 prism_ff_ambient;',
+      ...(on.length ? [`uniform vec4 prism_ff_light[${on.length * 8}];`] : []), ...outs.map((x) => `out vec4 ${x.name};`),
+      'void main() {', '  vec4 p = prism_ff_proj * (prism_ff_view * (prism_ff_world * vec4(prism_a_position0.xyz, 1.0)));',
+      '  gl_Position = vec4(p.xy * prism_posFix.xy + prism_posFix.zw * p.w, p.z * 2.0 - p.w, p.w);',
+      ...body, ...tcs.map((k) => `  prism_t${k} = prism_a_texcoord${k};`), '}', ''].join('\n');
+    o = { kind: 'vertex', ffp: true, lights: on, glsl, samplers: [], outputs: outs, inputs: [] };
+    ffCache.set(`v${sig}`, o);
+    return o;
+  }
+  // Its pixel stage: stage 0 as D3D9 sets it by default (its texture times the diffuse colour, the texture's
+  // alpha), or the diffuse colour where no texture is bound; the specular colour added after, when enabled.
+  // Any other stage setting is refused by name.
+  function ffPixel() {
+    const t0 = tss[0], tex = !!textures[0];
+    const def = [TSS.COLOROP, TSS.COLORARG1, TSS.COLORARG2, TSS.ALPHAOP, TSS.ALPHAARG1, TSS.ALPHAARG2].every((t) => t0.get(t) === tssDefault(0)[t]);
+    if (!def && !(t0.get(TSS.COLOROP) === 1)) fail(`texture stage 0 without a pixel shader: COLOROP ${t0.get(TSS.COLOROP)} ALPHAOP ${t0.get(TSS.ALPHAOP)} (args ${t0.get(TSS.COLORARG1)}, ${t0.get(TSS.COLORARG2)}): only the default stage is supported yet`);
+    if (tss[1].get(TSS.COLOROP) !== 1) fail('texture stage 1 without a pixel shader is not supported yet');
+    const textured = tex && t0.get(TSS.COLOROP) !== 1, spec = !!rs.get(RS.SPECULARENABLE);
+    const sig = `p${textured ? 't' : ''}${spec ? 's' : ''}`;
+    let o = ffCache.get(sig);
+    if (o) return o;
+    const inputs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, ...(spec ? [{ semantic: 'COLOR', index: 1, name: 'prism_col1' }] : []),
+      ...(textured ? [{ semantic: 'TEXCOORD', index: 0, name: 'prism_t0' }] : [])];
+    const glsl = ['#version 300 es', 'precision highp float;', ...inputs.map((i) => `in vec4 ${i.name};`), ...(textured ? ['uniform highp sampler2D prism_s0;'] : []),
+      'layout(location = 0) out vec4 prism_o0;', 'void main() {',
+      textured ? '  vec4 t = texture(prism_s0, prism_t0.xy);\n  vec4 c = vec4(t.rgb * prism_col0.rgb, t.a);' : '  vec4 c = prism_col0;',
+      ...(spec ? ['  c.rgb = min(c.rgb + prism_col1.rgb, 1.0);'] : []), '  prism_o0 = c;', '}', ''].join('\n');
+    o = { kind: 'pixel', ffp: true, sh: compile(g.FRAGMENT_SHADER, glsl, 'the fixed function\'s pixel stage'), glsl, inputs,
+      samplers: textured ? [{ name: 'texture0', index: 0, dim: '2D' }] : [], outputs: [{ semantic: 'COLOR', index: 0 }] };
+    ffCache.set(sig, o);
+    return o;
+  }
+  function ffUniforms(p, vsObj) {
+    g.uniformMatrix4fv(p.ff.world, false, transform(256)); g.uniformMatrix4fv(p.ff.view, false, transform(2)); g.uniformMatrix4fv(p.ff.proj, false, transform(3));
+    if (p.ff.mat) g.uniform4fv(p.ff.mat, [...material.diffuse, ...material.ambient, ...material.specular, ...material.emissive, material.power, 0, 0, 0]);
+    if (p.ff.ambient) { const a = rs.get(RS.AMBIENT) >>> 0; g.uniform4f(p.ff.ambient, ((a >> 16) & 255) / 255, ((a >> 8) & 255) / 255, (a & 255) / 255, (a >>> 24) / 255); }
+    if (p.ff.light && vsObj.lights.length) {
+      const v = new Float32Array(vsObj.lights.length * 32);
+      vsObj.lights.forEach((l, i) => v.set([l.type, l.range ?? 0, l.falloff ?? 0, 0, ...l.diffuse, ...l.specular, ...l.ambient, ...l.position, 1, ...l.direction, 0,
+        ...l.attenuation, 0, Math.cos((l.theta ?? 0) / 2), Math.cos((l.phi ?? 0) / 2), 0, 0], i * 32));
+      g.uniform4fv(p.ff.light, v);
+    }
   }
   const shaderIds = new WeakMap(); let shaderSeq = 0;
   const objectsKey = (o) => { if (!shaderIds.has(o)) shaderIds.set(o, ++shaderSeq); return shaderIds.get(o); };
@@ -425,7 +534,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (v.bytes && type >= 4 && !idx && allZero(v.bytes.subarray(0, n * stride))) return;
     // pretransformed vertices (XYZRHW) skip vertex processing, a vertex shader that is set included (elevated draws
     // its full-screen passes with its terrain's vertex shader still set)
-    const vsObj = vs && !L.E.some((e) => e.usage === 'positiont') ? get(vs, 'vertex') : null, psObj = ps ? get(ps, 'pixel') : null;
+    const pre = L.E.some((e) => e.usage === 'positiont');
+    const psObj = ps ? get(ps, 'pixel') : ffPixel(), vsObj = pre ? null : vs ? get(vs, 'vertex') : ffVertex(L);
     applyState();
     // WebGL refuses a draw with a bound target the pixel shader writes nothing to; D3D leaves that target as it was
     g.drawBuffers(fbBufs.get(framebuffer()).map((b, k) => (b !== g.NONE && psObj?.outputs.some((o) => o.semantic === 'COLOR' && o.index === k) ? b : g.NONE)));
@@ -441,6 +551,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (p.posFix) g.uniform4f(p.posFix, 1, -1, 1 / viewport.width, 1 / viewport.height);
     if (p.vp) g.uniform4f(p.vp, viewport.x, viewport.y, viewport.width, viewport.height);
     if (p.zr) g.uniform2f(p.zr, viewport.minZ, viewport.maxZ);
+    if (p.ff) ffUniforms(p, vsObj);
     bindSamplers(p);
     for (const [unit, loc] of p.bc) { const c = samp[unit][4]; g.uniform4f(loc, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }
     g.bindVertexArray(vao);
@@ -531,8 +642,23 @@ function createDevice(g, params, { floatRT, onPresent }) {
     getRenderState: (state) => rs.get(state) ?? 0,
     setSamplerState: (s, type, value) => { samp[slot(s)][type] = value >>> 0; return OK; },
     getSamplerState: (s, type) => samp[slot(s)][type],
-    setTextureStageState: () => OK,                          // the fixed function's stages: not drawn yet
-    setTransform: () => OK,
+    setTextureStageState: (stage, type, value) => { if (stage < 8) tss[stage].set(type, value >>> 0); return OK; },
+    getTextureStageState: (stage, type) => tss[stage]?.get(type) ?? 0,
+    // a D3D matrix, row-major as D3DMATRIX lays it out; D3DTS_WORLD is 256
+    setTransform: (state, m) => { transforms.set(state, Float32Array.from(m)); return OK; },
+    getTransform: (state) => Float32Array.from(transform(state)),
+    // D3DLIGHT9 as { type (1 point, 2 spot, 3 directional), diffuse, specular, ambient: [r,g,b,a], position, direction: [x,y,z], range, falloff, attenuation: [3], theta, phi }
+    setLight: (i, l) => { lights.set(i, { ...l }); return OK; },
+    getLight: (i) => lights.get(i) ?? fail(`light ${i} was never set`),
+    lightEnable: (i, on) => {
+      if (on && !lights.has(i)) lights.set(i, { type: 3, diffuse: [1, 1, 1, 0], specular: [0, 0, 0, 0], ambient: [0, 0, 0, 0], position: [0, 0, 0], direction: [0, 0, 1], range: 0, falloff: 0, attenuation: [0, 0, 0], theta: 0, phi: 0 });
+      if (on) lightOn.add(i); else lightOn.delete(i);
+      return OK;
+    },
+    getLightEnable: (i) => lightOn.has(i),
+    // D3DMATERIAL9 as { diffuse, ambient, specular, emissive: [r,g,b,a], power }
+    setMaterial: (m) => { material = { ...m }; return OK; },
+    getMaterial: () => ({ ...material }),
     setViewport: (v) => { viewport = { ...v }; return OK; },
     getViewport: () => ({ ...viewport }),
     setScissorRect: (x1, y1, x2, y2) => { scissor = [x1, y1, x2, y2]; return OK; },
