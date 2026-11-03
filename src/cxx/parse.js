@@ -535,7 +535,14 @@ class CxxParser {
     // `struct X x;` naming a class already known declares nothing: only a definition, a first mention, or
     // `class X;` alone, which declares X here even past an outer X (Queen's `class Graphics;`).
     const defines = this.isP('{') || this.isP(':') || (this.isP('<') && this.isTemplate(name));
-    if (name && !owner && !this.isTemplate(name) && this.scope.names.get(name) !== 'func' && (defines || this.isP(';') || !this.scope.find(name))) this.scope.set(name, 'type');
+    if (name && !owner && !this.isTemplate(name) && this.scope.names.get(name) !== 'func' && (defines || this.isP(';') || !this.scope.find(name))) {
+      // A first mention anywhere else -- `class GenMaterial *Material;` as a member, which .kkrieger's
+      // geneffect.hpp relies on for genoverlay.hpp -- declares the class in the nearest enclosing
+      // namespace or block, not in the class it is mentioned in ([basic.scope.pdecl]).
+      let at = this.scope;
+      if (!defines && !this.isP(';')) while (at.cls && at.parent) at = at.parent;
+      at.set(name, 'type');
+    }
     // An explicit specialisation names its arguments: `template<> struct ColorMasks<565> { ... }`.
     const specArgs = name && this.isP('<') && this.isTemplate(name) ? this.templateArgs() : null;
     if (!this.isP('{') && !this.isP(':')) {
@@ -691,9 +698,12 @@ class CxxParser {
       // -- but not a constructor, whose name is the class's.
       if (isFunc && specs.storage !== 'typedef' && d.name?.parts.length === 1 && (!member || d.name.parts[0].name !== cls)) this.scope.set(d.name.parts[0].name, 'func');
       // So does a variable, in its scope: after Cube's `mitem &mitem = ...;`, `mitem.text` is the variable's.
-      if (!isFunc && !member && specs.storage !== 'typedef' && d.name?.parts.length === 1) {
+      // A data member too, over a type of an enclosing scope: in .kkrieger's EngMesh::Job, the member
+      // `EngMesh::SVCache SVCache[MAXSVCACHE];` makes `SVCache[i].Init()` in Job's constructor an
+      // expression. A type of the class's own scope keeps its name.
+      if (!isFunc && specs.storage !== 'typedef' && d.name?.parts.length === 1) {
         const k = this.scope.find(d.name.parts[0].name);
-        if (k === 'type' || k === 'template') this.scope.set(d.name.parts[0].name, 'var');
+        if ((k === 'type' || k === 'template') && (!member || !this.scope.names.has(d.name.parts[0].name))) this.scope.set(d.name.parts[0].name, 'var');
       }
       if (specs.storage === 'typedef' && d.name) {
         const tname = d.name.parts[d.name.parts.length - 1].name;

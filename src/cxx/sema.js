@@ -63,9 +63,11 @@ const OP_CODE = { '+': 'pl', '-': 'mi', '*': 'ml', '/': 'dv', '%': 'rm', '^': 'e
   new: 'nw', delete: 'dl', 'new[]': 'na', 'delete[]': 'da' };
 
 /** Lower a parsed C++ unit to C text. `tag` names the unit, for its static-initialiser function. */
-export function lowerCxx(unit, { tag = 'unit', builtins = null } = {}) {
+export function lowerCxx(unit, { tag = 'unit', builtins = null, msvc = false } = {}) {
   const sema = new Sema(tag);
   sema.builtins = builtins;
+  // What Visual C++ 7.1 accepts that g++ refuses (src/cxx/index.js, MSVC rules).
+  sema.msvc = msvc;
   return sema.run(unit);
 }
 
@@ -365,6 +367,22 @@ export class Sema {
   }
 
   // ---------------------------------------------------------------- constants
+  /**
+   * A const integer's value -- or, when this front end cannot fold it, its expression in C, which the
+   * C compiler can: .kkrieger's _viruz2.cpp has `static const int v2nparms = sizeof(v2parms) /
+   * sizeof(V2PARAM);`, then `v2soundsize = v2nparms+1+255*3` and `unsigned char
+   * v2initsnd[v2soundsize] = { ... }`. A const variable is no constant in C, so every use of one is
+   * its expression (varExpr).
+   */
+  recordConst(ent, init, env) {
+    const v = this.constInt(init, env);
+    if (v !== null) { ent.constValue = v; return; }
+    if (this.readsVariable(init, env)) return;
+    const cx = { env, fn: null, pending: [], constOnly: true, node: init };
+    let e;
+    try { e = this.expr(init, cx); } catch { return; }
+    if (!cx.dynamic && T.isInteger(e.t)) ent.constText = `(${e.c})`;
+  }
   /** An integer constant expression's value, or null if it is not one this front end can fold. */
   constInt(e, env) {
     switch (e.k) {
@@ -1104,7 +1122,7 @@ export class Sema {
     const ent = prior?.k === 'var' ? prior : env.scope.set(name, { k: 'var', name, type, cname, global: true, cLink });
     if (prior?.k === 'var' && prior.type.k === 'array' && prior.type.n == null) prior.type = type;
     ent.storage = ns?.internal && it.specs.storage !== 'extern' ? 'static' : it.specs.storage;
-    if (type.c && T.isInteger(type) && it.init) { const v = this.constInt(it.init, env); if (v !== null) ent.constValue = v; }
+    if (type.c && T.isInteger(type) && it.init) this.recordConst(ent, it.init, env);
     if (it.specs.storage === 'extern' && !it.init && !it.ctorArgs) { ent.externOnly = !ent.definedHere; return ent; }
     ent.definedHere = true; ent.externOnly = false;
     this.defineGlobal(ent, it, env);

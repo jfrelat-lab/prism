@@ -1584,6 +1584,52 @@ int main() {
 }
 `);
 
+// Shapes of .kkrieger's player (fr_public, werkkzeug3_kkrieger): arrays of arrays of objects, a local
+// one (genmesh.cpp's `sVector sidev[2][64]` in CSGSplitR) and one at file scope (kkriegergame.cpp's
+// `sVector SplitHeapVector[2][SPLITHEAPMAX]`) -- each element built in order and destroyed in reverse,
+// as one run of elements; and a class first named as a member's type (geneffect.hpp's `class
+// GenMaterial *Material;`), which declares it outside that class, where genoverlay.hpp then uses it;
+// geneffect.cpp's `::operator delete(EffectData)`, called by name; and engine.cpp's EngMesh::Job, whose
+// member `EngMesh::SVCache SVCache[MAXSVCACHE];` hides the enclosing class's type in Job's functions.
+C('kkrieger-shapes', `
+#include <stdio.h>
+class EngMesh {
+public:
+    struct SVCache { int light; void Init() { light = 3; } };
+    struct Job { EngMesh::SVCache SVCache[4]; Job(); int sum(); };
+};
+EngMesh::Job::Job() { for (int i = 0; i < 4; i++) SVCache[i].Init(); SVCache[2].light = 5; }
+int EngMesh::Job::sum() { int s = 0; for (int i = 0; i < 4; i++) s += SVCache[i].light; return s; }
+struct GenEffect { class GenMaterial *Material; };
+static int pass(GenMaterial *m) { return m == 0; }
+class GenMaterial { public: int n; };
+static int made;
+struct V { int id; V() : id(made++) { printf("+%d ", id); } ~V() { printf("-%d ", id); } };
+struct P { float x, y; };
+V grid[2][3];
+static int split() {
+    V sides[2][2];
+    P pts[3][2];
+    pts[2][1].x = 4;
+    sides[1][0].id += 100;
+    printf("| %d %d %g |", sides[0][1].id, sides[1][0].id, pts[2][1].x);
+    return sides[1][1].id;
+}
+int main() {
+    int *raw = (int *)::operator new(4 * sizeof(int));
+    raw[3] = 7;
+    printf("raw %d\\n", raw[3]);
+    EngMesh::Job job;
+    printf("job %d\\n", job.sum());
+    ::operator delete(raw);
+    GenMaterial mat; GenEffect fx; fx.Material = &mat;
+    printf("main %d %d %d %d\\n", grid[0][2].id, grid[1][0].id, pass(0), pass(fx.Material));
+    int r = split();
+    printf("\\nsplit %d\\n", r);
+    return 0;
+}
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);
@@ -1643,7 +1689,35 @@ if (!FILTER) {
     ['a .C unit is C++, as gcc decides, on a case-sensitive tree', out(CLASS, 'UNIT.C', cxxForTarget(undefined, false)) === '42'],
     ['...and C on a case-insensitive (DOS) tree: `class` is an identifier', out(PLAIN, 'UNIT.C', cxxForTarget(undefined, true)) === '42'],
     ['...where the target\'s own table still wins', out(CLASS, 'UNIT.C', cxxForTarget({ language: { 'UNIT.C': 'c++' } }, true)) === '42'],
+    ['a compiler PRISM does not know is refused by name', /^refused: .*'borland'.*gcc, msvc/.test(out(CLASS, 'unit.cpp', { compiler: 'borland' }))],
   ];
+  /*
+   * compiler: "msvc" -- what Visual C++ 7.1 accepts and g++ refuses, as .kkrieger's player leans on it
+   * (src/cxx/index.js). No oracle runs MSVC here, so each value is worked out by hand, and each rule
+   * is a program that must run with the option beside the same program refused without it.
+   */
+  const MSVC = { compiler: 'msvc' };
+  const KEYWORDS = '#include <stdio.h>\nstatic __forceinline unsigned __int64 big(__int32 a) { return (unsigned __int64)a << 33; }\n'
+    + 'int __stdcall f(int __w64 x) { return x; }\n__declspec(noreturn) void die(void);\n'
+    + 'int main() { printf("%d %d\\n", (int)(big(3) >> 32), f(7)); return 0; }\n';
+  // /Zc:forScope-: i is 12 after both loops, s = 0+1+2+10+11.
+  const FORSCOPE = '#include <stdio.h>\nint main() { int s = 0; for (int i = 0; i < 3; i++) s += i; for (int i = 10; i < 12; i++) s += i; printf("%d\\n", s * 100 + i); return 0; }\n';
+  // C4239: the callee advances a temporary copy of q, so q still points at 'a'; with an lvalue of
+  // the reference's own type the binding is the real one, and the overload taking it wins.
+  const REFTEMP = '#include <stdio.h>\nstatic void adv(const char *&p) { p++; }\nstatic int pick(const char *&) { return 1; }\nstatic int pick(const char *const &) { return 2; }\n'
+    + 'int main() { char buf[] = "ab"; char *q = buf; const char *r = buf; adv(q); adv(r); printf("%c%c %d\\n", *q, *r, pick(r)); return 0; }\n';
+  const FNVOID = '#include <stdio.h>\nstatic int h(int a) { return a * 3; }\nstruct H { int id; void *fn; };\nstatic H table[] = { 1, h };\n'
+    + 'int main() { printf("%d\\n", ((int (*)(int))table[0].fn)(table[0].id + 4)); return 0; }\n';
+  option.push(
+    ['msvc: its keywords (__int64, __forceinline, __stdcall, __w64, __declspec)', out(KEYWORDS, 'unit.cpp', MSVC) === '6 7'],
+    ['...refused as g++ would', out(KEYWORDS, 'unit.cpp').startsWith('refused')],
+    ['msvc: a for statement\'s variable outlives the loop and is declared again by the next', out(FORSCOPE, 'unit.cpp', MSVC) === '2412'],
+    ['...refused as g++ would', out(FORSCOPE, 'unit.cpp').startsWith('refused')],
+    ['msvc: a reference to non-const binds a temporary, after any real binding', out(REFTEMP, 'unit.cpp', MSVC) === 'ab 1'],
+    ['...refused as g++ would', out(REFTEMP, 'unit.cpp').startsWith('refused')],
+    ['msvc: a function converts to void *', out(FNVOID, 'unit.cpp', MSVC) === '15'],
+    ['...refused as g++ would', out(FNVOID, 'unit.cpp').startsWith('refused')],
+  );
   // What the lowering must never emit, the C front end refuses as gcc does ("array type has
   // incomplete element type") rather than giving the rows a stride of 0.
   const AREA = 'struct Area { short a; short b[4]; };\n';

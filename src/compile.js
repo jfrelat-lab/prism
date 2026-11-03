@@ -3,7 +3,7 @@
 // This is the whole pipeline in one file so the seams are visible. Everything it does is tier-0.
 
 import { Preprocessor } from './cpp/cpp.js';
-import { cxxToC, CXX_DEFINES, unitLanguage, checkCxxOption } from './cxx/index.js';
+import { cxxToC, CXX_DEFINES, MSVC_DEFINES, cxxCompiler, unitLanguage, checkCxxOption } from './cxx/index.js';
 import { parse } from './parse/parser.js';
 import * as T from './sema/types.js';
 import { Module, FUNC_TAG } from './link/module.js';
@@ -857,9 +857,10 @@ function wireRebind(F, mod, emitted, rebind) {
  */
 function unitTokens(pp, source, file, cxx) {
   if (unitLanguage(file, cxx) !== 'c++') return pp.run(source, file);
-  for (const [k, v] of Object.entries(CXX_DEFINES)) pp.defineText(k, v);
+  const compiler = cxxCompiler(cxx);
+  for (const [k, v] of Object.entries({ ...CXX_DEFINES, ...(compiler === 'msvc' ? MSVC_DEFINES : {}) })) pp.defineText(k, v);
   // The C library this compiler knows without a header (BUILTINS) is the C++ unit's to call too.
-  const c = cxxToC(pp.run(source, file), { file, builtins: BUILTINS });
+  const c = cxxToC(pp.run(source, file), { file, builtins: BUILTINS, compiler });
   return new Preprocessor({}).run(c, file);
 }
 

@@ -321,6 +321,7 @@ export const exprMethods = {
     // a variable, memcpy copied whatever nothing held). Its address is still the variable's:
     // `doOutput(&newline_character, 1)` (agos's charset.cpp).
     if (ent.constValue !== undefined) return { c: String(ent.constValue), t: T.uncst(ent.type), lv: false, constAddr: { c: `(&${ent.cname})`, t: T.ptr(ent.type), ent } };
+    if (ent.constText !== undefined) return { c: ent.constText, t: T.uncst(ent.type), lv: false, constAddr: { c: `(&${ent.cname})`, t: T.ptr(ent.type), ent } };
     if (ent.global) this.useGlobal(ent);
     if (ent.type.k === 'ref') return { c: `(*${ent.cname})`, t: ent.type.to, lv: true, addr: ent.cname };
     return { c: ent.cname, t: ent.type, lv: true, known: true, constValue: ent.constValue };
@@ -358,6 +359,9 @@ export const exprMethods = {
       // Several levels: `byte **` to `const byte *const *`, C++'s qualification conversion.
       if (this.qualifiesTo(F.to, V.to)) return { rank: QUAL, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       if (V.to.k === 'void' && F.to.k !== 'func') return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
+      // Visual C++ converts a function's address to void * as well: kkrieger_oplist.cpp's KHandlers
+      // table keeps its handlers in void * fields (src/cxx/index.js).
+      if (V.to.k === 'void' && F.to.k === 'func' && this.msvc) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       if (V.to.k === 'class' && F.to.k === 'class') {
         const path = this.derivedPath(F.to.cls, V.to.cls);
         if (path) return { rank: CONV, gen: () => this.upcastPtr(from.c, path, V.to.cls) };
@@ -463,14 +467,18 @@ export const exprMethods = {
           return { rank: EXACT, gen: () => `(&${e.c})` };
         }
       }
-      if (!U.c) return null;
+      // Visual C++ binds a reference to non-const to a temporary too (C4239, src/cxx/index.js):
+      // .kkrieger's mainplayer.cpp hands an sU8 * to KDoc::Init(const sU8 *&). Whatever the callee
+      // writes through it is lost, as it is there. Ranked after any binding C++ allows.
+      if (!U.c && !this.msvc) return null;
       // A reference to const binds to a temporary made from the converted value.
       const v = this.convert(e, T.uncst(U), cx, { user, explicit });
       if (!v) return null;
+      const rank = v.rank + (U.c ? 0 : USER);
       // A pinned class's conversion already leaves an object in a temporary of its own (construct,
       // copyOf): the reference is to that object, not to a byte copy of it.
-      if (this.pinnedType(T.uncst(U))) return { rank: v.rank, gen: () => `(&${v.gen()})` };
-      return { rank: v.rank, gen: () => { const name = this.temp(cx, T.uncst(U)); const cls = this.isClassy(U); if (cls && this.dtorOf(cls)) cx.pending.push({ name, cls }); return `(${name} = ${v.gen()}, &${name})`; } };
+      if (this.pinnedType(T.uncst(U))) return { rank, gen: () => `(&${v.gen()})` };
+      return { rank, gen: () => { const name = this.temp(cx, T.uncst(U)); const cls = this.isClassy(U); if (cls && this.dtorOf(cls)) cx.pending.push({ name, cls }); return `(${name} = ${v.gen()}, &${name})`; } };
     }
     const V = T.uncst(to);
     if (V.k === 'class') {
@@ -1112,6 +1120,17 @@ export const exprMethods = {
       const name = this.lastName(n.fn.name);
       if (cx.constOnly) cx.dynamic = true;
       return { c: `${name}(${args.map((a) => this.variadicArg(a, cx)).join(', ')})`, t: this.cxxTypeOfC(this.builtins.get(name).ret), lv: false };
+    }
+    // The global allocation functions are declared in every unit without a header, and called by name
+    // too: .kkrieger's geneffect.cpp frees raw storage with `::operator delete(EffectData)`. They are
+    // the malloc and free that new and delete use here.
+    const alloc = n.fn.k === 'id' && n.fn.name.parts.length === 1 && /^operator(new|delete)(\[\])?$/.exec(this.lastName(n.fn.name));
+    if (alloc && !this.lookupName(n.fn.name, cx.env)) {
+      if (args.length !== 1) this.fail(`${this.lastName(n.fn.name)} with ${args.length} arguments`, n);
+      this.needMalloc();
+      if (cx.constOnly) cx.dynamic = true;
+      if (alloc[1] === 'new') return { c: `malloc(${this.coerce(args[0], T.UINT, cx, n)})`, t: T.ptr(T.VOID), lv: false };
+      return { c: `free((void *)(${this.decay(args[0]).c}))`, t: T.VOID, lv: false };
     }
     // Not found by ordinary lookup, an unqualified name is looked for in the namespaces of its
     // arguments' classes (argument-dependent lookup): Scumm's debugger calls

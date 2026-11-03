@@ -243,17 +243,20 @@ export const stmtMethods = {
       case 'while': return `while (${this.cond(n.c, cx)}) ${this.body(n.body, cx, 'loop')}`;
       case 'do': { const b = this.body(n.body, cx, 'loop'); return `do ${b} while (${this.cond(n.c, cx)});`; }
       case 'for': {
+        // Visual C++ 7.1 by default (/Zc:forScope-, src/cxx/index.js): the variable the statement
+        // declares belongs to the enclosing block, and outlives the loop -- _viruz2.cpp returns it.
+        const outer = this.msvc && n.init?.k === 'decl' ? this.stmt(n.init, { ...cx, forScopeName: true }) : '';
         const scope = new Scope(cx.env.scope);
         const inner = { ...cx, env: { ...cx.env, scope } };
         const cl = { vars: [], kind: 'block' };
         cx.fn.cleanups.push(cl);
         try {
-          const init = n.init ? this.stmt(n.init, inner) : '';
+          const init = n.init && !outer ? this.stmt(n.init, inner) : '';
           const c = n.c ? this.cond(n.c, inner) : '';
           let step = '';
           if (n.step) { const { e, after } = this.full(n.step, inner); step = [e.c, ...after.map((s) => s.replace(/;$/, ''))].join(', '); }
           const b = this.body(n.body, inner, 'loop');
-          return `{\n${indent([init, `for (; ${c}; ${step}) ${b}`, ...this.destroy(cl.vars, cx)].filter(Boolean).join('\n'))}\n}`;
+          return [outer, `{\n${indent([init, `for (; ${c}; ${step}) ${b}`, ...this.destroy(cl.vars, cx)].filter(Boolean).join('\n'))}\n}`].filter(Boolean).join('\n');
         } finally { cx.fn.cleanups.pop(); }
       }
       case 'switch': {
@@ -376,20 +379,23 @@ export const stmtMethods = {
     }
     if (!it.decl.name) return '';
     if (it.decl.derivs.length && it.decl.derivs[it.decl.derivs.length - 1].k === 'func') { this.declareFunction(it, { ...cx.env, scope: cx.env.scope }); return ''; }
-    const name = this.lastName(it.decl.name);
+    const cppName = this.lastName(it.decl.name);
+    // MSVC's for scope (forStmt): a for statement's variable lives on in the enclosing block, under a C
+    // name of its own, so that the next `for (sInt i = 0; ...)` there can declare another.
+    const name = cx.forScopeName ? `${cppName}__for${++this.anon}` : cppName;
     let type = this.declType(it.specs, it.decl.derivs, cx.env, it);
     if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, this.nestBraces(it.init, type).items.length);
     if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);
     const isStatic = it.specs.storage === 'static';
     if (it.specs.storage === 'extern') {
-      const g = this.global.get(name) ?? this.global.set(name, { k: 'var', name, type, cname: name, global: true, externOnly: true });
-      cx.env.scope.set(name, g);
+      const g = this.global.get(cppName) ?? this.global.set(cppName, { k: 'var', name: cppName, type, cname: cppName, global: true, externOnly: true });
+      cx.env.scope.set(cppName, g);
       return '';
     }
-    const ent = { k: 'var', name, type, cname: name, local: true, isStatic };
+    const ent = { k: 'var', name: cppName, type, cname: name, local: true, isStatic };
     const cl = cx.fn.cleanups[cx.fn.cleanups.length - 1];
     const st = isStatic ? 'static ' : '';
-    const done = (text) => { cx.env.scope.set(name, ent); return text; };
+    const done = (text) => { cx.env.scope.set(cppName, ent); return text; };
     if (type.c && T.isInteger(type) && it.init) { const v = this.constInt(it.init, cx.env); if (v !== null) ent.constValue = v; }
 
     if (type.k === 'ref') {
@@ -412,7 +418,7 @@ export const stmtMethods = {
         const text = this.bracesInit(it.init, type, { env: cx.env, fn: null, pending: [], constOnly: true, node: it, dynFix });
         if (!dynFix.length) return done(`${decl} = ${text};`);
         const g = `__guard_${name}_${++this.anon}`;
-        cx.env.scope.set(name, ent);
+        cx.env.scope.set(cppName, ent);
         const sets = dynFix.map((dx) => { const { e, after } = this.full(dx.x, cx, (m, c) => ({ c: this.dynSet(`${name}${dx.path.join('')}`, dx.type, this.expr(m, c), c, m) })); return [e.c, ...after].join(' '); });
         return [`static ${this.ct(T.uncst(type), name)} = ${text};`, `static int ${g};`, `if (!${g}) { ${g} = 1; ${sets.join(' ')} }`].join('\n');
       }
@@ -428,7 +434,7 @@ export const stmtMethods = {
           const args = it.ctorArgs ? it.ctorArgs.map((a) => this.expr(a, c)) : it.init ? [this.expr(it.init, c)] : [];
           return { c: this.constructAt(dest, cls, args, c, it) };
         });
-        cx.env.scope.set(name, ent);
+        cx.env.scope.set(cppName, ent);
         return [nrvo ? '' : `${decl};`, e.c, ...after].filter(Boolean).join('\n');
       }
       if (d) cl.vars.push({ c: name, cls, ent });
@@ -445,13 +451,14 @@ export const stmtMethods = {
         this.use(pick.f);
         return { c: `${pick.f.cname}(${[`&${name}`, ...pick.cArgs].join(', ')});` };
       });
-      cx.env.scope.set(name, ent);
+      cx.env.scope.set(cppName, ent);
       return [`${decl};`, e.c, ...after].filter(Boolean).join('\n');
     }
     const elem = this.isClassy(type);
     if (type.k === 'array' && elem && it.init?.k === 'braces' && this.isAggregate(elem)) return done(`${st}${this.ct(type, name)} = ${this.bracesInit(it.init, type, cx)};`);
     if (type.k === 'array' && elem) {
-      if (type.of.k !== 'class') this.fail('an array of arrays of objects', it);
+      if (type.of.k !== 'class' && it.init) this.fail('an initialised array of arrays of objects', it);
+      const flat = this.flatObjects(name, type);
       const d = this.dtorOf(elem);
       if (it.init?.k === 'braces') {
         // Built element by element; a static one the first time control passes it, as C++ says.
@@ -474,12 +481,12 @@ export const stmtMethods = {
         return done([decl, ...this.arrayFromBraces(name, type, it.init.items, cx, it)].join('\n'));
       }
       const ctor = this.defaultCtor(elem, it);
-      if (d) cl.vars.push({ c: name, cls: elem, count: type.n });
+      if (d) cl.vars.push({ c: flat.at, cls: elem, count: flat.n });
       const decl = `${st}${this.ct(type, name)};`;
       if (it.init) this.fail('an initialised array of objects', it);
       if (!ctor) return done(decl);
       this.use(ctor);
-      return done(`${decl}\n{ int __i; for (__i = 0; __i < ${type.n}; __i++) ${ctor.cname}(${[`&${name}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`);
+      return done(`${decl}\n{ int __i; for (__i = 0; __i < ${flat.n}; __i++) ${ctor.cname}(${[`&${flat.at}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`);
     }
     const decl = `${st}${this.ct(type, name)}`;
     if (it.ctorArgs) {
@@ -502,7 +509,7 @@ export const stmtMethods = {
       try { c = this.coerce(this.expr(it.init, probe), T.uncst(type), probe, it, 'initialisation'); } catch { c = null; }
       if (probe.dynamic || c === null || this.readsVariable(it.init, cx.env)) {
         const g = `__guard_${name}_${++this.anon}`;
-        cx.env.scope.set(name, ent);
+        cx.env.scope.set(cppName, ent);
         const { e, after } = this.full(it.init, cx, (m, cc) => ({ c: this.coerce(this.expr(m, cc), T.uncst(type), cc, m, 'initialisation'), t: type }));
         return [`static ${this.ct(T.uncst(type), name)};`, `static int ${g};`, `if (!${g}) { ${g} = 1; ${name} = ${e.c}; ${after.join(' ')} }`].join('\n');
       }
@@ -539,12 +546,22 @@ export const stmtMethods = {
       case 'id': {
         const r = this.lookupName(x.name, env);
         const e = r?.ent;
-        return e?.k === 'var' && !e.field && e.constValue === undefined && e.type.k !== 'array' && e.type.k !== 'func';
+        return e?.k === 'var' && !e.field && e.constValue === undefined && e.constText === undefined && e.type.k !== 'array' && e.type.k !== 'func';
       }
       case 'bin': return this.readsVariable(x.a, env) || this.readsVariable(x.b, env);
       case 'unary': return x.op !== '&' && this.readsVariable(x.e, env);
       default: return false;
     }
+  },
+  /**
+   * An array of arrays of objects is one run of elements: C lays `sVector sidev[2][64]` out as 128 of
+   * them (.kkrieger's genmesh.cpp), so it is built and destroyed as that run, through a pointer to its
+   * first element. `at` is what to index; for one dimension, the array itself.
+   */
+  flatObjects(name, type) {
+    let n = 1, t = type;
+    for (; t.k === 'array'; t = t.of) n *= t.n;
+    return { n, at: type.of.k === 'array' ? `((${this.ct(T.ptr(T.uncst(t)))})${name})` : name };
   },
   /** A class C initialises with braces: no constructor, base or virtual function, none in its members. */
   isAggregate(cls) {
@@ -600,7 +617,8 @@ export const stmtMethods = {
     })());
     const level = (t, take) => {
       const out = [];
-      if (t.k === 'array') { const n = t.n ?? Infinity; while (out.length < n && i < items.length) out.push(take(t.of)); return out; }
+      // A length that is C text (recordConst) is the C compiler's to check.
+      if (t.k === 'array') { const n = typeof t.n === 'number' ? t.n : Infinity; while (out.length < n && i < items.length) out.push(take(t.of)); return out; }
       const cls = this.complete(t.cls, b);
       for (const f of cls.key === 'union' ? cls.fields.slice(0, 1) : cls.fields) { if (i >= items.length) break; out.push(take(f.type)); }
       return out;
@@ -970,12 +988,13 @@ export const stmtMethods = {
         if (this.dtorOf(elem)) this.finis.push(...this.destroy([{ c: ent.cname, cls: elem, count: type.n }], this.initContext(env)).map((l) => `  ${l}`));
         return;
       }
-      if (type.of.k !== 'class' || it.init) this.fail('an initialised array of objects at file scope', it);
+      if (it.init) this.fail('an initialised array of objects at file scope', it);
       this.out.vars.push(`${decl};`);
       const ctor = this.defaultCtor(elem, it);
       const cx = this.initContext(env);
-      if (ctor) { this.use(ctor); dynamic([`{ int __i; for (__i = 0; __i < ${type.n}; __i++) ${ctor.cname}(${[`&${ent.cname}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`], null); }
-      if (this.dtorOf(elem)) this.finis.push(...this.destroy([{ c: ent.cname, cls: elem, count: type.n }], cx).map((l) => `  ${l}`));
+      const flat = this.flatObjects(ent.cname, type);
+      if (ctor) { this.use(ctor); dynamic([`{ int __i; for (__i = 0; __i < ${flat.n}; __i++) ${ctor.cname}(${[`&${flat.at}[__i]`, ...this.defaultArgs(ctor, 0, cx)].join(', ')}); }`], null); }
+      if (this.dtorOf(elem)) this.finis.push(...this.destroy([{ c: flat.at, cls: elem, count: flat.n }], cx).map((l) => `  ${l}`));
       return;
     }
     const init = it.init ?? (it.ctorArgs?.length === 1 ? it.ctorArgs[0] : null);
