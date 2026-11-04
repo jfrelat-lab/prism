@@ -12,6 +12,7 @@ import { DJGPP_HEADERS } from './headers-djgpp.js';
 import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js';
 import { SVGALIB_HEADERS } from './headers-svgalib.js';
 import { WIN32_HEADERS } from './headers-win32.js';
+import { MMINTRIN_H, XMMINTRIN_H } from './headers-mmx.js';
 
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
@@ -2318,6 +2319,8 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'float.h': FLOATH,
   'stddef.h': STDDEF,
   'stdio.h': STDIO,
+  'mmintrin.h': MMINTRIN_H,
+  'xmmintrin.h': XMMINTRIN_H,
   'stdlib.h': STDLIB,
   'string.h': STRING,
   // BSD's name for part of the same library; DJGPP and glibc both carry it.

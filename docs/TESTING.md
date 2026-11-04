@@ -36,6 +36,8 @@ PRISM_REF_CACHE=0 turn them off.
 | `gate-borland-options.mjs` | **PRJCFG** (Borland C++ 3.1) on the unmodified `.PRJ` | every 16-bit target compiles with the options its own project records |
 | `gate-dos16-run.mjs` | **Borland C++ 2.0** running the same programs | identical output under a 16-bit model: argv, varargs, printf, DOS services |
 | `gate-borlandasm.mjs` | **Unicorn** in 16-bit real mode, on the same snippets assembled by nasm | Borland inline asm, 1,339 cases |
+| `gate-msvcasm.mjs` | **Unicorn** in 32-bit mode as a Pentium III, on the same snippets assembled by nasm | Visual C++ `__asm`: the integer ALU with CF/ZF/SF/OF and every MMX instruction, 2,640 cases; names, fields, labels, the computed jump and the return in EAX, executed |
+| `gate-mmintrin.mjs` | gcc 12, i386, `-mmmx -msse` with its own headers | `<mmintrin.h>`/`<xmmintrin.h>`: 76 intrinsics, 18,793 results |
 | `gate-tasm-front.mjs` | **Turbo Assembler 2.5** under DOSBox-X, per game | every byte, relocation, public, instruction, offset and length TASM produced — Keen Dreams and Catacomb 3-D |
 | `gate-tasm-run.mjs` | **Unicorn executing TASM's own object code** | registers, flags, 1,088 KB page by page, port writes |
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |

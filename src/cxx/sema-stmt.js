@@ -308,12 +308,69 @@ export const stmtMethods = {
         }).join(', '));
         return `__asm__ ${n.quals.join(' ')} (${n.template.join(' ')}${sections.map((s) => ` : ${s}`).join('')});`;
       }
+      case 'msasm': return this.msvcAsm(n, cx);
       // C wants a statement after a label where C++ allows a declaration: an empty one goes between.
       case 'label': return `${n.name}: ${n.s.k === 'decl' ? ';\n' : ''}${this.stmt(n.s, cx)}`;
       case 'return': return this.returnStmt(n, cx);
       case 'using': this.using(n.item, cx.env.scope, cx.env); return '';
       default: this.fail(`statement ${n.k}`, n);
     }
+  },
+
+  /**
+   * Visual C++ inline assembly, one line of C per line of assembly, every name it uses rewritten to
+   * the name the C front end will know: a variable to its C name (a reference parameter to the
+   * pointer that holds it, which is what MASM addresses), an enumerator to its value, and
+   * `Class.member` to the C struct and field (`[esi]BilinearContext.Src`). Anything else -- a
+   * mnemonic, a register, a size, a label -- is left as written; src/asm/msvc.js judges it.
+   */
+  msvcAsm(n, cx) {
+    const KEEP = /^(e?[abcd]x|[abcd][lh]|e?[sd]i|e?[bs]p|mm[0-7]|xmm[0-7]|st|byte|word|dword|qword|mmword|ptr|offset)$/i;
+    const out = n.lines.map((line) => {
+      const text = [];
+      for (let i = 0; i < line.length; i++) {
+        const t = line[i];
+        const first = i === 0 || (i === 2 && line[1].v === ':' && line[0].k === 'id');
+        const label = line[i + 1]?.v === ':' && i === 0;
+        if (t.k !== 'id' || first || label || KEEP.test(t.v)) { text.push(t.v); continue; }
+        // A qualified name, `N::g`: its parts, whichever way the lexer spelt the scope operator.
+        const q = { parts: [{ name: t.v }] };
+        for (;;) {
+          const two = line[i + 1]?.v === ':' && line[i + 2]?.v === ':' && line[i + 3]?.k === 'id';
+          const one = line[i + 1]?.v === '::' && line[i + 2]?.k === 'id';
+          if (!one && !two) break;
+          i += two ? 3 : 2;
+          q.parts.push({ name: line[i].v });
+        }
+        // Class.member, through a base when the member is inherited.
+        if (line[i + 1]?.v === '.' && line[i + 2]?.k === 'id') {
+          const ty = (() => { try { return this.namedType(q, cx.env); } catch { return null; } })();
+          if (ty?.k === 'class') {
+            const cls = this.complete(ty.cls, n);
+            const m = this.memberEntity(cls, line[i + 2].v);
+            if (!m || m.ent.k !== 'var' || !m.ent.field) this.fail(`'${t.v}.${line[i + 2].v}' in __asm is not a data member`, n);
+            if (m.path.some((p) => p.includes('['))) this.fail(`'${t.v}.${line[i + 2].v}' in __asm is reached through a virtual base`, n);
+            // An offset needs the layout: the struct is defined in C even if the C++ only points at it.
+            this.needStruct(cls);
+            text.push(`${cls.cname}.${[...m.path, m.ent.cname].join('.')}`);
+            i += 2;
+            continue;
+          }
+        }
+        const r = this.lookupName(q, cx.env);
+        const ent = r?.ent;
+        if (ent?.k === 'enumerator' && ent.ctext === undefined) { text.push(String(ent.value)); continue; }
+        if (ent?.k === 'var') {
+          if (ent.field) this.fail(`the member '${t.v}' named in __asm (a member is reached through a register)`, n);
+          if (ent.global) this.useGlobal(ent);
+          text.push(ent.cname);
+          continue;
+        }
+        text.push(t.v);
+      }
+      return text.join(' ');
+    });
+    return `__asm {\n${out.join('\n')}\n}`;
   },
 
   returnStmt(n, cx) {

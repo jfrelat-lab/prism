@@ -249,6 +249,9 @@ export class Parser {
     if (kw.v === 'asm' && !this.isP('(') && !/^_*(volatile|inline|goto|const)_*$/.test(this.peek().v)) {
       return this.#borlandAsm(kw);
     }
+    if (kw.v === '__asm' && !this.isP('(') && !/^_*(volatile|inline|goto|const)_*$/.test(this.peek().v)) {
+      return this.#msvcAsm(kw);
+    }
     while (this.peek().k === ID &&
            /^_*(volatile|inline|goto|const)_*$/.test(this.peek().v)) this.i++;
     this.#skipAttributeLike();
@@ -300,6 +303,74 @@ export class Parser {
    * An identifier naming an ENUM constant becomes its value here, because this is the last place its
    * scope exists: the emitter resolves names to storage, and an enum constant has none.
    */
+  /**
+   * Visual C++'s `__asm { ... }`, or `__asm instruction` to the end of the line (src/asm/msvc.js).
+   * Captured as token lines, one per source line. A `;` begins a COMMENT, as in MASM, not a
+   * separator: `mov eax, [c0];` is one instruction.
+   *
+   * Two things are resolved here because this is the last place their scope exists: an enum
+   * constant becomes its value, and `Type.field` -- MASM's `[esi]BilinearContext.Src` -- becomes the
+   * field's offset, from the same layout `__builtin_offsetof` reads.
+   */
+  #msvcAsm(kw) {
+    const lines = [];
+    let lastLine = null, comment = false;
+    const recordOf = (name) => {
+      const sym = this.scope.lookup(name);
+      const t = sym?.kind === 'typedef' ? sym.type : !sym ? this.scope.lookupTag(name) : null;
+      return t && T.isRecord(t) ? t : null;
+    };
+    const take = (toks, at) => {
+      const t = toks[at];
+      const line = t.loc ? `${t.loc.file}:${t.loc.line}` : null;
+      if (line !== lastLine) { comment = false; lines.push([]); lastLine = line; }
+      if (comment) return at + 1;
+      if (t.k === PUNCT && t.v === ';') { comment = true; return at + 1; }
+      if (t.k === ID) {
+        const rec = recordOf(t.v);
+        if (rec && toks[at + 1]?.k === PUNCT && toks[at + 1].v === '.') {
+          const path = [];
+          let j = at + 1;
+          while (toks[j]?.k === PUNCT && toks[j].v === '.' && toks[j + 1]?.k === ID) { path.push({ field: toks[j + 1].v }); j += 2; }
+          let off;
+          try { off = constEval({ n: 'offsetof', target: rec, path }); } catch (e) {
+            throw new ParseError(`__asm: ${t.v}.${path.map((p) => p.field).join('.')}: ${e.message}`, t);
+          }
+          lines.at(-1).push({ k: NUM, v: String(off), fieldOf: t.v });
+          return j;
+        }
+        const sym = this.scope.lookup(t.v);
+        if (sym?.kind === 'enumconst') { lines.at(-1).push({ k: NUM, v: String(sym.value), enumOf: t.v }); return at + 1; }
+      }
+      lines.at(-1).push({ k: t.k, v: t.v });
+      return at + 1;
+    };
+    const toks = [];
+    if (this.isP('{')) {
+      this.i++;
+      for (let depth = 1; ;) {
+        const t = this.next();
+        if (t.k === EOF) throw new ParseError('unterminated __asm { block', kw);
+        if (t.k === PUNCT && t.v === '{') depth++;
+        if (t.k === PUNCT && t.v === '}' && --depth === 0) break;
+        toks.push(t);
+      }
+    } else {
+      // To the end of the keyword's line, or to the next `__asm` on it, or to a closing brace.
+      const line = kw.loc?.line, file = kw.loc?.file;
+      while (this.peek().k !== EOF) {
+        const t = this.peek();
+        if (t.loc?.line !== line || t.loc?.file !== file) break;
+        if (t.k === PUNCT && t.v === '}') break;
+        if (t.k === ID && t.v === '__asm') break;
+        this.i++;
+        toks.push(t);
+      }
+    }
+    for (let at = 0; at < toks.length;) at = take(toks, at);
+    return { n: 'asmmsvc', lines: lines.filter((l) => l.length), loc: kw.loc };
+  }
+
   #borlandAsm(kw) {
     const text = [];
     const lines = [[]];

@@ -914,6 +914,43 @@ class CxxParser {
     return { k: 'block', stmts, loc };
   }
 
+  /**
+   * Visual C++'s `__asm { ... }` or `__asm instruction` (src/asm/msvc.js), kept as token lines, one per
+   * source line, a `;` and what follows it on its line dropped (MASM's comment). sema.js rewrites the
+   * names in it to their C names and hands it to the C front end, which reads it.
+   */
+  msvcAsm(loc) {
+    const kw = this.next();
+    const toks = [];
+    if (this.eatP('{')) {
+      for (let depth = 1; ;) {
+        const t = this.next();
+        if (t.k === EOF) this.fail('unterminated __asm { block');
+        if (t.k === PUNCT && t.v === '{') depth++;
+        if (t.k === PUNCT && t.v === '}' && --depth === 0) break;
+        toks.push(t);
+      }
+    } else {
+      const line = kw.loc?.line, file = kw.loc?.file;
+      while (this.peek().k !== EOF) {
+        const t = this.peek();
+        if (t.loc?.line !== line || t.loc?.file !== file) break;
+        if ((t.k === PUNCT && t.v === '}') || (t.k === ID && t.v === '__asm')) break;
+        toks.push(this.next());
+      }
+    }
+    const lines = [];
+    let last = null, comment = false;
+    for (const t of toks) {
+      const at = t.loc ? `${t.loc.file}:${t.loc.line}` : null;
+      if (at !== last || !lines.length) { lines.push([]); last = at; comment = false; }
+      if (comment) continue;
+      if (t.k === PUNCT && t.v === ';') { comment = true; continue; }
+      lines.at(-1).push(t);
+    }
+    return { k: 'msasm', lines: lines.filter((l) => l.length), loc };
+  }
+
   statement() {
     const loc = this.loc();
     const t = this.peek();
@@ -974,6 +1011,7 @@ class CxxParser {
         // front end, which reads it: the template and constraints as written, the operands as C++
         // expressions to lower. FreeType's ftconfig.h has one in a static inline function.
         case '__asm__': case '__asm': case 'asm': {
+          if (t.v === '__asm' && !this.isP('(', 1) && !/^_*(volatile|inline|goto)_*$/.test(this.peek(1).v)) return this.msvcAsm(loc);
           this.next();
           const quals = [];
           while (this.peek().k === ID && /^_*(volatile|inline|goto)_*$/.test(this.peek().v)) quals.push(this.next().v);

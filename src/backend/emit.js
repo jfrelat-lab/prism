@@ -24,6 +24,7 @@ import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
 import { needsFlattening, flattenGotos } from './flatten.js';
 import { lowerBorlandAsm, emitInstruction, REGISTER_DECLS, BorlandAsmError, PSEUDO, PSEUDO_REFUSED,
   firstUndefinedRead, interruptJs } from '../asm/borland.js';
+import { lowerMsvcAsm, emitInstruction as emitMsvcInstruction, MSVC_REGISTER_DECLS, MsvcAsmError } from '../asm/msvc.js';
 
 /*
  * The frame epilogue, emitted as a MARKER and resolved once the function's final frame size is known.
@@ -408,6 +409,22 @@ export class FunctionEmitter {
       this.decl = d;
       this.asm = low;
     }
+    /*
+     * Visual C++ inline assembly (src/asm/msvc.js): lowered the same way, in a flat 32-bit model only,
+     * where a pointer is its linear address. Its register file is declared beside the frame.
+     */
+    if (hasNode(d.body, 'asmmsvc')) {
+      if ((this.ctx.model ?? 'i386') !== 'i386') unsup('Visual C++ inline assembly outside the flat 32-bit model');
+      let low;
+      try { low = lowerMsvcAsm(d.body, { INT: this.ty.INT }); } catch (e) {
+        if (e instanceof MsvcAsmError) unsup(`Visual C++ inline assembly: ${e.message}`);
+        throw e;
+      }
+      d = { ...d, body: low.body };
+      this.decl = d;
+      this.asm = low;
+      this.usesMsvcRegs = true;
+    }
 
     /*
      * THE REGISTER FILE -- one per invocation, shared by the asm, Borland's pseudo-registers (_AX,
@@ -486,6 +503,7 @@ export class FunctionEmitter {
     if (seg) unsup(`a 16-bit ${seg} pointer (Borland segmented model)`);
     // Every Borland asm statement was lowered at the top of emit(); one left here is a lowering bug.
     if (hasNode(d.body, 'asmborland')) unsup('Borland inline assembly');
+    if (hasNode(d.body, 'asmmsvc')) unsup('Visual C++ inline assembly');
 
     // Which locals escape? A scalar that is never `&`-taken can live in a JS var. Everything with
     // an address, and every aggregate, needs a slot. This single decision is the difference between
@@ -577,12 +595,13 @@ export class FunctionEmitter {
     // running past its floor would write the heap, silently. i386's megabyte is left unchecked.
     if (this.frameSize && this.ty.INT.size === 2) body.push(`if(_fp<${this.mod.stackLimit})M.stackOverflow(_fp);`);
     if (this.usesRegs) body.push(REGISTER_DECLS);
+    if (this.usesMsvcRegs) body.push(MSVC_REGISTER_DECLS);
     if (this.usesRegs && this.isInterrupt) body.push('if(M.isrRegs)for(const _k of ["ax","bx","cx","dx","si","di","bp","es"])$r[_k]=M.isrRegs[_k]&65535;');
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     for (const p of this.vaNamed ?? []) body.push('  ' + storeExpr(p.js, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
-    body.push(`  return ${this.asm?.endsInAsm && d.type.ret.k !== 'void' ? this.#axReturn(d.type.ret)
+    body.push(`  return ${this.asm?.endsInAsm && d.type.ret.k !== 'void' ? (this.usesMsvcRegs ? this.#eaxReturn(d.type.ret) : this.#axReturn(d.type.ret))
       : d.type.ret.k === 'void' ? '' : (is64(d.type.ret) ? '0n' : '0')};`);
 
     // Now the frame's final size is known, so every epilogue marker becomes the one right value.
@@ -1599,6 +1618,15 @@ export class FunctionEmitter {
         return;
       }
       case 'asmins': {
+        if (s.ins.isa === 'msvc') {
+          let js;
+          try { js = emitMsvcInstruction(s.ins, this.#msvcEnv()); } catch (e) {
+            if (e instanceof MsvcAsmError) unsup(`Visual C++ inline assembly: ${e.message}`);
+            throw e;
+          }
+          if (js) this.out.push(js);
+          return;
+        }
         let js;
         try { js = emitInstruction(s.ins, this.#asmEnv()); } catch (e) {
           if (e instanceof BorlandAsmError) unsup(`Borland inline assembly: ${e.message}`);
@@ -1878,6 +1906,43 @@ export class FunctionEmitter {
         return null;
       },
     };
+  }
+
+  /** What src/asm/msvc.js needs from this function: its names, its memory and its labels. */
+  #msvcEnv() {
+    const U = { 1: this.ty.UCHAR, 2: this.ty.USHORT, 4: this.ty.UINT };
+    return this._msvcEnv ??= {
+      symbol: (name) => {
+        const l = this.locals.get(name);
+        if (l) {
+          if (l.kind === 'slot') return { addr: `(_fp+${l.off}|0)`, type: l.type };
+          if (l.kind === 'global') return { addr: String(l.addr), type: l.type };
+          throw new MsvcAsmError(`the local '${name}', which has no stack slot`);
+        }
+        const g = this.ctx.globals.get(name);
+        if (g) return { addr: String(g.addr), type: g.type };
+        if (this.ctx.funcs.get(name)) return { isFunc: true };
+        throw new MsvcAsmError(`'${name}', which is not a variable in scope`);
+      },
+      load: (addr, size) => loadExpr(addr, U[size]),
+      store: (addr, size, v) => storeExpr(addr, U[size], v),
+      labelIndex: (name) => {
+        const k = this.labels?.index.get(name);
+        if (k === undefined) throw new MsvcAsmError(`the label '${name}', which has no state`);
+        return k;
+      },
+    };
+  }
+
+  /** Falling off the end after an MSVC __asm block returns EAX -- EDX:EAX for eight bytes. */
+  #eaxReturn(t) {
+    if (T.isInteger(t) && !is64(t) && t.size <= 4) {
+      const sh = 32 - t.size * 8;
+      return t.size === 4 ? (t.signed ? '($e.eax|0)' : '($e.eax>>>0)') : t.signed ? `(($e.eax<<${sh})>>${sh})` : `($e.eax&${t.size === 1 ? 255 : 65535})`;
+    }
+    if (t.k === 'ptr') return '($e.eax|0)';
+    if (T.isInteger(t) && is64(t)) return `(BigInt.${t.signed ? 'asIntN' : 'asUintN'}(64,(BigInt($e.edx>>>0)<<32n)|BigInt($e.eax>>>0)))`;
+    return unsup(`Visual C++ inline assembly returning a ${T.typeName(t)} in registers`);
   }
 
   /** Falling off the end after an asm statement returns AX -- DX:AX for four bytes -- as Borland does. */
@@ -2242,6 +2307,7 @@ export class FunctionEmitter {
         return { js: `(${t}=${v.js},${loadExpr(e.part ? `(${t}+${of.size}|0)` : t, of)})`, type: of };
       }
       case 'asmcc': return { js: `(${e.js}?1:0)`, type: this.ty.INT };
+      case 'asmval': return { js: `(${e.js}|0)`, type: this.ty.INT };
       case 'sizeoftype': return { js: String(e.target.size), type: this.ty.UINT };
       case 'sizeofexpr': {
         const t = e.expr.type;

@@ -6,6 +6,7 @@
 
 import { Module, isFuncPtr, funcIndex } from '../link/module.js';
 import { MODELS } from '../sema/abi.js';
+import { makeX86 } from '../asm/msvc-rt.js';
 
 export class Trap extends Error {}
 export class ExitCalled extends Error {
@@ -74,6 +75,8 @@ export function makeMachine(mod = new Module()) {
     stdout: [],
     randState: 1,            // see rt.rand — deterministic on purpose
     cpu: { if: 1 },          // the interrupt flag, one for the machine (env/pcirq.js delivers against it)
+    // The MMX registers Visual C++ inline assembly runs on: the machine's, not a function's (src/asm/msvc-rt.js).
+    get x86() { return this._x86 ??= makeX86(); },
     /*
      * The safepoint budget. Emitted loops decrement it and call sp_ when it runs out; the default
      * handler just refills it, so an uninstrumented run pays a decrement and nothing else. A harness
