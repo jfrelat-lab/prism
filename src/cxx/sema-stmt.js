@@ -361,7 +361,15 @@ export const stmtMethods = {
         const ent = r?.ent;
         if (ent?.k === 'enumerator' && ent.ctext === undefined) { text.push(String(ent.value)); continue; }
         if (ent?.k === 'var') {
-          if (ent.field) this.fail(`the member '${t.v}' named in __asm (a member is reached through a register)`, n);
+          // A data member of this function's class is its OFFSET, as Visual C++ reads it: _viruz2.cpp's
+          // `mov ecx, this` then `[ecx + m_samplerate]`.
+          if (ent.field) {
+            const cls = cx.fn?.f.cls;
+            if (!cls || r.path.some((p) => p.includes('['))) this.fail(`the member '${t.v}' named in __asm outside its class`, n);
+            this.needStruct(cls);
+            text.push(`${cls.cname}.${[...r.path, ent.cname].join('.')}`);
+            continue;
+          }
           if (ent.global) this.useGlobal(ent);
           text.push(ent.cname);
           continue;

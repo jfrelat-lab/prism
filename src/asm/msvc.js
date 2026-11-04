@@ -50,11 +50,13 @@ const SUB = {
   al: ['eax', 1, 0], cl: ['ecx', 1, 0], dl: ['edx', 1, 0], bl: ['ebx', 1, 0],
   ah: ['eax', 1, 8], ch: ['ecx', 1, 8], dh: ['edx', 1, 8], bh: ['ebx', 1, 8],
 };
-const PTR_SIZE = { byte: 1, word: 2, dword: 4, qword: 8, mmword: 8 };
+const PTR_SIZE = { byte: 1, word: 2, dword: 4, qword: 8, mmword: 8, tbyte: 10, real4: 4, real8: 8, real10: 10 };
 const MASK = { 1: 0xff, 2: 0xffff, 4: 0xffffffff };
 
 /** The register file one invocation declares. */
-export const MSVC_REGISTER_DECLS = 'var $e={eax:0,ecx:0,edx:0,ebx:0,esi:0,edi:0,cf:0,zf:0,sf:0,of:0},$x=M.x86,$a=0,$t=0,$u=0,$v=0,$stk=[];';
+// ESP points into the free stack below this function's frame: the asm pushes there, and the C it is part
+// of calls nothing while it runs. EBP stays refused -- it would be Visual C++'s frame, not PRISM's.
+export const MSVC_REGISTER_DECLS = 'var $e={eax:0,ecx:0,edx:0,ebx:0,esi:0,edi:0,esp:((_fp&-16)-16)|0,ebp:0,cf:0,zf:0,sf:0,of:0,pf:0},$x=M.x86,$f=$x.f,$a=0,$t=0,$u=0,$v=0,$w=0;';
 
 const CC = {
   jz: '$e.zf', je: '$e.zf', jnz: '!$e.zf', jne: '!$e.zf',
@@ -63,12 +65,23 @@ const CC = {
   jbe: '($e.cf||$e.zf)', jna: '($e.cf||$e.zf)', ja: '(!$e.cf&&!$e.zf)', jnbe: '(!$e.cf&&!$e.zf)',
   jl: '($e.sf!==$e.of)', jnge: '($e.sf!==$e.of)', jge: '($e.sf===$e.of)', jnl: '($e.sf===$e.of)',
   jle: '($e.zf||$e.sf!==$e.of)', jng: '($e.zf||$e.sf!==$e.of)', jg: '(!$e.zf&&$e.sf===$e.of)', jnle: '(!$e.zf&&$e.sf===$e.of)',
+  jp: '$e.pf', jpe: '$e.pf', jnp: '!$e.pf', jpo: '!$e.pf',
   jecxz: '($e.ecx===0)',
 };
 const ALU = new Set(['add', 'sub', 'and', 'or', 'xor', 'cmp', 'test', 'adc']);
 const KNOWN = new Set([...ALU, ...MMX_BINARY, ...MMX_SHIFT, 'mov', 'movzx', 'movsx', 'lea', 'inc', 'dec', 'neg', 'not',
   'shl', 'sal', 'shr', 'sar', 'imul', 'push', 'pop', 'xchg', 'cdq', 'nop', 'jmp', 'clc', 'stc', 'cmc',
-  'movq', 'movd', 'movntq', 'emms', 'pshufw', 'pinsrw', 'pextrw', 'pmovmskb', ...Object.keys(CC)]);
+  'movq', 'movd', 'movntq', 'emms', 'pshufw', 'pinsrw', 'pextrw', 'pmovmskb', ...Object.keys(CC),
+  'mul', 'div', 'idiv', 'shld', 'shrd', 'cwde', 'cbw', 'cwd', 'sahf', 'lahf', 'rdtsc',
+  'movsb', 'movsw', 'movsd', 'stosb', 'stosw', 'stosd']);
+/** The x87 instructions this file translates. */
+const X87 = new Set(['fld', 'fild', 'fst', 'fstp', 'fist', 'fistp', 'fadd', 'faddp', 'fiadd', 'fsub', 'fsubp',
+  'fisub', 'fsubr', 'fsubrp', 'fisubr', 'fmul', 'fmulp', 'fimul', 'fdiv', 'fdivp', 'fidiv', 'fdivr', 'fdivrp',
+  'fidivr', 'fchs', 'fabs', 'fsqrt', 'frndint', 'fscale', 'fprem', 'fxch', 'fsin', 'fcos', 'fsincos', 'fptan',
+  'fpatan', 'f2xm1', 'fyl2x', 'fyl2xp1', 'fld1', 'fldz', 'fldpi', 'fldl2e', 'fldl2t', 'fldlg2', 'fldln2',
+  'fcom', 'fcomp', 'fcompp', 'fucom', 'fucomp', 'fucompp', 'ftst', 'fcomi', 'fcomip', 'fucomi', 'fucomip',
+  'fstsw', 'fnstsw', 'fstcw', 'fnstcw', 'fldcw', 'fclex', 'fnclex', 'finit', 'fninit', 'ffree', 'fwait',
+  'wait', 'fnop', 'fincstp', 'fdecstp']);
 
 /** MASM numbers: 0x3CE, 0ch, 43h, 255. */
 function number(v) {
@@ -149,12 +162,17 @@ function operand(toks) {
   if (!rest.length) fail('an empty operand');
   if (rest.length === 1 && !bracket && !size && !offset && rest[0].k === ID) {
     const r = rest[0].v.toLowerCase();
-    if (r === 'esp' || r === 'ebp') fail(`${r} (the frame is PRISM's, not Visual C++'s)`);
     if (R32.includes(r)) return { kind: 'reg', reg: r, size: 4 };
     if (SUB[r]) return { kind: 'reg', reg: r, size: SUB[r][1] };
     if (isMM(r)) return { kind: 'mm', n: Number(r[2]), size: 8 };
     if (/^xmm[0-7]$/.test(r)) fail(`the SSE register ${r}`);
-    if (/^st$/.test(r)) fail('the x87 stack');
+    if (r === 'st') return { kind: 'st', i: 0 };
+  }
+  // st(i)
+  if (rest.length === 4 && lc(rest[0]) === 'st' && isP(rest[1], '(') && rest[2].k === NUM && isP(rest[3], ')') && !bracket && !size) {
+    const i = number(rest[2].v);
+    if (i > 7) fail(`st(${i})`);
+    return { kind: 'st', i };
   }
   const e = expression(rest);
   if (offset) {
@@ -165,7 +183,6 @@ function operand(toks) {
   if (e.regs.length > 2) fail('an address with more than two registers');
   if (e.regs.filter((x) => x.scale !== 1).length > 1) fail('an address with two scaled registers');
   for (const x of e.regs) {
-    if (x.r === 'esp' || x.r === 'ebp') fail(`[${x.r}] (the frame is PRISM's, not Visual C++'s)`);
     if (![1, 2, 4, 8].includes(x.scale)) fail(`the scale ${x.scale}`);
   }
   // A bare name with no register is either memory or a label: lowering decides, knowing the labels.
@@ -194,12 +211,23 @@ export function parseLine(toks) {
     }
     const op = lc(toks[0]);
     if (!op) fail(`'${toks[0]?.v}' where an instruction was expected`);
-    if (op === 'call' || op === 'int') fail(op);
-    if (op === 'rep' || /^(stos|lods|movs|scas|cmps)[bwd]$/.test(op)) fail(`the string instruction '${op}'`);
-    if (/^f/.test(op)) fail(`the x87 instruction '${op}'`);
-    if (!KNOWN.has(op)) fail(`the instruction '${op}'`);
+    if (op === 'int') fail(op);
+    if (op === 'call') {
+      const o = splitOperands(toks.slice(1)).map(operand);
+      if (o.length !== 1 || !((o[0].kind === 'reg' && o[0].size === 4) || (o[0].kind === 'mem' && !o[0].bare))) fail('call to other than a pointer in a register or in memory');
+      return [{ op, ops: o, text }];
+    }
+    // rep before movs and stos, which run upward: Visual C++ code runs with DF clear.
+    if (op === 'rep') {
+      const s = lc(toks[1]);
+      if (!/^(movs|stos)[bwd]$/.test(s ?? '') || toks.length !== 2) fail(`rep ${s ?? ''}`);
+      return [{ op: s, rep: true, ops: [], text }];
+    }
+    if (/^(rep[nez]+|lods[bwd]|scas[bwd]|cmps[bwd]|std)$/.test(op)) fail(`the string instruction '${op}'`);
+    if (/^f/.test(op) && !X87.has(op)) fail(`the x87 instruction '${op}'`);
+    if (!KNOWN.has(op) && !X87.has(op)) fail(`the instruction '${op}'`);
     if (op in CC || op === 'jmp') {
-      const rest = toks.slice(1);
+      const rest = toks.slice(1).filter((t) => !/^(short|near)$/i.test(t.v));
       if (rest.length === 1 && rest[0].k === ID) {
         const r = rest[0].v.toLowerCase();
         if (R32.includes(r)) return [{ op: 'jmpreg', reg: r, text }];
@@ -229,6 +257,31 @@ export function lowerMsvcAsm(body, { INT }) {
     for (const k of Object.keys(n)) if (k !== 'type' && k !== 'loc' && k !== 'sym') collect(n[k]);
   };
   collect(body);
+  /*
+   * EBP IS VISUAL C++'S FRAME POINTER, which PRISM has no equivalent of: a block that reads it without
+   * having set it is reading the compiler's frame, and is refused. One that sets it first -- kdoc.cpp's
+   * CallCode does `push ebp; mov ebp,esp` round a call -- is using a register like any other.
+   */
+  let readsEbp = null, writesEbp = false;
+  const scan = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (Array.isArray(n)) { n.forEach(scan); return; }
+    if (n.n === 'asmmsvc') {
+      for (const line of n.lines) {
+        for (const ins of parseLine(line)) {
+          if (!ins.ops) continue;
+          const d = ins.ops[0];
+          if (d?.kind === 'reg' && d.reg === 'ebp' && ['mov', 'pop', 'lea'].includes(ins.op)) writesEbp = true;
+          const mentions = ins.ops.some((o, i) => (o.kind === 'reg' && o.reg === 'ebp' && !(i === 0 && ['mov', 'pop', 'lea'].includes(ins.op)))
+            || (o.kind === 'mem' && o.regs.some((x) => x.r === 'ebp')));
+          if (mentions && !writesEbp) readsEbp ??= ins.text;
+        }
+      }
+    }
+    for (const k of Object.keys(n)) if (k !== 'type' && k !== 'loc' && k !== 'sym') scan(n[k]);
+  };
+  scan(body);
+  if (readsEbp && !(readsEbp.startsWith('push') && writesEbp)) fail(`ebp read before this function sets it (it would be Visual C++'s frame) -- in \`${readsEbp}\``);
   const names = new Set();
   const labelTaken = new Set();
   const lower = (node) => {
@@ -308,7 +361,7 @@ function wrReg(r, v) {
 /** Flags at width w from the inputs and the unmasked result; `k` names the operation family. */
 function flagsJs(k, a, b, r, w) {
   const mask = MASK[w], sign = w === 4 ? 0x80000000 : w === 2 ? 0x8000 : 0x80;
-  const zs = `$e.zf=((${r})&${mask})===0?1:0;$e.sf=((${r})&${sign})!==0?1:0;`;
+  const zs = `$e.zf=((${r})&${mask})===0?1:0;$e.sf=((${r})&${sign})!==0?1:0;$e.pf=$x.par[(${r})&255];`;
   switch (k) {
     case 'add': return zs + `$e.cf=(${r})>${mask}?1:0;$e.of=((~((${a})^(${b}))&((${a})^(${r}))&${sign})!==0)?1:0;`;
     case 'sub': return zs + `$e.cf=(${a})<(${b})?1:0;$e.of=((((${a})^(${b}))&((${a})^(${r}))&${sign})!==0)?1:0;`;
@@ -387,6 +440,7 @@ function emit(ins, op, ops, env) {
   const need = (n) => { if (ops.length !== n) fail(`${op} with ${ops.length} operands`); };
   const mm = (o) => { if (o.kind !== 'mm') fail(`${op} wants an MMX register, not a ${o.kind} operand`); return o.n; };
 
+  if (X87.has(op)) return emitX87(op, ops, env, { addr, memSize, rd, wr, need });
   if (op === 'lealabel') return `${wrReg(ops[0].reg, String(env.labelIndex(ins.label)))}`;
 
   if (MMX_BINARY.has(op)) {
@@ -402,7 +456,8 @@ function emit(ins, op, ops, env) {
   }
 
   switch (op) {
-    case 'nop': case 'emms': return '';
+    case 'nop': return '';
+    case 'emms': return '$f.emms();';
     case 'clc': return '$e.cf=0;';
     case 'stc': return '$e.cf=1;';
     case 'cmc': return '$e.cf^=1;';
@@ -477,13 +532,57 @@ function emit(ins, op, ops, env) {
     }
     case 'push': {
       need(1);
-      return `$stk.push(${rd(ops[0], 4)});`;
+      return `$u=${rd(ops[0], 4)};$e.esp=($e.esp-4)|0;${env.store('$e.esp', 4, '$u')};`;
     }
     case 'pop': {
       need(1);
-      return `if(!$stk.length)throw new Error("MSVC inline assembly: pop with nothing pushed");${wr(ops[0], '$stk.pop()', 4)}`;
+      return `$u=${env.load('$e.esp', 4)};$e.esp=($e.esp+4)|0;${wr(ops[0], '$u', 4)}`;
     }
 
+    // Through a function pointer: M.asmCall reads the arguments off the asm's stack (src/runtime/runtime.js).
+    case 'call': return `M.asmCall(${rd(ops[0], 4)}|0,$e.esp,$e);`;
+    case 'cwde': return '$e.eax=($e.eax<<16)>>16;';
+    case 'cbw': return wrReg('ax', '(($e.eax<<24)>>24)&65535');
+    case 'cwd': return wrReg('dx', '(($e.eax<<16)>>31)&65535');
+    // AH into SF ZF AF PF CF, which is how an x87 compare reaches a jump (fstsw ax; sahf).
+    case 'sahf': return '$u=($e.eax>>>8)&255;$e.cf=$u&1;$e.pf=($u>>2)&1;$e.zf=($u>>6)&1;$e.sf=($u>>7)&1;';
+    case 'lahf': return wrReg('ah', '$e.cf|2|($e.pf<<2)|($e.zf<<6)|($e.sf<<7)');
+    case 'rdtsc': return '$t=$x.rdtsc();$e.eax=($t%4294967296)|0;$e.edx=Math.floor($t/4294967296)|0;';
+    case 'mul': case 'div': case 'idiv': {
+      need(1);
+      const w = width(ops[0], null);
+      if (w !== 4) fail(`${op} of ${w} bytes`);
+      const v = rd(ops[0], 4);
+      if (op === 'mul') {
+        return `{const _p=BigInt(${v}>>>0)*BigInt($e.eax>>>0);$e.eax=Number(_p&0xffffffffn)|0;$e.edx=Number(_p>>32n)|0;$e.cf=$e.of=$e.edx!==0?1:0;}`;
+      }
+      // #DE -- a zero divisor or a quotient that does not fit -- is the program's crash, raised by name.
+      const S = op === 'idiv';
+      return `{const _d=BigInt(${S ? `(${v})|0` : `(${v})>>>0`});const _n=(BigInt($e.edx${S ? '|0' : '>>>0'})<<32n)|BigInt($e.eax>>>0);`
+        + `if(_d===0n)throw new Error("MSVC inline assembly: ${op} by zero");const _q=_n/_d;`
+        + `if(${S ? '_q<-2147483648n||_q>2147483647n' : '_q>4294967295n'})throw new Error("MSVC inline assembly: ${op} overflow");`
+        + `$e.eax=Number(BigInt.asIntN(32,_q));$e.edx=Number(BigInt.asIntN(32,_n%_d));}`;
+    }
+    case 'shld': case 'shrd': {
+      need(3);
+      if (ops[0].kind === 'mem' ? memSize(ops[0], 4) !== 4 : ops[0].size !== 4) fail(`${op} of other than 32 bits`);
+      if (ops[1].kind !== 'reg' || ops[1].size !== 4) fail(`${op} from other than a 32-bit register`);
+      const c = ops[2].kind === 'imm' ? String(ops[2].value & 31)
+        : ops[2].kind === 'reg' && ops[2].reg === 'cl' ? '($e.ecx&31)' : fail(`${op} by something other than an immediate or cl`);
+      const r = op === 'shld' ? '(($u<<$v)|($w>>>(32-$v)))>>>0' : '(($u>>>$v)|($w<<(32-$v)))>>>0';
+      const cf = op === 'shld' ? '($u>>>(32-$v))&1' : '($u>>>($v-1))&1';
+      // OF is defined for a count of one: whether the sign changed. Otherwise kept, as the shifts keep it.
+      return `$u=${rd(ops[0], 4)};$w=${rdReg(ops[1].reg)};$v=${c};if($v){$t=${r};$e.cf=${cf};$e.zf=$t===0?1:0;$e.sf=$t>>>31;$e.pf=$x.par[$t&255];`
+        + `if($v===1)$e.of=(($t^$u)>>>31);${wr(ops[0], '$t', 4)}}`;
+    }
+    case 'movsb': case 'movsw': case 'movsd': case 'stosb': case 'stosw': case 'stosd': {
+      // Upward, DF being clear in Visual C++ code. With rep, ECX times; ECX counts down to zero.
+      const z = { b: 1, w: 2, d: 4 }[op.at(-1)];
+      const one = op.startsWith('movs')
+        ? `${env.store('$e.edi', z, env.load('$e.esi', z))};$e.esi=($e.esi+${z})|0;$e.edi=($e.edi+${z})|0;`
+        : `${env.store('$e.edi', z, z === 4 ? '$e.eax' : `($e.eax&${MASK[z]})`)};$e.edi=($e.edi+${z})|0;`;
+      return ins.rep ? `while($e.ecx!==0){${one}$e.ecx=($e.ecx-1)|0;}` : one;
+    }
     case 'add': case 'sub': case 'cmp': case 'and': case 'or': case 'xor': case 'test': case 'adc': {
       need(2);
       const w = width(ops[0], ops[1]);
@@ -507,7 +606,7 @@ function emit(ins, op, ops, env) {
       // CF is not touched by inc and dec.
       const r = op === 'inc' ? '$u+1' : '$u-1';
       const of = op === 'inc' ? `(($t&${mask})>>>0)===${sign}` : `(($t&${mask})>>>0)===${sign - 1}`;
-      return `$u=${rd(ops[0], w)};$t=(${r})>>>0;$e.zf=($t&${mask})===0?1:0;$e.sf=($t&${sign})!==0?1:0;$e.of=${of}?1:0;`
+      return `$u=${rd(ops[0], w)};$t=(${r})>>>0;$e.zf=($t&${mask})===0?1:0;$e.sf=($t&${sign})!==0?1:0;$e.pf=$x.par[$t&255];$e.of=${of}?1:0;`
         + wr(ops[0], `$t&${mask}`, w);
     }
     case 'neg': {
@@ -534,7 +633,7 @@ function emit(ins, op, ops, env) {
       const cf = op === 'shl' || op === 'sal' ? `$e.cf=$v<=${bits}?(($u>>>(${bits}-$v))&1):0;` : `$e.cf=(${op === 'sar' ? `(($u<<${sx})>>${sx})` : '$u'}>>>Math.min($v-1,31))&1;`;
       const of = op === 'shr' ? `if($v===1)$e.of=($u&${sign})!==0?1:0;` : op === 'sar' ? 'if($v===1)$e.of=0;'
         : `if($v===1)$e.of=((($t&${sign})!==0?1:0)^$e.cf);`;
-      return `$u=${rd(ops[0], w)};$v=${c};if($v){$t=${r};${cf}$e.zf=($t&${mask})===0?1:0;$e.sf=($t&${sign})!==0?1:0;${of}${wr(ops[0], '$t', w)}}`;
+      return `$u=${rd(ops[0], w)};$v=${c};if($v){$t=${r};${cf}$e.zf=($t&${mask})===0?1:0;$e.sf=($t&${sign})!==0?1:0;$e.pf=$x.par[$t&255];${of}${wr(ops[0], '$t', w)}}`;
     }
     case 'imul': {
       if (ops.length === 2 || ops.length === 3) {
@@ -551,4 +650,142 @@ function emit(ins, op, ops, env) {
     }
   }
   return fail(`the instruction '${op}'`);
+}
+
+// --------------------------------------------------------------------------------------------------
+// The x87 (src/asm/msvc-rt.js makeX87 holds the stack and the two words; `$f` is it).
+// --------------------------------------------------------------------------------------------------
+
+/** The two-operand arithmetic, as JS over `d` (the destination's value) and `s` (the source's). */
+const FARITH = {
+  fadd: (d, s) => `($u=${d},$v=${s},$f.g($f.r($u+$v),$u,$v))`, fmul: (d, s) => `($u=${d},$v=${s},$f.g($f.r($u*$v),$u,$v))`,
+  fsub: (d, s) => `($u=${d},$v=${s},$f.g($f.r($u-$v),$u,$v))`, fsubr: (d, s) => `($u=${d},$v=${s},$f.g($f.r($v-$u),$u,$v))`,
+  fdiv: (d, s) => `($u=${d},$v=${s},$f.g($f.r($f.dv($u,$v)),$u,$v))`, fdivr: (d, s) => `($u=${d},$v=${s},$f.g($f.r($f.dv($v,$u)),$u,$v))`,
+};
+const FCONST = { fld1: '1', fldz: '0', fldpi: 'Math.PI', fldl2e: 'Math.LOG2E', fldl2t: 'Math.log2(10)',
+  fldlg2: 'Math.log10(2)', fldln2: 'Math.LN2' };
+
+function emitX87(op, ops, env, { addr, memSize, rd, wr, need }) {
+  const st = (o) => { if (o.kind !== 'st') fail(`${op} wants an x87 register, not a ${o.kind} operand`); return o.i; };
+  const sz = (o, sizes) => {
+    if (o.kind !== 'mem') fail(`${op} wants memory, not a ${o.kind} operand`);
+    // A size only the instruction states: the control and status words are always two bytes.
+    const z = memSize(o, sizes.length === 1 ? sizes[0] : null);
+    if (!sizes.includes(z)) fail(`${op} of ${z} bytes`);
+    return z;
+  };
+  const L4 = (a) => env.load(a, 4), L2 = (a) => env.load(a, 2);
+  /** A real in memory, as a JS double. */
+  const real = (o, z) => {
+    const a = addr(o);
+    if (z === 4) return `$f.fromF32(${L4(a)})`;
+    if (z === 8) return `($a=${a},$f.fromF64(${L4('$a')},${L4('($a+4|0)')}))`;
+    return `($a=${a},$f.fromF80(${L4('$a')},${L4('($a+4|0)')},${L2('($a+8|0)')}))`;
+  };
+  const int = (o, z) => {
+    const a = addr(o);
+    if (z === 2) return `((${L2(a)})<<16>>16)`;
+    if (z === 4) return `((${L4(a)})|0)`;
+    return `($a=${a},((${L4('($a+4|0)')})|0)*4294967296+((${L4('$a')})>>>0))`;
+  };
+  const storeReal = (o, z, v) => {
+    const a = addr(o);
+    if (z === 4) return `$w=${v};$a=${a};${env.store('$a', 4, '$f.toF32($w)')};`;
+    if (z === 8) return `$w=${v};$a=${a};${env.store('$a', 4, '$f.toF64lo($w)')};${env.store('($a+4|0)', 4, '$f.toF64hi($w)')};`;
+    return `$w=$f.toF80(${v});$a=${a};${env.store('$a', 4, '$w[0]')};${env.store('($a+4|0)', 4, '$w[1]')};${env.store('($a+8|0)', 2, '$w[2]')};`;
+  };
+  const storeInt = (o, z, v) => {
+    const a = addr(o);
+    if (z === 8) return `$w=$f.ist64(${v});$a=${a};${env.store('$a', 4, '$w[0]')};${env.store('($a+4|0)', 4, '$w[1]')};`;
+    return `$a=${a};${env.store('$a', z, `$f.ist(${v},${z})`)};`;
+  };
+
+  switch (op) {
+    case 'fld':
+      need(1);
+      if (ops[0].kind === 'st') return `$f.push($f.get(${ops[0].i}));`;
+      return `$f.push(${real(ops[0], sz(ops[0], [4, 8, 10]))});`;
+    case 'fild': need(1); return `$f.push(${int(ops[0], sz(ops[0], [2, 4, 8]))});`;
+    case 'fst': case 'fstp': {
+      need(1);
+      const pop = op === 'fstp' ? '$f.pop();' : '';
+      if (ops[0].kind === 'st') return `$f.set(${ops[0].i},$f.get(0));${pop}`;
+      const z = sz(ops[0], op === 'fstp' ? [4, 8, 10] : [4, 8]);
+      return storeReal(ops[0], z, '$f.get(0)') + pop;
+    }
+    case 'fist': case 'fistp': {
+      need(1);
+      const z = sz(ops[0], op === 'fistp' ? [2, 4, 8] : [2, 4]);
+      return storeInt(ops[0], z, '$f.get(0)') + (op === 'fistp' ? '$f.pop();' : '');
+    }
+    case 'fadd': case 'fsub': case 'fsubr': case 'fmul': case 'fdiv': case 'fdivr': {
+      const f = FARITH[op];
+      // No operand: MASM's spelling of the popping form on ST(1).
+      if (!ops.length) return `$f.set(1,${f('$f.get(1)', '$f.get(0)')});$f.pop();`;
+      if (ops.length === 1) {
+        if (ops[0].kind === 'st') return `$f.set(0,${f('$f.get(0)', `$f.get(${ops[0].i})`)});`;
+        return `$f.set(0,${f('$f.get(0)', real(ops[0], sz(ops[0], [4, 8])))});`;
+      }
+      need(2);
+      const d = st(ops[0]), s = st(ops[1]);
+      if (d !== 0 && s !== 0) fail(`${op} between two registers neither of which is st`);
+      return `$f.set(${d},${f(`$f.get(${d})`, `$f.get(${s})`)});`;
+    }
+    case 'faddp': case 'fsubp': case 'fsubrp': case 'fmulp': case 'fdivp': case 'fdivrp': {
+      const f = FARITH[op.slice(0, -1)];
+      const d = ops.length ? st(ops[0]) : 1;
+      if (ops.length === 2 && st(ops[1]) !== 0) fail(`${op} from other than st`);
+      return `$f.set(${d},${f(`$f.get(${d})`, '$f.get(0)')});$f.pop();`;
+    }
+    case 'fiadd': case 'fisub': case 'fisubr': case 'fimul': case 'fidiv': case 'fidivr': {
+      need(1);
+      const f = FARITH[`f${op.slice(2)}`];
+      return `$f.set(0,${f('$f.get(0)', int(ops[0], sz(ops[0], [2, 4])))});`;
+    }
+    case 'fchs': return '$f.set(0,-$f.get(0));';
+    case 'fabs': return '$f.set(0,Math.abs($f.get(0)));';
+    case 'fsqrt': return '$u=$f.get(0);$f.set(0,$f.g($f.r(Math.sqrt($u)),$u));';
+    case 'frndint': return '$f.set(0,$f.rint($f.get(0)));';
+    case 'fscale': return '$f.scale();';
+    case 'fprem': return '$f.prem();';
+    case 'fxch': return `$f.xch(${ops.length ? st(ops[0]) : 1});`;
+    case 'fsin': return '$f.trig((a)=>$f.set(0,$f.g(Math.sin(a),a)));';
+    case 'fcos': return '$f.trig((a)=>$f.set(0,$f.g(Math.cos(a),a)));';
+    case 'fsincos': return '$f.trig((a)=>{$f.set(0,$f.g(Math.sin(a),a));$f.push($f.g(Math.cos(a),a));});';
+    case 'fptan': return '$f.trig((a)=>{$f.set(0,$f.g(Math.tan(a),a));$f.push(1);});';
+    case 'fpatan': return '$u=$f.get(1);$v=$f.get(0);$f.set(1,$f.g(Math.atan2($u,$v),$u,$v));$f.pop();';
+    case 'f2xm1': return '$u=$f.get(0);$f.set(0,$f.g(Math.expm1($u*Math.LN2),$u));';
+    case 'fyl2x': return '$u=$f.get(1);$v=$f.get(0);$f.set(1,$f.g($u*Math.log2($v),$u,$v));$f.pop();';
+    case 'fyl2xp1': return '$u=$f.get(1);$v=$f.get(0);$f.set(1,$f.g($u*(Math.log1p($v)/Math.LN2),$u,$v));$f.pop();';
+    case 'fcom': case 'fcomp': case 'fucom': case 'fucomp': {
+      const pop = op.endsWith('p') ? '$f.pop();' : '';
+      if (!ops.length) return `$f.com($f.get(0),$f.get(1));${pop}`;
+      need(1);
+      const v = ops[0].kind === 'st' ? `$f.get(${ops[0].i})` : real(ops[0], sz(ops[0], [4, 8]));
+      return `$f.com($f.get(0),${v});${pop}`;
+    }
+    case 'fcompp': case 'fucompp': return '$f.com($f.get(0),$f.get(1));$f.pop();$f.pop();';
+    case 'ftst': return '$f.com($f.get(0),0);';
+    case 'fcomi': case 'fcomip': case 'fucomi': case 'fucomip': {
+      // These write EFLAGS directly: unordered ZF=PF=CF=1, below CF, equal ZF; OF, SF cleared.
+      const i = ops.length === 2 ? (st(ops[0]) === 0 ? st(ops[1]) : fail(`${op} into other than st`)) : ops.length ? st(ops[0]) : 1;
+      return `$u=$f.get(0);$v=$f.get(${i});if($u!==$u||$v!==$v){$e.zf=$e.pf=$e.cf=1;}else{$e.zf=$u===$v?1:0;$e.cf=$u<$v?1:0;$e.pf=0;}`
+        + `$e.of=0;$e.sf=0;${op.endsWith('p') ? '$f.pop();' : ''}`;
+    }
+    case 'fstsw': case 'fnstsw':
+      need(1);
+      if (ops[0].kind === 'reg' && ops[0].reg === 'ax') return wr(ops[0], '$f.status()', 2);
+      sz(ops[0], [2]);
+      return wr(ops[0], '$f.status()', 2);
+    case 'fstcw': case 'fnstcw': need(1); sz(ops[0], [2]); return wr(ops[0], '$f.cw', 2);
+    case 'fldcw': need(1); sz(ops[0], [2]); return `$f.cw=${rd(ops[0], 2)};`;
+    case 'fclex': case 'fnclex': return '$f.clex();';
+    case 'finit': case 'fninit': return '$f.init();';
+    case 'ffree': need(1); return `$f.free(${st(ops[0])});`;
+    case 'fincstp': return '$f.top=($f.top+1)&7;';
+    case 'fdecstp': return '$f.top=($f.top-1)&7;';
+    case 'fwait': case 'wait': case 'fnop': return '';
+  }
+  if (FCONST[op]) return `$f.push(${FCONST[op]});`;
+  return fail(`the x87 instruction '${op}'`);
 }

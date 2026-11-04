@@ -55,7 +55,7 @@ def run(case, layout):
         return {'error': 'did not reach the end'}
     fl = mu.reg_read(UC_X86_REG_EFLAGS)
     mem = bytes(mu.mem_read(layout['buf'], layout['size']))
-    return {'cf': fl & 1, 'zf': (fl >> 6) & 1, 'sf': (fl >> 7) & 1, 'of': (fl >> 11) & 1,
+    return {'cf': fl & 1, 'pf': (fl >> 2) & 1, 'zf': (fl >> 6) & 1, 'sf': (fl >> 7) & 1, 'of': (fl >> 11) & 1,
             'mem': hashlib.sha256(mem).hexdigest(), 'out': mem[layout['out']:].hex()}
 
 

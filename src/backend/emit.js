@@ -1941,6 +1941,8 @@ export class FunctionEmitter {
       return t.size === 4 ? (t.signed ? '($e.eax|0)' : '($e.eax>>>0)') : t.signed ? `(($e.eax<<${sh})>>${sh})` : `($e.eax&${t.size === 1 ? 255 : 65535})`;
     }
     if (t.k === 'ptr') return '($e.eax|0)';
+    // A float or a double comes back in ST(0), popped, as the x87 calling convention returns it.
+    if (T.isFloat(t)) return t.size === 4 ? 'Math.fround($f.pop())' : '$f.pop()';
     if (T.isInteger(t) && is64(t)) return `(BigInt.${t.signed ? 'asIntN' : 'asUintN'}(64,(BigInt($e.edx>>>0)<<32n)|BigInt($e.eax>>>0)))`;
     return unsup(`Visual C++ inline assembly returning a ${T.typeName(t)} in registers`);
   }
