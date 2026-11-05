@@ -13,6 +13,8 @@ import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js'
 import { SVGALIB_HEADERS } from './headers-svgalib.js';
 import { WIN32_HEADERS } from './headers-win32.js';
 import { MMINTRIN_H, XMMINTRIN_H } from './headers-mmx.js';
+import { D3D9_H, DINPUT_H, OLECTL_H, CRTDBG_H } from './headers-d3d9.js';
+import { DSOUND_H } from './headers-dsound.js';
 
 const STDDEF = `
 #ifndef _PRISM_STDDEF_H
@@ -1990,6 +1992,11 @@ public:
 
 export const HEADERS = {
   ...WIN32_HEADERS,
+  'd3d9.h': D3D9_H,
+  'dsound.h': DSOUND_H,
+  'dinput.h': DINPUT_H,
+  'olectl.h': OLECTL_H,
+  'crtdbg.h': CRTDBG_H,
   'X11/Xlib.h': XLIB,
   'X11/Xutil.h': XUTIL,
   'X11/Xatom.h': XATOM,

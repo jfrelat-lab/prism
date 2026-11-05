@@ -28,6 +28,7 @@
 #include <windows.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/time.h>
 
 /*
@@ -206,6 +207,28 @@ HANDLE WINAPI CreateEvent(LPSECURITY_ATTRIBUTES sa, BOOL manual, BOOL initial, L
     (void)sa; (void)manual; (void)initial; (void)name;
     return HANDLE_OF(HANDLE);
 }
+/*
+ * The process heap is the C heap: one heap, so its handle is a constant.
+ */
+HANDLE WINAPI GetProcessHeap(void) { return (HANDLE)1; }
+LPVOID WINAPI HeapAlloc(HANDLE heap, DWORD flags, SIZE_T bytes)
+{
+    (void)heap;
+    return (flags & HEAP_ZERO_MEMORY) ? calloc(1, bytes ? bytes : 1) : malloc(bytes ? bytes : 1);
+}
+LPVOID WINAPI HeapReAlloc(HANDLE heap, DWORD flags, LPVOID mem, SIZE_T bytes) { (void)heap; (void)flags; return realloc(mem, bytes); }
+BOOL WINAPI HeapFree(HANDLE heap, DWORD flags, LPVOID mem) { (void)heap; (void)flags; free(mem); return TRUE; }
+BOOL WINAPI HeapValidate(HANDLE heap, DWORD flags, LPCVOID mem) { (void)heap; (void)flags; (void)mem; return TRUE; }
+
+/*
+ * Critical sections, counted. There is one thread, so entering never waits; the count is kept so
+ * that a section left more often than entered is the program's error to see in a debugger, as on
+ * Windows.
+ */
+void WINAPI InitializeCriticalSection(LPCRITICAL_SECTION cs) { memset(cs, 0, sizeof *cs); cs->LockCount = -1; }
+void WINAPI EnterCriticalSection(LPCRITICAL_SECTION cs) { cs->LockCount++; cs->RecursionCount++; }
+void WINAPI LeaveCriticalSection(LPCRITICAL_SECTION cs) { cs->LockCount--; cs->RecursionCount--; }
+void WINAPI DeleteCriticalSection(LPCRITICAL_SECTION cs) { (void)cs; }
 BOOL WINAPI SetEvent(HANDLE h) { (void)h; return TRUE; }
 BOOL WINAPI ResetEvent(HANDLE h) { (void)h; return TRUE; }
 DWORD WINAPI WaitForSingleObject(HANDLE h, DWORD ms) { (void)h; (void)ms; return WAIT_OBJECT_0; }
@@ -709,6 +732,9 @@ HWND WINAPI CreateDialog(HINSTANCE i, LPCSTR t, HWND p, LPVOID proc)
  * asked its question, and nothing happened. A person who clicks a window's close box has answered
  * that question; anything else is a modal dialog nobody can see.
  */
+/* The process ends as exit() ends it: atexit handlers run, the status is the program's. */
+void WINAPI ExitProcess(UINT code) { exit((int)code); }
+
 int WINAPI MessageBox(HWND w, LPCSTR text, LPCSTR caption, UINT type)
 {
     (void)w; (void)text; (void)caption;
@@ -1351,23 +1377,44 @@ HANDLE WINAPI GetStdHandle(DWORD which)
 
 extern int write(int fd, const void *buf, unsigned n);
 
+/* A file CreateFile opened (src/env/win32-app.c), or the console. */
+FILE *prism_win32_file(HANDLE h);
 BOOL WINAPI WriteFile(HANDLE h, LPCVOID buf, DWORD n, LPDWORD written, LPVOID ov)
 {
+    FILE *f = prism_win32_file(h);
     (void)ov;
+    if (f) { size_t w = fwrite(buf, 1, n, f); if (written) *written = (DWORD)w; return w == n; }
     if (h == CONSOLE_OUT && buf && n) write(1, buf, n);
     if (written) *written = n;
     return TRUE;
 }
-/* No CreateFile here ever opens a file, so every handle these receive is one they must refuse. */
+/* A handle that is not a file CreateFile opened is refused, as Windows refuses an invalid one. */
 DWORD WINAPI SetFilePointer(HANDLE h, LONG lo, PLONG hi, DWORD how)
-{ (void)h; (void)lo; (void)hi; (void)how; SetLastError(6 /* ERROR_INVALID_HANDLE */); return INVALID_SET_FILE_POINTER; }
+{
+    FILE *f = prism_win32_file(h);
+    if (!f || (hi && *hi)) { SetLastError(6 /* ERROR_INVALID_HANDLE */); return INVALID_SET_FILE_POINTER; }
+    if (fseek(f, lo, how == FILE_END ? SEEK_END : how == FILE_CURRENT ? SEEK_CUR : SEEK_SET) != 0) return INVALID_SET_FILE_POINTER;
+    return (DWORD)ftell(f);
+}
 DWORD WINAPI GetFileSize(HANDLE h, LPDWORD hi)
-{ (void)h; if (hi) *hi = 0; SetLastError(6 /* ERROR_INVALID_HANDLE */); return INVALID_FILE_SIZE; }
+{
+    FILE *f = prism_win32_file(h);
+    long at, end;
+    if (hi) *hi = 0;
+    if (!f) { SetLastError(6 /* ERROR_INVALID_HANDLE */); return INVALID_FILE_SIZE; }
+    at = ftell(f); fseek(f, 0, SEEK_END); end = ftell(f); fseek(f, at, SEEK_SET);
+    return (DWORD)end;
+}
 BOOL WINAPI ReadFile(HANDLE h, LPVOID buf, DWORD n, LPDWORD got, LPVOID ov)
 {
-    (void)h; (void)buf; (void)n; (void)ov;
+    FILE *f = prism_win32_file(h);
+    size_t r;
+    (void)ov;
     if (got) *got = 0;
-    return FALSE;
+    if (!f) { SetLastError(6 /* ERROR_INVALID_HANDLE */); return FALSE; }
+    r = fread(buf, 1, n, f);
+    if (got) *got = (DWORD)r;
+    return TRUE;
 }
 BOOL WINAPI GetConsoleScreenBufferInfo(HANDLE h, PCONSOLE_SCREEN_BUFFER_INFO info)
 {

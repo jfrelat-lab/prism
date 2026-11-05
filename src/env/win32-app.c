@@ -206,7 +206,8 @@ BOOL WINAPI VirtualLock(LPVOID a, SIZE_T n) { (void)a; (void)n; return 1; }
 BOOL WINAPI VirtualUnlock(LPVOID a, SIZE_T n) { (void)a; (void)n; return 1; }
 
 /* ---- handles and processes, at the depth a program that opens nothing needs. */
-BOOL WINAPI CloseHandle(HANDLE h) { (void)h; return 1; }
+int prism_win32_file_close(HANDLE h);
+BOOL WINAPI CloseHandle(HANDLE h) { prism_win32_file_close(h); return 1; }
 HANDLE WINAPI GetCurrentProcess(void) { return (HANDLE)-1; }
 DWORD WINAPI GetCurrentProcessId(void) { return 1; }
 DWORD WINAPI GetCurrentThreadId(void) { return 1; }
@@ -361,13 +362,6 @@ BOOL WINAPI SetHandleInformation(HANDLE h, DWORD mask, DWORD flags)
 { (void)h; (void)mask; (void)flags; return 1; }
 
 /* No real files behind these: PuTTY checks and carries on without its random seed or its help file. */
-HANDLE WINAPI CreateFile(LPCSTR name, DWORD access, DWORD share, void *sa,
-                         DWORD disp, DWORD flags, HANDLE tmpl)
-{
-    (void)name; (void)access; (void)share; (void)sa; (void)disp; (void)flags; (void)tmpl;
-    SetLastError(2 /* ERROR_FILE_NOT_FOUND */);
-    return INVALID_HANDLE_VALUE;
-}
 /* Files through the stdio layer, which owns PRISM's file table: a Windows path is a stdio path with
    its separators turned. */
 static void prism_posix_path(char *out, const char *in, int n)
@@ -376,6 +370,57 @@ static void prism_posix_path(char *out, const char *in, int n)
     for (i = 0; in && in[i] && i < n - 1; i++) out[i] = in[i] == '\\' ? '/' : in[i];
     out[i] = 0;
 }
+/*
+ * FILE HANDLES, over the stdio file table: CreateFile opens a FILE and the handle names its slot, so
+ * ReadFile, WriteFile, GetFileSize, SetFilePointer (src/env/win32.c) and CloseHandle reach it through
+ * prism_win32_file. .kkrieger's sSystem_::LoadFile reads its data file this way -- CreateFile,
+ * GetFileSize, ReadFile -- where PuTTY and Quake II never opened one at all.
+ */
+#define PRISM_FILES 64
+#define PRISM_FILE_BASE 0x5F000000u
+static FILE *prism_files[PRISM_FILES];
+FILE *prism_win32_file(HANDLE h)
+{
+    unsigned i = (unsigned)(ULONG_PTR)h - PRISM_FILE_BASE;
+    return i < PRISM_FILES ? prism_files[i] : NULL;
+}
+int prism_win32_file_close(HANDLE h)
+{
+    unsigned i = (unsigned)(ULONG_PTR)h - PRISM_FILE_BASE;
+    if (i >= PRISM_FILES || !prism_files[i]) return 0;
+    fclose(prism_files[i]);
+    prism_files[i] = NULL;
+    return 1;
+}
+HANDLE WINAPI CreateFile(LPCSTR name, DWORD access, DWORD share, void *sa,
+                         DWORD disp, DWORD flags, HANDLE tmpl)
+{
+    char p[MAX_PATH];
+    FILE *f = NULL;
+    int i;
+    (void)share; (void)sa; (void)flags; (void)tmpl;
+    prism_posix_path(p, name, sizeof p);
+    switch (disp) {
+    case CREATE_NEW:
+        if ((f = fopen(p, "rb")) != NULL) { fclose(f); SetLastError(80 /* ERROR_FILE_EXISTS */); return INVALID_HANDLE_VALUE; }
+        f = fopen(p, "w+b");
+        break;
+    case CREATE_ALWAYS: f = fopen(p, "w+b"); break;
+    case OPEN_EXISTING: f = fopen(p, (access & GENERIC_WRITE) ? "r+b" : "rb"); break;
+    case OPEN_ALWAYS: if ((f = fopen(p, "r+b")) == NULL) f = fopen(p, "w+b"); break;
+    case TRUNCATE_EXISTING:
+        if ((f = fopen(p, "rb")) == NULL) break;
+        fclose(f); f = fopen(p, "w+b");
+        break;
+    }
+    if (!f) { SetLastError(2 /* ERROR_FILE_NOT_FOUND */); return INVALID_HANDLE_VALUE; }
+    for (i = 0; i < PRISM_FILES; i++)
+        if (!prism_files[i]) { prism_files[i] = f; return (HANDLE)(ULONG_PTR)(PRISM_FILE_BASE + i); }
+    fclose(f);
+    SetLastError(4 /* ERROR_TOO_MANY_OPEN_FILES */);
+    return INVALID_HANDLE_VALUE;
+}
+
 BOOL WINAPI DeleteFile(LPCSTR name)
 {
     char p[MAX_PATH];
@@ -495,6 +540,17 @@ BOOL WINAPI FindClose(HANDLE h)
     return TRUE;
 }
 
+/* The interface GUIDs dsound.h and olectl.h declare, with the SDK's values: defined here, once for every
+   Win32 program, whichever of the shims that implement them it links. */
+const GUID IID_IDirectSound = { 0x279AFA83, 0x4981, 0x11CE, { 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60 } };
+const GUID IID_IDirectSound8 = { 0xC50A7E93, 0xF395, 0x4834, { 0x9E, 0xF6, 0x7F, 0xA9, 0x9D, 0xE5, 0x09, 0x66 } };
+const GUID IID_IDirectSoundBuffer = { 0x279AFA85, 0x4981, 0x11CE, { 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60 } };
+const GUID IID_IDirectSoundBuffer8 = { 0x6825A449, 0x7524, 0x4D82, { 0x92, 0x0F, 0x50, 0xE3, 0x6A, 0xB3, 0xAB, 0x1E } };
+const GUID IID_IDirectSound3DListener = { 0x279AFA84, 0x4981, 0x11CE, { 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60 } };
+const GUID IID_IDirectSound3DBuffer = { 0x279AFA86, 0x4981, 0x11CE, { 0xA5, 0x21, 0x00, 0x20, 0xAF, 0x0B, 0xE5, 0x60 } };
+const GUID IID_IPicture = { 0x7BF80980, 0xBF32, 0x101A, { 0x8B, 0xBB, 0x00, 0xAA, 0x00, 0x30, 0x0C, 0xAB } };
+const GUID IID_IStream = { 0x0000000C, 0x0000, 0x0000, { 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46 } };
+
 /* user32's sprintf: its format language is a subset of C's, so C's formats it. */
 int WINAPIV wsprintfA(LPSTR buf, LPCSTR fmt, ...)
 {
@@ -505,6 +561,8 @@ int WINAPIV wsprintfA(LPSTR buf, LPCSTR fmt, ...)
     va_end(ap);
     return n;
 }
+/* Its va_list form, which .kkrieger's sDPrintF and sFatal format with (_types.cpp). */
+int WINAPI wvsprintfA(LPSTR buf, LPCSTR fmt, va_list ap) { return vsprintf(buf, fmt, ap); }
 /* A breakpoint with no debugger attached: Windows ends the process, and so does this. */
 void WINAPI DebugBreak(void) { fprintf(stderr, "DebugBreak: breakpoint with no debugger\n"); abort(); }
 DWORD WINAPI GetTempPath(DWORD n, LPSTR buf)

@@ -146,7 +146,7 @@ export function makeMachine(mod = new Module()) {
     /**
      * `call reg` in Visual C++ inline assembly (src/asm/msvc.js): the arguments are on the asm's stack
      * at ESP, laid out as i386 cdecl and stdcall both lay them (a float in four bytes, a double or a
-     * long long in eight), read by the callee's DECLARED parameters. The C stack is moved below the
+     * long long in eight, a struct in its size rounded to four), read by the callee's DECLARED parameters. The C stack is moved below the
      * asm's for the call, so the callee's frame cannot land on what the asm pushed. The result comes
      * back as the ABI returns it: EAX, EDX:EAX, or ST(0) for a float or a double.
      */
@@ -154,7 +154,6 @@ export function makeMachine(mod = new Module()) {
       if (!isFuncPtr(p)) throw new Trap(`call through a non-function pointer 0x${(p >>> 0).toString(16)}`);
       const f = M.funcs[funcIndex(p)], t = funcType(funcIndex(p));
       if (!f || !t) throw new Trap(`call through an unbound function pointer (index ${funcIndex(p)})`);
-      if (t.variadic) throw new Trap('an __asm call to a variadic function');
       const dv = mod.dv, args = [];
       let at = esp >>> 0;
       for (const { type: pt } of t.params ?? []) {
@@ -162,8 +161,14 @@ export function makeMachine(mod = new Module()) {
         else if (T.isFloat(pt)) { args.push(dv.getFloat64(at, true)); at += 8; }
         else if (T.isInteger(pt) && pt.size === 8) { args.push(dv.getBigInt64(at, true)); at += 8; }
         else if (T.isScalarType(pt)) { args.push(dv.getInt32(at, true)); at += 4; }
-        else throw new Trap('an __asm call passing a struct by value');
+        // A struct by value is its bytes on the stack, padded to four; PRISM passes a struct as its
+        // address, which the callee copies from -- here, the asm's copy (CallCode's sF324 parameters).
+        else if (T.isRecord(pt)) { args.push(at | 0); at += (pt.size + 3) & ~3; }
+        else throw new Trap('an __asm call passing a parameter of an unknown shape');
       }
+      // A variadic callee's tail is PRISM's packed buffer, whose slots are the i386 stack's: what follows
+      // the fixed parameters on the asm's stack IS that buffer, passed as the hidden last parameter.
+      if (t.variadic) args.push(at | 0);
       const sp = M.sp;
       M.sp = Math.min(sp, (esp & -16) - 16);
       let v;

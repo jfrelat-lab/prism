@@ -633,7 +633,8 @@ typedef const char *LPCSTR, *PCSTR, *LPCTSTR;
 /* The wide pair. wchar_t is 2 bytes here because _WIN32 is defined; see src/env/headers.js. */
 typedef wchar_t *LPWSTR;
 typedef const wchar_t *LPCWSTR;
-typedef void *LPVOID, *PVOID, *LPCVOID;
+typedef void *LPVOID, *PVOID;
+typedef const void *LPCVOID;
 typedef void *HANDLE, *PHANDLE;
 typedef long LRESULT, LPARAM;
 typedef unsigned int WPARAM;
@@ -682,12 +683,12 @@ typedef union _ULARGE_INTEGER {
 DECLARE_HANDLE(HWND);
 DECLARE_HANDLE(HDC);
 DECLARE_HANDLE(HINSTANCE);
-DECLARE_HANDLE(HMODULE);
+typedef HINSTANCE HMODULE;           /* the same type in windows.h: a module handle IS its instance */
 DECLARE_HANDLE(HICON);
 DECLARE_HANDLE(HCURSOR);
 DECLARE_HANDLE(HBRUSH);
 DECLARE_HANDLE(HMENU);
-DECLARE_HANDLE(HGDIOBJ);
+typedef void *HGDIOBJ;                 /* void * in windows.h, so every GDI handle converts to it */
 DECLARE_HANDLE(HPALETTE);
 DECLARE_HANDLE(HBITMAP);
 DECLARE_HANDLE(HGLOBAL);
@@ -716,7 +717,13 @@ typedef struct _GUID {
     unsigned short Data3;
     unsigned char  Data4[8];
 } GUID, IID, CLSID, *LPGUID, *LPCLSID;
+#ifdef __cplusplus
+typedef const GUID &REFGUID;
+typedef const GUID &REFIID;
+typedef const GUID &REFCLSID;
+#else
 typedef const GUID *REFGUID, *REFIID, *REFCLSID;
+#endif
 #define DEFINE_GUID(name, a, b, c, d0,d1,d2,d3,d4,d5,d6,d7) extern const GUID name
 #define DEFINE_OLEGUID(name, l, w1, w2) extern const GUID name
 
@@ -728,6 +735,30 @@ typedef const GUID *REFGUID, *REFIID, *REFCLSID;
  * function pointer whose first parameter is the interface itself. Quake calls them through the
  * SDK's own IDirectDrawSurface_Lock-style wrappers, which expand to exactly that.
  */
+#ifdef __cplusplus
+/*
+ * ---- COM, in its C++ form, as objbase.h gives it under __cplusplus: an interface is a struct of pure
+ * virtual methods deriving from its base, so the vtable is the virtual table and p->Method(...) is a
+ * virtual call. Its layout is the C form's -- the table pointer first, the methods in declaration order
+ * after the base's -- which is what lets an object made in C (src/env/d3d9.c) be called from C++.
+ */
+#define interface struct
+#define DECLARE_INTERFACE(iface) struct iface
+#define DECLARE_INTERFACE_(iface, baseiface) struct iface : public baseiface
+#define STDMETHOD(method)        virtual HRESULT STDMETHODCALLTYPE method
+#define STDMETHOD_(type, method) virtual type STDMETHODCALLTYPE method
+#define STDAPI                   extern "C" HRESULT WINAPI
+#define STDAPI_(type)            extern "C" type WINAPI
+#define PURE                     = 0
+#define THIS_
+#define THIS                     void
+struct IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject) = 0;
+    virtual ULONG STDMETHODCALLTYPE AddRef(void) = 0;
+    virtual ULONG STDMETHODCALLTYPE Release(void) = 0;
+};
+typedef IUnknown *LPUNKNOWN;
+#else
 #define interface struct
 #define DECLARE_INTERFACE(iface) \\
     typedef struct iface##Vtbl iface##Vtbl; \\
@@ -743,9 +774,11 @@ typedef const GUID *REFGUID, *REFIID, *REFCLSID;
 #define THIS                     void *This
 typedef struct IUnknown IUnknown;
 typedef IUnknown *LPUNKNOWN;
+#endif
 
 /* ---- the small structs the platform units name. */
 typedef struct tagRECT { LONG left, top, right, bottom; } RECT, *LPRECT, *PRECT;
+typedef const RECT *LPCRECT;
 typedef struct tagPOINT { LONG x, y; } POINT, *LPPOINT, *PPOINT;
 typedef struct tagSIZE { LONG cx, cy; } SIZE, *LPSIZE;
 typedef struct tagMSG {
@@ -1147,6 +1180,8 @@ BOOL WINAPI FindNextFileA(HANDLE h, WIN32_FIND_DATAA *out);
 #define FindFirstFile FindFirstFileA
 #define FindNextFile FindNextFileA
 int WINAPIV wsprintfA(LPSTR, LPCSTR, ...);
+#include <stdarg.h>
+int WINAPI wvsprintfA(LPSTR, LPCSTR, va_list);
 #define wsprintf wsprintfA
 void WINAPI DebugBreak(void);
 BOOL WINAPI CopyFile(LPCSTR, LPCSTR, BOOL);
@@ -1539,6 +1574,7 @@ BOOL WINAPI DrawEdge(HDC dc, RECT *r, UINT edge, UINT flags);
 #define CREATE_NEW      1
 #define CREATE_NEW_ALWAYS 2
 #define TRUNCATE_EXISTING 5
+#define OPEN_ALWAYS     4
 #define ANSI_FIXED_FONT 11
 #define HWND_BOTTOM     ((HWND)1)
 #define HWND_NOTOPMOST  ((HWND)-2)
@@ -1562,6 +1598,7 @@ BOOL WINAPI PlaySound(LPCTSTR name, HMODULE mod, DWORD flags);
 #define CFS_POINT       0x0002
 #define CFS_FORCE_POSITION 0x0020
 BOOL WINAPI DeleteFile(LPCTSTR name);
+#define DeleteFileA DeleteFile
 DWORD WINAPI GetTempPath(DWORD n, LPTSTR buf);
 UINT WINAPI GetTempFileName(LPCTSTR dir, LPCTSTR pre, UINT unique, LPTSTR out);
 #define TA_NOUPDATECP   0
@@ -1779,7 +1816,8 @@ BOOL WINAPI UnmapViewOfFile(LPCVOID addr);
  * implemented: the linker reports what the program actually calls, which is a smaller set than what
  * it names, and src/env/win32.c fills that in.
  */
-typedef struct _ABC { int abcA; UINT abcB; int abcC; } ABC;
+typedef struct _ABC { int abcA; UINT abcB; int abcC; } ABC, *LPABC;
+BOOL WINAPI GetCharABCWidths(HDC dc, UINT first, UINT last, LPABC widths);
 typedef struct _ABCFLOAT { FLOAT abcfA, abcfB, abcfC; } ABCFLOAT;
 typedef struct tagSCROLLINFO {
     UINT cbSize, fMask;
@@ -2307,6 +2345,58 @@ BOOL WINAPI SetPriorityClass(HANDLE, DWORD);
 BOOL WINAPI SetThreadPriority(HANDLE, int);
 HANDLE WINAPI CreateThread(LPSECURITY_ATTRIBUTES, DWORD, LPTHREAD_START_ROUTINE, LPVOID, DWORD, LPDWORD);
 DWORD WINAPI ResumeThread(HANDLE);
+/* The names .kkrieger's _start.cpp reaches beyond the rest (each implemented in src/env/win32*.c, or
+   declared only and refused at the link if a program calls it). */
+#define GetCommandLine GetCommandLineA
+#define MapVirtualKey(code, type) MapVirtualKeyEx(code, type, 0)
+#define MAPVK_VK_TO_VSC 0
+#define MAPVK_VSC_TO_VK 1
+#define MAPVK_VK_TO_CHAR 2
+SHORT WINAPI VkKeyScan(char ch);
+BOOL WINAPI SetRect(LPRECT r, int left, int top, int right, int bottom);
+BOOL WINAPI StretchBlt(HDC dst, int x, int y, int w, int h, HDC src, int sx, int sy, int sw, int sh, DWORD rop);
+int WINAPI GetDIBits(HDC dc, HBITMAP bm, UINT start, UINT lines, LPVOID bits, struct tagBITMAPINFO *bmi, UINT usage);
+int WINAPI SetDIBits(HDC dc, HBITMAP bm, UINT start, UINT lines, const void *bits, const struct tagBITMAPINFO *bmi, UINT usage);
+typedef BOOL (CALLBACK *MONITORENUMPROC)(HMONITOR, HDC, LPRECT, LPARAM);
+BOOL WINAPI EnumDisplayMonitors(HDC dc, LPCRECT clip, MONITORENUMPROC fn, LPARAM data);
+LONG WINAPI CompareFileTime(const FILETIME *a, const FILETIME *b);
+BOOL WINAPI CreateDirectory(LPCSTR path, LPSECURITY_ATTRIBUTES sa);
+BOOL WINAPI MoveFile(LPCSTR from, LPCSTR to);
+#define SetCurrentDirectoryA SetCurrentDirectory
+DWORD WINAPI GetLogicalDrives(void);
+#define MCW_PC _MCW_PC
+#define MCW_RC _MCW_RC
+#define MB_TASKMODAL 0x00002000L
+#define MB_TOPMOST   0x00040000L
+#define CS_CLASSDC   0x0040
+#define SC_SIZE      0xF000
+#define SC_MOVE      0xF010
+#define SPI_GETWORKAREA 0x0030
+#define WHEEL_DELTA  120
+#define OUT_TT_PRECIS 4
+#define PROOF_QUALITY 2
+#define OF_READ   0x00000000
+#define OF_WRITE  0x00000001
+#define OF_CREATE 0x00001000
+/* The ANSI spellings _start.cpp uses of functions declared above by their plain names. */
+#define GetCurrentDirectoryA GetCurrentDirectory
+/* The process heap, over the C heap. */
+#define HEAP_NO_SERIALIZE 0x00000001
+#define HEAP_GENERATE_EXCEPTIONS 0x00000004
+#define HEAP_ZERO_MEMORY 0x00000008
+HANDLE WINAPI GetProcessHeap(void);
+LPVOID WINAPI HeapAlloc(HANDLE heap, DWORD flags, SIZE_T bytes);
+LPVOID WINAPI HeapReAlloc(HANDLE heap, DWORD flags, LPVOID mem, SIZE_T bytes);
+BOOL WINAPI HeapFree(HANDLE heap, DWORD flags, LPVOID mem);
+BOOL WINAPI HeapValidate(HANDLE heap, DWORD flags, LPCVOID mem);
+/* A critical section: winnt.h's layout (24 bytes); with one thread, entering never waits. */
+typedef struct _RTL_CRITICAL_SECTION {
+    void *DebugInfo; LONG LockCount; LONG RecursionCount; HANDLE OwningThread; HANDLE LockSemaphore; ULONG_PTR SpinCount;
+} CRITICAL_SECTION, *LPCRITICAL_SECTION, *PCRITICAL_SECTION;
+void WINAPI InitializeCriticalSection(LPCRITICAL_SECTION cs);
+void WINAPI EnterCriticalSection(LPCRITICAL_SECTION cs);
+void WINAPI LeaveCriticalSection(LPCRITICAL_SECTION cs);
+void WINAPI DeleteCriticalSection(LPCRITICAL_SECTION cs);
 HANDLE WINAPI CreateEvent(LPSECURITY_ATTRIBUTES, BOOL, BOOL, LPCSTR);
 BOOL WINAPI SetEvent(HANDLE);
 BOOL WINAPI ResetEvent(HANDLE);
@@ -2323,8 +2413,8 @@ BOOL WINAPI UnmapViewOfFile(LPCVOID);
 BOOL WINAPI AllocConsole(void);
 BOOL WINAPI FreeConsole(void);
 HANDLE WINAPI GetStdHandle(DWORD);
-BOOL WINAPI WriteFile(HANDLE, LPCVOID, DWORD, LPDWORD, LPVOID);
-BOOL WINAPI ReadFile(HANDLE, LPVOID, DWORD, LPDWORD, LPVOID);
+BOOL WINAPI WriteFile(HANDLE, LPCVOID, DWORD, LPDWORD, LPOVERLAPPED);
+BOOL WINAPI ReadFile(HANDLE, LPVOID, DWORD, LPDWORD, LPOVERLAPPED);
 #define FILE_BEGIN 0
 #define FILE_CURRENT 1
 #define FILE_END 2
@@ -2530,106 +2620,7 @@ int WINAPI WSAUnhookBlockingHook(void);
 #define MAKEWORD_WSA(a,b) ((unsigned short)(((unsigned char)(a))|(((unsigned short)((unsigned char)(b)))<<8)))
 #endif
 `,
-  'dsound.h': `
-#ifndef _PRISM_DSOUND_H
-#define _PRISM_DSOUND_H
-#include <windows.h>
-
-/*
- * dsound.h.
- *
- * THIS HEADER USED TO BE TWO TYPEDEFS, and the comment justifying that said snd_win.c was not in the
- * unit list. That justification is gone, undone by a correction on the other side: this variant took
- * the tree's null sound driver at first, carried over from the Linux one, and S_Activate is defined
- * ONLY in win32/snd_win.c while win32/vid_dll.c calls it on every window activation. So the honest
- * Win32 build compiles snd_win.c, and the moment it did, the two typedefs were not enough. A stale
- * justification is worse than a missing declaration, so it is rewritten rather than left standing.
- *
- * What it declares is the surface snd_win.c reaches, measured: twelve vtable methods across the two
- * interfaces, the three descriptor structs by the fields the program touches, and nineteen
- * constants. NOTHING IMPLEMENTS ANY OF IT -- src/env/win32.c returns NULL from LoadLibrary, so the
- * program's own GetProcAddress on dsound.dll fails and it stands down to waveOut, which also fails.
- * That is the path a 1996 game took on a machine with no sound card, and it is the one taken here.
- *
- * The DSERR_ and DSBCAPS_ values are therefore UNOBSERVABLE, exactly as ddraw.h's DDERR_ ones are:
- * distinct constants so the program's comparisons compile, not measured numbers. If DirectSound is
- * ever implemented they become part of that contract and must be measured then.
- */
-typedef struct IDirectSound       *LPDIRECTSOUND;
-typedef struct IDirectSoundBuffer *LPDIRECTSOUNDBUFFER;
-
-typedef struct _DSCAPS {
-    DWORD dwSize;
-    DWORD dwFlags;
-    DWORD dwMinSecondarySampleRate, dwMaxSecondarySampleRate;
-    DWORD dwPrimaryBuffers;
-} DSCAPS, *LPDSCAPS;
-
-typedef struct _DSBCAPS {
-    DWORD dwSize;
-    DWORD dwFlags;
-    DWORD dwBufferBytes;
-    DWORD dwUnlockTransferRate;
-    DWORD dwPlayCpuOverhead;
-} DSBCAPS, *LPDSBCAPS;
-
-typedef struct _DSBUFFERDESC {
-    DWORD dwSize;
-    DWORD dwFlags;
-    DWORD dwBufferBytes;
-    DWORD dwReserved;
-    LPWAVEFORMATEX lpwfxFormat;
-} DSBUFFERDESC, *LPDSBUFFERDESC;
-
-typedef struct IDirectSoundVtbl {
-    HRESULT (WINAPI *QueryInterface)(LPDIRECTSOUND, void *, void **);
-    DWORD   (WINAPI *AddRef)(LPDIRECTSOUND);
-    DWORD   (WINAPI *Release)(LPDIRECTSOUND);
-    HRESULT (WINAPI *CreateSoundBuffer)(LPDIRECTSOUND, LPDSBUFFERDESC,
-                                        LPDIRECTSOUNDBUFFER *, void *);
-    HRESULT (WINAPI *GetCaps)(LPDIRECTSOUND, LPDSCAPS);
-    HRESULT (WINAPI *SetCooperativeLevel)(LPDIRECTSOUND, HWND, DWORD);
-} IDirectSoundVtbl;
-struct IDirectSound { IDirectSoundVtbl *lpVtbl; };
-
-typedef struct IDirectSoundBufferVtbl {
-    HRESULT (WINAPI *QueryInterface)(LPDIRECTSOUNDBUFFER, void *, void **);
-    DWORD   (WINAPI *AddRef)(LPDIRECTSOUNDBUFFER);
-    DWORD   (WINAPI *Release)(LPDIRECTSOUNDBUFFER);
-    HRESULT (WINAPI *GetCaps)(LPDIRECTSOUNDBUFFER, LPDSBCAPS);
-    HRESULT (WINAPI *GetCurrentPosition)(LPDIRECTSOUNDBUFFER, LPDWORD, LPDWORD);
-    HRESULT (WINAPI *GetStatus)(LPDIRECTSOUNDBUFFER, LPDWORD);
-    HRESULT (WINAPI *Lock)(LPDIRECTSOUNDBUFFER, DWORD, DWORD, void **, LPDWORD,
-                           void **, LPDWORD, DWORD);
-    HRESULT (WINAPI *Play)(LPDIRECTSOUNDBUFFER, DWORD, DWORD, DWORD);
-    HRESULT (WINAPI *Restore)(LPDIRECTSOUNDBUFFER);
-    HRESULT (WINAPI *SetFormat)(LPDIRECTSOUNDBUFFER, LPWAVEFORMATEX);
-    HRESULT (WINAPI *Stop)(LPDIRECTSOUNDBUFFER);
-    HRESULT (WINAPI *Unlock)(LPDIRECTSOUNDBUFFER, void *, DWORD, void *, DWORD);
-} IDirectSoundBufferVtbl;
-struct IDirectSoundBuffer { IDirectSoundBufferVtbl *lpVtbl; };
-
-#define DS_OK                    0
-#define DSERR_ALLOCATED          0x88780001L
-#define DSERR_BUFFERLOST         0x88780002L
-#define DSERR_INVALIDCALL        0x88780003L
-#define DSERR_INVALIDPARAM       0x88780004L
-#define DSERR_PRIOLEVELNEEDED    0x88780005L
-#define DSSCL_NORMAL             1
-#define DSSCL_PRIORITY           2
-#define DSSCL_EXCLUSIVE          3
-#define DSSCL_WRITEPRIMARY       4
-#define DSBCAPS_PRIMARYBUFFER    0x00000001L
-#define DSBCAPS_CTRLFREQUENCY    0x00000020L
-#define DSBCAPS_LOCSOFTWARE      0x00000008L
-#define DSBPLAY_LOOPING          0x00000001L
-#define DSBSTATUS_PLAYING        0x00000001L
-#define DSBSTATUS_BUFFERLOST     0x00000002L
-#define DSCAPS_EMULDRIVER        0x00000020L
-
-HRESULT WINAPI DirectSoundCreate(void *lpGuid, LPDIRECTSOUND *ppDS, void *pUnkOuter);
-#endif
-`,
+  // dsound.h is src/env/headers-dsound.js: the real interfaces, in both COM shapes.
   'ddraw.h': `
 #ifndef _PRISM_DDRAW_H
 #define _PRISM_DDRAW_H
