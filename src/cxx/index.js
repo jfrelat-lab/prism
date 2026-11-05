@@ -38,11 +38,14 @@ const KEYS = new Set(['std', 'language', 'compiler']);
  *     _viruz2.cpp's `for (sU32 pn=0; pn<posnum; pn++) ...  return pn;` -- sema-stmt.js 'for';
  *   - a reference to non-const binds a temporary (warning C4239): mainplayer.cpp passes an sU8 *
  *     to KDoc::Init(const sU8 *&) -- sema-expr.js bindRef;
- *   - a function converts to void * (kkrieger_oplist.cpp's table of handlers) -- sema-expr.js coerce.
+ *   - a function converts to void * (kkrieger_oplist.cpp's table of handlers) -- sema-expr.js coerce;
+ *   - wchar_t is unsigned short (/Zc:wchar_t-, the default until 2005): _start.cpp passes an sU16 string
+ *     to ExtTextOutW -- MSVC_DEFINES.
  */
 export const MSVC_DEFINES = {
   __int64: 'long long', __int32: 'int', __int16: 'short', __int8: 'char', __w64: '', __forceinline: 'inline',
   __cdecl: '', _cdecl: '', __stdcall: '', _stdcall: '', __fastcall: '', _fastcall: '', '__declspec(x)': '',
+  wchar_t: 'unsigned short',
 };
 
 /** Which compiler a `cxx` option says the program was written for. */

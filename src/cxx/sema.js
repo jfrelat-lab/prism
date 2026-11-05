@@ -321,10 +321,12 @@ export class Sema {
     return null;
   }
   forwardClass(name, key, env, node) {
-    const cls = this.newClass(name, key, node, env);
-    // Declared in the nearest non-class scope, as C++ does for an elaborated name seen first here.
+    // Declared in the nearest non-class scope, as C++ does for an elaborated name seen first here
+    // ([basic.scope.pdecl]/7) -- and MADE there too, so its C name is that scope's: genoverlay.hpp's
+    // `class GenMaterial *DefaultMat;` inside a class is ::GenMaterial, whose constructor is defined.
     let s = env.scope;
     while (s.cls && s.parent) s = s.parent;
+    const cls = this.newClass(name, key, node, { ...env, scope: s, cls: null });
     s.set(name, { k: 'type', type: { k: 'class', cls } });
     return { k: 'class', cls };
   }

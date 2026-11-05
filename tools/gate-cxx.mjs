@@ -1602,7 +1602,9 @@ EngMesh::Job::Job() { for (int i = 0; i < 4; i++) SVCache[i].Init(); SVCache[2].
 int EngMesh::Job::sum() { int s = 0; for (int i = 0; i < 4; i++) s += SVCache[i].light; return s; }
 struct GenEffect { class GenMaterial *Material; };
 static int pass(GenMaterial *m) { return m == 0; }
-class GenMaterial { public: int n; };
+class GenMaterial { public: int n; GenMaterial(); int get(); };
+GenMaterial::GenMaterial() : n(41) {}
+int GenMaterial::get() { return n + 1; }
 static int made;
 struct V { int id; V() : id(made++) { printf("+%d ", id); } ~V() { printf("-%d ", id); } };
 struct P { float x, y; };
@@ -1624,6 +1626,9 @@ int main() {
     ::operator delete(raw);
     GenMaterial mat; GenEffect fx; fx.Material = &mat;
     printf("main %d %d %d %d\\n", grid[0][2].id, grid[1][0].id, pass(0), pass(fx.Material));
+    // The member's class IS ::GenMaterial: constructed by its constructor, called through the member.
+    GenEffect fx2; fx2.Material = new GenMaterial;
+    printf("mat %d\\n", fx2.Material->get());
     int r = split();
     printf("\\nsplit %d\\n", r);
     return 0;
@@ -1708,7 +1713,13 @@ if (!FILTER) {
     + 'int main() { char buf[] = "ab"; char *q = buf; const char *r = buf; adv(q); adv(r); printf("%c%c %d\\n", *q, *r, pick(r)); return 0; }\n';
   const FNVOID = '#include <stdio.h>\nstatic int h(int a) { return a * 3; }\nstruct H { int id; void *fn; };\nstatic H table[] = { 1, h };\n'
     + 'int main() { printf("%d\\n", ((int (*)(int))table[0].fn)(table[0].id + 4)); return 0; }\n';
+  // /Zc:wchar_t-, VC 7.1's default: wchar_t IS unsigned short, two bytes, and a pointer to one is a
+  // pointer to the other (_start.cpp hands ExtTextOutW an sU16 string).
+  const WCHAR = '#include <stdio.h>\nstatic int len(const wchar_t *s) { int n = 0; while (s[n]) n++; return n; }\n'
+    + 'int main() { unsigned short s[] = { 104, 105, 0 }; printf("%d %d\\n", (int)sizeof(wchar_t), len(s)); return 0; }\n';
   option.push(
+    ['msvc: wchar_t is unsigned short (/Zc:wchar_t-)', out(WCHAR, 'unit.cpp', MSVC) === '2 2'],
+    ['...refused as g++ would', out(WCHAR, 'unit.cpp').startsWith('refused')],
     ['msvc: its keywords (__int64, __forceinline, __stdcall, __w64, __declspec)', out(KEYWORDS, 'unit.cpp', MSVC) === '6 7'],
     ['...refused as g++ would', out(KEYWORDS, 'unit.cpp').startsWith('refused')],
     ['msvc: a for statement\'s variable outlives the loop and is declared again by the next', out(FORSCOPE, 'unit.cpp', MSVC) === '2412'],
@@ -1739,6 +1750,19 @@ if (!FILTER) {
     } catch (e) { return `refused: ${e.message.split('\n')[0]}`; }
   })();
   option.push(['a member template instance defined in one unit is called from another', two === '51 23']);
+  // An elaborated \`class X *\` inside a class names ::X ([basic.scope.pdecl]/7). In a unit that sees it
+  // before X's definition, the class was made nested -- named Overlay_Mat in C -- so its constructor,
+  // defined by the unit that sees X first, was never found (.kkrieger's genoverlay.hpp, GenMaterial).
+  const MAT = 'class Mat { public: int n; Mat(); int get(); };\n';
+  const elaborated = (() => {
+    try {
+      return compileProgram([
+        { file: 'mat.cpp', source: `${MAT}Mat::Mat() : n(41) {}\nint Mat::get() { return n + 1; }\n` },
+        { file: 'overlay.cpp', source: `#include <stdio.h>\nstruct Overlay { class Mat *m; };\n${MAT}int main() { Overlay o; o.m = new Mat; printf("%d\\n", o.m->get()); return 0; }\n` },
+      ], { resolve: builtinHeaderResolver({}), memory: 8 << 20 }).run(['x']).stdout.trim();
+    } catch (e) { return `refused: ${e.message.split('\n')[0]}`; }
+  })();
+  option.push(['class X * in a member declaration names ::X, across units', elaborated === '42']);
   // Nothing a program never defines is named: a pure virtual function under a virtual base was.
   const pureSrc = cases.find((c) => c.name === 'virtual-base-pure')?.src ?? '';
   const pureUndefined = (() => { try { return compileProgram([{ file: 'pure.cpp', source: pureSrc }], { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true }).undefined ?? []; } catch (e) { return [`refused: ${e.message}`]; } })();
