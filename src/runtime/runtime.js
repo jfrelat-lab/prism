@@ -6,7 +6,7 @@
 
 import { Module, isFuncPtr, funcIndex } from '../link/module.js';
 import { MODELS } from '../sema/abi.js';
-import { makeX86 } from '../asm/msvc-rt.js';
+import { makeX86, sig24 } from '../asm/msvc-rt.js';
 import * as T from '../sema/types.js';
 
 /*
@@ -15,10 +15,10 @@ import * as T from '../sema/types.js';
  * floats and e is not 0 -- then the exact value is past the midpoint, on e's side.
  */
 function toF32(s, e) {
-  const r = Math.fround(s);
+  const r = sig24(s);
   if (e === 0 || r === s || !Number.isFinite(s)) return r;
-  const o = 2 * s - r;                                              // the other float, if s is a midpoint
-  if (Math.fround(o) !== o) return r;
+  const o = 2 * s - r;                                              // the other 24-bit value, if s is a midpoint
+  if (sig24(o) !== o) return r;
   return e > 0 ? Math.max(r, o) : Math.min(r, o);
 }
 // a*b - p exactly, for p = a*b rounded (Dekker's product: Veltkamp's split into 26-bit halves).

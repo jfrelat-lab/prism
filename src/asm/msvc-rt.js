@@ -17,6 +17,19 @@
 
 export const MM_SCRATCH = 8;
 
+/*
+ * A result rounded to 24 significant bits as the x87 does at single precision: the SIGNIFICAND only. The
+ * exponent stays the register's, 15 bits, so 1e-73 is a 24-bit number there, where Math.fround -- a
+ * float's exponent too -- makes it 0 (sFPow(x, 64) in .kkrieger's Bitmap_Bump, against QEMU's
+ * floatx80). Outside a float's range the value is scaled into it by an exact power of two and back.
+ */
+export function sig24(v) {
+  const a = Math.abs(v);
+  if (a === 0 || !Number.isFinite(a) || (a >= 1.1754943508222875e-38 && a < 3.4e38)) return Math.fround(v);
+  const k = Math.floor(Math.log2(a)), h = k >> 1;                  // two steps: 2^1074 is not a double
+  return Math.fround(v * 2 ** -h * 2 ** -(k - h)) * 2 ** h * 2 ** (k - h);
+}
+
 const s8 = (v) => (v < -128 ? -128 : v > 127 ? 127 : v);
 const u8s = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
 const s16 = (v) => (v < -32768 ? -32768 : v > 32767 ? 32767 : v);
@@ -174,7 +187,7 @@ function makeX87(f32, f64, w32, w16) {
     /** A quotient; a finite nonzero dividend over zero raises ZE (the status word reports it). */
     dv(a, b) { if (b === 0 && a === a && a !== 0 && Number.isFinite(a)) F.sw |= 4; return a / b; },
     /** The result of an arithmetic operation, rounded to the precision control's width. */
-    r(v) { return ((F.cw >> 8) & 3) === 0 ? Math.fround(v) : v; },
+    r(v) { return ((F.cw >> 8) & 3) === 0 ? sig24(v) : v; },
     /** A result made a NaN from operands that were not: the indefinite. A NaN operand propagates as is. */
     g(v, a, b = 0) { return v === v || a !== a || b !== b ? v : INDEF; },
     get(i) { const k = (F.top + i) & 7; if (empty[k]) { F.sw |= 0x41; return INDEF; } return st[k]; },

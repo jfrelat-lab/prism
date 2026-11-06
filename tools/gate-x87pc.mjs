@@ -70,31 +70,34 @@ const build = (x87Precision) => {
 };
 const lines = (p) => p.run().stdout.trim().split('\n');
 
-function msvc() {
-  const dir = join(ROOT, '.oracle', 'msvc', 'x87pc');
+// Part C: .kkrieger's own sFPow, its x87 assembly unchanged (tools/x87pc-pow.cpp).
+const POW_SOURCE = readFileSync(join(ROOT, 'tools', 'x87pc-pow.cpp'), 'utf8');
+
+function msvc(name, source, flags) {
+  const dir = join(ROOT, '.oracle', 'msvc', name);
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'x87pc.cpp'), SOURCE);
+  writeFileSync(join(dir, `${name}.cpp`), source);
   const run = (...args) => {
     const r = spawnSync(WCL, [dir, ...args], { encoding: 'utf8' });
     return (r.stdout + r.stderr).replace(/\r/g, '').split('\n').filter((l) => !/XDG_RUNTIME|configuration directory/.test(l)).join('\n');
   };
-  // .kkrieger's own optimisation (/O1 /Og ...) would do; /O2 is the harder case for spills.
-  const out = run('cl.exe', '/nologo', '/O2', '/ML', 'x87pc.cpp');
-  if (!existsSync(join(dir, 'x87pc.exe'))) throw new Error(`cl failed:\n${out}`);
-  return run('x87pc.exe').trim().split('\n');
+  const out = run('cl.exe', '/nologo', ...flags, '/ML', `${name}.cpp`);
+  if (!existsSync(join(dir, `${name}.exe`))) throw new Error(`cl failed:\n${out}`);
+  return run(`${name}.exe`).trim().split('\n');
 }
 
 if (process.argv.includes('--capture')) {
   if (!existsSync(WCL)) { console.log(`--capture needs ${WCL}`); process.exit(1); }
-  const golden = { compiler: 'Visual C++ Toolkit 2003, cl 13.10.3077, /O2 /ML', lines: msvc() };
+  // /O2 is the harder case for spills; sFPow with .kkrieger's own /O1 /Og /Oi.
+  const golden = { compiler: 'Visual C++ Toolkit 2003, cl 13.10.3077, /ML', lines: msvc('x87pc', SOURCE, ['/O2']), pow: msvc('x87pow', POW_SOURCE, ['/O1', '/Og', '/Oi']) };
   mkdirSync(dirname(GOLDEN), { recursive: true });
   writeFileSync(GOLDEN, `${JSON.stringify(golden, null, 1)}\n`);
-  console.log(`goldens/x87pc.json: ${golden.lines.length} lines`);
+  console.log(`goldens/x87pc.json: ${golden.lines.length} lines, ${golden.pow.length} sFPow calls`);
   process.exit(0);
 }
 if (!existsSync(GOLDEN)) { console.log('no goldens/x87pc.json: run with --capture first'); process.exit(1); }
-const want = JSON.parse(readFileSync(GOLDEN, 'utf8')).lines;
+const { lines: want, pow: wantPow } = JSON.parse(readFileSync(GOLDEN, 'utf8'));
 
 const compare = (got, keep = () => true) => {
   const w = want.filter(keep), g = got.filter(keep);
@@ -190,6 +193,20 @@ const partB = (M) => {
 const b0 = partB(build(true).M);
 report(b0.twice > 0, `part B's midpoint cases do round wrong twice`, `${b0.twice} of ${CASES.length}`);
 report(!b0.diff, `part B: x87Precision = the exact rule, ${CASES.length} operations`, b0.first ?? '');
+
+// Part C: sFPow under PC24, its own assembly through PRISM's x87, against cl's build of it on QEMU's
+// floatx80 (float operands: QEMU's rounded loads change nothing). At x^64 the results go far below a
+// float's exponent range, where the x87 keeps its own.
+const powRun = (mutate) => {
+  const p = compileProgram([{ file: 'x87pow.cpp', source: POW_SOURCE }], { resolve: builtinHeaderResolver({}), cxx: { compiler: 'msvc' }, collect: true, floatToInt: 'fist', x87Precision: true });
+  for (const f of p.failures ?? []) report(false, `PRISM refuses ${f.fn}`, String(f.message).slice(0, 80));
+  if (mutate) mutate(p.M);
+  const got = p.run().stdout.trim().split('\n');
+  return wantPow.filter((l, i) => l !== got[i]).length;
+};
+report(wantPow?.length === 2400 && powRun() === 0, `part C: .kkrieger's sFPow = cl's on QEMU's floatx80, ${wantPow?.length} calls`);
+const cRed = powRun((M) => { M.x86.f.r = (v) => (((M.x86.f.cw >> 8) & 3) === 0 ? Math.fround(v) : v); });
+report(cRed > 0, `mutation turns it red: a float's exponent range at 24 bits (Math.fround)`, `${cRed} calls differ`);
 
 const MUTANTS = [
   ['ignores the precision control', (M) => { for (const k of ['pcAdd', 'pcMul', 'pcDiv']) M[k] = { pcAdd: (a, b) => a + b, pcMul: (a, b) => a * b, pcDiv: (a, b) => a / b }[k]; M.pcSqrt = Math.sqrt; }],
