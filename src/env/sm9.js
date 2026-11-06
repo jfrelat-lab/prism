@@ -1,4 +1,4 @@
-// sm9.js — Direct3D 9 shader bytecode (vs_1_1 to vs_3_0, ps_2_0 to ps_3_0) to GLSL ES 3.00, for
+// sm9.js — Direct3D 9 shader bytecode (vs_1_1 to vs_3_0, ps_1_1 to ps_1_3, ps_2_0 to ps_3_0) to GLSL ES 3.00, for
 // src/env/d3d9.js: the tokens fxc or D3DXAssembleShader produced, as a program hands them to
 // CreateVertexShader / CreatePixelShader. The result has hlsl.js's shape and conventions, so either
 // stage can meet the other's: { glsl, samplers, inputs, outputs }, the float register file
@@ -24,6 +24,10 @@ const OP = {
   36: 'nrm', 37: 'sincos', 38: 'rep', 39: 'endrep', 40: 'if', 41: 'ifc', 42: 'else', 43: 'endif', 44: 'break', 45: 'breakc', 46: 'mova',
   47: 'defb', 48: 'defi', 65: 'texkill', 66: 'texld', 78: 'expp', 79: 'logp', 80: 'cnd', 81: 'def', 88: 'cmp', 90: 'dp2add', 91: 'dsx',
   92: 'dsy', 93: 'texldd', 94: 'setp', 95: 'texldl', 96: 'breakp',
+  // ps_1_x's texture addressing; 66 is ps_1_x's tex, 64 its texcoord
+  64: 'texcoord', 67: 'texbem', 68: 'texbeml', 69: 'texreg2ar', 70: 'texreg2gb', 71: 'texm3x2pad', 72: 'texm3x2tex', 73: 'texm3x3pad',
+  74: 'texm3x3tex', 76: 'texm3x3spec', 77: 'texm3x3vspec', 82: 'texreg2rgb', 83: 'texdp3tex', 84: 'texm3x2depth', 85: 'texdp3',
+  86: 'texm3x3', 87: 'texdepth', 89: 'bem', 0xfffd: 'phase',
 };
 // instructions without a destination parameter
 const NO_DST = new Set(['nop', 'call', 'callnz', 'loop', 'ret', 'endloop', 'label', 'rep', 'endrep', 'if', 'ifc', 'else', 'endif', 'break', 'breakc', 'breakp']);
@@ -47,12 +51,20 @@ export function bytecodeVersion(tokens) {
   return { stage: kind === 0xfffe ? 'vs' : 'ps', major: (v >> 8) & 255, minor: v & 255 };
 }
 
-/** Translate shader bytecode (Uint32Array or array of DWORDs) to { glsl, samplers, inputs, outputs }. */
-export function translateBytecode(tokens) {
+/**
+ * Translate shader bytecode (Uint32Array or array of DWORDs) to { glsl, samplers, inputs, outputs }.
+ * `samplerDims` ({ n: '2D' | 'Cube' | '3D' }) gives a ps_1_x sampler its dimension: those shaders declare
+ * none, so a tex reads whatever kind of texture is bound to the stage, and the caller translates again
+ * when that kind changes.
+ */
+export function translateBytecode(tokens, { samplerDims = {} } = {}) {
   const ver = bytecodeVersion(tokens) ?? fail(`version token 0x${(tokens[0] >>> 0).toString(16)}`);
   const { stage, major, minor } = ver;
   const profile = `${stage}_${major}_${minor}`;
-  if (stage === 'ps' && major < 2) fail(`${profile} is not supported yet (ps_2_0 and later)`);
+  // ps_1_1 to ps_1_3: t<n> are registers a tex or texcoord fills from texture coordinate set n (and the
+  // program may then overwrite), r0 is the colour out, and a result may be scaled (_x2, _x4, _d2).
+  const ps1 = stage === 'ps' && major < 2;
+  if (ps1 && (major !== 1 || minor > 3)) fail(`${profile} is not supported yet (ps_1_1 to ps_1_3, ps_2_0 and later)`);
   if (major > 3) fail(`${profile}`);
 
   // ---- decode: { op, ctl, pred, p: [param tokens] } ----
@@ -61,12 +73,12 @@ export function translateBytecode(tokens) {
     const t = tokens[i] >>> 0, code = t & 0xffff;
     if (code === 0xffff) break;
     if (code === 0xfffe) { i += 1 + ((t >>> 16) & 0x7fff); continue; }
-    const op = OP[code] ?? fail(`${profile}: opcode ${code} is not supported`);
+    const op = ps1 && code === 66 ? 'tex' : OP[code] ?? fail(`${profile}: opcode ${code} is not supported`);
     let len;
     if (major >= 2) len = (t >>> 24) & 15;
     else if (op === 'def') len = 5;
     else { len = 0; while (i + 1 + len < tokens.length && (tokens[i + 1 + len] >>> 31)) len++; }   // SM1: parameters have bit 31 set
-    ins.push({ op, ctl: (t >>> 16) & 255, pred: !!(t & 0x10000000), p: Array.from(tokens.slice(i + 1, i + 1 + len), (x) => x >>> 0) });
+    ins.push({ op, ctl: (t >>> 16) & 255, pred: !!(t & 0x10000000), coissue: !!(t & 0x40000000), p: Array.from(tokens.slice(i + 1, i + 1 + len), (x) => x >>> 0) });
     i += 1 + len;
   }
   const regType = (t) => ((t >>> 28) & 7) | ((t >>> 8) & 0x18);
@@ -91,7 +103,7 @@ export function translateBytecode(tokens) {
 
   // ---- registers ----
   const temps = new Set(), inputs = [], outputs = [], ins_ = [], outs = [], locals = new Map(), helpers = new Set();
-  const samplers = new Map();
+  const samplers = new Map(), texRegs = new Set();
   let usesC = false, usesI = false, usesB = false, usesP = false, usesA0 = false, usesAL = false, usesDepth = false;
   const input = (name, decl, entry) => { if (!inputs.some((x) => x.name === name)) { inputs.push(entry); ins_.push(decl); } return name; };
   const varyingIn = (usage, index) => {
@@ -114,7 +126,9 @@ export function translateBytecode(tokens) {
     return output(`${name}_r`, { semantic: usage === 'color' ? 'COLOR' : 'TEXCOORD', index, name },
       `  ${name} = ${usage === 'color' && major < 3 ? `clamp(${name}_r, 0.0, 1.0)` : `${name}_r`};`, `out vec4 ${name};`);
   };
-  const constAt = (n) => (defs.has(n) && !relConst ? `vec4(${defs.get(n).join(', ')})` : (usesC = true, relConst ? `prism_cr[${n}]` : `prism_c[${n}]`));
+  // ps_1_x reads its constants clamped to [-1, 1] (Wine and DXVK alike), a def's as a SetPixelShaderConstantF's
+  const constAt = (n) => ps1 ? (defs.has(n) ? `vec4(${defs.get(n).map((v) => `${Math.min(1, Math.max(-1, +v))}`.replace(/^(-?\d+)$/, '$1.0')).join(', ')})` : (usesC = true, `clamp(prism_c[${n}], -1.0, 1.0)`))
+    : defs.has(n) && !relConst ? `vec4(${defs.get(n).join(', ')})` : (usesC = true, relConst ? `prism_cr[${n}]` : `prism_c[${n}]`);
   /** The register a parameter token names, as a vec4 (or the integer/bool forms where they are only used whole). */
   function reg(type, n, write) {
     switch (type) {
@@ -126,6 +140,7 @@ export function translateBytecode(tokens) {
       case R.CONST: return constAt(n);
       case 3:                                                                       // vs: a0; ps: t<n>, a texture coordinate
         if (stage === 'vs') { usesA0 = true; return write ? 'prism_a0' : 'vec4(prism_a0)'; }
+        if (ps1) { texRegs.add(n); return `prism_tr${n}`; }
         return varyingIn('texcoord', n);
       case R.RASTOUT: return varyingOut(['position', 'fog', 'psize'][n], 0);
       case R.ATTROUT: return varyingOut('color', n);
@@ -195,6 +210,8 @@ export function translateBytecode(tokens) {
       }
       const name = reg(dst.type, dst.num, true);
       const m = [0, 1, 2, 3].filter((c) => dst.mask & (1 << c)).map((c) => SW[c]).join('');
+      const shift = (dst.t >>> 24) & 15;                                          // ps_1_x: _x2 _x4 _x8 / _d2 _d4 _d8, before _sat
+      if (shift) { const k = shift < 8 ? 2 ** shift : 2 ** (shift - 16); expr = `(${expr}) * ${Number.isInteger(k) ? `${k}.0` : k}`; }
       let e = dst.sat ? `clamp(${expr}, 0.0, 1.0)` : `(${expr})`;
       if (pred) e = `mix(${name}, ${e}, ${pred.code})`;
       line(m === 'xyzw' ? `${name} = ${e};` : `${name}.${m} = ${e}.${m};`);
@@ -240,7 +257,8 @@ export function translateBytecode(tokens) {
       case 'nrm': helpers.add('nrm'); write(`prism_nrm(${s(0)})`); break;
       case 'sincos': write(`vec4(cos(${scalar(S[0])}), sin(${scalar(S[0])}), 0.0, 0.0)`); break;
       case 'cmp': helpers.add('cmp'); write(`prism_cmp(${s(0)}, ${s(1)}, ${s(2)})`); break;
-      case 'cnd': helpers.add('cnd'); write(`prism_cnd(${s(0)}, ${s(1)}, ${s(2)})`); break;
+      // ps_1_1 to ps_1_3: a co-issued cnd does not compare, it takes src1 (wined3d; DXVK 1.10.3 compares)
+      case 'cnd': if (ps1 && x.coissue) { write(s(1)); break; } helpers.add('cnd'); write(`prism_cnd(${s(0)}, ${s(1)}, ${s(2)})`); break;
       case 'dp2add': write(`vec4(dot((${s(0)}).xy, (${s(1)}).xy) + ${scalar(S[2])})`); break;
       case 'dsx': write(`dFdx(${s(0)})`); break;
       case 'dsy': write(`dFdy(${s(0)})`); break;                                   // D3D's rows are kept, so +y is down in both
@@ -256,8 +274,16 @@ export function translateBytecode(tokens) {
         else write(`texture(${sm}, (${c}).${xy})`);
         break;
       }
+      case 'tex': {                                                                 // ps_1_x: t<n> = sampler n at coordinate set n
+        const n = dst.num, dim = samplerDims[n] ?? '2D';
+        samplers.set(n, dim);
+        write(`texture(prism_s${n}, ${varyingIn('texcoord', n)}.${dim === '2D' ? 'xy' : 'xyz'})`);
+        break;
+      }
+      case 'texcoord': write(`vec4(clamp(${varyingIn('texcoord', dst.num)}.xyz, 0.0, 1.0), 1.0)`); break;
       case 'texkill': {
-        const name = reg(dst.type, dst.num, false);
+        // ps_1_x tests coordinate set n itself, not what t<n> holds
+        const name = ps1 ? varyingIn('texcoord', dst.num) : reg(dst.type, dst.num, false);
         const m = [0, 1, 2, 3].filter((c) => dst.mask & (1 << c)).map((c) => SW[c]).join('') || 'xyz';
         line(`if (any(lessThan(${name}.${m}, ${m.length === 1 ? '0.0' : `vec${m.length}(0.0)`}))) discard;`);
         break;
@@ -295,6 +321,7 @@ export function translateBytecode(tokens) {
     }
   }
 
+  if (ps1) { temps.add(0); outputs.push({ semantic: 'COLOR', index: 0 }); }
   // a defi/defb register reads its literal, as def's: the shader's own value over the register file's
   const intConsts = usesI ? 'uniform ivec4 prism_i[16];' : null;
   const boolConsts = usesB ? 'uniform int prism_b[16];' : null;
@@ -306,6 +333,8 @@ export function translateBytecode(tokens) {
     ...(stage === 'vs' ? ['uniform vec4 prism_posFix;'] : []),
     ...ins_, ...outs,
     ...[...temps].sort((a, b) => a - b).map((n) => `vec4 r${n} = vec4(0.0);`),
+    ...[...texRegs].sort((a, b) => a - b).map((n) => `vec4 prism_tr${n} = vec4(0.0);`),
+    ...(ps1 ? ['layout(location = 0) out vec4 prism_o0;'] : []),
     ...[...locals.keys()].map((l) => `vec4 ${l} = vec4(0.0);`),
     ...(usesA0 ? ['ivec4 prism_a0 = ivec4(0);'] : []), ...(usesAL ? ['int prism_aL = 0;'] : []), ...(usesP ? ['bvec4 prism_p = bvec4(false);'] : []),
     ...(relConst ? [`vec4 prism_cr[${N}];`] : []),
@@ -319,6 +348,7 @@ export function translateBytecode(tokens) {
     `void prism_main() {\n${mainBody.join('\n')}\n}`,
     'void main() {', ...init, '  prism_main();',
     ...[...locals.values()].filter(Boolean),
+    ...(ps1 ? ['  prism_o0 = r0;'] : []),
     // D3D's clip space to GL's: z from [0, w] to [-w, w], and the half-pixel offset and row order (prism_posFix)
     ...(stage === 'vs' ? ['  gl_Position = vec4(prism_pos.xy * prism_posFix.xy + prism_posFix.zw * prism_pos.w, prism_pos.z * 2.0 - prism_pos.w, prism_pos.w);'] : []),
     '}', ''].join('\n');

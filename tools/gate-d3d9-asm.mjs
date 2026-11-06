@@ -34,6 +34,44 @@ const check = (ok, what, detail = '') => { console.log(`${ok ? '  ok  ' : ' FAIL
 const N = 8;
 const ps3 = (...l) => ['ps_3_0', ...l, ''].join('\n');
 
+// ps_1_1 (.kkrieger's material11): no vPos, so a vs_1_1 feeds coordinates that vary across the 64 pixels -- t0 in
+// [0, 1], t1 in [-1.75, 1.25] (out of range on both sides, for texcoord's clamp and texkill), and a colour.
+function ps11Cases() {
+  const vs = ['vs_1_1', 'dcl_position v0', 'def c0, 0.5, 0.5, 1.5, -0.25', 'mov oPos, v0', 'mad oT0, v0.xyxy, c0.x, c0.y',
+    'mad oT1, v0.yxyx, c0.z, c0.w', 'mad oD0, v0.yxxy, c0.x, c0.y', ''].join('\n');
+  const ps1 = (...l) => ['ps_1_1', ...l, ''].join('\n');
+  return [
+    { name: 'ps_1_1: texcoord (clamped, w of one), the _bx2 and _bias source modifiers', vs,
+      ps: ps1('def c0, 0.5, 0.5, 0.5, 0.5', 'texcoord t0', 'texcoord t1', 'mul r1, t0_bx2, t1_bias', 'mad r0, r1, c0, c0') },
+    { name: 'ps_1_1: 1-x and negation, _x2 and _d2 results, _sat after the scale', vs,
+      ps: ps1('def c0, 0.5, 0.5, 0.5, 0.5', 'def c1, 0.3, 0.6, 0.9, 1', 'texcoord t0', 'texcoord t1', 'add_x2 r1, 1-t0, -c1',
+        'mul_d2 r1, r1, t1', 'mad_sat r0, r1, c0, c0') },
+    { name: 'ps_1_1: the range of a register -- _x4 past one, then scaled back down', vs,
+      ps: ps1('def c0, 0.25, 0.25, 0.25, 0.25', 'def c1, 0.9, 0.6, 0.3, 1', 'texcoord t0', 'mul_x4 r1, t0, c1', 'mul r0, r1, c0') },
+    { name: 'ps_1_1: a negative intermediate below minus one, then brought back into range', vs,
+      ps: ps1('def c0, 0.25, 0.25, 0.25, 0.25', 'def c1, 0.9, 0.6, 0.3, 1', 'texcoord t0', 'mul_x4 r1, t0, -c1', 'mad r0, r1, c0, c1') },
+    { name: 'ps_1_1: dp3 of _bx2 sources, lrp with the diffuse colour v0', vs,
+      ps: ps1('def c1, 0.2, 0.4, 0.9, 0.7', 'def c2, 0.5, 0, 0, 0', 'def c3, 0, 1, 1, 1', 'texcoord t0', 'dp3 r1, t0_bx2, c1_bx2',
+        'lrp r0, v0, t0, c1', 'mul r0, r0, c3', 'mad r0, r1, c2, r0', 'add r0, r0, c2') },
+    // r0.a = x / 8 + 1/16, never the threshold 0.5 itself (where interpolation decides)
+    { name: 'ps_1_1: cnd on r0.a, plain and co-issued, blue replicated into alpha', vs,
+      notDxvk: 'compares in a co-issued cnd, where wined3d takes src1 whatever r0.a holds (followed here)',
+      ps: ps1('def c0, 0.25, 0.25, 0.25, 0.25', 'def c1, 0.75, 0.75, 0.75, 0.75', 'def c2, 1, 0, 0, 0', 'def c3, 0, 1, 0, 0', 'def c4, 0.0625, 0.0625, 0.0625, 0.0625',
+        'texcoord t0', 'texcoord t1', 'add r0.a, t0.b, c4', 'cnd t1.rgb, r0.a, c1, c0', '+mov t1.a, c0', 'mul t1, t1, c2', 'mov r1.a, c0', '+cnd r1.rgb, r0.a, c1, c0',
+        'mad r0.rgb, r1, c3, t1') },
+    // its own t0 (0.15 to 0.85): pixel centres sample at whole clip coordinates (the half-pixel offset), and the
+    // shared t0 puts row 0 on v = 1.0 exactly, a texel edge where Wine and DXVK wrap differently
+    { name: 'ps_1_1: tex on the 2x2 texture times v0, texkill on coordinate set 1, a t register overwritten', texture: true,
+      vs: vs.replace('mad oT0, v0.xyxy, c0.x, c0.y', 'mad oT0, v0.xyxy, c1.x, c1.y').replace('mov oPos', 'def c1, 0.4, 0.55, 0, 0\nmov oPos'),
+      ps: ps1('def c0, 0.5, 0.5, 0.5, 0.5', 'tex t0', 'texkill t1', 'mul t0, t0, v0', 'add r0, t0, c0') },
+    { name: 'ps_1_1: a def above one', vs,
+      ps: ps1('def c0, 0.25, 0.25, 0.25, 0.25', 'def c2, 2, 2, 2, 2', 'texcoord t0', 'mul r1, t0, c2', 'mul r0, r1, c0') },
+    { name: 'ps_1_1: constants above one and below minus one set through SetPixelShaderConstantF', vs,
+      consts: [0.25, 0.25, 0.25, 0.25, 0, 0, 0, 0, 2, -2, 0.5, 2],
+      ps: ps1('texcoord t0', 'mul r1, t0, c2', 'mad r0, r1, c0, c0') },
+  ];
+}
+
 const cases = [
   { name: 'ps_3_0 arithmetic and source modifiers: mad, max with a negated source, min with _abs, frc of negatives',
     ps: ps3('def c0, 0.125, -0.5, 0.5, 0.25', 'mul r0.xy, vPos.xy, c0.x', 'add r1, r0.xyxy, c0.y', 'mad r2.x, r1.x, r1.y, c0.z',
@@ -98,6 +136,7 @@ const cases = [
       'expp r1.x, c0.y', 'logp r1.y, c0.z', 'mad o1.xyz, r0, c0.x, c0.y', 'mov o1.w, r1.x', ''].join('\n'),
     ps: ps3('dcl_texcoord v0', 'def c0, 0.5, 0, 0, 0', 'mov oC0, v0'),
     consts: [...Array(16).fill(0), 0.1, 0, 0, 0, 0, 0.2, 0, 0, 0, 0, 0.3, 0, 0, 0, 0, 0, 0, 0.15, 0, 0] },
+  ...ps11Cases(),
   { notDxvk: 'reads x for rcp\'s unswizzled source, where wined3d and the vs_1_x documentation read w',
     name: 'vs_1_1: oPos, oT0, oT1 and a diffuse colour above one (clamped before the pixel shader), m4x3, expp and logp as vectors, an unswizzled rcp',
     vs: ['vs_1_1', 'dcl_position v0', 'def c0, 0.5, 0.25, 2, 1', 'def c1, 0.3, 0.1, 0.2, 0.1', 'def c2, 0.1, 0.4, 0.1, 0.2', 'def c3, 0.2, 0.1, 0.3, 0.3',
