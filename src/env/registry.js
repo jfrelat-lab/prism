@@ -62,6 +62,7 @@ import { GL_HEADERS, GLX_HEADERS } from './headers-gl.js';
 import { installGlx, glxBuiltins } from './glx.js';
 import { installFxMesa, fxmesaBuiltins, FXMESA_H } from './fxmesa.js';
 import { installWgl, wglBuiltins } from './wgl.js';
+import { installD3D9, d3d9Builtins } from './d3d9host.js';
 
 /** The port machine, created once. compileProgram already makes one, so this usually finds it. */
 const machineOf = (M) => (M.machine ?? installPorts(M));
@@ -248,6 +249,8 @@ export const ENV = {
   fxmesa: { needs: ['gl'], install: (M, _c, o) => installFxMesa(M, o), headers: { 'GL/fxmesa.h': FXMESA_H }, builtins: fxmesaBuiltins(T) },
   // The host half of src/env/opengl32.c (Win32 GL): framebuffer size and SwapBuffers. See src/env/wgl.js.
   wgl: { needs: ['gl'], install: (M, _c, o) => installWgl(M, o), headers: {}, builtins: wglBuiltins(T) },
+  // The host half of src/env/d3d9.c (Direct3D 9): its drawing calls onto src/env/d3d9.js. See src/env/d3d9host.js.
+  d3d9: { install: (M, _c, o) => installD3D9(M, o), headers: {}, builtins: d3d9Builtins(T) },
   glx: { needs: ['gl', 'x11'], install: (M, _c, o) => installGlx(M, o), headers: GLX_HEADERS, builtins: glxBuiltins(T) },
 
   // svgalib: Quake's OTHER Linux display path, the console framebuffer. See src/env/svgalib.js.

@@ -11,6 +11,7 @@
  *   settex <stage> <id>           (id 0: none)
  *   asm <id> <assembly, its lines separated by ';'>   a shader through D3DXAssembleShader; its bytecode is
  *                                 written to scene.txt.<id>.bin for the gate to hand PRISM
+ *   code <id> <dword...>          a shader as bytecode (how PRISM is handed what D3DXAssembleShader made: it has no assembler)
  *   setvs <id>  setps <id>        vsc <reg> <x y z w>  psc <reg> <x y z w>
  *   decl <id> <n> {<stream> <offset> <type> <method> <usage> <index>} x n      setdecl <id>      fvf <hex>
  *   vb <id> <dword...>            a token with a '.' is a float, anything else a DWORD
@@ -18,10 +19,15 @@
  *   stream <n> <vb id> <offset> <stride>      indices <ib id>
  *   clear <flags> <argb> <z> <stencil>
  *   draw <type> <start> <count>   drawi <type> <base vertex> <min index> <vertices> <start index> <count>
- * The back buffer (X8R8G8B8) is written row 0 first as R, G, B bytes; culling starts off. */
+ * The back buffer (X8R8G8B8) is written row 0 first as R, G, B bytes; culling starts off.
+ *
+ * PRISM compiles this file too (tools/gate-d3d9-scenes.mjs --program): its own src/env/d3d9.c, joined to src/env/d3d9.js,
+ * plays the script, and `code` stands in for `asm`. */
 #include <windows.h>
 #include <d3d9.h>
+#ifndef __PRISM__
 #include <d3dx9shader.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,7 +72,11 @@ int main(int argc, char **argv) {
   for (; a < argc && argv[a][0] == '-'; a++) if (!strcmp(argv[a], "-dll") && a + 1 < argc) dll = argv[++a];
   if (argc - a < 4) { fprintf(stderr, "usage: d3d9scene [-dll d3d9.dll] scene.txt out.rgb w h\n"); return 2; }
   w = atoi(argv[a + 2]); h = atoi(argv[a + 3]);
+#ifdef __PRISM__
+  wnd = NULL;                                  /* a window is only the device's focus: PRISM's d3d9.c draws to the page */
+#else
   wnd = CreateWindowA("STATIC", "d3d9scene", WS_POPUP, 0, 0, w, h, NULL, NULL, NULL, NULL);
+#endif
   if (dll) {
     HMODULE m = LoadLibraryA(dll);
     IDirect3D9 *(WINAPI *create)(UINT) = m ? (void *)GetProcAddress(m, "Direct3DCreate9") : NULL;
@@ -126,6 +136,7 @@ int main(int argc, char **argv) {
       }
       tex[id] = (IDirect3DBaseTexture9 *)t;
     } else if (!strcmp(word, "settex")) { long s = num(&p), id = num(&p); CHECK(IDirect3DDevice9_SetTexture(dev, s, id ? tex[id] : NULL)); }
+#ifndef __PRISM__
     else if (!strcmp(word, "asm")) {
       long id = num(&p);
       char *s = p, name[512];
@@ -142,6 +153,15 @@ int main(int argc, char **argv) {
       fclose(o);
       if ((*(DWORD *)ID3DXBuffer_GetBufferPointer(code) >> 16) == 0xfffe) CHECK(IDirect3DDevice9_CreateVertexShader(dev, ID3DXBuffer_GetBufferPointer(code), &vsh[id]));
       else CHECK(IDirect3DDevice9_CreatePixelShader(dev, ID3DXBuffer_GetBufferPointer(code), &psh[id]));
+    }
+#endif
+    else if (!strcmp(word, "code")) {
+      long id = num(&p), n = 0;
+      static DWORD t[4096];
+      char *q = p;
+      while (n < 4096) { DWORD x = (DWORD)strtoul(q, &p, 0); if (p == q) break; t[n++] = x; q = p; }
+      if ((t[0] >> 16) == 0xfffe) CHECK(IDirect3DDevice9_CreateVertexShader(dev, t, &vsh[id]));
+      else CHECK(IDirect3DDevice9_CreatePixelShader(dev, t, &psh[id]));
     }
     else if (!strcmp(word, "setvs")) { long id = num(&p); CHECK(IDirect3DDevice9_SetVertexShader(dev, id ? vsh[id] : NULL)); }
     else if (!strcmp(word, "setps")) { long id = num(&p); CHECK(IDirect3DDevice9_SetPixelShader(dev, id ? psh[id] : NULL)); }

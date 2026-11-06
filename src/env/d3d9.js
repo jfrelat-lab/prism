@@ -730,6 +730,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     setViewport: (v) => { viewport = { ...v }; return OK; },
     getViewport: () => ({ ...viewport }),
     setScissorRect: (x1, y1, x2, y2) => { scissor = [x1, y1, x2, y2]; return OK; },
+    getScissorRect: () => scissor.slice(),
 
     // shaders
     createVertexShader: (tokens) => add(makeShader(tokens, 'vertex')),

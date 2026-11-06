@@ -35,7 +35,12 @@ export function comDeclarations(ifaces) {
   const bodies = Object.entries(ifaces).map(([name, [base, ms]]) => {
     const cxx = ms.map((m) => { const { ret, fn, params } = parse(m); return `    virtual ${ret} STDMETHODCALLTYPE ${fn}(${params || 'void'}) = 0;`; });
     const c = flat(ifaces, name).map((m) => { const { ret, fn, params } = parse(m); return `    ${ret} (STDMETHODCALLTYPE *${fn})(${name} *This${params ? `, ${params}` : ''});`; });
-    return `#ifdef __cplusplus\nstruct ${name} : public ${base}\n{\n${cxx.join('\n')}\n};\n#else\nstruct ${name}Vtbl\n{\n${c.join('\n')}\n};\nstruct ${name} { struct ${name}Vtbl *lpVtbl; };\n#endif`;
+    // the SDK's C call macros, IDirect3D9_CreateDevice(p, a, ...) for (p)->lpVtbl->CreateDevice(p, a, ...)
+    const calls = flat(ifaces, name).map((m) => {
+      const { fn, params } = parse(m), args = params ? params.split(',').map((_, k) => `, ${String.fromCharCode(97 + k)}`).join('') : '';
+      return `#define ${name}_${fn}(p${args}) (p)->lpVtbl->${fn}(p${args})`;
+    });
+    return `#ifdef __cplusplus\nstruct ${name} : public ${base}\n{\n${cxx.join('\n')}\n};\n#else\nstruct ${name}Vtbl\n{\n${c.join('\n')}\n};\nstruct ${name} { struct ${name}Vtbl *lpVtbl; };\n${calls.join('\n')}\n#endif`;
   });
   return `${typedefs.join('\n')}\n${bodies.join('\n\n')}`;
 }

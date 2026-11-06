@@ -9,6 +9,10 @@
 // base vertex, the stencil one-sided and two-sided. Inputs are chosen off texel edges and face edges, where
 // implementations may differ by a rounding.
 //
+// Each scene is played twice on PRISM: by tools/d3d9scene.js straight on d3d9.js, and by d3d9scene.c ITSELF compiled
+// by PRISM, whose COM calls go through src/env/d3d9.c and its host (src/env/d3d9host.js) to the same device -- the
+// path a Direct3D 9 program takes. There `code` lines carry the bytecode the reference assembled.
+//
 //   node tools/gate-d3d9-scenes.mjs              SKIP when no Chrome is found (PRISM_CHROME=<path> names one)
 //   node tools/gate-d3d9-scenes.mjs --capture    plays the scenes in the oracle container first
 import { createServer } from 'node:http';
@@ -17,6 +21,8 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { skip } from './gate-skip.mjs';
+import { buildTarget } from '../src/target.js';
+import { snapshotProgram } from '../src/compile.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = join(ROOT, 'goldens', 'd3d9-scenes.json');
@@ -132,11 +138,23 @@ if (!existsSync(GOLDEN)) { console.log(`no ${GOLDEN}: node tools/gate-d3d9-scene
 const golden = JSON.parse(readFileSync(GOLDEN, 'utf8')).cases;
 
 // ---- PRISM: the same scripts on d3d9.js ----
-const runs = cases.filter((k) => golden[k.name]).map((k) => ({ name: k.name, script: k.script.join('\n'), shaders: golden[k.name].shaders }));
+const runs = cases.filter((k) => golden[k.name]).map((k) => ({ name: k.name, script: k.script.join('\n'), shaders: golden[k.name].shaders,
+  // for the compiled program: each asm line replaced by the bytecode it assembled to
+  program: `${k.script.map((l) => { const a = l.match(/^asm (\d+) /); return a ? `code ${a[1]} ${golden[k.name].shaders[a[1]].map((w) => `0x${(w >>> 0).toString(16)}`).join(' ')}` : l; }).join('\n')}\n` }));
+// d3d9scene.c through PRISM, once, as a snapshot the page loads (what the page's worker does with a bundle)
+const target = { name: 'd3d9scene', dir: 'tools/oracle', units: { list: ['d3d9scene.c'] }, generated: ['src/env/win32-app.c', 'src/env/d3d9.c'],
+  env: ['stdio', 'd3d9'], compile: { memory: 64, collect: true } };
+let snap = null;
+buildTarget(target, { root: ROOT, onProgram: (p) => { if (p.failures?.length) throw new Error(`d3d9scene.c: ${p.failures.map((f) => `${f.fn}: ${f.message}`).join('; ')}`); snap = snapshotProgram(p); } });
+const bundleJs = `export const meta = ${JSON.stringify(snap.meta)};\nexport const factory = (function(){\n${snap.src}\n})();\n`;
 const page = `<!doctype html><canvas id="c" width="${N}" height="${N}"></canvas><pre id="o"></pre>
 <script type="module">
 import { createD3D9 } from '/src/env/d3d9.js';
 import { playScene } from '/tools/d3d9scene.js';
+import { loadSnapshot, bindLateBuiltins } from '/src/compile.js';
+import { buildEnv } from '/src/env/registry.js';
+import * as B from '/bundle.js';
+const image = new Uint8Array(await (await fetch('/bundle.bin')).arrayBuffer());
 const runs = ${JSON.stringify(runs)};
 const out = {};
 const gl = document.getElementById('c').getContext('webgl2', { antialias: false });
@@ -147,12 +165,23 @@ for (const k of runs) {
     dev.beginScene();
     out[k.name] = playScene(dev, k.script, k.shaders, ${N}, ${N});
   } catch (e) { out[k.name] = { error: String(e.message || e).slice(0, 3000) }; }
+  try {
+    const program = loadSnapshot({ meta: B.meta, factory: B.factory, image });
+    const env = buildEnv(program.M, ['stdio', 'd3d9'], { stdio: { files: { 's.txt': new TextEncoder().encode(k.program) } }, d3d9: { gl } });
+    bindLateBuiltins(program);
+    program.run(['d3d9scene', 's.txt', 'out.rgb', '${N}', '${N}']);
+    program.M.flushAll?.();
+    const got = program.M.files.store.get('out.rgb');
+    out['program: ' + k.name] = got ? Array.from(got) : { error: 'no out.rgb (calls: ' + JSON.stringify([...env.d3d9.calls]) + ')' };
+  } catch (e) { out['program: ' + k.name] = { error: String(e.stack || e.message || e).slice(0, 3000) }; }
 }
 document.getElementById('o').textContent = JSON.stringify(out);
 </script>`;
 const server = createServer((req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (path === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(page); return; }
+  if (path === '/bundle.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(bundleJs); return; }
+  if (path === '/bundle.bin') { res.writeHead(200, { 'content-type': 'application/octet-stream' }); res.end(Buffer.from(snap.image)); return; }
   const file = join(ROOT, path);
   if (!(file.startsWith(join(ROOT, 'src')) || file === join(ROOT, 'tools', 'd3d9scene.js')) || !existsSync(file)) { res.writeHead(404); res.end(); return; }
   res.writeHead(200, { 'content-type': extname(file) === '.js' ? 'text/javascript' : 'application/octet-stream' });
@@ -160,7 +189,7 @@ const server = createServer((req, res) => {
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const dom = await new Promise((resolve, reject) => {
-  const p = spawn(CHROME, ['--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--virtual-time-budget=20000', '--dump-dom', `http://127.0.0.1:${server.address().port}/`], { stdio: ['ignore', 'pipe', 'ignore'] });
+  const p = spawn(CHROME, ['--headless=new', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--virtual-time-budget=60000', '--dump-dom', `http://127.0.0.1:${server.address().port}/`], { stdio: ['ignore', 'pipe', 'ignore'] });
   let s = ''; p.stdout.on('data', (d) => { s += d; }); p.on('close', () => resolve(s)); p.on('error', reject);
 });
 server.close();
@@ -170,16 +199,16 @@ try { res = JSON.parse(m[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&').repla
 if (!res) { check(false, 'the WebGL2 page ran', m ? m[1].slice(0, 200) : 'no output from Chrome'); process.exit(1); }
 const verbose = process.argv.includes('--verbose');
 const image = (px) => Array.from({ length: N }, (_, y) => Array.from({ length: N }, (_, x) => px.slice((y * N + x) * 3, (y * N + x) * 3 + 3).map((v) => v.toString(16).padStart(2, '0')).join('')).join(' ')).join('\n        ');
-for (const k of cases) {
-  const r = res[k.name], gd = golden[k.name];
-  if (!gd) { check(false, k.name, 'no capture: node tools/gate-d3d9-scenes.mjs --capture'); continue; }
-  if (!r || r.error) { check(false, k.name, r ? r.error : 'not run'); continue; }
+for (const [via, k] of [...cases.map((k) => ['', k]), ...cases.map((k) => ['program: ', k])]) {
+  const r = res[via + k.name], gd = golden[k.name], name = via ? `${k.name} -- through d3d9.c, compiled` : k.name;
+  if (!gd) { check(false, name, 'no capture: node tools/gate-d3d9-scenes.mjs --capture'); continue; }
+  if (!r || r.error) { check(false, name, r ? r.error : 'not run'); continue; }
   for (const [who, ref] of [['Wine', gd.wine], ['DXVK', gd.dxvk]]) {
     if (!ref) continue;
     let worst = 0, at = 0, n = 0;
     for (let i = 0; i < ref.length; i++) { const d = Math.abs(r[i] - ref[i]); if (d > 1) n++; if (d > worst) { worst = d; at = i; } }
     const px = (at / 3) | 0;
-    check(worst <= 1, `${k.name} -- against ${who}`, `${n} bytes off, worst ${worst} at (${px % N},${(px / N) | 0}): PRISM ${r.slice(px * 3, px * 3 + 3)}, ${who} ${ref.slice(px * 3, px * 3 + 3)}` +
+    check(worst <= 1, `${name} -- against ${who}`, `${n} bytes off, worst ${worst} at (${px % N},${(px / N) | 0}): PRISM ${r.slice(px * 3, px * 3 + 3)}, ${who} ${ref.slice(px * 3, px * 3 + 3)}` +
       (verbose ? `\n        PRISM:\n        ${image(r)}\n        ${who}:\n        ${image(ref)}` : ''));
   }
 }

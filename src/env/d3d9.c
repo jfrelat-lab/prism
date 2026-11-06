@@ -1,16 +1,15 @@
 /*
- * d3d9.c -- d3d9.dll as a HEADLESS device: Direct3D 9's objects with their memory, for a program
+ * d3d9.c -- d3d9.dll: Direct3D 9's objects with their memory, for a program
  * compiled from C or C++ (.kkrieger's _start.cpp calls it through d3d9.h's virtual methods, whose
  * table layout is this file's -- src/env/com.js).
  *
- * What it is for, and what it is not. A Direct3D 9 program does a great deal before it draws: it
- * creates its textures and fills them through LockRect, reads render targets back, clears and fills
- * surfaces. All of that is memory, and this file does it for real -- every texture, cube face, volume,
- * surface and buffer holds its bytes, Clear and ColorFill write them, StretchRect and
- * GetRenderTargetData copy them. What it does NOT do is rasterise: Draw* calls succeed and draw
- * nothing, which is what "headless" means here, and why a texture a program renders into (rather than
- * fills) comes out as it was cleared. The drawing device is PRISM's src/env/d3d9.js; joining this file
- * to it is the next step, not a thing to fake here.
+ * What it is for. A Direct3D 9 program does a great deal besides drawing: it creates its textures and
+ * fills them through LockRect, reads render targets back, clears and fills surfaces. All of that is
+ * memory, and this file does it for real -- every texture, cube face, volume, surface and buffer holds
+ * its bytes. The drawing is src/env/d3d9.js's, on WebGL 2, reached through the host (src/env/d3d9host.js,
+ * the `d3d9` environment): see THE DRAWING DEVICE below. Without one (Node, the texture gate) this file
+ * is HEADLESS: Draw* calls succeed and draw nothing, and a texture a program renders into (rather than
+ * fills) comes out as it was cleared.
  *
  * Every texture level a program unlocks is handed to prism_d3d9_unlocked, which the host binds: the
  * texture gate records the texels there (tools/gate-kkrieger-tex.mjs). The capabilities are the ones
@@ -30,6 +29,28 @@
 
 /* The host's: called for every texture level unlocked, with its bytes. */
 void prism_d3d9_unlocked(int texture, int face, int level, int width, int height, int format, const void *bits, int pitch);
+
+/*
+ * THE DRAWING DEVICE. When the host has one (src/env/d3d9host.js, src/env/d3d9.js on WebGL 2), every call that
+ * draws, or holds what is drawn, goes to it as well, by operation number, and each object here keeps the host's
+ * handle for it. Headless (Node, the texture gate) the host answers 0 to the device and everything stays here.
+ * Who holds the truth: a texture's or a buffer's bytes are this file's, handed over at Unlock (and UpdateTexture,
+ * UpdateSurface, ColorFill); a render target's are the host's, read back by GetRenderTargetData and by LockRect.
+ * A D3DPOOL_SYSTEMMEM or SCRATCH object never reaches the host: the program only copies to and from it.
+ */
+int prism_d3d9_call(int op, int a, int b, int c, int d, int e, int f, int g, int h);
+enum { H_DEVICE = 1, H_BACKBUFFER, H_AUTODEPTH, H_TEXTURE, H_TEXWRITE, H_SURFACE, H_RENDERTARGET, H_DEPTHSURF, H_BUFFER, H_BUFWRITE,
+    H_SHADER, H_DECL, H_RS, H_SS, H_TSS, H_SETTEX, H_SETVS, H_SETPS, H_SETDECL, H_SETFVF, H_STREAM, H_INDICES, H_SETRT, H_SETDS,
+    H_CONSTS, H_VIEWPORT, H_SCISSOR, H_CLEAR, H_DRAW, H_DRAWI, H_DRAWUP, H_DRAWIUP, H_PRESENT, H_STRETCH, H_READBACK, H_COLORFILL,
+    H_RELEASE, H_TRANSFORM, H_MATERIAL, H_LIGHT, H_LIGHTENABLE };
+static int host_on;
+static int H(int op, int a, int b, int c, int d, int e, int f, int g, int h) { return host_on ? prism_d3d9_call(op, a, b, c, d, e, f, g, h) : 0; }
+#define P_(p) ((int)(size_t)(p))
+static int fbits(float v) { union { float f; int i; } u; u.f = v; return u.i; }
+/* Texture, Volume, Buffer and Blob all begin so: their table, their count, their host handle. */
+typedef struct Head { void *vtbl; LONG refs; int host; } Head;
+#define HOSTOF(p) ((p) ? ((Head *)(p))->host : 0)
+#define HOSTED(pool) ((pool) != D3DPOOL_SYSTEMMEM && (pool) != D3DPOOL_SCRATCH)
 
 static int next_id = 1;
 
@@ -58,6 +79,7 @@ typedef struct Surface {
     int owns_bits;
     int texture, face, level;     /* the texture level this is, or texture 0 */
     IUnknown *container;
+    int host;                     /* the host surface: a render target, depth buffer or the back buffer, or a texture level drawn into */
 } Surface;
 
 static struct IDirect3DSurface9Vtbl surface_vtbl;
@@ -75,6 +97,13 @@ static Surface *surface_new(UINT w, UINT h, D3DFORMAT fmt, D3DPOOL pool, DWORD u
     return s;
 }
 #define SURF(p) ((Surface *)(p))
+
+/* A texture level's bytes, to the host's copy of the texture (a level the program draws into is the host's own). */
+static void surface_push(Surface *s)
+{
+    if (s->texture && HOSTOF(s->container) && !(s->desc.Usage & D3DUSAGE_RENDERTARGET))
+        H(H_TEXWRITE, HOSTOF(s->container), s->face < 0 ? 0 : s->face, s->level, P_(s->bits), s->pitch, 0, 0, 0);
+}
 
 /* Fill a rectangle of a surface with a D3DCOLOR, in the surface's own format. */
 static void surface_fill(Surface *s, const RECT *r, D3DCOLOR c)
@@ -117,6 +146,7 @@ static HRESULT STDMETHODCALLTYPE surf_LockRect(IDirect3DSurface9 *This, D3DLOCKE
 {
     Surface *s = SURF(This);
     (void)f;
+    if (s->host && (s->desc.Usage & D3DUSAGE_RENDERTARGET)) H(H_READBACK, s->host, P_(s->bits), s->pitch, 0, 0, 0, 0, 0);
     lr->Pitch = s->pitch;
     lr->pBits = s->bits + (r ? r->top * s->pitch + r->left * bpp(s->desc.Format) : 0);
     return D3D_OK;
@@ -126,6 +156,7 @@ static HRESULT STDMETHODCALLTYPE surf_UnlockRect(IDirect3DSurface9 *This)
     Surface *s = SURF(This);
     if (s->texture)
         prism_d3d9_unlocked(s->texture, s->face, s->level, s->desc.Width, s->desc.Height, s->desc.Format, s->bits, s->pitch);
+    surface_push(s);
     return D3D_OK;
 }
 static HRESULT STDMETHODCALLTYPE surf_GetDC(IDirect3DSurface9 *This, HDC *dc) { (void)This; *dc = 0; return D3DERR_INVALIDCALL; }
@@ -142,6 +173,7 @@ static struct IDirect3DSurface9Vtbl surface_vtbl = {
 typedef struct Texture {
     union { IDirect3DTexture9 tex; IDirect3DCubeTexture9 cube; } iface;
     LONG refs;
+    int host;
     int id, faces, levels;
     D3DFORMAT format;
     DWORD usage;
@@ -181,6 +213,7 @@ static ULONG STDMETHODCALLTYPE tex_Release(IDirect3DTexture9 *This)
     LONG n = --t->refs;
     int i;
     if (n == 0) {
+        H(H_RELEASE, t->host, 0, 0, 0, 0, 0, 0, 0);
         for (i = 0; i < t->faces * t->levels; i++) { free(t->surf[i]->bits); free(t->surf[i]); }
         free(t->surf); free(t);
     }
@@ -250,6 +283,7 @@ static void cube_vtbl_init(void)
 typedef struct Volume {
     IDirect3DVolumeTexture9 iface;
     LONG refs;
+    int host;
     UINT w, h, d, levels;
     D3DFORMAT format;
     unsigned char **bits;
@@ -264,7 +298,7 @@ static ULONG STDMETHODCALLTYPE vol_Release(IDirect3DVolumeTexture9 *This)
     Volume *v = VOL(This);
     LONG n = --v->refs;
     UINT l;
-    if (n == 0) { for (l = 0; l < v->levels; l++) free(v->bits[l]); free(v->bits); free(v); }
+    if (n == 0) { H(H_RELEASE, v->host, 0, 0, 0, 0, 0, 0, 0); for (l = 0; l < v->levels; l++) free(v->bits[l]); free(v->bits); free(v); }
     return n < 0 ? 0 : n;
 }
 static HRESULT STDMETHODCALLTYPE vol_GetDevice(IDirect3DVolumeTexture9 *This, IDirect3DDevice9 **d) { (void)This; *d = 0; return D3DERR_INVALIDCALL; }
@@ -301,7 +335,13 @@ static HRESULT STDMETHODCALLTYPE vol_LockBox(IDirect3DVolumeTexture9 *This, UINT
     lb->pBits = v->bits[l] + (box ? box->Front * lb->SlicePitch + box->Top * lb->RowPitch + box->Left * b : 0);
     return D3D_OK;
 }
-static HRESULT STDMETHODCALLTYPE vol_UnlockBox(IDirect3DVolumeTexture9 *This, UINT l) { (void)This; (void)l; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE vol_UnlockBox(IDirect3DVolumeTexture9 *This, UINT l)
+{
+    Volume *v = VOL(This);
+    int rp = vdim(v->w, l) * bpp(v->format);
+    if (l < v->levels) H(H_TEXWRITE, v->host, 0, l, P_(v->bits[l]), rp, rp * vdim(v->h, l), 0, 0);
+    return D3D_OK;
+}
 static HRESULT STDMETHODCALLTYPE vol_AddDirtyBox(IDirect3DVolumeTexture9 *This, const D3DBOX *b) { (void)This; (void)b; return D3D_OK; }
 
 static struct IDirect3DVolumeTexture9Vtbl volume_vtbl = {
@@ -316,7 +356,8 @@ static struct IDirect3DVolumeTexture9Vtbl volume_vtbl = {
 typedef struct Buffer {
     union { IDirect3DVertexBuffer9 vb; IDirect3DIndexBuffer9 ib; } iface;
     LONG refs;
-    UINT size;
+    int host;
+    UINT size, lock_off, lock_n;
     DWORD usage, fvf;
     D3DFORMAT format;
     D3DPOOL pool;
@@ -330,7 +371,7 @@ static ULONG STDMETHODCALLTYPE buf_Release(IDirect3DVertexBuffer9 *This)
 {
     Buffer *b = BUF(This);
     LONG n = --b->refs;
-    if (n == 0) { free(b->bits); free(b); }
+    if (n == 0) { H(H_RELEASE, b->host, 0, 0, 0, 0, 0, 0, 0); free(b->bits); free(b); }
     return n < 0 ? 0 : n;
 }
 static HRESULT STDMETHODCALLTYPE buf_GetDevice(IDirect3DVertexBuffer9 *This, IDirect3DDevice9 **d) { (void)This; *d = 0; return D3DERR_INVALIDCALL; }
@@ -342,8 +383,21 @@ static DWORD STDMETHODCALLTYPE buf_GetPriority(IDirect3DVertexBuffer9 *This) { (
 static void STDMETHODCALLTYPE buf_PreLoad(IDirect3DVertexBuffer9 *This) { (void)This; }
 static D3DRESOURCETYPE STDMETHODCALLTYPE vb_GetType(IDirect3DVertexBuffer9 *This) { (void)This; return D3DRTYPE_VERTEXBUFFER; }
 static HRESULT STDMETHODCALLTYPE buf_Lock(IDirect3DVertexBuffer9 *This, UINT off, UINT n, void **p, DWORD f)
-{ (void)n; (void)f; *p = BUF(This)->bits + off; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE buf_Unlock(IDirect3DVertexBuffer9 *This) { (void)This; return D3D_OK; }
+{
+    Buffer *b = BUF(This);
+    (void)f;
+    if (off > b->size) off = b->size;
+    b->lock_off = off; b->lock_n = n && off + n <= b->size ? n : b->size - off;
+    *p = b->bits + off;
+    return D3D_OK;
+}
+static HRESULT STDMETHODCALLTYPE buf_Unlock(IDirect3DVertexBuffer9 *This)
+{
+    Buffer *b = BUF(This);
+    if (b->lock_n) H(H_BUFWRITE, b->host, b->lock_off, P_(b->bits + b->lock_off), b->lock_n, 0, 0, 0, 0);
+    b->lock_n = 0;
+    return D3D_OK;
+}
 static HRESULT STDMETHODCALLTYPE vb_GetDesc(IDirect3DVertexBuffer9 *This, D3DVERTEXBUFFER_DESC *d)
 {
     Buffer *b = BUF(This);
@@ -387,6 +441,7 @@ static Buffer *buffer_new(UINT size, DWORD usage, DWORD fvf, D3DFORMAT fmt, D3DP
 typedef struct Blob {
     IDirect3DVertexShader9 iface;     /* one layout for the three: GetDevice, then their data */
     LONG refs;
+    int host;
     void *data;
     UINT size;
 } Blob;
@@ -397,7 +452,7 @@ static ULONG STDMETHODCALLTYPE blob_Release(IDirect3DVertexShader9 *This)
 {
     Blob *b = BLOB(This);
     LONG n = --b->refs;
-    if (n == 0) { free(b->data); free(b); }
+    if (n == 0) { H(H_RELEASE, b->host, 0, 0, 0, 0, 0, 0, 0); free(b->data); free(b); }
     return n < 0 ? 0 : n;
 }
 static HRESULT STDMETHODCALLTYPE blob_GetDevice(IDirect3DVertexShader9 *This, IDirect3DDevice9 **d) { (void)This; *d = 0; return D3DERR_INVALIDCALL; }
@@ -455,7 +510,7 @@ static HRESULT STDMETHODCALLTYPE sw_QueryInterface(IDirect3DSwapChain9 *This, RE
 static ULONG STDMETHODCALLTYPE sw_AddRef(IDirect3DSwapChain9 *This) { return ++((Swap *)This)->refs; }
 static ULONG STDMETHODCALLTYPE sw_Release(IDirect3DSwapChain9 *This) { LONG n = --((Swap *)This)->refs; return n < 1 ? 1 : n; }
 static HRESULT STDMETHODCALLTYPE sw_Present(IDirect3DSwapChain9 *This, const RECT *s, const RECT *d, HWND w, const RGNDATA *r, DWORD f)
-{ (void)s; (void)d; (void)w; (void)r; (void)f; ((Swap *)This)->dev->presents++; return D3D_OK; }
+{ (void)s; (void)d; (void)w; (void)r; (void)f; ((Swap *)This)->dev->presents++; H(H_PRESENT, 0, 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE sw_GetFrontBufferData(IDirect3DSwapChain9 *This, IDirect3DSurface9 *s) { (void)This; (void)s; return D3DERR_INVALIDCALL; }
 static HRESULT STDMETHODCALLTYPE sw_GetBackBuffer(IDirect3DSwapChain9 *This, UINT i, D3DBACKBUFFER_TYPE t, IDirect3DSurface9 **out)
 { Surface *b = ((Swap *)This)->dev->back; (void)i; (void)t; b->refs++; *out = &b->iface; return D3D_OK; }
@@ -485,6 +540,14 @@ static HRESULT copy_rect(Surface *s, const RECT *sr, Surface *d, const RECT *dr)
 }
 
 #define D_ This
+static int host_surface(Surface *s)
+{
+    if (s && !s->host && s->texture && HOSTOF(s->container))
+        s->host = H(H_SURFACE, HOSTOF(s->container), s->face < 0 ? 0 : s->face, s->level, 0, 0, 0, 0, 0);
+    return s ? s->host : 0;
+}
+/* The host's pixels of a render target into this file's copy of it. */
+static void pull(Surface *s) { if (s->host && (s->desc.Usage & D3DUSAGE_RENDERTARGET)) H(H_READBACK, s->host, P_(s->bits), s->pitch, 0, 0, 0, 0, 0); }
 static HRESULT STDMETHODCALLTYPE dev_QueryInterface(IDirect3DDevice9 *This, REFIID riid, void **out) { (void)riid; *out = This; DEV(This)->refs++; return D3D_OK; }
 static ULONG STDMETHODCALLTYPE dev_AddRef(IDirect3DDevice9 *This) { return ++DEV(This)->refs; }
 static ULONG STDMETHODCALLTYPE dev_Release(IDirect3DDevice9 *This) { LONG n = --DEV(This)->refs; return n < 0 ? 0 : n; }
@@ -502,7 +565,7 @@ static HRESULT STDMETHODCALLTYPE dev_CreateAdditionalSwapChain(IDirect3DDevice9 
 static HRESULT STDMETHODCALLTYPE dev_GetSwapChain(IDirect3DDevice9 *This, UINT i, IDirect3DSwapChain9 **out) { if (i) return D3DERR_INVALIDCALL; *out = DEV(This)->swap; return D3D_OK; }
 static UINT STDMETHODCALLTYPE dev_GetNumberOfSwapChains(IDirect3DDevice9 *This) { (void)This; return 1; }
 static HRESULT STDMETHODCALLTYPE dev_Reset(IDirect3DDevice9 *This, D3DPRESENT_PARAMETERS *p) { DEV(This)->pp = *p; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_Present(IDirect3DDevice9 *This, const RECT *s, const RECT *d, HWND w, const RGNDATA *r) { (void)s; (void)d; (void)w; (void)r; DEV(This)->presents++; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_Present(IDirect3DDevice9 *This, const RECT *s, const RECT *d, HWND w, const RGNDATA *r) { (void)s; (void)d; (void)w; (void)r; DEV(This)->presents++; H(H_PRESENT, 0, 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetBackBuffer(IDirect3DDevice9 *This, UINT sc, UINT i, D3DBACKBUFFER_TYPE t, IDirect3DSurface9 **out) { (void)sc; return sw_GetBackBuffer(DEV(This)->swap, i, t, out); }
 static HRESULT STDMETHODCALLTYPE dev_GetRasterStatus(IDirect3DDevice9 *This, UINT sc, D3DRASTER_STATUS *r) { (void)sc; return sw_GetRasterStatus(DEV(This)->swap, r); }
 static HRESULT STDMETHODCALLTYPE dev_SetDialogBoxMode(IDirect3DDevice9 *This, BOOL b) { (void)This; (void)b; return D3D_OK; }
@@ -514,6 +577,7 @@ static HRESULT STDMETHODCALLTYPE dev_CreateTexture(IDirect3DDevice9 *This, UINT 
     Texture *t = texture_new(w, h, l, u, f, p, 1);
     (void)This; (void)sh;
     t->iface.tex.lpVtbl = &texture_vtbl;
+    if (HOSTED(p)) t->host = H(H_TEXTURE, 0, w, h, 1, t->levels, u, f, 0);
     *out = &t->iface.tex;
     return D3D_OK;
 }
@@ -521,8 +585,13 @@ static HRESULT STDMETHODCALLTYPE dev_CreateVolumeTexture(IDirect3DDevice9 *This,
 {
     Volume *v = (Volume *)calloc(1, sizeof *v);
     UINT i;
-    (void)This; (void)u; (void)p; (void)sh;
-    v->iface.lpVtbl = &volume_vtbl; v->refs = 1; v->w = w; v->h = h; v->d = d; v->format = f; v->levels = l ? l : 1;
+    UINT big = w > h ? w : h;
+    (void)This; (void)sh;
+    if (d > big) big = d;
+    v->iface.lpVtbl = &volume_vtbl; v->refs = 1; v->w = w; v->h = h; v->d = d; v->format = f;
+    if (!l) for (l = 1; big > 1; big >>= 1) l++;          /* 0: the whole chain, as for any texture */
+    v->levels = l;
+    if (HOSTED(p)) v->host = H(H_TEXTURE, 2, w, h, d, v->levels, u, f, 0);
     v->bits = (unsigned char **)calloc(v->levels, sizeof *v->bits);
     for (i = 0; i < v->levels; i++) v->bits[i] = (unsigned char *)calloc(1, vdim(w, i) * vdim(h, i) * vdim(d, i) * bpp(f) + 1);
     *out = &v->iface;
@@ -532,19 +601,20 @@ static HRESULT STDMETHODCALLTYPE dev_CreateCubeTexture(IDirect3DDevice9 *This, U
 {
     Texture *t = texture_new(e, e, l, u, f, p, 6);
     (void)This; (void)sh;
+    if (HOSTED(p)) t->host = H(H_TEXTURE, 1, e, e, 1, t->levels, u, f, 0);
     cube_vtbl_init();
     t->iface.cube.lpVtbl = &cube_vtbl;
     *out = &t->iface.cube;
     return D3D_OK;
 }
 static HRESULT STDMETHODCALLTYPE dev_CreateVertexBuffer(IDirect3DDevice9 *This, UINT n, DWORD u, DWORD fvf, D3DPOOL p, IDirect3DVertexBuffer9 **out, HANDLE *sh)
-{ (void)This; (void)sh; *out = &buffer_new(n, u, fvf, D3DFMT_VERTEXDATA, p, 0)->iface.vb; return D3D_OK; }
+{ Buffer *b = buffer_new(n, u, fvf, D3DFMT_VERTEXDATA, p, 0); (void)This; (void)sh; if (HOSTED(p)) b->host = H(H_BUFFER, 0, n, 0, 0, 0, 0, 0, 0); *out = &b->iface.vb; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_CreateIndexBuffer(IDirect3DDevice9 *This, UINT n, DWORD u, D3DFORMAT f, D3DPOOL p, IDirect3DIndexBuffer9 **out, HANDLE *sh)
-{ (void)This; (void)sh; *out = &buffer_new(n, u, 0, f, p, 1)->iface.ib; return D3D_OK; }
+{ Buffer *b = buffer_new(n, u, 0, f, p, 1); (void)This; (void)sh; if (HOSTED(p)) b->host = H(H_BUFFER, 1, n, f, 0, 0, 0, 0, 0); *out = &b->iface.ib; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_CreateRenderTarget(IDirect3DDevice9 *This, UINT w, UINT h, D3DFORMAT f, D3DMULTISAMPLE_TYPE m, DWORD q, BOOL lk, IDirect3DSurface9 **out, HANDLE *sh)
-{ (void)This; (void)m; (void)q; (void)lk; (void)sh; *out = &surface_new(w, h, f, D3DPOOL_DEFAULT, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE)->iface; return D3D_OK; }
+{ Surface *s = surface_new(w, h, f, D3DPOOL_DEFAULT, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE); (void)This; (void)m; (void)q; (void)lk; (void)sh; s->host = H(H_RENDERTARGET, w, h, f, 0, 0, 0, 0, 0); *out = &s->iface; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_CreateDepthStencilSurface(IDirect3DDevice9 *This, UINT w, UINT h, D3DFORMAT f, D3DMULTISAMPLE_TYPE m, DWORD q, BOOL dc, IDirect3DSurface9 **out, HANDLE *sh)
-{ (void)This; (void)m; (void)q; (void)dc; (void)sh; *out = &surface_new(w, h, f, D3DPOOL_DEFAULT, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_SURFACE)->iface; return D3D_OK; }
+{ Surface *s = surface_new(w, h, f, D3DPOOL_DEFAULT, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_SURFACE); (void)This; (void)m; (void)q; (void)dc; (void)sh; s->host = H(H_DEPTHSURF, w, h, 0, 0, 0, 0, 0, 0); *out = &s->iface; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_UpdateSurface(IDirect3DDevice9 *This, IDirect3DSurface9 *s, const RECT *sr, IDirect3DSurface9 *d, const POINT *dp)
 {
     RECT dr;
@@ -552,7 +622,10 @@ static HRESULT STDMETHODCALLTYPE dev_UpdateSurface(IDirect3DDevice9 *This, IDire
     dr.left = dp ? dp->x : 0; dr.top = dp ? dp->y : 0;
     dr.right = dr.left + (sr ? sr->right - sr->left : (LONG)SURF(s)->desc.Width);
     dr.bottom = dr.top + (sr ? sr->bottom - sr->top : (LONG)SURF(s)->desc.Height);
-    return copy_rect(SURF(s), sr, SURF(d), &dr);
+    pull(SURF(s));
+    if (copy_rect(SURF(s), sr, SURF(d), &dr) != D3D_OK) return D3DERR_INVALIDCALL;
+    surface_push(SURF(d));
+    return D3D_OK;
 }
 static HRESULT STDMETHODCALLTYPE dev_UpdateTexture(IDirect3DDevice9 *This, IDirect3DBaseTexture9 *s, IDirect3DBaseTexture9 *d)
 {
@@ -560,14 +633,33 @@ static HRESULT STDMETHODCALLTYPE dev_UpdateTexture(IDirect3DDevice9 *This, IDire
     int i, n = a->faces * a->levels;
     (void)This;
     if (b->faces * b->levels < n) n = b->faces * b->levels;
-    for (i = 0; i < n; i++) copy_rect(a->surf[i], 0, b->surf[i], 0);
+    for (i = 0; i < n; i++) { copy_rect(a->surf[i], 0, b->surf[i], 0); surface_push(b->surf[i]); }
     return D3D_OK;
 }
-static HRESULT STDMETHODCALLTYPE dev_GetRenderTargetData(IDirect3DDevice9 *This, IDirect3DSurface9 *rt, IDirect3DSurface9 *d) { (void)This; return copy_rect(SURF(rt), 0, SURF(d), 0); }
-static HRESULT STDMETHODCALLTYPE dev_GetFrontBufferData(IDirect3DDevice9 *This, UINT sc, IDirect3DSurface9 *d) { (void)sc; return copy_rect(DEV(This)->back, 0, SURF(d), 0); }
+static HRESULT STDMETHODCALLTYPE dev_GetRenderTargetData(IDirect3DDevice9 *This, IDirect3DSurface9 *rt, IDirect3DSurface9 *d) { (void)This; pull(SURF(rt)); return copy_rect(SURF(rt), 0, SURF(d), 0); }
+static HRESULT STDMETHODCALLTYPE dev_GetFrontBufferData(IDirect3DDevice9 *This, UINT sc, IDirect3DSurface9 *d) { (void)sc; pull(DEV(This)->back); return copy_rect(DEV(This)->back, 0, SURF(d), 0); }
 static HRESULT STDMETHODCALLTYPE dev_StretchRect(IDirect3DDevice9 *This, IDirect3DSurface9 *s, const RECT *sr, IDirect3DSurface9 *d, const RECT *dr, D3DTEXTUREFILTERTYPE f)
-{ (void)This; (void)f; return copy_rect(SURF(s), sr, SURF(d), dr); }
-static HRESULT STDMETHODCALLTYPE dev_ColorFill(IDirect3DDevice9 *This, IDirect3DSurface9 *s, const RECT *r, D3DCOLOR c) { (void)This; surface_fill(SURF(s), r, c); return D3D_OK; }
+{
+    Surface *a = SURF(s), *b = SURF(d);
+    HRESULT hr;
+    (void)This;
+    /* between two of the host's surfaces, on the host; otherwise here, the source read back first */
+    if ((a->desc.Usage & D3DUSAGE_RENDERTARGET) && (b->desc.Usage & D3DUSAGE_RENDERTARGET) && host_surface(a) && host_surface(b))
+        return H(H_STRETCH, a->host, P_(sr), b->host, P_(dr), f, 0, 0, 0), D3D_OK;
+    pull(a);
+    hr = copy_rect(a, sr, b, dr);
+    surface_push(b);
+    return hr;
+}
+static HRESULT STDMETHODCALLTYPE dev_ColorFill(IDirect3DDevice9 *This, IDirect3DSurface9 *s, const RECT *r, D3DCOLOR c)
+{
+    Surface *x = SURF(s);
+    (void)This;
+    surface_fill(x, r, c);
+    if ((x->desc.Usage & D3DUSAGE_RENDERTARGET) && host_surface(x)) H(H_COLORFILL, x->host, P_(r), (int)c, 0, 0, 0, 0, 0);
+    else surface_push(x);
+    return D3D_OK;
+}
 static HRESULT STDMETHODCALLTYPE dev_CreateOffscreenPlainSurface(IDirect3DDevice9 *This, UINT w, UINT h, D3DFORMAT f, D3DPOOL p, IDirect3DSurface9 **out, HANDLE *sh)
 { (void)This; (void)sh; *out = &surface_new(w, h, f, p, 0, D3DRTYPE_SURFACE)->iface; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetRenderTarget(IDirect3DDevice9 *This, DWORD i, IDirect3DSurface9 *s)
@@ -575,12 +667,13 @@ static HRESULT STDMETHODCALLTYPE dev_SetRenderTarget(IDirect3DDevice9 *This, DWO
     Device *d = DEV(This);
     if (i > 3 || (i == 0 && !s)) return D3DERR_INVALIDCALL;
     d->rt[i] = SURF(s);
+    H(H_SETRT, i, host_surface(SURF(s)), 0, 0, 0, 0, 0, 0);
     if (i == 0) { d->vp.X = d->vp.Y = 0; d->vp.Width = SURF(s)->desc.Width; d->vp.Height = SURF(s)->desc.Height; d->vp.MinZ = 0; d->vp.MaxZ = 1; }
     return D3D_OK;
 }
 static HRESULT STDMETHODCALLTYPE dev_GetRenderTarget(IDirect3DDevice9 *This, DWORD i, IDirect3DSurface9 **out)
 { Surface *s = i < 4 ? DEV(This)->rt[i] : 0; if (!s) { *out = 0; return D3DERR_NOTFOUND; } s->refs++; *out = &s->iface; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetDepthStencilSurface(IDirect3DDevice9 *This, IDirect3DSurface9 *s) { DEV(This)->ds = SURF(s); return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetDepthStencilSurface(IDirect3DDevice9 *This, IDirect3DSurface9 *s) { DEV(This)->ds = SURF(s); H(H_SETDS, s ? SURF(s)->host : 0, 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetDepthStencilSurface(IDirect3DDevice9 *This, IDirect3DSurface9 **out)
 { Surface *s = DEV(This)->ds; if (!s) { *out = 0; return D3DERR_NOTFOUND; } s->refs++; *out = &s->iface; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_BeginScene(IDirect3DDevice9 *This) { (void)This; return D3D_OK; }
@@ -591,7 +684,7 @@ static HRESULT STDMETHODCALLTYPE dev_Clear(IDirect3DDevice9 *This, DWORD n, cons
     Device *d = DEV(This);
     RECT r;
     DWORD i;
-    (void)z; (void)st;
+    H(H_CLEAR, (int)n, P_(rs), (int)flags, (int)c, fbits(z), (int)st, 0, 0);
     if (!(flags & D3DCLEAR_TARGET) || !d->rt[0]) return D3D_OK;
     if (!n || !rs) {
         r.left = d->vp.X; r.top = d->vp.Y; r.right = d->vp.X + d->vp.Width; r.bottom = d->vp.Y + d->vp.Height;
@@ -602,20 +695,20 @@ static HRESULT STDMETHODCALLTYPE dev_Clear(IDirect3DDevice9 *This, DWORD n, cons
     }
     return D3D_OK;
 }
-static HRESULT STDMETHODCALLTYPE dev_SetTransform(IDirect3DDevice9 *This, D3DTRANSFORMSTATETYPE s, const D3DMATRIX *m) { (void)This; (void)s; (void)m; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetTransform(IDirect3DDevice9 *This, D3DTRANSFORMSTATETYPE s, const D3DMATRIX *m) { (void)This; (void)s; (void)m; H(H_TRANSFORM, s, P_(m), 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetTransform(IDirect3DDevice9 *This, D3DTRANSFORMSTATETYPE s, D3DMATRIX *m) { (void)This; (void)s; memset(m, 0, sizeof *m); m->m[0][0] = m->m[1][1] = m->m[2][2] = m->m[3][3] = 1; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_MultiplyTransform(IDirect3DDevice9 *This, D3DTRANSFORMSTATETYPE s, const D3DMATRIX *m) { (void)This; (void)s; (void)m; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetViewport(IDirect3DDevice9 *This, const D3DVIEWPORT9 *v) { DEV(This)->vp = *v; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetViewport(IDirect3DDevice9 *This, const D3DVIEWPORT9 *v) { DEV(This)->vp = *v; H(H_VIEWPORT, P_(v), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetViewport(IDirect3DDevice9 *This, D3DVIEWPORT9 *v) { *v = DEV(This)->vp; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetMaterial(IDirect3DDevice9 *This, const D3DMATERIAL9 *m) { (void)This; (void)m; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetMaterial(IDirect3DDevice9 *This, const D3DMATERIAL9 *m) { (void)This; (void)m; H(H_MATERIAL, P_(m), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetMaterial(IDirect3DDevice9 *This, D3DMATERIAL9 *m) { (void)This; memset(m, 0, sizeof *m); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetLight(IDirect3DDevice9 *This, DWORD i, const D3DLIGHT9 *l) { (void)This; (void)i; (void)l; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetLight(IDirect3DDevice9 *This, DWORD i, const D3DLIGHT9 *l) { (void)This; (void)i; (void)l; H(H_LIGHT, i, P_(l), 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetLight(IDirect3DDevice9 *This, DWORD i, D3DLIGHT9 *l) { (void)This; (void)i; memset(l, 0, sizeof *l); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_LightEnable(IDirect3DDevice9 *This, DWORD i, BOOL e) { (void)This; (void)i; (void)e; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_LightEnable(IDirect3DDevice9 *This, DWORD i, BOOL e) { (void)This; (void)i; (void)e; H(H_LIGHTENABLE, i, e, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetLightEnable(IDirect3DDevice9 *This, DWORD i, BOOL *e) { (void)This; (void)i; *e = FALSE; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetClipPlane(IDirect3DDevice9 *This, DWORD i, const float *p) { (void)This; (void)i; (void)p; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetClipPlane(IDirect3DDevice9 *This, DWORD i, float *p) { (void)This; (void)i; p[0] = p[1] = p[2] = p[3] = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetRenderState(IDirect3DDevice9 *This, D3DRENDERSTATETYPE s, DWORD v) { if ((DWORD)s < 256) DEV(This)->rs[s] = v; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetRenderState(IDirect3DDevice9 *This, D3DRENDERSTATETYPE s, DWORD v) { if ((DWORD)s < 256) DEV(This)->rs[s] = v; H(H_RS, s, (int)v, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetRenderState(IDirect3DDevice9 *This, D3DRENDERSTATETYPE s, DWORD *v) { *v = (DWORD)s < 256 ? DEV(This)->rs[s] : 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_CreateStateBlock(IDirect3DDevice9 *This, D3DSTATEBLOCKTYPE t, IDirect3DStateBlock9 **out) { (void)This; (void)t; *out = 0; return D3DERR_NOTAVAILABLE; }
 static HRESULT STDMETHODCALLTYPE dev_BeginStateBlock(IDirect3DDevice9 *This) { (void)This; return D3DERR_NOTAVAILABLE; }
@@ -623,61 +716,61 @@ static HRESULT STDMETHODCALLTYPE dev_EndStateBlock(IDirect3DDevice9 *This, IDire
 static HRESULT STDMETHODCALLTYPE dev_SetClipStatus(IDirect3DDevice9 *This, const D3DCLIPSTATUS9 *c) { (void)This; (void)c; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetClipStatus(IDirect3DDevice9 *This, D3DCLIPSTATUS9 *c) { (void)This; c->ClipUnion = c->ClipIntersection = 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetTexture(IDirect3DDevice9 *This, DWORD s, IDirect3DBaseTexture9 **out) { (void)This; (void)s; *out = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetTexture(IDirect3DDevice9 *This, DWORD s, IDirect3DBaseTexture9 *t) { (void)This; (void)s; (void)t; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetTexture(IDirect3DDevice9 *This, DWORD s, IDirect3DBaseTexture9 *t) { (void)This; (void)s; (void)t; H(H_SETTEX, s, HOSTOF(t), 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetTextureStageState(IDirect3DDevice9 *This, DWORD s, D3DTEXTURESTAGESTATETYPE t, DWORD *v) { (void)This; (void)s; (void)t; *v = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetTextureStageState(IDirect3DDevice9 *This, DWORD s, D3DTEXTURESTAGESTATETYPE t, DWORD v) { (void)This; (void)s; (void)t; (void)v; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetTextureStageState(IDirect3DDevice9 *This, DWORD s, D3DTEXTURESTAGESTATETYPE t, DWORD v) { (void)This; (void)s; (void)t; (void)v; H(H_TSS, s, t, (int)v, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetSamplerState(IDirect3DDevice9 *This, DWORD s, D3DSAMPLERSTATETYPE t, DWORD *v) { (void)This; (void)s; (void)t; *v = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetSamplerState(IDirect3DDevice9 *This, DWORD s, D3DSAMPLERSTATETYPE t, DWORD v) { (void)This; (void)s; (void)t; (void)v; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetSamplerState(IDirect3DDevice9 *This, DWORD s, D3DSAMPLERSTATETYPE t, DWORD v) { (void)This; (void)s; (void)t; (void)v; H(H_SS, s, t, (int)v, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_ValidateDevice(IDirect3DDevice9 *This, DWORD *n) { (void)This; *n = 1; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetPaletteEntries(IDirect3DDevice9 *This, UINT n, const PALETTEENTRY *e) { (void)This; (void)n; (void)e; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetPaletteEntries(IDirect3DDevice9 *This, UINT n, PALETTEENTRY *e) { (void)This; (void)n; (void)e; return D3DERR_INVALIDCALL; }
 static HRESULT STDMETHODCALLTYPE dev_SetCurrentTexturePalette(IDirect3DDevice9 *This, UINT n) { (void)This; (void)n; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetCurrentTexturePalette(IDirect3DDevice9 *This, UINT *n) { (void)This; *n = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetScissorRect(IDirect3DDevice9 *This, const RECT *r) { (void)This; (void)r; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetScissorRect(IDirect3DDevice9 *This, const RECT *r) { (void)This; (void)r; H(H_SCISSOR, P_(r), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetScissorRect(IDirect3DDevice9 *This, RECT *r) { (void)This; r->left = r->top = r->right = r->bottom = 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetSoftwareVertexProcessing(IDirect3DDevice9 *This, BOOL b) { (void)This; (void)b; return D3D_OK; }
 static BOOL STDMETHODCALLTYPE dev_GetSoftwareVertexProcessing(IDirect3DDevice9 *This) { (void)This; return FALSE; }
 static HRESULT STDMETHODCALLTYPE dev_SetNPatchMode(IDirect3DDevice9 *This, float n) { (void)This; (void)n; return D3D_OK; }
 static float STDMETHODCALLTYPE dev_GetNPatchMode(IDirect3DDevice9 *This) { (void)This; return 0; }
 /* Drawing: headless, so nothing is rasterised (see the top of this file). */
-static HRESULT STDMETHODCALLTYPE dev_DrawPrimitive(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, UINT s, UINT n) { (void)This; (void)t; (void)s; (void)n; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_DrawIndexedPrimitive(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, INT b, UINT mi, UINT nv, UINT si, UINT n) { (void)This; (void)t; (void)b; (void)mi; (void)nv; (void)si; (void)n; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_DrawPrimitiveUP(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, UINT n, const void *v, UINT st) { (void)This; (void)t; (void)n; (void)v; (void)st; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_DrawPrimitive(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, UINT s, UINT n) { (void)This; (void)t; (void)s; (void)n; H(H_DRAW, t, s, n, 0, 0, 0, 0, 0); return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_DrawIndexedPrimitive(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, INT b, UINT mi, UINT nv, UINT si, UINT n) { (void)This; (void)t; (void)b; (void)mi; (void)nv; (void)si; (void)n; H(H_DRAWI, t, b, mi, nv, si, n, 0, 0); return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_DrawPrimitiveUP(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, UINT n, const void *v, UINT st) { (void)This; (void)t; (void)n; (void)v; (void)st; H(H_DRAWUP, t, n, P_(v), st, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_DrawIndexedPrimitiveUP(IDirect3DDevice9 *This, D3DPRIMITIVETYPE t, UINT mi, UINT nv, UINT n, const void *ix, D3DFORMAT f, const void *v, UINT st)
-{ (void)This; (void)t; (void)mi; (void)nv; (void)n; (void)ix; (void)f; (void)v; (void)st; return D3D_OK; }
+{ (void)This; H(H_DRAWIUP, t, mi, nv, n, P_(ix), f, P_(v), st); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_ProcessVertices(IDirect3DDevice9 *This, UINT s, UINT d, UINT n, IDirect3DVertexBuffer9 *b, IDirect3DVertexDeclaration9 *dc, DWORD f)
 { (void)This; (void)s; (void)d; (void)n; (void)b; (void)dc; (void)f; return D3DERR_INVALIDCALL; }
 static HRESULT STDMETHODCALLTYPE dev_CreateVertexDeclaration(IDirect3DDevice9 *This, const D3DVERTEXELEMENT9 *e, IDirect3DVertexDeclaration9 **out)
-{ (void)This; *out = (IDirect3DVertexDeclaration9 *)&blob_new(e, decl_bytes(e))->iface; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetVertexDeclaration(IDirect3DDevice9 *This, IDirect3DVertexDeclaration9 *d) { (void)This; (void)d; return D3D_OK; }
+{ Blob *b = blob_new(e, decl_bytes(e)); (void)This; b->host = H(H_DECL, P_(e), (int)(b->size / sizeof *e) - 1, 0, 0, 0, 0, 0, 0); *out = (IDirect3DVertexDeclaration9 *)&b->iface; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetVertexDeclaration(IDirect3DDevice9 *This, IDirect3DVertexDeclaration9 *d) { (void)This; (void)d; H(H_SETDECL, HOSTOF(d), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetVertexDeclaration(IDirect3DDevice9 *This, IDirect3DVertexDeclaration9 **d) { (void)This; *d = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetFVF(IDirect3DDevice9 *This, DWORD f) { (void)This; (void)f; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetFVF(IDirect3DDevice9 *This, DWORD f) { (void)This; (void)f; H(H_SETFVF, (int)f, 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetFVF(IDirect3DDevice9 *This, DWORD *f) { (void)This; *f = 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_CreateVertexShader(IDirect3DDevice9 *This, const DWORD *f, IDirect3DVertexShader9 **out)
-{ (void)This; *out = &blob_new(f, shader_bytes(f))->iface; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetVertexShader(IDirect3DDevice9 *This, IDirect3DVertexShader9 *s) { (void)This; (void)s; return D3D_OK; }
+{ Blob *b = blob_new(f, shader_bytes(f)); (void)This; b->host = H(H_SHADER, 0, P_(f), (int)b->size, 0, 0, 0, 0, 0); *out = &b->iface; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetVertexShader(IDirect3DDevice9 *This, IDirect3DVertexShader9 *s) { (void)This; (void)s; H(H_SETVS, HOSTOF(s), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetVertexShader(IDirect3DDevice9 *This, IDirect3DVertexShader9 **s) { (void)This; *s = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetVertexShaderConstantF(IDirect3DDevice9 *This, UINT r, const float *d, UINT n) { (void)This; (void)r; (void)d; (void)n; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetVertexShaderConstantF(IDirect3DDevice9 *This, UINT r, const float *d, UINT n) { (void)This; (void)r; (void)d; (void)n; H(H_CONSTS, 0, r, P_(d), n, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetVertexShaderConstantF(IDirect3DDevice9 *This, UINT r, float *d, UINT n) { (void)This; (void)r; memset(d, 0, n * 16); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetVertexShaderConstantI(IDirect3DDevice9 *This, UINT r, const int *d, UINT n) { (void)This; (void)r; (void)d; (void)n; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetVertexShaderConstantI(IDirect3DDevice9 *This, UINT r, const int *d, UINT n) { (void)This; (void)r; (void)d; (void)n; H(H_CONSTS, 2, r, P_(d), n, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetVertexShaderConstantI(IDirect3DDevice9 *This, UINT r, int *d, UINT n) { (void)This; (void)r; memset(d, 0, n * 16); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetVertexShaderConstantB(IDirect3DDevice9 *This, UINT r, const BOOL *d, UINT n) { (void)This; (void)r; (void)d; (void)n; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetVertexShaderConstantB(IDirect3DDevice9 *This, UINT r, const BOOL *d, UINT n) { (void)This; (void)r; (void)d; (void)n; H(H_CONSTS, 4, r, P_(d), n, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetVertexShaderConstantB(IDirect3DDevice9 *This, UINT r, BOOL *d, UINT n) { (void)This; (void)r; memset(d, 0, n * 4); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetStreamSource(IDirect3DDevice9 *This, UINT s, IDirect3DVertexBuffer9 *b, UINT o, UINT st) { (void)This; (void)s; (void)b; (void)o; (void)st; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetStreamSource(IDirect3DDevice9 *This, UINT s, IDirect3DVertexBuffer9 *b, UINT o, UINT st) { (void)This; (void)s; (void)b; (void)o; (void)st; H(H_STREAM, s, HOSTOF(b), o, st, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetStreamSource(IDirect3DDevice9 *This, UINT s, IDirect3DVertexBuffer9 **b, UINT *o, UINT *st) { (void)This; (void)s; *b = 0; *o = *st = 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetStreamSourceFreq(IDirect3DDevice9 *This, UINT s, UINT f) { (void)This; (void)s; (void)f; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetStreamSourceFreq(IDirect3DDevice9 *This, UINT s, UINT *f) { (void)This; (void)s; *f = 1; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetIndices(IDirect3DDevice9 *This, IDirect3DIndexBuffer9 *b) { (void)This; (void)b; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetIndices(IDirect3DDevice9 *This, IDirect3DIndexBuffer9 *b) { (void)This; (void)b; H(H_INDICES, HOSTOF(b), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetIndices(IDirect3DDevice9 *This, IDirect3DIndexBuffer9 **b) { (void)This; *b = 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_CreatePixelShader(IDirect3DDevice9 *This, const DWORD *f, IDirect3DPixelShader9 **out)
-{ (void)This; *out = (IDirect3DPixelShader9 *)&blob_new(f, shader_bytes(f))->iface; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetPixelShader(IDirect3DDevice9 *This, IDirect3DPixelShader9 *s) { (void)This; (void)s; return D3D_OK; }
+{ Blob *b = blob_new(f, shader_bytes(f)); (void)This; b->host = H(H_SHADER, 1, P_(f), (int)b->size, 0, 0, 0, 0, 0); *out = (IDirect3DPixelShader9 *)&b->iface; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetPixelShader(IDirect3DDevice9 *This, IDirect3DPixelShader9 *s) { (void)This; (void)s; H(H_SETPS, HOSTOF(s), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetPixelShader(IDirect3DDevice9 *This, IDirect3DPixelShader9 **s) { (void)This; *s = 0; return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetPixelShaderConstantF(IDirect3DDevice9 *This, UINT r, const float *d, UINT n) { (void)This; (void)r; (void)d; (void)n; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetPixelShaderConstantF(IDirect3DDevice9 *This, UINT r, const float *d, UINT n) { (void)This; (void)r; (void)d; (void)n; H(H_CONSTS, 1, r, P_(d), n, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetPixelShaderConstantF(IDirect3DDevice9 *This, UINT r, float *d, UINT n) { (void)This; (void)r; memset(d, 0, n * 16); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetPixelShaderConstantI(IDirect3DDevice9 *This, UINT r, const int *d, UINT n) { (void)This; (void)r; (void)d; (void)n; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetPixelShaderConstantI(IDirect3DDevice9 *This, UINT r, const int *d, UINT n) { (void)This; (void)r; (void)d; (void)n; H(H_CONSTS, 3, r, P_(d), n, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetPixelShaderConstantI(IDirect3DDevice9 *This, UINT r, int *d, UINT n) { (void)This; (void)r; memset(d, 0, n * 16); return D3D_OK; }
-static HRESULT STDMETHODCALLTYPE dev_SetPixelShaderConstantB(IDirect3DDevice9 *This, UINT r, const BOOL *d, UINT n) { (void)This; (void)r; (void)d; (void)n; return D3D_OK; }
+static HRESULT STDMETHODCALLTYPE dev_SetPixelShaderConstantB(IDirect3DDevice9 *This, UINT r, const BOOL *d, UINT n) { (void)This; (void)r; (void)d; (void)n; H(H_CONSTS, 5, r, P_(d), n, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetPixelShaderConstantB(IDirect3DDevice9 *This, UINT r, BOOL *d, UINT n) { (void)This; (void)r; memset(d, 0, n * 4); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_DrawRectPatch(IDirect3DDevice9 *This, UINT h, const float *s, const D3DRECTPATCH_INFO *i) { (void)This; (void)h; (void)s; (void)i; return D3DERR_INVALIDCALL; }
 static HRESULT STDMETHODCALLTYPE dev_DrawTriPatch(IDirect3DDevice9 *This, UINT h, const float *s, const D3DTRIPATCH_INFO *i) { (void)This; (void)h; (void)s; (void)i; return D3DERR_INVALIDCALL; }
@@ -750,6 +843,10 @@ static HRESULT STDMETHODCALLTYPE d3d_CreateDevice(IDirect3D9 *This, UINT a, D3DD
         d->depth = surface_new(bw, bh, pp->AutoDepthStencilFormat, D3DPOOL_DEFAULT, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_SURFACE);
         d->depth->refs = 1 << 20;
     }
+    host_on = prism_d3d9_call(H_DEVICE, (int)bw, (int)bh, pp->BackBufferFormat == D3DFMT_A8R8G8B8 ? D3DFMT_A8R8G8B8 : D3DFMT_X8R8G8B8,
+        pp->EnableAutoDepthStencil ? (int)pp->AutoDepthStencilFormat : 0, 0, 0, 0, 0) != 0;
+    d->back->host = H(H_BACKBUFFER, 0, 0, 0, 0, 0, 0, 0, 0);
+    if (d->depth) d->depth->host = H(H_AUTODEPTH, 0, 0, 0, 0, 0, 0, 0, 0);
     sw->iface.lpVtbl = &swap_vtbl; sw->refs = 1; sw->dev = d;
     d->swap = &sw->iface;
     dev_SetRenderTarget(&d->iface, 0, &d->back->iface);
