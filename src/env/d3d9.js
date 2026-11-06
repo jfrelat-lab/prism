@@ -47,6 +47,7 @@ function half(v) {
 }
 const DEPTH_FMT = new Set([70, 71, 75, 77, 79, 80, 82, 83]);   // D15S1 D32 D24S8 D24X8 D24X4S4 D16 D32F_LOCKABLE D24FS8
 const USAGE_RENDERTARGET = 1, USAGE_DEPTHSTENCIL = 2, USAGE_AUTOGENMIPMAP = 0x400;
+const TARGET = { '2D': 'TEXTURE_2D', Cube: 'TEXTURE_CUBE_MAP', '3D': 'TEXTURE_3D' };
 
 // Render states (D3DRENDERSTATETYPE) and their defaults; the device's auto depth buffer sets ZENABLE.
 const RS = { ZENABLE: 7, FILLMODE: 8, SHADEMODE: 9, ZWRITEENABLE: 14, ALPHATESTENABLE: 15, SRCBLEND: 19, DESTBLEND: 20, CULLMODE: 22, ZFUNC: 23,
@@ -54,12 +55,13 @@ const RS = { ZENABLE: 7, FILLMODE: 8, SHADEMODE: 9, ZWRITEENABLE: 14, ALPHATESTE
   STENCILPASS: 55, STENCILFUNC: 56, STENCILREF: 57, STENCILMASK: 58, STENCILWRITEMASK: 59, TEXTUREFACTOR: 60, LIGHTING: 137, COLORWRITEENABLE: 168,
   BLENDOP: 171, SCISSORTESTENABLE: 174, SLOPESCALEDEPTHBIAS: 175, SRGBWRITEENABLE: 194, DEPTHBIAS: 195, SEPARATEALPHABLENDENABLE: 206,
   SRCBLENDALPHA: 207, DESTBLENDALPHA: 208, BLENDOPALPHA: 209, BLENDFACTOR: 193, POINTSIZE: 154, AMBIENT: 139, COLORVERTEX: 141, LOCALVIEWER: 142,
-  NORMALIZENORMALS: 143, DIFFUSEMATERIALSOURCE: 145, SPECULARMATERIALSOURCE: 146, AMBIENTMATERIALSOURCE: 147, EMISSIVEMATERIALSOURCE: 148 };
+  NORMALIZENORMALS: 143, DIFFUSEMATERIALSOURCE: 145, SPECULARMATERIALSOURCE: 146, AMBIENTMATERIALSOURCE: 147, EMISSIVEMATERIALSOURCE: 148,
+  TWOSIDEDSTENCILMODE: 185, CCW_STENCILFAIL: 186, CCW_STENCILZFAIL: 187, CCW_STENCILPASS: 188, CCW_STENCILFUNC: 189 };
 const RS_DEFAULT = { [RS.FILLMODE]: 3, [RS.SHADEMODE]: 2, [RS.ZWRITEENABLE]: 1, [RS.SRCBLEND]: 2, [RS.DESTBLEND]: 1, [RS.CULLMODE]: 3, [RS.ZFUNC]: 4,
   [RS.ALPHAFUNC]: 8, [RS.DITHERENABLE]: 0, [RS.STENCILFAIL]: 1, [RS.STENCILZFAIL]: 1, [RS.STENCILPASS]: 1, [RS.STENCILFUNC]: 8, [RS.STENCILMASK]: 0xffffffff,
   [RS.STENCILWRITEMASK]: 0xffffffff, [RS.TEXTUREFACTOR]: 0xffffffff, [RS.LIGHTING]: 1, [RS.COLORWRITEENABLE]: 0xf, [RS.BLENDOP]: 1, [RS.SRCBLENDALPHA]: 2,
   [RS.DESTBLENDALPHA]: 1, [RS.BLENDOPALPHA]: 1, [RS.BLENDFACTOR]: 0xffffffff, [RS.COLORVERTEX]: 1, [RS.LOCALVIEWER]: 1, [RS.DIFFUSEMATERIALSOURCE]: 1,
-  [RS.SPECULARMATERIALSOURCE]: 2 };
+  [RS.SPECULARMATERIALSOURCE]: 2, [RS.CCW_STENCILFAIL]: 1, [RS.CCW_STENCILZFAIL]: 1, [RS.CCW_STENCILPASS]: 1, [RS.CCW_STENCILFUNC]: 8 };
 // Texture stage states (D3DTEXTURESTAGESTATETYPE) the fixed function's pixel stage reads, and their defaults: stage 0
 // modulates its texture by the diffuse colour and takes the texture's alpha, the others are disabled.
 const TSS = { COLOROP: 1, COLORARG1: 2, COLORARG2: 3, ALPHAOP: 4, ALPHAARG1: 5, ALPHAARG2: 6, TEXCOORDINDEX: 11, TEXTURETRANSFORMFLAGS: 24 };
@@ -124,15 +126,26 @@ function createDevice(g, params, { floatRT, onPresent }) {
   const get = (h, kind) => { const o = objects.get(h); if (!o || (kind && o.kind !== kind)) fail(`handle ${h} is not a ${kind}`); return o; };
 
   // ---- surfaces and textures ----
-  function makeTexture(w, h, levels, usage, format) {
+  // A texture of one of D3D9's three kinds: dim '2D', 'Cube' (six faces, D3D's face order and texel rows are
+  // GL's: both follow RenderMan's cube layout) or '3D' (a volume, depth d). Each 2D level and cube face level
+  // is a surface; `faces[f]` lists a cube face's, `surfaces` is face 0's (a 2D texture's own).
+  function makeTexture(w, h, levels, usage, format, dim = '2D', d = 1) {
     const f = FMT[format] ?? fail(`texture format ${format}`);
     if ((usage & USAGE_RENDERTARGET) && /F$/.test(f[0]) && !floatRT) fail('a float render target without EXT_color_buffer_float');
-    const n = levels || 1 + Math.floor(Math.log2(Math.max(w, h)));
-    const tex = g.createTexture();
-    g.bindTexture(g.TEXTURE_2D, tex);
-    g.texStorage2D(g.TEXTURE_2D, (usage & USAGE_AUTOGENMIPMAP) ? 1 + Math.floor(Math.log2(Math.max(w, h))) : n, g[f[0]], w, h);
-    const t = { kind: 'texture', tex, w, h, levels: n, usage, format, f, surfaces: [] };
-    for (let l = 0; l < n; l++) t.surfaces.push(add({ kind: 'surface', tex: t, level: l, w: Math.max(1, w >> l), h: Math.max(1, h >> l), format }));
+    if (dim !== '2D' && (usage & USAGE_RENDERTARGET)) fail(`a ${dim === 'Cube' ? 'cube' : 'volume'} render target is not supported yet`);
+    const big = Math.max(w, h, d), n = levels || 1 + Math.floor(Math.log2(big));
+    const tex = g.createTexture(), target = TARGET[dim];
+    g.bindTexture(g[target], tex);
+    const storage = (usage & USAGE_AUTOGENMIPMAP) ? 1 + Math.floor(Math.log2(big)) : n;
+    if (dim === '3D') g.texStorage3D(g.TEXTURE_3D, storage, g[f[0]], w, h, d);
+    else g.texStorage2D(g[target], storage, g[f[0]], w, h);
+    const t = { kind: 'texture', dim, target, tex, w, h, d, levels: n, usage, format, f, surfaces: [], faces: [] };
+    if (dim !== '3D') for (let face = 0; face < (dim === 'Cube' ? 6 : 1); face++) {
+      const list = [];
+      for (let l = 0; l < n; l++) list.push(add({ kind: 'surface', tex: t, face, level: l, w: Math.max(1, w >> l), h: Math.max(1, h >> l), format }));
+      t.faces.push(list);
+    }
+    t.surfaces = t.faces[0] ?? [];
     return t;
   }
   function makeDepth(w, h) {
@@ -214,7 +227,22 @@ function createDevice(g, params, { floatRT, onPresent }) {
     const sh = g.createShader(type === 'pixel' ? g.FRAGMENT_SHADER : g.VERTEX_SHADER);
     g.shaderSource(sh, t.glsl); g.compileShader(sh);
     if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${profile}${h ? ` ${h.entry}` : ''}: ${g.getShaderInfoLog(sh)}\n${t.glsl}`);
-    return { kind: type, sh, ...t };
+    // ps_1_x declares no sampler kinds: a tex reads whatever is bound, so the shader is translated again per kinds
+    return { kind: type, sh, ...t, ...(v && v.stage === 'ps' && v.major < 2 ? { ps1: Array.from(tokens), variants: new Map() } : {}) };
+  }
+  function ps1Variant(o) {
+    const dims = {};
+    for (const sm of o.samplers) { const t = textures[sm.index] ? objects.get(textures[sm.index]) : null; if (t && t.dim !== '2D') dims[sm.index] = t.dim; }
+    const key = JSON.stringify(dims);
+    if (key === '{}') return o;
+    let x = o.variants.get(key);
+    if (!x) {
+      const t = translateBytecode(o.ps1, { samplerDims: dims });
+      const sh = g.createShader(g.FRAGMENT_SHADER); g.shaderSource(sh, t.glsl); g.compileShader(sh);
+      if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${t.profile} with samplers ${key}: ${g.getShaderInfoLog(sh)}\n${t.glsl}`);
+      o.variants.set(key, x = { kind: 'pixel', sh, ...t });
+    }
+    return x;
   }
   // An FVF as vertex elements { off, size, color, usage, index } (usage as the HLSL semantic's name,
   // lower case) and its stride. D3DCOLOR elements are B,G,R,A bytes.
@@ -239,6 +267,25 @@ function createDevice(g, params, { floatRT, onPresent }) {
     fvfLayouts.set(f, L);
     return L;
   }
+  // A vertex declaration's elements in the same form, each with its GL type: D3DDECLTYPE -> [components, GL type,
+  // normalised]. D3DCOLOR is B,G,R,A bytes (swapped per draw, as an FVF's); a missing component reads as GL's
+  // (0, 0, 0, 1), which is D3D9's default too. The stride is the stream's, set by SetStreamSource.
+  const DECLTYPE = { 0: [1, 'FLOAT'], 1: [2, 'FLOAT'], 2: [3, 'FLOAT'], 3: [4, 'FLOAT'], 4: [4, 'UNSIGNED_BYTE', true], 5: [4, 'UNSIGNED_BYTE'],
+    6: [2, 'SHORT'], 7: [4, 'SHORT'], 8: [4, 'UNSIGNED_BYTE', true], 9: [2, 'SHORT', true], 10: [4, 'SHORT', true], 11: [2, 'UNSIGNED_SHORT', true],
+    12: [4, 'UNSIGNED_SHORT', true], 15: [2, 'HALF_FLOAT'], 16: [4, 'HALF_FLOAT'] };
+  const DECLUSAGE = ['position', 'blendweight', 'blendindices', 'normal', 'psize', 'texcoord', 'tangent', 'binormal', 'tessfactor', 'positiont',
+    'color', 'fog', 'depth', 'sample'];
+  function declLayout(els) {
+    const E = els.map((e) => {
+      if (e.stream !== 0) fail(`vertex declaration: an element in stream ${e.stream} (only stream 0 is supported yet)`);
+      if (e.method) fail(`vertex declaration: method ${e.method} (tessellation) is not supported`);
+      const t = DECLTYPE[e.type] ?? fail(`vertex declaration: D3DDECLTYPE ${e.type} is not supported yet`);
+      const usage = DECLUSAGE[e.usage] ?? fail(`vertex declaration: usage ${e.usage}`);
+      return { off: e.offset, size: t[0], glType: t[1], norm: !!t[2], color: e.type === 4, usage, index: e.usageIndex };
+    });
+    return { E, stride: null, colors: E.filter((e) => e.color).map((e) => e.off) };
+  }
+  const layout = () => (decl ? get(decl, 'decl').L : fvfLayout(fvf));
   // What a sampler read must be made into, beyond GL's own read, per draw:
   // - D3DTADDRESS_BORDER, which WebGL lacks: the border colour outside [0, 1] on that axis (the GL sampler
   //   clamps). Exact with point filtering; with linear, D3D also blends the border into the outermost half texel.
@@ -281,7 +328,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
   function program(vsObj, psObj, L) {
     const psA = adaptations(psObj.samplers, 0), vsA = vsObj ? adaptations(vsObj.samplers, 16) : [];
     const sig = (l) => l.map((x) => `${x.index}${x.u ? 'u' : ''}${x.v ? 'v' : ''}${x.fill ? textures[x.slot] && objects.get(textures[x.slot]).format : ''}`).join(',');
-    const key = `${vsObj ? objectsKey(vsObj) : `t${fvf}`}|${objectsKey(psObj)}|${sig(psA)}|${sig(vsA)}`;
+    const key = `${vsObj ? objectsKey(vsObj) : `t${decl ? `d${decl}` : fvf}`}|${objectsKey(psObj)}|${sig(psA)}|${sig(vsA)}`;
     let p = programs.get(key);
     if (p) return p;
     let vsrc;
@@ -318,7 +365,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
     const u = (n) => g.getUniformLocation(prog, n);
     p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
       ff: vsObj?.ffp ? { world: u('prism_ff_world'), view: u('prism_ff_view'), proj: u('prism_ff_proj'), mat: u('prism_ff_mat'), ambient: u('prism_ff_ambient'), light: u('prism_ff_light') } : null,
-      s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])], bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
+      s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])],
+      dims: new Map([...psObj.samplers.map((sm) => [sm.index, sm.dim]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, sm.dim]) : [])]), bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
     programs.set(key, p);
     return p;
   }
@@ -426,6 +474,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
     9: 'DST_COLOR', 10: 'ONE_MINUS_DST_COLOR', 11: 'SRC_ALPHA_SATURATE', 14: 'CONSTANT_COLOR', 15: 'ONE_MINUS_CONSTANT_COLOR' };
   const BLENDOP = { 1: 'FUNC_ADD', 2: 'FUNC_SUBTRACT', 3: 'FUNC_REVERSE_SUBTRACT', 4: 'MIN', 5: 'MAX' };
   const blend = (v) => g[BLEND[v] ?? fail(`blend factor ${v}`)];
+  // D3DSTENCILOP: KEEP ZERO REPLACE INCRSAT DECRSAT INVERT INCR DECR
+  const STENCILOP = { 1: 'KEEP', 2: 'ZERO', 3: 'REPLACE', 4: 'INCR', 5: 'DECR', 6: 'INVERT', 7: 'INCR_WRAP', 8: 'DECR_WRAP' };
+  const stencilOp = (v) => g[STENCILOP[v] ?? fail(`stencil operation ${v}`)];
   const ADDRESS = { 1: 'REPEAT', 2: 'MIRRORED_REPEAT', 3: 'CLAMP_TO_EDGE', 4: 'CLAMP_TO_EDGE' };   // BORDER: see adapt
   const samplerObjs = [];
   function applyState() {
@@ -450,20 +501,37 @@ function createDevice(g, params, { floatRT, onPresent }) {
     const cw = rs.get(RS.COLORWRITEENABLE);
     g.colorMask(!!(cw & 1), !!(cw & 2), !!(cw & 4), !!(cw & 8));
     if (rs.get(RS.ALPHATESTENABLE)) fail('D3DRS_ALPHATESTENABLE is not supported yet');
-    if (rs.get(RS.STENCILENABLE)) fail('D3DRS_STENCILENABLE is not supported yet');
+    // The stencil, one-sided or two (D3DRS_TWOSIDEDSTENCILMODE: the CCW_ states for counter-clockwise triangles).
+    // D3D's clockwise front faces are GL's front faces here (the rows kept, see the cull above), so D3D's CCW set is
+    // GL's BACK. Its buffer is the depth surface's D24S8.
+    if (rs.get(RS.STENCILENABLE) && depthSurface) {
+      g.enable(g.STENCIL_TEST);
+      const ref = rs.get(RS.STENCILREF) & 255, mask = rs.get(RS.STENCILMASK) & 255;
+      const two = !!rs.get(RS.TWOSIDEDSTENCILMODE);
+      const side = (face, fn, sf, zf, pass) => {
+        g.stencilFuncSeparate(face, CMP(rs.get(fn)), ref, mask);
+        g.stencilOpSeparate(face, stencilOp(rs.get(sf)), stencilOp(rs.get(zf)), stencilOp(rs.get(pass)));
+      };
+      side(two ? g.FRONT : g.FRONT_AND_BACK, RS.STENCILFUNC, RS.STENCILFAIL, RS.STENCILZFAIL, RS.STENCILPASS);
+      if (two) side(g.BACK, RS.CCW_STENCILFUNC, RS.CCW_STENCILFAIL, RS.CCW_STENCILZFAIL, RS.CCW_STENCILPASS);
+      g.stencilMask(rs.get(RS.STENCILWRITEMASK) & 255);
+    } else g.disable(g.STENCIL_TEST);
     if (rs.get(RS.FILLMODE) !== 3) fail(`D3DRS_FILLMODE ${rs.get(RS.FILLMODE)}`);
   }
   function bindSamplers(p) {
     for (const [unit, loc] of p.s) {
       g.activeTexture(g.TEXTURE0 + unit);
       const t = textures[unit] ? get(textures[unit], 'texture') : null;
-      g.bindTexture(g.TEXTURE_2D, t ? t.tex : null);
+      // the shader's sampler type and the texture's kind must agree, or GL reads black where D3D reads the texture
+      const want = p.dims.get(unit) ?? '2D';
+      if (t && t.dim !== want) fail(`sampler ${unit}: a ${t.dim} texture bound where the shader samples a ${want} one`);
+      for (const k of ['TEXTURE_2D', 'TEXTURE_CUBE_MAP', 'TEXTURE_3D']) g.bindTexture(g[k], t && k === t.target ? t.tex : null);
       g.uniform1i(loc, unit);
       const st = samp[unit];
       let so = samplerObjs[unit];
       if (!so) so = samplerObjs[unit] = g.createSampler();
       const addr = (v) => g[ADDRESS[v] ?? fail(`sampler ${unit}: texture address ${v}`)];
-      g.samplerParameteri(so, g.TEXTURE_WRAP_S, addr(st[1])); g.samplerParameteri(so, g.TEXTURE_WRAP_T, addr(st[2]));
+      g.samplerParameteri(so, g.TEXTURE_WRAP_S, addr(st[1])); g.samplerParameteri(so, g.TEXTURE_WRAP_T, addr(st[2])); g.samplerParameteri(so, g.TEXTURE_WRAP_R, addr(st[3]));
       const mag = st[5] >= 2 ? g.LINEAR : g.NEAREST, min = st[6] >= 2, mip = st[7];
       const levels = t ? t.levels : 1;
       g.samplerParameteri(so, g.TEXTURE_MAG_FILTER, mag);
@@ -528,14 +596,14 @@ function createDevice(g, params, { floatRT, onPresent }) {
   }
   // v: { bytes } or { buf, base, first }; idx: null, { bytes, fmt } or { buf, offset, fmt }
   function draw(type, primCount, stride, v, idx = null) {
-    const L = fvfLayout(fvf);
-    if (L.stride !== stride) fail(`stride ${stride} for FVF 0x${fvf.toString(16)} of ${L.stride} bytes`);
+    const L = layout();
+    if (L.stride !== null && L.stride !== stride) fail(`stride ${stride} for FVF 0x${fvf.toString(16)} of ${L.stride} bytes`);
     const n = COUNT[type]?.(primCount) ?? fail(`primitive type ${type}`);
     if (v.bytes && type >= 4 && !idx && allZero(v.bytes.subarray(0, n * stride))) return;
     // pretransformed vertices (XYZRHW) skip vertex processing, a vertex shader that is set included (elevated draws
     // its full-screen passes with its terrain's vertex shader still set)
     const pre = L.E.some((e) => e.usage === 'positiont');
-    const psObj = ps ? get(ps, 'pixel') : ffPixel(), vsObj = pre ? null : vs ? get(vs, 'vertex') : ffVertex(L);
+    const psObj = ps ? (((o) => (o.ps1 ? ps1Variant(o) : o))(get(ps, 'pixel'))) : ffPixel(), vsObj = pre ? null : vs ? get(vs, 'vertex') : ffVertex(L);
     applyState();
     // WebGL refuses a draw with a bound target the pixel shader writes nothing to; D3D leaves that target as it was
     g.drawBuffers(fbBufs.get(framebuffer()).map((b, k) => (b !== g.NONE && psObj?.outputs.some((o) => o.semantic === 'COLOR' && o.index === k) ? b : g.NONE)));
@@ -565,7 +633,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
       // an input no element feeds: D3DCOLOR's defaults for the colours, (0, 0, 0, 1) otherwise
       if (!e) { g.vertexAttrib4f(a.loc, ...(a.usage === 'color' ? (a.index ? [0, 0, 0, 0] : [1, 1, 1, 1]) : [0, 0, 0, 1])); continue; }
       g.enableVertexAttribArray(a.loc);
-      g.vertexAttribPointer(a.loc, e.size, e.color ? g.UNSIGNED_BYTE : g.FLOAT, e.color, stride, base + e.off);
+      g.vertexAttribPointer(a.loc, e.size, g[e.glType ?? (e.color ? 'UNSIGNED_BYTE' : 'FLOAT')], e.norm ?? e.color, stride, base + e.off);
     }
     if (idx) {
       if (idx.bytes) { g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, ibo); g.bufferData(g.ELEMENT_ARRAY_BUFFER, idx.bytes, g.STREAM_DRAW); } else g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, idx.buf);
@@ -680,8 +748,10 @@ function createDevice(g, params, { floatRT, onPresent }) {
     // vertex input
     setFVF: (f) => { fvf = f >>> 0; decl = 0; return OK; },
     getFVF: () => fvf,
-    createVertexDeclaration: () => fail('vertex declarations are not supported yet'),
-    setVertexDeclaration: (h) => { if (h) fail('vertex declarations are not supported yet'); decl = 0; return OK; },
+    // D3DVERTEXELEMENT9s as { stream, offset, type, method, usage, usageIndex }, without the D3DDECL_END marker
+    createVertexDeclaration: (els) => add({ kind: 'decl', els: els.map((e) => ({ ...e })), L: declLayout(els) }),
+    setVertexDeclaration: (h) => { if (h) get(h, 'decl'); decl = h; fvf = 0; return OK; },
+    getVertexDeclaration: () => decl,
 
     // buffers
     createVertexBuffer: (length) => add(makeBuffer('vb', length)),
@@ -705,14 +775,14 @@ function createDevice(g, params, { floatRT, onPresent }) {
     // from the buffers in GL; a vertex buffer holding D3DCOLORs goes up from its CPU copy, swapped
     drawPrimitive: (type, start, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb');
-      if (fvfLayout(fvf).colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + COUNT[type](primCount)) * s.stride) });
+      if (layout().colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + COUNT[type](primCount)) * s.stride) });
       else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset, first: start });
       return OK;
     },
     drawIndexedPrimitive: (type, baseVertex, minIndex, numVertices, startIndex, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb'), ib = get(indices, 'ib');
       const size = ib.format === 102 ? 4 : 2;
-      if (fvfLayout(fvf).colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + baseVertex * s.stride) }, { bytes: ib.bytes.slice(startIndex * size, (startIndex + COUNT[type](primCount)) * size), fmt: ib.format });
+      if (layout().colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + baseVertex * s.stride) }, { bytes: ib.bytes.slice(startIndex * size, (startIndex + COUNT[type](primCount)) * size), fmt: ib.format });
       else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset + baseVertex * s.stride }, { buf: ib.buf, offset: startIndex * size, fmt: ib.format });
       return OK;
     },
@@ -721,15 +791,36 @@ function createDevice(g, params, { floatRT, onPresent }) {
     createTexture: (w, h, levels, usage, format) => add(makeTexture(w, h, levels, usage, format)),
     // D3DXFillTextureTX(texture, a tx_1_0 shader): the host's d3dx9 hands over the blob D3DXCompileShader made
     fillTextureTX,
-    textureWrite: (h, level, rect, bytes, pitch) => {
-      const t = get(h, 'texture'), s = get(t.surfaces[level], 'surface');
+    // a 2D level, or a cube face's (face: D3DCUBEMAP_FACES, +X -X +Y -Y +Z -Z)
+    textureWrite: (h, level, rect, bytes, pitch, face = 0) => {
+      const t = get(h, 'texture');
+      if (t.dim === '3D') fail('textureWrite on a volume texture (volumeWrite)');
+      const s = get(t.faces[face]?.[level] ?? fail(`face ${face} level ${level}`), 'surface');
       if (rect) fail('a partial texture write is not supported yet');
-      g.bindTexture(g.TEXTURE_2D, t.tex);
+      g.bindTexture(g[t.target], t.tex);
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
-      g.texSubImage2D(g.TEXTURE_2D, level, 0, 0, s.w, s.h, g[t.f[1]], g[t.f[2]], texels(t.f, bytes, s.w, s.h, pitch));
-      if (level === 0 && (t.usage & USAGE_AUTOGENMIPMAP)) g.generateMipmap(g.TEXTURE_2D);
+      g.texSubImage2D(t.dim === 'Cube' ? g.TEXTURE_CUBE_MAP_POSITIVE_X + face : g.TEXTURE_2D, level, 0, 0, s.w, s.h, g[t.f[1]], g[t.f[2]], texels(t.f, bytes, s.w, s.h, pitch));
+      if (level === 0 && (t.usage & USAGE_AUTOGENMIPMAP) && (t.dim === '2D' || face === 5)) g.generateMipmap(g[t.target]);
       return OK;
     },
+    // a volume's level, slice 0 first: LockBox's bytes with its row and slice pitches
+    volumeWrite: (h, level, bytes, rowPitch, slicePitch) => {
+      const t = get(h, 'texture');
+      if (t.dim !== '3D') fail('volumeWrite on a texture that is not a volume');
+      const w = Math.max(1, t.w >> level), ht = Math.max(1, t.h >> level), d = Math.max(1, t.d >> level);
+      const slices = [];
+      for (let z = 0; z < d; z++) slices.push(texels(t.f, bytes.subarray(z * slicePitch), w, ht, rowPitch));
+      const one = slices[0], all = new one.constructor(one.length * d);
+      slices.forEach((s, z) => all.set(s, z * one.length));
+      g.bindTexture(g.TEXTURE_3D, t.tex);
+      g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+      g.texSubImage3D(g.TEXTURE_3D, level, 0, 0, 0, w, ht, d, g[t.f[1]], g[t.f[2]], all);
+      if (level === 0 && (t.usage & USAGE_AUTOGENMIPMAP)) g.generateMipmap(g.TEXTURE_3D);
+      return OK;
+    },
+    createCubeTexture: (edge, levels, usage, format) => add(makeTexture(edge, edge, levels, usage, format, 'Cube')),
+    createVolumeTexture: (w, h, d, levels, usage, format) => add(makeTexture(w, h, levels, usage, format, '3D', d)),
+    getCubeMapSurface: (h, face, level) => get(h, 'texture').faces[face]?.[level] ?? fail(`face ${face} level ${level}`),
     setTexture: (s, h) => { textures[slot(s)] = h; return OK; },
     getTexture: (s) => textures[slot(s)],
     getSurfaceLevel: (h, level) => get(h, 'texture').surfaces[level] ?? fail(`level ${level}`),
@@ -785,14 +876,13 @@ function createDevice(g, params, { floatRT, onPresent }) {
     release: (h) => {
       const o = objects.get(h);
       if (!o) return OK;
-      if (o.kind === 'texture') { g.deleteTexture(o.tex); for (const s of o.surfaces) objects.delete(s); }
-      else if ((o.kind === 'vertex' || o.kind === 'pixel') && o.sh) g.deleteShader(o.sh);
+      if (o.kind === 'texture') { g.deleteTexture(o.tex); for (const s of o.faces.flat()) objects.delete(s); }
+      else if ((o.kind === 'vertex' || o.kind === 'pixel') && o.sh) { g.deleteShader(o.sh); for (const x of o.variants?.values() ?? []) g.deleteShader(x.sh); }
       else if (o.kind === 'surface' && o.depth) { g.deleteRenderbuffer(o.depth); for (const rb of o.sized.values()) g.deleteRenderbuffer(rb); }
       objects.delete(h);
       for (const [k, fb] of fbos) if (k.split(/[,/]/).includes(String(h))) { g.deleteFramebuffer(fb); fbos.delete(k); }
       return OK;
     },
   };
-  void decl;
   return dev;
 }
