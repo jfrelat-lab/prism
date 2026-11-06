@@ -263,7 +263,9 @@ function coerce(ty, js, from, to) {
   // other, because JS throws rather than converting.
   if (is64(to)) {
     if (is64(from)) return mask64(js, to);
-    if (T.isFloat(from)) return mask64(`BigInt(Math.trunc(${js}))`, to);
+    // Truncated in every mode (/QIfist leaves 64 bits to _ftol), through a helper: BigInt() throws on
+    // an infinity or a NaN, where C has no answer and the x87 stores the integer indefinite.
+    if (T.isFloat(from)) return mask64(`M.ftol64(${js})`, to);
     return mask64(`BigInt(${T.isUnsigned(from) ? `(${js})>>>0` : `(${js})|0`})`, to);
   }
   if (is64(from)) {
@@ -277,6 +279,8 @@ function coerce(ty, js, from, to) {
   }
   if (T.isFloat(from)) {
     // C truncates toward zero. `|0` does exactly that for the in-range case, which is all C defines.
+    // /QIfist: fistp, then the low dword, narrowed to the target as any int is.
+    if (ty.fist) return to.size < 4 ? coerce(ty, `M.fist(${js})`, ty.INT, to) : T.isUnsigned(to) ? `(M.fist(${js})>>>0)` : `M.fist(${js})`;
     return T.isUnsigned(to) ? `((${js})>>>0)` : `((${js})|0)`;
   }
   /*
@@ -341,6 +345,7 @@ export class FunctionEmitter {
      * lift when the rest of P11.1 lands.
      */
     this.ty = T.makeTypes(ctx.model ?? 'i386', { signedChar: ctx.signedChar });
+    if (ctx.floatToInt === 'fist') this.ty = { ...this.ty, fist: true };
     /*
      * Which model each emitted function was actually emitted for. A set that holds anything but the
      * one the program was compiled for means some path built an emitter without the model -- which

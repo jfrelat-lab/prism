@@ -78,6 +78,21 @@ export function makeMachine(mod = new Module()) {
     cpu: { if: 1 },          // the interrupt flag, one for the machine (env/pcirq.js delivers against it)
     // The MMX registers Visual C++ inline assembly runs on: the machine's, not a function's (src/asm/msvc-rt.js).
     get x86() { return this._x86 ??= makeX86(); },
+    // A floating value to an integer of 32 bits or fewer under compile({ floatToInt: 'fist' }) (Visual
+    // C++ /QIfist): a fistp of eight bytes by the x87 rounding control, of which the int keeps the low
+    // dword -- 0 for the integer indefinite, the 0x8000000000000000 that an out-of-range or NaN value
+    // stores. (tools/gate-qifist.mjs, against cl 13.10.)
+    fist(v) {
+      const r = this.x86.f.rint(v);
+      if (!(r >= -(2 ** 63) && r < 2 ** 63)) { this.x86.f.sw |= 1; return 0; }
+      return r >= -2147483648 && r < 2147483648 ? r | 0 : (r % 4294967296) | 0;
+    },
+    // A floating value to a 64-bit integer, in every mode (/QIfist leaves it to the _ftol helper):
+    // truncated whatever the control word, signed or not, and the indefinite where it does not fit.
+    ftol64(v) {
+      const r = Math.trunc(v);
+      return r >= -(2 ** 63) && r < 2 ** 63 ? BigInt(r) : -(2n ** 63n);
+    },
     /*
      * The safepoint budget. Emitted loops decrement it and call sp_ when it runs out; the default
      * handler just refills it, so an uninstrumented run pays a decrement and nothing else. A harness

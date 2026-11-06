@@ -38,6 +38,7 @@ PRISM_REF_CACHE=0 turn them off.
 | `gate-borlandasm.mjs` | **Unicorn** in 16-bit real mode, on the same snippets assembled by nasm | Borland inline asm, 1,339 cases |
 | `gate-msvcasm.mjs` | **Unicorn** in 32-bit mode as a Pentium III, on the same snippets assembled by nasm; the x87 ops Unicorn's QEMU 5 computes in double (fprem, transcendentals) against **gcc's GNU asm in the oracle container** | Visual C++ `__asm`: integer ALU with CF/ZF/SF/OF/PF, MMX, x87 at 53 and 24 bits and every rounding mode, 3,240 cases + 152 x87 entries; names, members, labels, the computed jump, CallCode's `call eax`, returns in EAX/EDX:EAX/ST(0), executed |
 | `gate-mmintrin.mjs` | gcc 12, i386, `-mmmx -msse` with its own headers | `<mmintrin.h>`/`<xmmintrin.h>`: 76 intrinsics, 18,793 results |
+| `gate-qifist.mjs` | **Visual C++ Toolkit 2003** (cl 13.10.3077) under Wine, with and without `/QIfist` | `compile.floatToInt`: float and double to char/short/int/unsigned/`__int64` under the four rounding modes, 272 lines; `'trunc'` on C's in-range ones; 4 mutations red |
 | `gate-tasm-front.mjs` | **Turbo Assembler 2.5** under DOSBox-X, per game | every byte, relocation, public, instruction, offset and length TASM produced — Keen Dreams and Catacomb 3-D |
 | `gate-tasm-run.mjs` | **Unicorn executing TASM's own object code** | registers, flags, 1,088 KB page by page, port writes |
 | `gate-tasm-link.mjs` | Borland's own link of the same objects | C reaches the assembly as Borland's linker lets it |

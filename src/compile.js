@@ -864,8 +864,9 @@ function unitTokens(pp, source, file, cxx) {
   return new Preprocessor({}).run(c, file);
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, ppSizeof = null, extraBuiltins = null, cxx } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, floatToInt, ppSizeof = null, extraBuiltins = null, cxx } = {}) {
   checkCxxOption(cxx);
+  checkFloatToInt(floatToInt);
   const pp = new Preprocessor({
     ppSizeof,
     defines: mergeDefines(mergeDefines(TARGET_DEFINES, { ...modelDefines(model, signedChar), ...longDoubleDefines(longDouble) }), defines),
@@ -919,7 +920,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   }
 
   // Pass 2: emit. Static initialisers are written straight into the image where they are constant.
-  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls, model, signedChar };
+  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls, model, signedChar, floatToInt };
   const pieces = [];
   const emitted = [];
   for (const d of unit.decls) {
@@ -1036,8 +1037,9 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx } = {}) {
   checkCxxOption(cxx);
+  checkFloatToInt(floatToInt);
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
   const exportsOf = new Map(Object.entries(moduleExports).map(([k, v]) => [k, new Set(v)]));
   // The builtins this build sees: the global table, plus whatever its environments add. Computed
@@ -1388,6 +1390,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       directCalls,
       model,              // this ctx carried neither, so every target's emitter typed for i386
       signedChar,
+      floatToInt,
       argOrder,
       builtinRefs,
       undefinedCalls,
@@ -1712,6 +1715,15 @@ function staticInit(mod, addr, type, init, ctx) {
 /** What gcc's -mlong-double-64 changes in the predefined macros PRISM sets: the size, nothing else. */
 export function longDoubleDefines(longDouble) {
   return longDouble === 64 ? { __SIZEOF_LONG_DOUBLE__: '8' } : {};
+}
+
+/**
+ * How a floating value becomes an integer. 'trunc' is C's rule. 'fist' is Visual C++'s /QIfist: no
+ * call to _ftol, a bare fistp of eight bytes instead, so the x87 control word's rounding decides
+ * (nearest by default, whatever the program's fldcw set) and the low dword is kept.
+ */
+function checkFloatToInt(v) {
+  if (v !== undefined && v !== 'trunc' && v !== 'fist') throw new Error(`compile: floatToInt must be 'trunc' or 'fist', not ${JSON.stringify(v)}`);
 }
 
 export function charDefines(model = 'i386', signedChar) {
