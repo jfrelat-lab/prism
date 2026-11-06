@@ -864,7 +864,7 @@ function unitTokens(pp, source, file, cxx) {
   return new Preprocessor({}).run(c, file);
 }
 
-export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, floatToInt, ppSizeof = null, extraBuiltins = null, cxx } = {}) {
+export function compile(source, { file = 'main.c', defines = {}, resolve = null, memory, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, extraBuiltins = null, cxx } = {}) {
   checkCxxOption(cxx);
   checkFloatToInt(floatToInt);
   const pp = new Preprocessor({
@@ -920,7 +920,7 @@ export function compile(source, { file = 'main.c', defines = {}, resolve = null,
   }
 
   // Pass 2: emit. Static initialisers are written straight into the image where they are constant.
-  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls, model, signedChar, floatToInt };
+  const ctx = { globals, funcs, builtins: withEnvBuiltins(extraBuiltins), safepoints, directCalls, model, signedChar, floatToInt, x87Precision };
   const pieces = [];
   const emitted = [];
   for (const d of unit.decls) {
@@ -1037,7 +1037,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx } = {}) {
   checkCxxOption(cxx);
   checkFloatToInt(floatToInt);
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
@@ -1391,6 +1391,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       model,              // this ctx carried neither, so every target's emitter typed for i386
       signedChar,
       floatToInt,
+      x87Precision,
       argOrder,
       builtinRefs,
       undefinedCalls,
@@ -1725,6 +1726,15 @@ export function longDoubleDefines(longDouble) {
 function checkFloatToInt(v) {
   if (v !== undefined && v !== 'trunc' && v !== 'fist') throw new Error(`compile: floatToInt must be 'trunc' or 'fist', not ${JSON.stringify(v)}`);
 }
+
+/*
+ * compile.x87Precision: double arithmetic as Visual C++'s x86 code does it, on the x87 -- every +, -,
+ * *, / and sqrt result rounded by the control word's precision field, so to 24 bits after a program's
+ * fldcw selects single precision (.kkrieger's sFloatFix does, before every texture). At the default
+ * precision nothing changes. A float is already rounded at every operation, which IS single
+ * precision; what stays open is a float temporary at 53 or 64 bits, kept wider by the x87 and
+ * rounded at every step here.
+ */
 
 export function charDefines(model = 'i386', signedChar) {
   return T.makeTypes(model, { signedChar }).CHAR.signed ? {} : { __CHAR_UNSIGNED__: '1' };

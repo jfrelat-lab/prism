@@ -328,6 +328,8 @@ function coerce(ty, js, from, to) {
  * unfitted -1 widened to 0xFFFFFFFF (Borland, executed: gate-borland-int16). Only the
  * compound-assignment arithmetic needs nothing: it is always converted back to the lvalue's type.
  */
+// compile.x87Precision: a double operation as the x87 does it (runtime.js M.pcAdd and the rest).
+const X87_OP = { '+': 'Add', '-': 'Sub', '*': 'Mul', '/': 'Div' };
 const fitInt = (ty, js, t) => (T.isInteger(t) && !is64(t) && t.size === 2 ? coerce(ty, js, t, t) : js);
 
 // ---------------------------------------------------------------- the function emitter
@@ -346,6 +348,7 @@ export class FunctionEmitter {
      */
     this.ty = T.makeTypes(ctx.model ?? 'i386', { signedChar: ctx.signedChar });
     if (ctx.floatToInt === 'fist') this.ty = { ...this.ty, fist: true };
+    if (ctx.x87Precision) this.ty = { ...this.ty, x87pc: true };
     /*
      * Which model each emitted function was actually emitted for. A set that holds anything but the
      * one the program was compiled for means some path built an emitter without the model -- which
@@ -2486,6 +2489,7 @@ export class FunctionEmitter {
     const A = coerce(this.ty, a.js, at, c), B = coerce(this.ty, b.js, bt, c);
     if (T.isFloat(c)) {
       const raw = `((${A})${op}(${B}))`;
+      if (c.name !== 'float' && this.ty.x87pc && '+-*/'.includes(op)) return { js: `M.pc${X87_OP[op]}(${A},${B})`, type: c };
       return { js: c.name === 'float' ? `Math.fround(${raw})` : raw, type: c };
     }
     if (is64(c)) return { js: bin64(op, A, B, c), type: c };
@@ -2607,6 +2611,7 @@ export class FunctionEmitter {
     const A = coerce(this.ty, a.js, at, c), B = coerce(this.ty, b.js, bt, c);
     if (T.isFloat(c)) {
       const raw = `((${A})${op}(${B}))`;
+      if (c.name !== 'float' && this.ty.x87pc && '+-*/'.includes(op)) return { js: `M.pc${X87_OP[op]}(${A},${B})`, type: c };
       return { js: c.name === 'float' ? `Math.fround(${raw})` : raw, type: c };
     }
     if (is64(c)) return { js: bin64(op, A, B, c), type: c };
@@ -2873,6 +2878,8 @@ export class FunctionEmitter {
          */
         const declared = f?.type?.ret;
         const ret = (declared && declared.k === 'ptr' && rt.ret?.k === 'ptr') ? declared : rt.ret;
+        // fsqrt is rounded by the precision control as fadd is (SDM 8.1.5.2); fsin and the rest are not.
+        if (this.ty.x87pc && impl === 'sqrt') return { js: `M.pcSqrt(${args.join(',')})`, type: ret };
         return { js: `M.rt.${impl}(${args.join(',')})`, type: ret };
       }
       if (f) {

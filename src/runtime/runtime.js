@@ -9,6 +9,26 @@ import { MODELS } from '../sema/abi.js';
 import { makeX86 } from '../asm/msvc-rt.js';
 import * as T from '../sema/types.js';
 
+/*
+ * The x87 at single precision (M.pcAdd and the rest): `s` is a double result and `e` the sign-bearing
+ * rest of the exact one (exact = s + e). Rounding s to float is right unless s sits exactly between two
+ * floats and e is not 0 -- then the exact value is past the midpoint, on e's side.
+ */
+function toF32(s, e) {
+  const r = Math.fround(s);
+  if (e === 0 || r === s || !Number.isFinite(s)) return r;
+  const o = 2 * s - r;                                              // the other float, if s is a midpoint
+  if (Math.fround(o) !== o) return r;
+  return e > 0 ? Math.max(r, o) : Math.min(r, o);
+}
+// a*b - p exactly, for p = a*b rounded (Dekker's product: Veltkamp's split into 26-bit halves).
+function twoProdErr(a, b, p) {
+  if (!Number.isFinite(p)) return 0;
+  const split = (x) => { const c = 134217729 * x, h = c - (c - x); return [h, x - h]; };
+  const [ah, al] = split(a), [bh, bl] = split(b);
+  return ((ah * bh - p) + ah * bl + al * bh) + al * bl;
+}
+
 export class Trap extends Error {}
 export class ExitCalled extends Error {
   // `quick` is _exit: the program leaves without its atexit handlers and without flushing.
@@ -86,6 +106,28 @@ export function makeMachine(mod = new Module()) {
       const r = this.x86.f.rint(v);
       if (!(r >= -(2 ** 63) && r < 2 ** 63)) { this.x86.f.sw |= 1; return 0; }
       return r >= -2147483648 && r < 2147483648 ? r | 0 : (r % 4294967296) | 0;
+    },
+    /*
+     * Double arithmetic under compile({ x87Precision: true }): when the x87 control word's precision
+     * field says single, fadd/fsub/fmul/fdiv/fsqrt round the EXACT result once, to 24 bits. Rounding
+     * the JS double instead rounds twice, and lands on the wrong side when the first rounding falls on
+     * a 24-bit midpoint (1 + 2^-24 + 2^-60, tools/gate-x87pc.mjs part B) -- so each operation also
+     * computes its exact error, whose sign settles that one case. At any other precision the double is
+     * the answer. The loads are exact, as the SDM has them (QEMU rounds an fld m64 at single precision).
+     */
+    pc24() { return this._x86 && !(this._x86.f.cw & 0x300); },
+    pcAdd(a, b) { const s = a + b; if (!this.pc24()) return s; const bb = s - a; return toF32(s, (a - (s - bb)) + (b - bb)); },
+    pcSub(a, b) { return this.pcAdd(a, -b); },
+    pcMul(a, b) { const p = a * b; if (!this.pc24()) return p; return toF32(p, twoProdErr(a, b, p)); },
+    pcDiv(a, b) {
+      const q = a / b; if (!this.pc24()) return q;
+      const p = q * b, r = (a - p) - twoProdErr(q, b, p);           // a - q*b, exactly enough for its sign
+      return toF32(q, r * Math.sign(b));
+    },
+    pcSqrt(a) {
+      const s = Math.sqrt(a); if (!this.pc24()) return s;
+      const p = s * s;
+      return toF32(s, (a - p) - twoProdErr(s, s, p));
     },
     // A floating value to a 64-bit integer, in every mode (/QIfist leaves it to the _ftol helper):
     // truncated whatever the control word, signed or not, and the indefinite where it does not fit.
