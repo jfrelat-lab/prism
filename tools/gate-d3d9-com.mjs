@@ -7,7 +7,7 @@
 // (d3d9Methods); this gate holds every table in d3d9.c to it:
 //   - a static table: entry k is `<prefix>_<method k>`, and there are exactly as many entries as
 //     methods;
-//   - a table built at run time (cube_vtbl_init, ib_vtbl_init) copies N slots of another table, then
+//   - a table built at run time (cube_vtbl_init, ib_vtbl_init, decl_vtbl_init) copies N slots of another table, then
 //     assigns members by name: every slot must end up filled with its method's function, and a slot
 //     kept from the copy must hold a function written for both interfaces (a buf_*, or a tex_* of
 //     IDirect3DBaseTexture9) -- vb_GetDesc left in the index buffer's GetDesc slot has the right
@@ -34,6 +34,7 @@ const BASE_TEXTURE = d3d9Methods('IDirect3DBaseTexture9').length;
 const RUNTIME_TABLES = {
   cube_vtbl_init: { keeps: (fn, k) => k < BASE_TEXTURE, why: `only IDirect3DBaseTexture9's ${BASE_TEXTURE} tex_* slots serve a cube` },
   ib_vtbl_init: { keeps: (fn) => fn.startsWith('buf_'), why: 'only buf_* serve both buffers' },
+  decl_vtbl_init: { keeps: (fn) => fn !== 'blob_GetFunction', why: "a shader's GetFunction counts bytes, GetDeclaration elements" },
 };
 // A table also handed out, cast, as another interface: it must fit that interface's order as well.
 const ALSO_SERVES = { blob_vtbl: ['IDirect3DPixelShader9'] };
@@ -119,7 +120,8 @@ const MUTATIONS = [
     .replace('for (i = 0; i < 17; i++) dst[i] = src[i];', 'for (i = 0; i < 18; i++) dst[i] = src[i];')
     .replace('cube_vtbl.GetLevelDesc = cube_GetLevelDesc; ', '')],
   ['ib_vtbl_init: GetDesc not reassigned, the vertex buffer one kept', (s) => s.replace(' ib_vtbl.GetDesc = ib_GetDesc;', '')],
-  ['ib_vtbl_init: GetType not reassigned, the vertex buffer one kept', (s) => s.replace('ib_vtbl.GetType = ib_GetType; ', '')],
+  ['decl_vtbl_init: GetDeclaration never assigned', (s) => s.replace('    decl_vtbl.GetDeclaration = decl_GetDeclaration;\n', '')],
+  ['ib_vtbl_init: GetType not reassigned, the vertex buffer one kept',(s) => s.replace('ib_vtbl.GetType = ib_GetType; ', '')],
 ];
 
 const src = readFileSync(SRC, 'utf8');

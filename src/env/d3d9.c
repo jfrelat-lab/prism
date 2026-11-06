@@ -465,6 +465,26 @@ static HRESULT STDMETHODCALLTYPE blob_GetFunction(IDirect3DVertexShader9 *This, 
 }
 static struct IDirect3DVertexShader9Vtbl blob_vtbl = { blob_QueryInterface, blob_AddRef, blob_Release, blob_GetDevice, blob_GetFunction };
 
+/* A declaration counts in elements, D3DDECL_END included, where a shader's function counts in bytes. */
+static HRESULT STDMETHODCALLTYPE decl_GetDeclaration(IDirect3DVertexDeclaration9 *This, D3DVERTEXELEMENT9 *e, UINT *n)
+{
+    Blob *b = BLOB(This);
+    *n = b->size / sizeof *e;
+    if (e) memcpy(e, b->data, b->size);
+    return D3D_OK;
+}
+static struct IDirect3DVertexDeclaration9Vtbl decl_vtbl;
+static void decl_vtbl_init(void)
+{
+    static int done;
+    void **dst = (void **)&decl_vtbl, **src = (void **)&blob_vtbl;
+    int i;
+    if (done) return;
+    done = 1;
+    for (i = 0; i < 4; i++) dst[i] = src[i];           /* IUnknown and GetDevice: the shader's */
+    decl_vtbl.GetDeclaration = decl_GetDeclaration;
+}
+
 /* A shader's length: its tokens up to the end token, 0x0000FFFF. */
 static UINT shader_bytes(const DWORD *f) { UINT n = 0; while (f[n] != 0x0000FFFF) n++; return (n + 1) * 4; }
 /* A declaration's length: its elements up to D3DDECL_END(). */
@@ -741,7 +761,7 @@ static HRESULT STDMETHODCALLTYPE dev_DrawIndexedPrimitiveUP(IDirect3DDevice9 *Th
 static HRESULT STDMETHODCALLTYPE dev_ProcessVertices(IDirect3DDevice9 *This, UINT s, UINT d, UINT n, IDirect3DVertexBuffer9 *b, IDirect3DVertexDeclaration9 *dc, DWORD f)
 { (void)This; (void)s; (void)d; (void)n; (void)b; (void)dc; (void)f; return D3DERR_INVALIDCALL; }
 static HRESULT STDMETHODCALLTYPE dev_CreateVertexDeclaration(IDirect3DDevice9 *This, const D3DVERTEXELEMENT9 *e, IDirect3DVertexDeclaration9 **out)
-{ Blob *b = blob_new(e, decl_bytes(e)); (void)This; b->host = H(H_DECL, P_(e), (int)(b->size / sizeof *e) - 1, 0, 0, 0, 0, 0, 0); *out = (IDirect3DVertexDeclaration9 *)&b->iface; return D3D_OK; }
+{ Blob *b = blob_new(e, decl_bytes(e)); (void)This; decl_vtbl_init(); b->iface.lpVtbl = (struct IDirect3DVertexShader9Vtbl *)&decl_vtbl; b->host = H(H_DECL, P_(e), (int)(b->size / sizeof *e) - 1, 0, 0, 0, 0, 0, 0); *out = (IDirect3DVertexDeclaration9 *)&b->iface; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetVertexDeclaration(IDirect3DDevice9 *This, IDirect3DVertexDeclaration9 *d) { (void)This; (void)d; H(H_SETDECL, HOSTOF(d), 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_GetVertexDeclaration(IDirect3DDevice9 *This, IDirect3DVertexDeclaration9 **d) { (void)This; *d = 0; return D3D_OK; }
 static HRESULT STDMETHODCALLTYPE dev_SetFVF(IDirect3DDevice9 *This, DWORD f) { (void)This; (void)f; H(H_SETFVF, (int)f, 0, 0, 0, 0, 0, 0, 0); return D3D_OK; }
