@@ -319,6 +319,16 @@ function createDevice(g, params, { floatRT, onPresent }) {
     }
     return glsl;
   }
+  // D3D9's alpha test as the last thing the pixel shader does: colour 0's alpha against D3DRS_ALPHAREF / 255 by
+  // D3DRS_ALPHAFUNC (D3DCMPFUNC), the fragment discarded when the comparison fails. Every generator here (hlsl.js,
+  // sm9.js, the fixed function) writes prism_o0 within its one main(), which becomes a function this one calls.
+  const ATCMP = { 2: '<', 3: '==', 4: '<=', 5: '>', 6: '!=', 7: '>=' };
+  function alphaTested(glsl, func) {
+    if (!func || func === 8) return glsl;
+    const test = func === 1 ? 'true' : `!(prism_o0.a ${ATCMP[func] ?? fail(`D3DRS_ALPHAFUNC ${func}`)} prism_aref)`;
+    if (glsl.split('void main() {').length !== 2) fail('the alpha test: a pixel shader without one main()');
+    return `${glsl.replace('void main() {', 'uniform float prism_aref;\nvoid prism_atmain() {')}\nvoid main() { prism_atmain(); if (${test}) discard; }\n`;
+  }
   const compile = (type, src, what) => {
     const sh = g.createShader(type); g.shaderSource(sh, src); g.compileShader(sh);
     if (!g.getShaderParameter(sh, g.COMPILE_STATUS)) fail(`${what}: ${g.getShaderInfoLog(sh)}\n${src}`);
@@ -328,7 +338,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
   function program(vsObj, psObj, L) {
     const psA = adaptations(psObj.samplers, 0), vsA = vsObj ? adaptations(vsObj.samplers, 16) : [];
     const sig = (l) => l.map((x) => `${x.index}${x.u ? 'u' : ''}${x.v ? 'v' : ''}${x.fill ? textures[x.slot] && objects.get(textures[x.slot]).format : ''}`).join(',');
-    const key = `${vsObj ? objectsKey(vsObj) : `t${decl ? `d${decl}` : fvf}`}|${objectsKey(psObj)}|${sig(psA)}|${sig(vsA)}`;
+    // the alpha test, which WebGL lacks: the pixel shader discards what D3DRS_ALPHAFUNC rejects (see alphaTested)
+    const at = rs.get(RS.ALPHATESTENABLE) && psObj.outputs.some((o) => o.semantic === 'COLOR' && o.index === 0) ? rs.get(RS.ALPHAFUNC) : 0;
+    const key = `${vsObj ? objectsKey(vsObj) : `t${decl ? `d${decl}` : fvf}`}|${objectsKey(psObj)}|${sig(psA)}|${sig(vsA)}|a${at}`;
     let p = programs.get(key);
     if (p) return p;
     let vsrc;
@@ -356,14 +368,15 @@ function createDevice(g, params, { floatRT, onPresent }) {
     const prog = g.createProgram();
     if (vsA.length) vsrc = adapt(vsrc, 'vs', vsA);
     g.attachShader(prog, compile(g.VERTEX_SHADER, vsrc, vsObj ? 'vertex shader' : 'pretransformed vertex stage'));
-    g.attachShader(prog, psA.length ? compile(g.FRAGMENT_SHADER, adapt(psObj.glsl, 's', psA), 'pixel shader with its sampler reads adapted') : psObj.sh);
+    const fsrc = psA.length || at ? alphaTested(psA.length ? adapt(psObj.glsl, 's', psA) : psObj.glsl, at) : null;
+    g.attachShader(prog, fsrc ? compile(g.FRAGMENT_SHADER, fsrc, 'pixel shader with its sampler reads adapted or its alpha tested') : psObj.sh);
     // attributes by semantic: prism_a_<usage><index>, matched to the vertex elements at each draw
     const attrs = [...vsrc.matchAll(/^in vec4 prism_a_([a-z]+?)(\d+);$/gm)].map((m, loc) => ({ loc, usage: m[1], index: +m[2] }));
     for (const a of attrs) g.bindAttribLocation(prog, a.loc, `prism_a_${a.usage}${a.index}`);
     g.linkProgram(prog);
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
     const u = (n) => g.getUniformLocation(prog, n);
-    p = { prog, attrs, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
+    p = { prog, attrs, aref: at ? u('prism_aref') : null, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
       ff: vsObj?.ffp ? { world: u('prism_ff_world'), view: u('prism_ff_view'), proj: u('prism_ff_proj'), mat: u('prism_ff_mat'), ambient: u('prism_ff_ambient'), light: u('prism_ff_light') } : null,
       s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])],
       dims: new Map([...psObj.samplers.map((sm) => [sm.index, sm.dim]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, sm.dim]) : [])]), bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
@@ -500,7 +513,6 @@ function createDevice(g, params, { floatRT, onPresent }) {
     } else g.disable(g.BLEND);
     const cw = rs.get(RS.COLORWRITEENABLE);
     g.colorMask(!!(cw & 1), !!(cw & 2), !!(cw & 4), !!(cw & 8));
-    if (rs.get(RS.ALPHATESTENABLE)) fail('D3DRS_ALPHATESTENABLE is not supported yet');
     // The stencil, one-sided or two (D3DRS_TWOSIDEDSTENCILMODE: the CCW_ states for counter-clockwise triangles).
     // D3D's clockwise front faces are GL's front faces here (the rows kept, see the cull above), so D3D's CCW set is
     // GL's BACK. Its buffer is the depth surface's D24S8.
@@ -619,6 +631,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (p.posFix) g.uniform4f(p.posFix, 1, -1, 1 / viewport.width, 1 / viewport.height);
     if (p.vp) g.uniform4f(p.vp, viewport.x, viewport.y, viewport.width, viewport.height);
     if (p.zr) g.uniform2f(p.zr, viewport.minZ, viewport.maxZ);
+    if (p.aref) g.uniform1f(p.aref, (rs.get(RS.ALPHAREF) & 255) / 255);
     if (p.ff) ffUniforms(p, vsObj);
     bindSamplers(p);
     for (const [unit, loc] of p.bc) { const c = samp[unit][4]; g.uniform4f(loc, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }

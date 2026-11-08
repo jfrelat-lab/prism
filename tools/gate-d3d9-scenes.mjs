@@ -82,6 +82,19 @@ const cases = [
       ].map(([x, y, c, u, v, b4, s2, h2]) => [f(x), f(y), f(0.5), `0x${(c >>> 0).toString(16)}`, f(u), f(v),
         `0x${(b4 >>> 0).toString(16)}`, `0x${(s2 >>> 0).toString(16)}`, `0x${(h2 >>> 0).toString(16)}`].join(' ')).join(' ')}`,
       'ib 5 0 1 2 2 1 3', 'stream 0 4 0 36', 'indices 5', 'drawi 4 2 0 4 0 2'] },
+  // the alpha is x across the quad, a half pixel off so that no pixel sits on the reference (128/255, 64/255)
+  { name: 'the alpha test: GREATER 128 after a ps_2_0 (.kkrieger\'s), LESSEQUAL 64 after a ps_1_1, then off',
+    notDxvk: 'draws all of the GREATER band and none of the LESSEQUAL band, where Wine draws what the test defines',
+    script: [...START, DECL_PT, 'setdecl 1',
+      asm(1, 'vs_1_1', 'dcl_position v0', 'dcl_texcoord v1', 'mov oPos, v0', 'mov oT0, v1'),
+      asm(2, 'ps_2_0', 'dcl t0.xyz', 'mov r0, c0', 'mov r0.w, t0.x', 'mov oC0, r0'),
+      asm(3, 'ps_1_1', 'texcoord t0', 'mov r0.rgb, c1', '+mov r0.a, t0.b'), 'setvs 1',
+      'psc 0 1.0 0.0 0.0 1.0', 'psc 1 0.0 1.0 0.0 1.0',
+      ...['vb 4', 'vb 5', 'vb 6'].map((v, k) => quad(+v.slice(3), -1, [0.33, -0.33, -1][k], 1, [1, 0.33, -0.33][k],
+        (x) => [(x + 1) / 2 + 1 / 32, 0, (x + 1) / 2 + 1 / 32])),
+      'rs 15 1', 'rs 25 5', 'rs 24 128', 'setps 2', 'stream 0 4 0 24', 'draw 5 0 2',
+      'rs 25 4', 'rs 24 64', 'setps 3', 'stream 0 5 0 24', 'draw 5 0 2',
+      'rs 15 0', 'setps 2', 'stream 0 6 0 24', 'draw 5 0 2'] },
   { name: 'the stencil, one-sided: a quad writes its reference (REPLACE), a second draws only where EQUAL',
     script: [...START, 'decl 1 1 0 0 2 0 0 0', 'setdecl 1', asm(1, 'vs_2_0', 'dcl_position v0', 'mov oPos, v0'),
       asm(2, 'ps_2_0', 'mov oC0, c0'), 'setvs 1', 'setps 2',
@@ -203,7 +216,8 @@ for (const [via, k] of [...cases.map((k) => ['', k]), ...cases.map((k) => ['prog
   const r = res[via + k.name], gd = golden[k.name], name = via ? `${k.name} -- through d3d9.c, compiled` : k.name;
   if (!gd) { check(false, name, 'no capture: node tools/gate-d3d9-scenes.mjs --capture'); continue; }
   if (!r || r.error) { check(false, name, r ? r.error : 'not run'); continue; }
-  for (const [who, ref] of [['Wine', gd.wine], ['DXVK', gd.dxvk]]) {
+  if (k.notDxvk && !via) console.log(`  --   ${name} -- not against DXVK: DXVK 1.10.3 ${k.notDxvk}`);
+  for (const [who, ref] of [['Wine', gd.wine], ['DXVK', k.notDxvk ? null : gd.dxvk]]) {
     if (!ref) continue;
     let worst = 0, at = 0, n = 0;
     for (let i = 0; i < ref.length; i++) { const d = Math.abs(r[i] - ref[i]); if (d > 1) n++; if (d > worst) { worst = d; at = i; } }
