@@ -33,6 +33,9 @@ const FMT = {
   114: ['R32F', 'RED', 'FLOAT', 4, 'copy'],               // R32F
   115: ['RG32F', 'RG', 'FLOAT', 8, 'copy'],               // G32R32F
   116: ['RGBA32F', 'RGBA', 'FLOAT', 16, 'copy'],          // A32B32G32R32F
+  // signed formats (bump and normal maps): memory U, V, W, Q -- the shader's x, y, z, w -- each byte / 127
+  63: ['RGBA8_SNORM', 'RGBA', 'BYTE', 4, 'snorm'],        // Q8W8V8U8
+  60: ['RG8_SNORM', 'RG', 'BYTE', 2, 'snorm'],            // V8U8
 };
 // a float as IEEE half bits (round to nearest even), for reading an F16 target back
 const f32h = new Float32Array(1), u32h = new Uint32Array(f32h.buffer);
@@ -665,11 +668,11 @@ function createDevice(g, params, { floatRT, onPresent }) {
   // ---- texel uploads: D3D's bytes as GL's ----
   function texels(f, bytes, w, h, pitch) {
     const bpp = f[3], row = w * bpp;
-    const out = f[4] === 'copy' ? (f[2] === 'FLOAT' ? new Float32Array(w * h * bpp / 4) : new Uint16Array(w * h * bpp / 2)) : new Uint8Array(w * h * bpp);
+    const out = f[4] === 'copy' ? (f[2] === 'FLOAT' ? new Float32Array(w * h * bpp / 4) : new Uint16Array(w * h * bpp / 2)) : f[4] === 'snorm' ? new Int8Array(w * h * bpp) : new Uint8Array(w * h * bpp);
     const dst = new Uint8Array(out.buffer);
     for (let y = 0; y < h; y++) {
       const src = bytes.subarray(y * pitch, y * pitch + row);
-      if (f[4] === 'copy' || f[4] === 'rgba' || f[4] === 'l8' || f[4] === 'a8') { dst.set(src, y * row); continue; }
+      if (f[4] === 'copy' || f[4] === 'snorm' || f[4] === 'rgba' || f[4] === 'l8' || f[4] === 'a8') { dst.set(src, y * row); continue; }
       for (let x = 0; x < w; x++) {
         const i = x * 4, o = y * row + i;
         dst[o] = src[i + 2]; dst[o + 1] = src[i + 1]; dst[o + 2] = src[i]; dst[o + 3] = f[4] === 'bgrx' ? 255 : src[i + 3];

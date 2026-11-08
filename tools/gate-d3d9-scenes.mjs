@@ -82,6 +82,11 @@ const cases = [
       ].map(([x, y, c, u, v, b4, s2, h2]) => [f(x), f(y), f(0.5), `0x${(c >>> 0).toString(16)}`, f(u), f(v),
         `0x${(b4 >>> 0).toString(16)}`, `0x${(s2 >>> 0).toString(16)}`, `0x${(h2 >>> 0).toString(16)}`].join(' ')).join(' ')}`,
       'ib 5 0 1 2 2 1 3', 'stream 0 4 0 36', 'indices 5', 'drawi 4 2 0 4 0 2'] },
+  // the pattern's bytes read signed: half of them negative (above 127), 255 as -1/127 and 128 as -1
+  { name: 'a Q8W8V8U8 texture (signed: .kkrieger\'s normal maps) read by ps_2_0 and brought into range',
+    script: [...START, 'tex2d 2 4 4 1 63', 'settex 0 2', ...POINT, DECL_PT, 'setdecl 1', VS_PT,
+      asm(3, 'ps_2_0', 'def c0, 0.5, 0.5, 0.5, 0.5', 'dcl t0.xy', 'dcl_2d s0', 'texld r0, t0, s0', 'mad r0, r0, c0, c0', 'mov oC0, r0'),
+      'setvs 1', 'setps 3', quad(4, -1, -1, 1, 1, (x, y) => [(x + 1) / 2 + 1 / 32, (1 - y) / 2 + 1 / 32, 0]), 'stream 0 4 0 24', 'draw 5 0 2'] },
   // the alpha is x across the quad, a half pixel off so that no pixel sits on the reference (128/255, 64/255)
   { name: 'the alpha test: GREATER 128 after a ps_2_0 (.kkrieger\'s), LESSEQUAL 64 after a ps_1_1, then off',
     notDxvk: 'draws all of the GREATER band and none of the LESSEQUAL band, where Wine draws what the test defines',
