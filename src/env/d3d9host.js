@@ -8,7 +8,7 @@
 //   installD3D9(M, { gl, canvas, onPresent })   gl: a WebGL2RenderingContext, or a canvas to take one from
 import { createD3D9 } from './d3d9.js';
 
-const OPS = ['DEVICE', 'BACKBUFFER', 'AUTODEPTH', 'TEXTURE', 'TEXWRITE', 'SURFACE', 'RENDERTARGET', 'DEPTHSURF', 'BUFFER', 'BUFWRITE',
+export const OPS = ['DEVICE', 'BACKBUFFER', 'AUTODEPTH', 'TEXTURE', 'TEXWRITE', 'SURFACE', 'RENDERTARGET', 'DEPTHSURF', 'BUFFER', 'BUFWRITE',
   'SHADER', 'DECL', 'RS', 'SS', 'TSS', 'SETTEX', 'SETVS', 'SETPS', 'SETDECL', 'SETFVF', 'STREAM', 'INDICES', 'SETRT', 'SETDS',
   'CONSTS', 'VIEWPORT', 'SCISSOR', 'CLEAR', 'DRAW', 'DRAWI', 'DRAWUP', 'DRAWIUP', 'PRESENT', 'STRETCH', 'READBACK', 'COLORFILL',
   'RELEASE', 'TRANSFORM', 'MATERIAL', 'LIGHT', 'LIGHTENABLE'];

@@ -142,7 +142,7 @@ const runs = cases.filter((k) => golden[k.name]).map((k) => ({ name: k.name, scr
   // for the compiled program: each asm line replaced by the bytecode it assembled to
   program: `${k.script.map((l) => { const a = l.match(/^asm (\d+) /); return a ? `code ${a[1]} ${golden[k.name].shaders[a[1]].map((w) => `0x${(w >>> 0).toString(16)}`).join(' ')}` : l; }).join('\n')}\n` }));
 // d3d9scene.c through PRISM, once, as a snapshot the page loads (what the page's worker does with a bundle)
-const target = { name: 'd3d9scene', dir: 'tools/oracle', units: { list: ['d3d9scene.c'] }, generated: ['src/env/win32-app.c', 'src/env/d3d9.c'],
+const target = { name: 'd3d9scene', dir: 'tools/oracle', units: { list: ['d3d9scene.c'] }, generated: ['src/env/win32-app.c', 'src/env/d3d9.c', 'src/env/dsound.c'],
   env: ['stdio', 'd3d9'], compile: { memory: 64, collect: true } };
 let snap = null;
 buildTarget(target, { root: ROOT, onProgram: (p) => { if (p.failures?.length) throw new Error(`d3d9scene.c: ${p.failures.map((f) => `${f.fn}: ${f.message}`).join('; ')}`); snap = snapshotProgram(p); } });

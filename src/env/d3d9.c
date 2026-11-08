@@ -17,8 +17,8 @@
  * textures, eight stages -- so a program takes the same paths under both.
  *
  * Its two DLLs reach the program through prism_system_lookup (src/env/win32-app.c): d3d9.dll's
- * Direct3DCreate9 and dsound.dll's DirectSoundCreate8, the second of which answers DSERR_NODRIVER --
- * there is no sound device here, and saying so is the program's cue to go silent.
+ * Direct3DCreate9, and dsound.dll's DirectSoundCreate8, which src/env/dsound.c implements as a silent
+ * device (a program like .kkrieger stops without one), so a target linking this file links that one.
  */
 #include <windows.h>
 #include <d3d9.h>
@@ -892,8 +892,7 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT version)
 
 /* ------------------------------------------------------------------ the rest of the two DLLs, and OLE */
 
-HRESULT WINAPI DirectSoundCreate8(LPCGUID guid, LPDIRECTSOUND8 *out, LPUNKNOWN outer) { (void)guid; (void)outer; *out = 0; return DSERR_NODRIVER; }
-HRESULT WINAPI DirectSoundCreate(LPCGUID guid, LPDIRECTSOUND *out, LPUNKNOWN outer) { (void)guid; (void)outer; *out = 0; return DSERR_NODRIVER; }
+/* DirectSoundCreate8 and DirectSoundCreate are src/env/dsound.c's, a silent device: link it beside this file. */
 /* No image codec here: LoadBitmapCore's own "no picture" path runs. */
 HRESULT WINAPI CreateStreamOnHGlobal(HGLOBAL h, BOOL del, LPSTREAM *out) { (void)h; (void)del; *out = 0; return E_NOTIMPL; }
 HRESULT WINAPI OleLoadPicture(LPSTREAM s, LONG n, BOOL run, REFIID riid, LPVOID *out) { (void)s; (void)n; (void)run; (void)riid; *out = 0; return E_NOTIMPL; }
