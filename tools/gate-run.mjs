@@ -2209,6 +2209,30 @@ int main(void)
 }
 `);
 
+/*
+ * One parameter's address taken, and the others read through it: (&tx)[j] is .kkrieger's Mesh_Cube walking
+ * tx, ty, tz. Undefined in C; the i386 stack layout in practice -- each parameter in order in its 4-byte slot,
+ * a short widened to one, a double in two, a structure in place. A write through the pointer to an int
+ * parameter is what it then holds by name (not to a short: gcc -O0 copies a narrow one to a local first).
+ */
+C('parameters-read-through-the-address-of-the-first', `#include <stdio.h>
+struct srt { float s, r, t; };
+static int walk(int tx, int ty, int tz, int flags) { int j, s = 0; for (j = 0; j < 3; j++) s = s * 100 + (&tx)[j]; return s + flags; }
+static int mixed(int a, short b, double c, struct srt d, int e)
+{
+    int *p = &a;
+    p[7] = 50;                                       /* e's slot */
+    return a * 1000000 + p[1] * 10000 + b * 100 + (int)c + (int)d.t + e;   /* p[1]: b as pushed, widened */
+}
+int main(void)
+{
+    struct srt d = { 1, 2, 3 };
+    printf("%d\\n", walk(8, 4, 1, 3));
+    printf("%d\\n", mixed(10, -20, 30.5, d, 40));
+    return 0;
+}
+`);
+
 const active = cases.filter(c => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-run: ${active.length} cases\n`);

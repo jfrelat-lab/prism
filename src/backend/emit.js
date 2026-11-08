@@ -528,9 +528,33 @@ export class FunctionEmitter {
      */
     for (const it of nestedDefs(d.body)) collectNestedRefs(it.body, escaped);
 
-    const pre = [];
+    const pre = [], preCopy = [];
+    /*
+     * Once one parameter of a fixed-argument function has its address taken, ALL of them live in memory,
+     * laid out as i386 cdecl and stdcall pass them: in order, each in its own 4-byte-aligned slot (2 on a
+     * 16-bit target), a structure in place. .kkrieger's Mesh_Cube walks tx, ty, tz as (&tx)[j] -- undefined in C, and the
+     * stack layout of the compilers it was written for; with only tx in memory, (&tx)[1] read 0.
+     */
+    const block = !this.variadic && d.type.params.some((p) => p.name && escaped.has(p.name)) ? new Map() : null;
+    if (block) {
+      // the stack's unit: 4 bytes on i386, 2 for a 16-bit target's pushes
+      const u = this.ty.INT.size, round = (n) => Math.ceil(n / u) * u;
+      const total = d.type.params.reduce((s, p) => s + round(p.type.size), 0);
+      let at = this.slot(total, u);
+      for (const p of d.type.params) { block.set(p, at); at += round(p.type.size); }
+    }
     for (const p of d.type.params) {
       if (!p.name) continue;
+      if (block) {
+        if (p.type.k === 'array') unsup('an array parameter by value');
+        const off = block.get(p);
+        this.locals.set(p.name, { kind: 'slot', off, type: p.type });
+        if (T.isRecord(p.type)) preCopy.push({ off, size: p.type.size, from: paramIdent(p.name) });
+        // a narrow integer is in its slot as the caller pushed it, widened to a whole int
+        else if (T.isInteger(p.type) && p.type.size < this.ty.INT.size) pre.push({ off, type: this.ty.INT, from: coerce(this.ty, paramIdent(p.name), p.type, this.ty.INT) });
+        else pre.push({ off, type: p.type, from: paramIdent(p.name) });
+        continue;
+      }
       if (T.isRecord(p.type)) {
         // The caller already made a fresh copy, so the callee may modify it in place — no second
         // copy is needed, and `&param` is simply that address.
@@ -606,6 +630,7 @@ export class FunctionEmitter {
     if (this.usesMsvcRegs) body.push(MSVC_REGISTER_DECLS);
     if (this.usesRegs && this.isInterrupt) body.push('if(M.isrRegs)for(const _k of ["ax","bx","cx","dx","si","di","bp","es"])$r[_k]=M.isrRegs[_k]&65535;');
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
+    for (const p of preCopy) body.push(`  M.copy((_fp+${p.off}|0),${p.from},${p.size});`);
     for (const p of this.vaNamed ?? []) body.push('  ' + storeExpr(p.js, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
     body.push(...this.out.map(l => '  ' + l));
     body.push('  ' + FRAME_RESTORE);
