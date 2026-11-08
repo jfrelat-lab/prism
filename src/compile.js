@@ -1565,9 +1565,12 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
  */
 
 /** A function type, as far as the runtime reads one (icall's variadic repacking): or null. */
+// A function's type as the runtime reads it: its parameters, for call-through-pointer and `call reg` to lay
+// out the arguments, and its return, for `call reg` (runtime asmCall) to put the result in EAX, EDX:EAX or ST(0).
 const typeForRuntime = (t) => (t && t.k === 'func' ? {
   k: 'func', variadic: !!t.variadic,
   params: (t.params ?? []).map((p) => ({ type: { k: p.type?.k, name: p.type?.name, size: p.type?.size } })),
+  ret: t.ret ? { k: t.ret.k, name: t.ret.name, size: t.ret.size } : null,
 } : null);
 
 /** A C type, as far as tasm-link reads one to move it through AX, DX:AX or the stack. */

@@ -31,7 +31,7 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { compileProgram, builtinHeaderResolver } from '../src/compile.js';
+import { compileProgram, builtinHeaderResolver, snapshotProgram, loadSnapshot } from '../src/compile.js';
 import { makeX86 } from '../src/asm/msvc-rt.js';
 import { compileRun } from './oracle.mjs';
 
@@ -827,6 +827,21 @@ int b_callcode(void) {
   para[0] = 7; para[1] = *(int *)&f; para[2] = 9;
   return CallCode((int)op3, para, 3);
 }
+/* a call through a register to a function returning a float: the result is ST(0), stored by fstp */
+float opf(int a, int b) { return a * 0.5f + b; }
+int b_callfloat(void) {
+  float r;
+  void *fn = (void *)opf;
+  __asm {
+    push 6
+    push 9
+    mov eax,fn
+    call eax
+    add esp,8
+    fstp r
+  }
+  return (int)(r * 100);
+}
 int b_mmget(void) { __asm { movq mmsave, mm5
   emms }
   return mmsave == 0x7fff7fff7fff7fffULL; }
@@ -935,6 +950,15 @@ function probes() {
   B('imul + shrd: sMulShift, 16.16 fixed point', call('sMulShift', 3 << 16, -(5 << 15)), -(15 << 15));
   B('shl/sar + idiv: sDivShift', call('sDivShift', 3 << 16, 2 << 16), 3 << 15);
   B('CallCode: push ebp/mov ebp,esp, rep movsd the arguments, call eax', call('b_callcode'), 7034);
+  B('call eax to a function returning a float, its result in ST(0)', call('b_callfloat'), 1050);
+  // The same calls from a SNAPSHOT (what a page loads): call reg reads the callee's declared return type, which
+  // the snapshot must keep -- without it EAX was left as it was, and .kkrieger's CallCode returned garbage.
+  {
+    const s = snapshotProgram(p), q = loadSnapshot({ meta: s.meta, image: s.image, src: s.src });
+    const qcall = (name) => { try { return q.F[name](); } catch (e) { return `threw ${e.message}`; } };
+    B('CallCode from a snapshot', qcall('b_callcode'), 7034);
+    B('call eax returning a float, from a snapshot', qcall('b_callfloat'), 1050);
+  }
   B('imul + idiv through EDX:EAX: sMulDiv', call('sMulDiv', 1 << 20, 3000, 7), Math.trunc((2 ** 20 * 3000) / 7));
   B('MMX registers survive from one function to the next', call('b_mmget'), 1);
 
