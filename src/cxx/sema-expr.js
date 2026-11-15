@@ -867,7 +867,20 @@ export const exprMethods = {
         if (t.k === 'array') t = T.ptr(t.of);
         else if (t.k === 'func') t = T.ptr(t);
         t = T.uncst(t);
-        if (t.k === 'class') this.fail('throwing a class object is not supported yet', n);
+        /*
+         * A class object is built where the exception lives, on the heap (constructAt: the copy, or the temporary
+         * elided into it -- `throw idException( msg )`), and thrown with the keys a handler can catch it by:
+         * its class, then each first base, which sits at its address. Its destructor is never called.
+         */
+        if (t.k === 'class') {
+          const cls = this.complete(t.cls, n);
+          const keys = [];
+          for (let c = cls; c; c = c.bases.length && !c.virt[0] ? c.bases[0] : null) keys.push(T.mangle({ k: 'class', cls: c }));
+          this.needStruct(cls);
+          const p = `__prism_exp${++this.anon}`;
+          const ctor = this.constructAt(`(*${p})`, cls, [x], cx, n);
+          return { c: `({ ${T.cDecl(T.ptr({ k: 'class', cls }), p)} = (${T.cDecl(T.ptr({ k: 'class', cls }))})malloc(sizeof(struct ${cls.cname})); ${ctor} __prism_cxx_throw_obj("${keys.join('|')}", "${cls.name}", ${p}); })`, t: T.VOID };
+        }
         const c = `({ ${T.cDecl(t, '__prism_ex')} = ${x.c}; __prism_cxx_throw("${T.mangle(t)}", "${throwName(t)}", &__prism_ex, sizeof __prism_ex); })`;
         return { c, t: T.VOID };
       }
@@ -1407,6 +1420,20 @@ export const exprMethods = {
         this.needStruct(V.to.cls);
         return { c: `((${this.ct(V)})((char *)${s.c} - (unsigned int)&((${this.ct(V)})0)->${path.join('.')}))`, t: V, lv: false };
       }
+    }
+    /*
+     * A pointer to a derived class's member function as one of its base's -- static_cast's inverse of the
+     * implicit conversion (scalarConv): Doom 3's event tables, `( void ( idClass::* )( void ) )&idAI::Event_X`,
+     * called later on an idClass * that is an idAI. With the base at the derived class's address the C function
+     * takes the same pointer either way; elsewhere the object would have to be moved, which is refused by name.
+     * A cast between member pointers of different signatures is reinterpret_cast's, the same C pointer cast.
+     */
+    if (V.k === 'memptr' && s.t.k === 'memptr') {
+      const down = this.derivedPath(s.t.cls, V.cls), up = this.derivedPath(V.cls, s.t.cls);
+      const path = down ?? up;
+      if (V.cls !== s.t.cls && !path) this.fail(`cast from ${T.show(e.t)} to ${T.show(V)}: unrelated classes`, node);
+      if (path && !path.every((p) => p === '__b0')) this.fail(`cast from ${T.show(e.t)} to ${T.show(V)}: the base is not at the derived class's address`, node);
+      return { c: `((${this.ct(V)})${s.c})`, t: V, lv: false };
     }
     if (!T.isScalar(V) || !T.isScalar(s.t)) this.fail(`cast from ${T.show(e.t)} to ${T.show(V)}`, node);
     return { c: `((${this.ct(V)})${s.c})`, t: V, lv: false, zero: e.zero && V.k === 'ptr' && V.to.k === 'void' };

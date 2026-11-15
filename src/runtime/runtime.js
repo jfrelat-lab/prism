@@ -559,6 +559,8 @@ function makeLibc(M) {
    */
   function ehMatches(h, e) {
     if (h === e) return true;
+    // a class object: its class and its first bases, any of which a handler may name
+    if (e.includes('|')) return e.split('|').includes(h);
     const hp = /^P(K?)(.+)$/.exec(h), ep = /^P(K?)(.+)$/.exec(e);
     if (!hp || !ep || (ep[1] && !hp[1])) return false;
     return hp[2] === ep[2] || (hp[2] === 'v' && !ep[2].startsWith('F'));
@@ -1360,6 +1362,8 @@ function makeLibc(M) {
       M.u8.copyWithin(obj, src, src + (size >>> 0));
       ehThrow({ key: M.mod.cstr(keyPtr), name: M.mod.cstr(namePtr), obj });
     },
+    // a class object, already built on the heap by its constructor: thrown where it is
+    __prism_cxx_throw_obj: (keyPtr, namePtr, obj) => ehThrow({ key: M.mod.cstr(keyPtr), name: M.mod.cstr(namePtr), obj }),
     __prism_cxx_rethrow: () => {
       if (!M.ehCurrent) ehTerminate('terminate called without an active exception\n');
       ehThrow(M.ehCurrent);

@@ -581,6 +581,7 @@ export const BUILTINS = new Map(Object.entries({
   __prism_eh_is: { ret: I, params: [P, P] },
   __prism_eh_obj: { ret: P, params: [P] },
   __prism_cxx_throw: { ret: V, params: [P, P, P, U] },
+  __prism_cxx_throw_obj: { ret: V, params: [P, P, P] },
   __prism_cxx_rethrow: { ret: V, params: [] },
   __prism_cxx_rethrow_from: { ret: V, params: [P] },
   __prism_va_start: { ret: P, params: [], vaStart: true },

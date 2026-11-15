@@ -274,8 +274,8 @@ export const stmtMethods = {
        * a throw copies its object, takes the innermost handler off and longjmps there, and the
        * handlers are tried in order -- the type rule in the runtime, catch (...) taking anything --
        * the last resort rethrowing to the next try out. Not done: destructors of the objects between
-       * the throw and the handler (longjmp passes them by), class objects thrown or caught, a handler
-       * by reference, a goto out of a try block.
+       * the throw and the handler (longjmp passes them by), the thrown class object's own destructor,
+       * a class object caught by value, a goto out of a try block.
        */
       case 'try': {
         const buf = `__prism_eh${cx.fn.ntry = (cx.fn.ntry ?? 0) + 1}`;
@@ -285,17 +285,19 @@ export const stmtMethods = {
         const handlers = n.handlers.map((h) => {
           if (!h.param) return `if (1) ${this.block(h.body, cx)}`;
           const t = T.uncst(this.declType(h.param.specs, h.param.decl.derivs, cx.env, h));
-          if (t.k === 'ref') this.fail('a handler that catches by reference is not supported yet', h);
-          if (t.k === 'class') this.fail('catching a class object is not supported yet', h);
+          // By reference (Doom 3: `catch( idException &e )`): bound to the thrown object itself, wherever it lives.
+          if (t.k === 'class') this.fail('catching a class object by value is not supported yet', h);
+          const ct = t.k === 'ref' ? T.uncst(t.to) : t;
           const name = h.param.decl.name ? this.lastName(h.param.decl.name) : null;
           const scope = new Scope(cx.env.scope);
           const inner = { ...cx, env: { ...cx.env, scope } };
           let decl = '';
           if (name) {
             scope.set(name, { k: 'var', name, type: t, cname: name, local: true });
-            decl = `${T.cDecl(t, name)} = *(${T.cDecl(T.ptr(t))})__prism_eh_obj(${buf});\n`;
+            decl = t.k === 'ref' ? `${T.cDecl(T.ptr(t.to), name)} = (${T.cDecl(T.ptr(t.to))})__prism_eh_obj(${buf});\n`
+              : `${T.cDecl(t, name)} = *(${T.cDecl(T.ptr(t))})__prism_eh_obj(${buf});\n`;
           }
-          return `if (__prism_eh_is(${buf}, "${T.mangle(t)}")) {\n${indent(decl + this.block(h.body, inner))}\n}`;
+          return `if (__prism_eh_is(${buf}, "${T.mangle(ct)}")) {\n${indent(decl + this.block(h.body, inner))}\n}`;
         });
         return `{\nint ${buf}[8];\n__prism_eh_push(${buf});\nif (setjmp(${buf}) == 0) {\n${indent(body)}\n__prism_eh_pop(${buf});\n} else ${handlers.join(' else ')} else __prism_cxx_rethrow_from(${buf});\n}`;
       }

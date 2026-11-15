@@ -1670,6 +1670,122 @@ int main() {
 }
 `);
 
+// Doom 3's event tables: a derived class's member functions cast to idClass member pointers, called on an idClass *.
+C('member-pointer-to-base', `
+// Doom 3's event tables (game/gamesys/Class.h): a derived class's member functions cast to pointers to idClass
+// members, kept in a table, called later on an idClass * that is the derived object -- one virtual among them.
+#include <stdio.h>
+
+class idClass;
+typedef void (idClass::*eventCallback_t)(void);
+struct idEventDef { const char *name; };
+template<class Type> struct idEventFunc { const idEventDef *event; eventCallback_t function; };
+#define EVENT(event, function) { &(event), (void (idClass::*)(void))(&function) },
+
+class idClass {
+public:
+	int id;
+	idClass() : id(1) {}
+	virtual ~idClass() {}
+	virtual void Spawn(void) { printf("idClass::Spawn %d\\n", id); }
+	void Dispatch(const idEventFunc<idClass> *table, const char *name) {
+		for (int i = 0; table[i].event; i++)
+			if (table[i].event->name == name) { (this->*table[i].function)(); return; }
+		printf("no %s\\n", name);
+	}
+};
+
+const idEventDef EV_Activate = { "activate" }, EV_Remove = { "remove" }, EV_Spawn = { "spawn" };
+
+class idEntity : public idClass {
+public:
+	int health;
+	idEntity() : health(100) { id = 2; }
+	void Event_Activate(void) { printf("idEntity::Event_Activate health %d id %d\\n", health, id); }
+	void Event_Remove(void) { health = 0; printf("idEntity::Event_Remove -> health %d\\n", health); }
+	virtual void Spawn(void) { printf("idEntity::Spawn health %d\\n", health); }
+	static idEventFunc<idEntity> eventCallbacks[];
+};
+
+class idAI : public idEntity {
+public:
+	int enemies;
+	idAI() : enemies(3) { id = 3; }
+	virtual void Spawn(void) { printf("idAI::Spawn enemies %d\\n", enemies); }
+};
+
+idEventFunc<idEntity> idEntity::eventCallbacks[] = {
+	EVENT(EV_Activate, idEntity::Event_Activate)
+	EVENT(EV_Remove, idEntity::Event_Remove)
+	EVENT(EV_Spawn, idEntity::Spawn)
+	{ NULL, NULL }
+};
+
+int main() {
+	idAI ai;
+	idClass *obj = &ai;
+	const idEventFunc<idClass> *table = (const idEventFunc<idClass> *)idEntity::eventCallbacks;
+	obj->Dispatch(table, EV_Activate.name);
+	obj->Dispatch(table, EV_Spawn.name);   // the virtual: idAI's overrider
+	obj->Dispatch(table, EV_Remove.name);
+	obj->Dispatch(table, EV_Activate.name);
+	eventCallback_t spawn = (void (idClass::*)(void))&idAI::Spawn;
+	(obj->*spawn)();
+	return 0;
+}
+`);
+
+// Doom 3's exceptions: class objects thrown, caught by reference as themselves or a base, rethrown.
+C('exception-class-objects', `
+// Doom 3's exceptions: idException thrown as a temporary, a class derived from it caught as itself or as its
+// base, by reference (named or not), an int still thrown alongside, and a rethrow to an outer handler.
+#include <stdio.h>
+#include <string.h>
+
+class idException {
+public:
+	char error[64];
+	idException(const char *text = "") { strcpy(error, text); }
+};
+class idCompileError : public idException {
+public:
+	int line;
+	idCompileError(const char *text, int l) : idException(text), line(l) {}
+};
+class idAllocError : public idException {
+public:
+	idAllocError(const char *text = "") : idException(text) {}
+};
+
+static void Fail(int how) {
+	if (how == 0) throw idException("fatal");
+	if (how == 1) throw idCompileError("syntax", 42);
+	if (how == 2) throw idAllocError();
+	throw 7;
+}
+static int Create(int how) {
+	try { Fail(how); return 1; }
+	catch (idAllocError &) { return -1; }
+}
+
+int main() {
+	for (int how = 0; how < 4; how++) {
+		try {
+			try { Fail(how); }
+			catch (idCompileError &err) { printf("compile error '%s' line %d\\n", err.error, err.line); err.line++; throw; }
+		}
+		catch (idException &e) { printf("exception '%s'\\n", e.error); }
+		catch (int n) { printf("int %d\\n", n); }
+	}
+	try { Fail(1); }
+	catch (idException &e) { idCompileError &c = (idCompileError &)e; printf("as base: '%s' %d\\n", e.error, c.line); }
+	printf("Create: %d\\n", Create(2));
+	try { printf("Create: %d\\n", Create(0)); }
+	catch (idException &e) { printf("passed through Create: '%s'\\n", e.error); }
+	return 0;
+}
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);
