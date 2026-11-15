@@ -37,7 +37,12 @@ typedef unsigned int wint_t;
 #endif
 #endif
 #ifndef NULL
+/* C++'s is an integer: void * converts to no other pointer there, and Doom 3 assigns NULL to ints */
+#ifdef __cplusplus
+#define NULL 0
+#else
 #define NULL ((void *)0)
+#endif
 #endif
 #define offsetof(t, m) __builtin_offsetof(t, m)
 #endif
