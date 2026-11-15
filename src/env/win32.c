@@ -1052,6 +1052,17 @@ int   prism_dib_palgen = 0;
 #define PRISM_PAL_TAG     0x50410000
 static int prism_gdi_serial = 1;
 
+/* WEAK, as are DeleteDC, SelectObject and DeleteObject below: win32-gui.c, where it is linked, keeps
+   real memory DCs and objects, and its definitions replace these. */
+HDC WINAPI CreateCompatibleDC(HDC dc) __attribute__((weak));
+BOOL WINAPI DeleteDC(HDC dc) __attribute__((weak));
+HGDIOBJ WINAPI SelectObject(HDC dc, HGDIOBJ obj) __attribute__((weak));
+BOOL WINAPI DeleteObject(HGDIOBJ obj) __attribute__((weak));
+/* A DIB section made, for win32-gui.c to draw text into: a weak no-op without it. */
+void prism_gdi_dib(HBITMAP h, void *bits, int w, int ht, int pitch, int bpp, int topdown) __attribute__((weak));
+void prism_gdi_dib(HBITMAP h, void *bits, int w, int ht, int pitch, int bpp, int topdown)
+{ (void)h; (void)bits; (void)w; (void)ht; (void)pitch; (void)bpp; (void)topdown; }
+
 HDC WINAPI CreateCompatibleDC(HDC dc)
 {
     (void)dc;
@@ -1084,7 +1095,11 @@ HBITMAP WINAPI CreateDIBSection(HDC dc, LPBITMAPINFO bmi, UINT usage,
     prism_dib_width = w;
     prism_dib_height = h;
     if (bits) *bits = prism_dib_surface;
-    return (HBITMAP)(PRISM_DIB_TAG | (prism_gdi_serial++ & 0xffff));
+    {
+        HBITMAP hb = (HBITMAP)(PRISM_DIB_TAG | (prism_gdi_serial++ & 0xffff));
+        prism_gdi_dib(hb, prism_dib_surface, w, h, prism_dib_pitch, bpp, prism_dib_topdown);
+        return hb;
+    }
 }
 
 /* The palette, in the DIB's own currency: BGRA quads, which become the host's r,g,b triples. */

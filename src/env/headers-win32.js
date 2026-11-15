@@ -2465,6 +2465,13 @@ typedef struct tagBITMAPINFO {
     RGBQUAD          bmiColors[1];
 } BITMAPINFO, *LPBITMAPINFO;
 
+/* GetObject of a bitmap */
+typedef struct tagBITMAP {
+    LONG   bmType, bmWidth, bmHeight, bmWidthBytes;
+    WORD   bmPlanes, bmBitsPixel;
+    LPVOID bmBits;
+} BITMAP, *PBITMAP, *LPBITMAP;
+
 #define BI_RGB               0
 #define DIB_RGB_COLORS       0
 #define DIB_PAL_COLORS       1
