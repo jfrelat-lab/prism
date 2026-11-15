@@ -1786,6 +1786,80 @@ int main() {
 }
 `);
 
+// Doom 3's idWinStr: conversion functions to a scalar and to a class, one hidden by a derived class's.
+C('conversion-hiding-copy-init', `
+// Doom 3's idWinStr (ui/Winvar.h): a class with conversions to const char * and to const idStr &, a derived
+// class redefining one; used as a subscript's operand, copy-initialising an idStr, passed where a const char * is
+// wanted.
+#include <stdio.h>
+#include <string.h>
+
+class idStr {
+public:
+	char buf[32];
+	char *data;   // points into the object itself, as idStr's does
+	idStr() { buf[0] = 0; data = buf; }
+	idStr(const idStr &o) { strcpy(buf, o.data); data = buf; }
+	idStr(const char *s) { strcpy(buf, s); data = buf; }
+	operator const char *() const { return data; }
+	int Length() const { return (int)strlen(data); }
+};
+
+class idWinStr {
+public:
+	idStr data;
+	idWinStr(const char *s) : data(s) {}
+	operator const char *() const { return data.data; }
+	operator const idStr &() const { return data; }
+};
+
+class idWinBackground : public idWinStr {
+public:
+	idWinBackground(const char *s) : idWinStr(s) {}
+	operator const char *() const { printf("(background's)"); return data.data; }
+};
+
+static const char *Find(const char *name) { printf("Find(%s) ", name); return name; }
+
+int main() {
+	idWinStr text("^1red");
+	if (text[0] == '^') printf("colour code %c\\n", text[1]);
+	idStr shadowText = text;
+	printf("copy '%s' length %d\\n", (const char *)shadowText, shadowText.Length());
+	idWinBackground back("textures/wall");
+	printf("%s\\n", Find(back));
+	printf("first %c\\n", back[0]);
+	return 0;
+}
+`);
+
+// A lone typedef of void as a parameter list: no parameters (OpenAL's ALvoid).
+C('typedef-void-params', `
+// OpenAL as Doom 3 reaches it (openal/idal.h): pointers to functions declared with a typedef of void.
+#include <stdio.h>
+typedef void ALvoid; typedef int ALsizei; typedef unsigned int ALuint; typedef int ALenum;
+extern ALvoid ( * idalGenBuffers )( ALsizei, ALuint * );
+extern ALenum ( * idalGetError )( ALvoid );
+static ALvoid gen(ALsizei n, ALuint *b) { *b = 7 + n; }
+static ALenum err(ALvoid) { return 3; }
+ALvoid ( * idalGenBuffers )( ALsizei, ALuint * ) = gen;
+ALenum ( * idalGetError )( ALvoid ) = err;
+#define alGenBuffers idalGenBuffers
+int main() { ALuint x; alGenBuffers(1, &x); printf("%u %d\\n", x, idalGetError()); return 0; }
+`);
+
+// A template parameter of enumeration type keeps its type in the instance.
+C('template-enum-param', `
+// Doom 3's idScriptVariable<type, etype_t etype, returnType> and idListDecls_f<declType_t type>: a template parameter
+// of enumeration type, passed on where only that enumeration is taken.
+#include <stdio.h>
+enum etype_t { ev_void, ev_float, ev_string };
+struct Obj { const char *GetVariable(const char *name, etype_t t) { static const char *k[] = { "void", "float", "string" }; printf("%s:%s ", name, k[t]); return name; } };
+template<class type, etype_t etype> struct Var { void LinkTo(Obj &o, const char *n) { o.GetVariable(n, etype); } };
+template<etype_t t> void List(Obj &o) { o.GetVariable("list", t); }
+int main() { Obj o; Var<float, ev_float> f; Var<int, ev_string> s; f.LinkTo(o, "speed"); s.LinkTo(o, "name"); List<ev_void>(o); printf("\\n"); return 0; }
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);

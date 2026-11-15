@@ -368,7 +368,9 @@ export class Sema {
         return T.array(t, n);
       }
       case 'func': {
-        const params = d.params.map((p) => T.paramType(this.declType(p.specs, p.decl.derivs, env, node)));
+        let params = d.params.map((p) => T.paramType(this.declType(p.specs, p.decl.derivs, env, node)));
+        // `( ALvoid )`, a typedef of void alone and unnamed, is an empty list as `( void )` is (OpenAL's al.h, Doom 3's idal.h)
+        if (params.length === 1 && T.uncst(params[0]).k === 'void' && !d.params[0].decl.name && !d.variadic) params = [];
         return T.func(t, params, d.variadic, !!d.cv?.const);
       }
       default: this.fail(`declarator ${d.k}`, node);
@@ -735,7 +737,21 @@ export class Sema {
     tmpl.params.forEach((p, i) => {
       if (p.value !== (out[i].k === 'tvalue')) this.fail(`template ${tmpl.name}: argument ${i + 1} must be a ${p.value ? 'value' : 'type'}`, node);
     });
-    return out;
+    return this.typedValues(tmpl.params, out, tmpl.env, node);
+  }
+  /**
+   * Value arguments given their parameter's type where it is an enumeration (`template<class type, etype_t etype>`):
+   * a use of the parameter in the instance is then of that type, not int, which converts to no enumeration --
+   * Doom 3's obj.GetVariable( name, etype ), GetVariable taking an etype_t.
+   */
+  typedValues(params, args, env, node) {
+    return args.map((a, i) => {
+      const p = params[i];
+      if (!p?.value || p.ptr || a.k !== 'tvalue' || a.vtype) return a;
+      let t = null;
+      try { t = this.declType(p.specs, [], env, node); } catch { return a; }
+      return t.k === 'enum' ? { ...a, vtype: T.uncst(t) } : a;
+    });
   }
   instantiate(tmpl, args, node) {
     args = this.withDefaults(tmpl, args, node);
@@ -822,7 +838,8 @@ export class Sema {
   /** Where an instance of ft is read: its scope (the class's, for a member), its arguments bound by name. */
   instanceEnv(ft, args) {
     const cls = ft.member?.cls ?? ft.env.cls ?? null;
-    return { scope: ft.member ? cls.scope : ft.env.scope, cls, bind: new Map([...(ft.env.bind ?? []), ...ft.params.map((p, i) => [p.name, args[i]])]) };
+    const typed = this.typedValues(ft.params, args, ft.env, null);
+    return { scope: ft.member ? cls.scope : ft.env.scope, cls, bind: new Map([...(ft.env.bind ?? []), ...ft.params.map((p, i) => [p.name, typed[i]])]) };
   }
   /** The instance of ft a call with these explicit template arguments and argument expressions makes, or null. */
   deduce(ft, explicit, args, env, node) {

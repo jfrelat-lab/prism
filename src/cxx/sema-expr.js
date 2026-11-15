@@ -288,7 +288,7 @@ export const exprMethods = {
     // A pointer parameter's: the array it was given (which decays), or the address `&name` gave, a constant.
     if (bound?.k === 'tvalue' && bound.sym) return bound.decays ? { ent: bound.sym, path: [], owner: null }
       : { ent: { k: 'enumerator', value: 0, ctext: `(&${bound.sym.cname})`, type: T.ptr(bound.sym.type) }, path: [], owner: null };
-    if (bound?.k === 'tvalue') return { ent: { k: 'enumerator', value: bound.value, type: T.INT }, path: [], owner: null };
+    if (bound?.k === 'tvalue') return { ent: { k: 'enumerator', value: bound.value, type: bound.vtype ?? T.INT }, path: [], owner: null };
     for (let s = env.scope; s; s = s.parent) {
       if (s.cls) {
         const m = this.memberEntity(s.cls, last);
@@ -546,7 +546,15 @@ export const exprMethods = {
     while (s.cls && s.parent) s = s.parent;
     return s;
   },
-  allConversions(cls) { return [...cls.convs, ...cls.bases.flatMap((b) => this.allConversions(b))]; },
+  /**
+   * A class's conversion functions and its bases' -- less those a derived class's hides: one converting to the
+   * same type, as any member hides a base's of its name (idWinBackground's operator const char * over idWinStr's).
+   */
+  allConversions(cls) {
+    const own = cls.convs, key = (f) => T.mangle(f.conv) + (f.type.thisConst ? 'K' : '');
+    const mine = new Set(own.map(key));
+    return [...own, ...cls.bases.flatMap((b) => this.allConversions(b)).filter((f) => !mine.has(key(f)))];
+  },
   /** e converted to `to`, or an error naming both types. */
   coerce(e, to, cx, node, what = 'conversion') {
     const v = this.convert(e, to, cx);
@@ -830,7 +838,9 @@ export const exprMethods = {
   /** A class operand of a built-in operator, converted by its one conversion function to a scalar. */
   builtinOperand(e, cx, node) {
     if (e.t.k !== 'class') return this.decay(e);
-    const fs = this.allConversions(this.complete(e.t.cls)).filter((f) => !(e.t.c && !f.type.thisConst));
+    // A conversion to a class is no operand of a built-in operator: it would need a second user conversion, which
+    // C++ never chains (idWinStr's operator const idStr & beside its operator const char *, in `text[i]`).
+    const fs = this.allConversions(this.complete(e.t.cls)).filter((f) => !(e.t.c && !f.type.thisConst) && (f.conv.k === 'ref' ? f.conv.to : f.conv).k !== 'class');
     const pick = fs.filter((f) => !!f.type.thisConst === !!e.t.c);
     const use = pick.length ? pick : fs;
     const targets = new Set(use.map((f) => T.mangle(T.uncst(f.conv.k === 'ref' ? f.conv.to : f.conv))));
@@ -1062,8 +1072,9 @@ export const exprMethods = {
       case 'funcs': {
         const targs = n.name.parts[n.name.parts.length - 1].targs ?? null;
         // A function template's instance named with all its arguments and not called -- `Complete<renderers>` given
-        // as a callback (Doom 3's argument completion) -- is that instance's address, when nothing else is named.
-        if (ent.templates?.length === 1 && !ent.list.length && targs?.length === ent.templates[0].params.length) {
+        // as a callback (Doom 3's argument completion) -- is that instance's address. Explicit arguments name only
+        // templates, so an ordinary function of that name beside it does not compete (&idListSortCompare<type>).
+        if (ent.templates?.length === 1 && targs?.length === ent.templates[0].params.length) {
           const ft = ent.templates[0];
           const f = this.instantiateFunction(ft, targs.map((a) => this.templateArg(a, cx.env, n)), n);
           if (!(f.cls && !f.isStatic)) { this.use(f); return { c: f.cname, t: f.type, lv: true, funcs: [f], owner: r.owner, qualified: r.qualified }; }

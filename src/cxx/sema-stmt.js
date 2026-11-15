@@ -501,7 +501,15 @@ export const stmtMethods = {
         if (nrvo) ent.cname = dest;
         else if (d) cl.vars.push({ c: name, cls, ent });
         const { e, after } = this.full({ k: 'ctor' }, cx, (_m, c) => {
-          const args = it.ctorArgs ? it.ctorArgs.map((a) => this.expr(a, c)) : it.init ? [this.expr(it.init, c)] : [];
+          let args = it.ctorArgs ? it.ctorArgs.map((a) => this.expr(a, c)) : it.init ? [this.expr(it.init, c)] : [];
+          // `T x = e` from another class is copy-initialisation: the constructors of T may not convert e by a user
+          // conversion of their own, so e's conversion function to T is the one way (Doom 3's idStr shadowText = text,
+          // text an idWinStr with operator const idStr & and operator const char *).
+          const a0 = args[0];
+          if (it.init && !it.ctorArgs && a0?.t.k === 'class' && !this.derivedPath(a0.t.cls, cls)) {
+            const fns = this.allConversions(this.complete(a0.t.cls)).filter((f) => { const r = f.conv.k === 'ref' ? f.conv.to : f.conv; return r.k === 'class' && this.derivedPath(r.cls, cls) && !(a0.t.c && !f.type.thisConst); });
+            if (fns.length === 1) args = [this.callMember(fns[0], a0, [], c)];
+          }
           return { c: this.constructAt(dest, cls, args, c, it) };
         });
         cx.env.scope.set(cppName, ent);
