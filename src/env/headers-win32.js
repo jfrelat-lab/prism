@@ -417,6 +417,9 @@ BOOL WINAPI MakeDragList(HWND hLB);
 void WINAPI DrawInsert(HWND handParent, HWND hLB, int nItem);
 int WINAPI LBItemFromPt(HWND hLB, POINT pt, BOOL bAutoScroll);
 typedef struct tagNMHDR { HWND hwndFrom; UINT_PTR idFrom; UINT code; } NMHDR, *LPNMHDR;
+/* A tooltip's tool (TTM_ADDTOOL), as MFC's OnToolHitTest fills it. */
+typedef struct tagTOOLINFOA { UINT cbSize, uFlags; HWND hwnd; UINT_PTR uId; RECT rect; HINSTANCE hinst; LPSTR lpszText; LPARAM lParam; } TOOLINFOA, TTTOOLINFOA, *LPTOOLINFOA;
+typedef TOOLINFOA TOOLINFO;
 
 #define TVIF_TEXT       0x0001
 #define TVIF_IMAGE      0x0002
@@ -658,6 +661,11 @@ typedef long SSIZE_T;
 typedef unsigned long SIZE_T;
 typedef long long LONGLONG;
 typedef unsigned long long ULONGLONG, DWORDLONG;
+/* basetsd.h's sized integers (wglext.h's OML entry points take INT64) */
+typedef signed char INT8; typedef unsigned char UINT8;
+typedef short INT16; typedef unsigned short UINT16;
+typedef int INT32, LONG32; typedef unsigned int UINT32, ULONG32, DWORD32;
+typedef long long INT64, LONG64; typedef unsigned long long UINT64, ULONG64, DWORD64;
 
 /*
  * LARGE_INTEGER, as a UNION. Quake reads it both ways in one function -- QueryPerformanceFrequency
@@ -825,6 +833,16 @@ typedef struct _OSVERSIONINFO {
     DWORD dwOSVersionInfoSize, dwMajorVersion, dwMinorVersion, dwBuildNumber, dwPlatformId;
     CHAR szCSDVersion[128];
 } OSVERSIONINFO, *LPOSVERSIONINFO;
+/* The XP-era extension (Doom 3's win32 keeps one): the service pack, suite and product type after it */
+typedef struct _OSVERSIONINFOEXA {
+    DWORD dwOSVersionInfoSize, dwMajorVersion, dwMinorVersion, dwBuildNumber, dwPlatformId;
+    CHAR szCSDVersion[128];
+    WORD wServicePackMajor, wServicePackMinor, wSuiteMask;
+    BYTE wProductType, wReserved;
+} OSVERSIONINFOEXA, OSVERSIONINFOEX, *POSVERSIONINFOEX, *LPOSVERSIONINFOEX;
+#define VER_PLATFORM_WIN32s 0
+#define VER_PLATFORM_WIN32_WINDOWS 1
+#define VER_PLATFORM_WIN32_NT 2
 typedef struct _SYSTEM_INFO {
     DWORD dwOemId; DWORD dwPageSize; LPVOID lpMinimumApplicationAddress, lpMaximumApplicationAddress;
     DWORD dwActiveProcessorMask, dwNumberOfProcessors, dwProcessorType,

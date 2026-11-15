@@ -323,8 +323,12 @@ class CxxParser {
         params.push(p);
       } else {
         const specs = this.declSpecifiers({ allowNone: false, inExpr: true });
-        if (specs.type?.k !== 'builtin') this.fail('a template parameter that is a value must be of an integer type');
-        const p = { name: this.ident(), value: true, specs, def: null };
+        // a pointer (`template<const char **strings>`: Doom 3's argument completion), its argument a global's address
+        let ptr = 0;
+        while (this.eatP('*')) { ptr++; this.eatKw('const'); }
+        // an integer, an enumeration (`template< declType_t type >`, by its name) or a pointer
+        if (!ptr && specs.type?.k !== 'builtin' && specs.type?.k !== 'name' && specs.type?.k !== 'named') this.fail(`a template parameter that is a value must be of an integer, enumeration or pointer type (${specs.type?.k})`);
+        const p = { name: this.ident(), value: true, specs, ptr, def: null };
         if (this.eatP('=')) p.def = this.binary(7);
         params.push(p);
       }

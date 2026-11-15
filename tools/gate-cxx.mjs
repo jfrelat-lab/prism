@@ -1635,6 +1635,41 @@ int main() {
 }
 `);
 
+// Doom 3's idCmdSystem::ArgCompletion_String: a pointer template parameter, its argument an array or &name, and
+// the instance named as a callback without being called.
+C('template-pointer-param', `
+// A pointer non-type template parameter, as Doom 3's idCmdSystem::ArgCompletion_String uses one.
+#include <stdio.h>
+#include <string.h>
+
+struct Cmd {
+	template<const char **strings>
+	static void Complete(const char *prefix, void (*callback)(const char *s));
+};
+template<const char **strings> inline void Cmd::Complete(const char *prefix, void (*callback)(const char *s)) {
+	for (int i = 0; strings[i]; i++) if (!strncmp(strings[i], prefix, strlen(prefix))) callback(strings[i]);
+}
+
+const char *renderers[] = { "best", "arb", "arb2", "nv10", NULL };
+const char *filters[] = { "GL_NEAREST", "GL_LINEAR", NULL };
+
+template<int *counter> struct Counter { static void bump() { ++*counter; } };
+int hits;
+
+static void print(const char *s) { printf("  %s\\n", s); }
+typedef void (*completion_t)(const char *, void (*)(const char *));
+
+int main() {
+	completion_t a = Cmd::Complete<renderers>, b = &Cmd::Complete<filters>;
+	printf("arb*:\\n"); a("arb", print);
+	printf("GL_L*:\\n"); b("GL_L", print);
+	printf("distinct instances: %d\\n", a != b);
+	Counter<&hits>::bump(); Counter<&hits>::bump();
+	printf("hits %d\\n", hits);
+	return 0;
+}
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);

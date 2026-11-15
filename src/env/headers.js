@@ -401,6 +401,11 @@ float sinf(float x);
 float cosf(float x);
 float tanf(float x);
 float atanf(float x);
+float acosf(float x);
+float asinf(float x);
+float sinhf(float x);
+float coshf(float x);
+float tanhf(float x);
 float atan2f(float y, float x);
 float expf(float x);
 float logf(float x);
@@ -2177,7 +2182,8 @@ struct count_info { int bytes; int blocks; int ptr; };
 `,
   'errnos.h': '#include <errno.h>\n',
   'alloca.h': 'void *alloca(unsigned long n);\n',
-  'malloc.h': '#include <stdlib.h>\n',
+  // MSVC's and glibc's malloc.h both declare alloca; MSVC's spells it _alloca too
+  'malloc.h': '#include <stdlib.h>\nvoid *alloca(unsigned long n);\nvoid *_alloca(unsigned long n);\n',
   'sys/time.h': `
 #include <sys/types.h>
 #ifndef _PRISM_TIMEVAL_DEFINED

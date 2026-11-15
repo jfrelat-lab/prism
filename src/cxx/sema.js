@@ -300,12 +300,19 @@ export class Sema {
     }
     return found;
   }
-  /** A template argument: a type, or (for a parameter that is a value) an integer constant. */
+  /**
+   * A template argument: a type, or (for a parameter that is a value) an integer constant -- or the address of a
+   * variable with linkage, for a pointer parameter: `name` (an array, decaying) or `&name`, kept as the variable's
+   * entity, which a use of the parameter in the instance then names.
+   */
   templateArg(a, env, node) {
     if (a.expr) {
       const v = this.constInt(a.expr, env);
-      if (v === null) this.fail('a template argument that is not a constant', node);
-      return { k: 'tvalue', value: v };
+      if (v !== null) return { k: 'tvalue', value: v };
+      const e = a.expr.k === 'unary' && a.expr.op === '&' ? a.expr.e : a.expr;
+      const ent = e.k === 'id' ? this.lookupName(e.name, env) : null;
+      if (ent?.ent?.k === 'var' && ent.ent.global) return { k: 'tvalue', value: `&${ent.ent.cname ?? e.name.parts.map((x) => x.name).join('::')}`, sym: ent.ent, decays: e === a.expr };
+      this.fail('a template argument that is not a constant', node);
     }
     return this.declType(a.specs, a.derivs, env, node);
   }

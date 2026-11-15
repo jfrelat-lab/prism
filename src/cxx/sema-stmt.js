@@ -461,6 +461,9 @@ export const stmtMethods = {
     const cl = cx.fn.cleanups[cx.fn.cleanups.length - 1];
     const st = isStatic ? 'static ' : '';
     const done = (text) => { cx.env.scope.set(cppName, ent); return text; };
+    // A name is declared from its declarator on, so its own initialiser may name it (C++ 3.3.1): Doom 3 allocates
+    // `viewEntity_t *guiSpace = (viewEntity_t *)R_ClearedFrameAlloc( sizeof( *guiSpace ) );`.
+    if (type.k !== 'class' && type.k !== 'ref') cx.env.scope.set(cppName, ent);
     if (type.c && T.isInteger(type) && it.init) { const v = this.constInt(it.init, cx.env); if (v !== null) ent.constValue = v; }
 
     if (type.k === 'ref') {

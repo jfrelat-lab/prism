@@ -285,6 +285,9 @@ export const exprMethods = {
     if (q.global) { const ent = this.global.find(last); return ent ? { ent, path: [], owner: null } : null; }
     // A template's value parameter, bound in an instance: a constant, as an enumerator is.
     const bound = env.bind?.get(last);
+    // A pointer parameter's: the array it was given (which decays), or the address `&name` gave, a constant.
+    if (bound?.k === 'tvalue' && bound.sym) return bound.decays ? { ent: bound.sym, path: [], owner: null }
+      : { ent: { k: 'enumerator', value: 0, ctext: `(&${bound.sym.cname})`, type: T.ptr(bound.sym.type) }, path: [], owner: null };
     if (bound?.k === 'tvalue') return { ent: { k: 'enumerator', value: bound.value, type: T.INT }, path: [], owner: null };
     for (let s = env.scope; s; s = s.parent) {
       if (s.cls) {
@@ -1045,6 +1048,13 @@ export const exprMethods = {
         return this.varExpr(ent, cx);
       case 'funcs': {
         const targs = n.name.parts[n.name.parts.length - 1].targs ?? null;
+        // A function template's instance named with all its arguments and not called -- `Complete<renderers>` given
+        // as a callback (Doom 3's argument completion) -- is that instance's address, when nothing else is named.
+        if (ent.templates?.length === 1 && !ent.list.length && targs?.length === ent.templates[0].params.length) {
+          const ft = ent.templates[0];
+          const f = this.instantiateFunction(ft, targs.map((a) => this.templateArg(a, cx.env, n)), n);
+          if (!(f.cls && !f.isStatic)) { this.use(f); return { c: f.cname, t: f.type, lv: true, funcs: [f], owner: r.owner, qualified: r.qualified }; }
+        }
         if (ent.templates?.length) return { funcs: ent.list, templates: ent.templates, targs, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };
         // A function named without being called: its address, when it is not overloaded.
         if (ent.list.length !== 1) return { funcs: ent.list, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };

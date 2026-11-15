@@ -1505,6 +1505,8 @@ function makeLibc(M) {
     roundf: (x) => Math.fround(Math.sign(x) * Math.round(Math.abs(x))),
     truncf: (x) => Math.fround(Math.trunc(x)),
     atanf: (x) => Math.fround(Math.atan(x)),
+    acosf: (x) => Math.fround(Math.acos(x)), asinf: (x) => Math.fround(Math.asin(x)),
+    sinhf: (x) => Math.fround(Math.sinh(x)), coshf: (x) => Math.fround(Math.cosh(x)), tanhf: (x) => Math.fround(Math.tanh(x)),
     atan2f: (y, x) => Math.fround(Math.atan2(y, x)),
     expf: (x) => Math.fround(Math.exp(x)), logf: (x) => Math.fround(Math.log(x)),
     log10f: (x) => Math.fround(Math.log10(x)),

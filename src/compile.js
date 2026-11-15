@@ -518,6 +518,8 @@ export const BUILTINS = new Map(Object.entries({
   log2f: { ret: FLT, params: [FLT] }, log2: { ret: D, params: [D] },
   cosf: { ret: FLT, params: [FLT] }, tanf: { ret: FLT, params: [FLT] },
   atanf: { ret: FLT, params: [FLT] }, atan2f: { ret: FLT, params: [FLT, FLT] },
+  acosf: { ret: FLT, params: [FLT] }, asinf: { ret: FLT, params: [FLT] },   // Doom 3's idMath
+  sinhf: { ret: FLT, params: [FLT] }, coshf: { ret: FLT, params: [FLT] }, tanhf: { ret: FLT, params: [FLT] },
   roundf: { ret: FLT, params: [FLT] }, truncf: { ret: FLT, params: [FLT] },
   expf: { ret: FLT, params: [FLT] }, logf: { ret: FLT, params: [FLT] },
   log10f: { ret: FLT, params: [FLT] }, powf: { ret: FLT, params: [FLT, FLT] },
@@ -561,6 +563,7 @@ export const BUILTINS = new Map(Object.entries({
   __builtin_unreachable: { ret: V, params: [], impl: 'abort' },
   alloca: { ret: P, params: [U], impl: 'alloca' },
   __builtin_alloca: { ret: P, params: [U], impl: 'alloca' },
+  _alloca: { ret: P, params: [U], impl: 'alloca' },   // MSVC's name (malloc.h): Doom 3's idlib
   // The variadic pair. __prism_va_start is intercepted by the emitter (it must resolve to the
   // current function's hidden buffer parameter); __prism_va_next is an ordinary runtime call.
   // setjmp is intercepted by the emitter: it must become a resume point in the function's state
