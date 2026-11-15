@@ -151,6 +151,14 @@ function createDevice(g, params, { floatRT, onPresent }) {
     t.surfaces = t.faces[0] ?? [];
     return t;
   }
+  // a texture at a new size, its handles kept: a new GL texture (texStorage2D's storage is immutable), its surfaces resized
+  function resizeTexture(t, w, h) {
+    g.deleteTexture(t.tex);
+    t.tex = g.createTexture(); t.w = w; t.h = h;
+    g.bindTexture(g[t.target], t.tex);
+    g.texStorage2D(g[t.target], t.levels, g[t.f[0]], w, h);
+    for (const list of t.faces) list.forEach((sh, l) => { const sf = objects.get(sh); sf.w = Math.max(1, w >> l); sf.h = Math.max(1, h >> l); });
+  }
   function makeDepth(w, h) {
     const rb = g.createRenderbuffer();
     g.bindRenderbuffer(g.RENDERBUFFER, rb);
@@ -211,7 +219,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
   let viewport = { x: 0, y: 0, width: W, height: H, minZ: 0, maxZ: 1 }, scissor = [0, 0, W, H];
   let fvf = 0, decl = 0, vs = 0, ps = 0, inScene = false;
   const streams = Array.from({ length: 16 }, () => ({ vb: 0, offset: 0, stride: 0 }));
-  let indices = 0;
+  // the index buffer and the format it is read in: its own (D3DFMT_INDEX16/32), unless SetIndices names one -- Direct3D 11's
+  // IASetIndexBuffer does, through MIRAGE's d3d11.dll
+  let indices = 0, indexFormat = 0;
   // the fixed function's state: transforms (D3DTRANSFORMSTATETYPE, D3D's row-major matrices), lights, the material, the stages
   const IDENTITY = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   const transforms = new Map();
@@ -280,13 +290,13 @@ function createDevice(g, params, { floatRT, onPresent }) {
     'color', 'fog', 'depth', 'sample'];
   function declLayout(els) {
     const E = els.map((e) => {
-      if (e.stream !== 0) fail(`vertex declaration: an element in stream ${e.stream} (only stream 0 is supported yet)`);
       if (e.method) fail(`vertex declaration: method ${e.method} (tessellation) is not supported`);
       const t = DECLTYPE[e.type] ?? fail(`vertex declaration: D3DDECLTYPE ${e.type} is not supported yet`);
       const usage = DECLUSAGE[e.usage] ?? fail(`vertex declaration: usage ${e.usage}`);
-      return { off: e.offset, size: t[0], glType: t[1], norm: !!t[2], color: e.type === 4, usage, index: e.usageIndex };
+      return { off: e.offset, size: t[0], glType: t[1], norm: !!t[2], color: e.type === 4, usage, index: e.usageIndex, stream: e.stream };
     });
-    return { E, stride: null, colors: E.filter((e) => e.color).map((e) => e.off) };
+    // colors: stream 0's D3DCOLORs, which the draw swaps in a copy of its vertices; another stream's are swapped on their own
+    return { E, stride: null, colors: E.filter((e) => e.color && !e.stream).map((e) => e.off), streamColors: E.some((e) => e.color && e.stream) };
   }
   const layout = () => (decl ? get(decl, 'decl').L : fvfLayout(fvf));
   // What a sampler read must be made into, beyond GL's own read, per draw:
@@ -685,6 +695,22 @@ function createDevice(g, params, { floatRT, onPresent }) {
       // an input no element feeds: D3DCOLOR's defaults for the colours, (0, 0, 0, 1) otherwise
       if (!e) { g.vertexAttrib4f(a.loc, ...(a.usage === 'color' ? (a.index ? [0, 0, 0, 0] : [1, 1, 1, 1]) : [0, 0, 0, 1])); continue; }
       g.enableVertexAttribArray(a.loc);
+      if (e.stream) {
+        // another stream (a vertex declaration's Stream; Direct3D 11's input slots): its own buffer, offset and
+        // stride, from the same first vertex; its D3DCOLORs go up from its CPU copy, swapped
+        const st = streams[e.stream], sb = get(st.vb, 'vb'), first = st.offset + (v.vbase ?? 0) * st.stride;
+        if (e.color) {
+          const tmp = streamBuf(e.stream), copy = new Uint8Array(sb.bytes.subarray(first));
+          for (let o = e.off; o + 3 < copy.length; o += st.stride) { const t = copy[o]; copy[o] = copy[o + 2]; copy[o + 2] = t; }
+          g.bindBuffer(g.ARRAY_BUFFER, tmp); g.bufferData(g.ARRAY_BUFFER, copy, g.STREAM_DRAW);
+          g.vertexAttribPointer(a.loc, e.size, g.UNSIGNED_BYTE, true, st.stride, e.off);
+        } else {
+          g.bindBuffer(g.ARRAY_BUFFER, sb.buf);
+          g.vertexAttribPointer(a.loc, e.size, g[e.glType ?? 'FLOAT'], e.norm ?? false, st.stride, first + e.off);
+        }
+        g.bindBuffer(g.ARRAY_BUFFER, v.bytes ? vbo : v.buf);
+        continue;
+      }
       g.vertexAttribPointer(a.loc, e.size, g[e.glType ?? (e.color ? 'UNSIGNED_BYTE' : 'FLOAT')], e.norm ?? e.color, stride, base + e.off);
     }
     if (idx) {
@@ -693,6 +719,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
     } else g.drawArrays(g[MODE[type]], v.first ?? 0, n);
     g.bindVertexArray(null);
   }
+  // a GL buffer per stream for the swapped D3DCOLORs of a stream other than 0
+  const streamBufs = [];
+  const streamBuf = (k) => (streamBufs[k] ??= g.createBuffer());
   // D3DCOLOR's B,G,R,A bytes as GL's R,G,B,A: swapped in a copy of the vertices.
   function swizzleColours(bytes, stride, L) {
     if (!L.colors.length) return bytes;
@@ -755,7 +784,25 @@ function createDevice(g, params, { floatRT, onPresent }) {
       }
       return OK;
     },
-    reset: () => fail('Reset is not supported yet'),
+    /*
+     * Reset, with new presentation parameters: the back buffer and the automatic depth buffer at the new size (the
+     * same handles), render target 0, the depth surface, the viewport and the scissor as D3D9 sets them. Unlike D3D9,
+     * the other resources are kept (no D3DPOOL_DEFAULT is lost) and so are the other states: DXGI's ResizeBuffers
+     * (MIRAGE's d3d11.dll, Deltarune) is this, and a D3D9 program sets its states again after a Reset anyway.
+     */
+    reset: (p = {}) => {
+      const w = p.width || g.drawingBufferWidth, h = p.height || g.drawingBufferHeight;
+      resizeTexture(backTex, w, h);
+      if (autoDepth) {
+        const d = get(autoDepth, 'surface');
+        g.deleteRenderbuffer(d.depth); for (const rb of d.sized.values()) g.deleteRenderbuffer(rb);
+        objects.set(autoDepth, makeDepth(w, h));
+      }
+      for (const [k, fb] of fbos) if (k.split(/[,/]/).includes(String(backBuffer)) || (autoDepth && k.endsWith(`/${autoDepth}`))) { g.deleteFramebuffer(fb); fbos.delete(k); }
+      rt = [backBuffer, 0, 0, 0]; depthSurface = autoDepth;
+      viewport = { x: 0, y: 0, width: w, height: h, minZ: 0, maxZ: 1 }; scissor = [0, 0, w, h];
+      return OK;
+    },
 
     // state
     setRenderState: (state, value) => { rs.set(state, value >>> 0); return OK; },
@@ -818,7 +865,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
       return OK;
     },
     setStreamSource: (stream, h, offset, stride) => { streams[stream] = { vb: h, offset, stride }; return OK; },
-    setIndices: (h) => { indices = h; return OK; },
+    setIndices: (h, format = 0) => { indices = h; indexFormat = format; return OK; },
 
     // draws
     drawPrimitiveUP: (type, primCount, bytes, stride) => { draw(type, primCount, stride, { bytes }); return OK; },
@@ -828,15 +875,15 @@ function createDevice(g, params, { floatRT, onPresent }) {
     // from the buffers in GL; a vertex buffer holding D3DCOLORs goes up from its CPU copy, swapped
     drawPrimitive: (type, start, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb');
-      if (layout().colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + COUNT[type](primCount)) * s.stride) });
-      else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset, first: start });
+      if (layout().colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + start * s.stride, s.offset + (start + COUNT[type](primCount)) * s.stride), vbase: start });
+      else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset, first: start, vbase: 0 });
       return OK;
     },
     drawIndexedPrimitive: (type, baseVertex, minIndex, numVertices, startIndex, primCount) => {
       const s = streams[0], b = get(s.vb, 'vb'), ib = get(indices, 'ib');
-      const size = ib.format === 102 ? 4 : 2;
-      if (layout().colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + baseVertex * s.stride) }, { bytes: ib.bytes.slice(startIndex * size, (startIndex + COUNT[type](primCount)) * size), fmt: ib.format });
-      else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset + baseVertex * s.stride }, { buf: ib.buf, offset: startIndex * size, fmt: ib.format });
+      const fmt = indexFormat || ib.format, size = fmt === 102 ? 4 : 2;
+      if (layout().colors.length) draw(type, primCount, s.stride, { bytes: b.bytes.subarray(s.offset + baseVertex * s.stride), vbase: baseVertex }, { bytes: ib.bytes.slice(startIndex * size, (startIndex + COUNT[type](primCount)) * size), fmt });
+      else draw(type, primCount, s.stride, { buf: b.buf, base: s.offset + baseVertex * s.stride, vbase: baseVertex }, { buf: ib.buf, offset: startIndex * size, fmt });
       return OK;
     },
 
@@ -849,10 +896,13 @@ function createDevice(g, params, { floatRT, onPresent }) {
       const t = get(h, 'texture');
       if (t.dim === '3D') fail('textureWrite on a volume texture (volumeWrite)');
       const s = get(t.faces[face]?.[level] ?? fail(`face ${face} level ${level}`), 'surface');
-      if (rect) fail('a partial texture write is not supported yet');
+      // a rectangle [left, top, right, bottom) of the level: bytes is that box's, pitch apart (UpdateSubresource of a box
+      // into a 2048x2048 GameMaker texture page, through MIRAGE's d3d11.dll)
+      const [x0, y0, x1, y1] = rect ? [rect.left, rect.top, rect.right, rect.bottom] : [0, 0, s.w, s.h];
+      if (x0 < 0 || y0 < 0 || x1 > s.w || y1 > s.h || x1 <= x0 || y1 <= y0) fail(`texture write of [${x0}, ${y0}, ${x1}, ${y1}) into a ${s.w}x${s.h} level`);
       g.bindTexture(g[t.target], t.tex);
       g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
-      g.texSubImage2D(t.dim === 'Cube' ? g.TEXTURE_CUBE_MAP_POSITIVE_X + face : g.TEXTURE_2D, level, 0, 0, s.w, s.h, g[t.f[1]], g[t.f[2]], texels(t.f, bytes, s.w, s.h, pitch));
+      g.texSubImage2D(t.dim === 'Cube' ? g.TEXTURE_CUBE_MAP_POSITIVE_X + face : g.TEXTURE_2D, level, x0, y0, x1 - x0, y1 - y0, g[t.f[1]], g[t.f[2]], texels(t.f, bytes, x1 - x0, y1 - y0, pitch));
       if (level === 0 && (t.usage & USAGE_AUTOGENMIPMAP) && (t.dim === '2D' || face === 5)) g.generateMipmap(g[t.target]);
       return OK;
     },
