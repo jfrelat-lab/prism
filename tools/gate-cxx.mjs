@@ -1904,6 +1904,17 @@ const char *idRegister::Name() const { switch (type) { case VEC4: return "vec4";
 int main() { FLOAT f = 1.5f; idRegister r; r.type = idRegister::FLOAT; printf("%s %g\\n", r.Name(), (double)f); return 0; }
 `);
 
+// A builtin-typed pointer to function declared in a statement; a parameter hiding a type.
+C('builtin-fnptr-param-shadow', `
+// Doom 3's win32 layer: a local pointer to function declared with a builtin type (GLimp_ExtensionPointer), and a
+// parameter named as a type that it hides in the body (NET_IPSocket's net_interface).
+#include <stdio.h>
+typedef struct { int ip; } net_interface;
+static void hello(void) { printf("hello\\n"); }
+static int open_socket(const char *net_interface, int port) { if (net_interface) printf("%s:%d\\n", net_interface, port); return net_interface ? 1 : 0; }
+int main() { void (*proc)(void); proc = hello; proc(); net_interface n; n.ip = 3; printf("%d %d %d\\n", open_socket("eth0", 27666), open_socket(0, 1), n.ip); return 0; }
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);

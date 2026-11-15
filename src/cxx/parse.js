@@ -765,6 +765,17 @@ class CxxParser {
       sc.usings.push({ scope: ownerScope, deep: true });
       this.scope = sc;
     }
+    // The parameters are names of the body's scope: one named as a type hides it there (Doom 3's
+    // NET_IPSocket( const char *net_interface, ... ) beside its typedef struct { ... } net_interface).
+    const fd = [...d.derivs].reverse().find((x) => x.k === 'func');
+    if (fd?.params?.length) {
+      const ps = new PScope(this.scope, this.scope.cls);
+      for (const p of fd.params) {
+        const n = p.decl?.name?.parts?.length === 1 ? p.decl.name.parts[0].name : null;
+        if (n && this.scope.find(n) === 'type') ps.set(n, 'var');
+      }
+      this.scope = ps;
+    }
     try {
       const inits = [];
       if (this.eatP(':')) {
@@ -1072,7 +1083,8 @@ class CxxParser {
     if (t.k === PUNCT && t.v === '::' && this.isTypeName()) { const j = this.resolvePath(0).end; return !this.isP('(', j) && !this.isP('.', j) && !this.isP('->', j); }
     if (t.k !== ID) return false;
     if (STORAGE.has(t.v) || (CV.has(t.v)) || t.v === 'class' || t.v === 'struct' || t.v === 'union' || t.v === 'enum') return true;
-    if (BUILTIN.has(t.v)) return !this.isP('(', 1);      // `int(x)` is a cast
+    // `int(x)` is a cast; `void (*proc)(void)` declares (Doom 3's GLimp_ExtensionPointer)
+    if (BUILTIN.has(t.v)) return !this.isP('(', 1) || this.isP('*', 2) || this.isP('&', 2);
     if (!this.startsType()) return false;
     // `T(args).m()` and `T(args);` are expressions; `T x`, `T *x`, `T &x`, `T<U> x`, `A::B x` declare.
     const j = this.resolvePath(0).end;

@@ -13,7 +13,8 @@ import { WATCOM_HEADERS, WATCOM_DOS_H, WATCOM_I86_H } from './headers-watcom.js'
 import { SVGALIB_HEADERS } from './headers-svgalib.js';
 import { WIN32_HEADERS } from './headers-win32.js';
 import { MMINTRIN_H, XMMINTRIN_H } from './headers-mmx.js';
-import { D3D9_H, DINPUT_H, OLECTL_H, CRTDBG_H } from './headers-d3d9.js';
+import { D3D9_H, OLECTL_H, CRTDBG_H } from './headers-d3d9.js';
+import { DINPUT_H } from './headers-dinput.js';
 import { DSOUND_H } from './headers-dsound.js';
 
 const STDDEF = `

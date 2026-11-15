@@ -630,20 +630,7 @@ IDirect3D9 *WINAPI Direct3DCreate9(UINT SDKVersion);
 #endif
 `;
 
-/*
- * <dinput.h>: the version macro and nothing more, said plainly. .kkrieger's player builds with
- * sUSE_DIRECTINPUT 0 -- its keys and mouse come from window messages -- so every DirectInput line in
- * _start.cpp sits under #if sUSE_DIRECTINPUT and needs no declaration; a program that does use
- * DirectInput fails at its first IDirectInput8, by name.
- */
-export const DINPUT_H = `#ifndef _PRISM_DINPUT_H
-#define _PRISM_DINPUT_H
-#include <windows.h>
-#ifndef DIRECTINPUT_VERSION
-#define DIRECTINPUT_VERSION 0x0800
-#endif
-#endif
-`;
+/* <dinput.h> is src/env/headers-dinput.js. */
 
 /*
  * <olectl.h>, with the IStream of objidl.h and the IPicture of ocidl.h that OleLoadPicture deals in:
