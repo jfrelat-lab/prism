@@ -589,6 +589,8 @@ LONG WINAPI RegOpenKeyEx(HKEY key, LPCSTR sub, DWORD opt, DWORD sam, PHKEY out)
     if (out) *out = (HKEY)0;
     return 2;                                   /* ERROR_FILE_NOT_FOUND */
 }
+/* The 16-bit era's spelling (Doom 3's Maya importer asks for Alias|Wavefront's key): the same answer */
+LONG WINAPI RegOpenKey(HKEY key, LPCSTR sub, PHKEY out) { return RegOpenKeyEx(key, sub, 0, 0, out); }
 LONG WINAPI RegCreateKeyEx(HKEY key, LPCSTR sub, DWORD res, LPSTR cls, DWORD opt,
                            DWORD sam, void *sa, PHKEY out, DWORD *disp)
 {

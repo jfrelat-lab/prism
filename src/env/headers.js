@@ -169,6 +169,9 @@ int vprintf(const char *fmt, char *ap);
 int vfprintf(FILE *stream, const char *fmt, char *ap);
 int vsprintf(char *dst, const char *fmt, char *ap);
 int vsnprintf(char *dst, size_t n, const char *fmt, char *ap);
+/* MSVC's names for them (Doom 3's idStr::vsnPrintf) */
+int _snprintf(char *dst, size_t n, const char *fmt, ...);
+int _vsnprintf(char *dst, size_t n, const char *fmt, char *ap);
 FILE *fopen(const char *name, const char *mode);
 FILE *freopen(const char *name, const char *mode, FILE *stream);
 int fclose(FILE *stream);

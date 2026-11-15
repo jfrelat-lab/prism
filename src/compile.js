@@ -609,6 +609,8 @@ export const BUILTINS = new Map(Object.entries({
   __builtin_memchr: { ret: P, params: [P, I, U], impl: 'memchr' },
   __builtin_sprintf: { ret: I, params: [P, P], variadic: true, impl: 'sprintf' },
   __builtin_snprintf: { ret: I, params: [P, U, P], variadic: true, impl: 'snprintf' },
+  _snprintf: { ret: I, params: [P, U, P], variadic: true, impl: 'snprintf' },   // MSVC's names
+  _vsnprintf: { ret: I, params: [P, U, P, P], impl: 'vsnprintf' },
   __builtin_fprintf: { ret: I, params: [P, P], variadic: true, impl: 'fprintf' },
   __builtin_calloc: { ret: P, params: [U, U], impl: 'calloc' },
   __builtin_realloc: { ret: P, params: [P, U], impl: 'realloc' },

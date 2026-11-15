@@ -303,6 +303,63 @@ static void remember_window(HWND h, WNDPROC p)
 }
 
 /*
+ * The global atom table: strings by number, 0xC000 up as Windows numbers string atoms, counted references.
+ * Doom 3 hands one with each line it posts to an editor window it looks for (Common.cpp's Printf).
+ */
+static struct { char name[256]; int refs; } prism_atoms[64];
+/* atom names compare without case */
+static int atom_same(const char *a, const char *b)
+{
+    for (;; a++, b++) {
+        int x = *a >= 'A' && *a <= 'Z' ? *a + 32 : *a, y = *b >= 'A' && *b <= 'Z' ? *b + 32 : *b;
+        if (x != y) return 0;
+        if (!x) return 1;
+    }
+}
+ATOM WINAPI GlobalFindAtom(LPCSTR name)
+{
+    int i;
+    for (i = 0; name && i < 64; i++) if (prism_atoms[i].refs && atom_same(prism_atoms[i].name, name)) return (ATOM)(0xC000 + i);
+    return 0;
+}
+ATOM WINAPI GlobalAddAtom(LPCSTR name)
+{
+    ATOM a = GlobalFindAtom(name);
+    int i;
+    if (a) { prism_atoms[a - 0xC000].refs++; return a; }
+    for (i = 0; name && i < 64; i++) if (!prism_atoms[i].refs) {
+        strncpy(prism_atoms[i].name, name, sizeof prism_atoms[i].name - 1);
+        prism_atoms[i].refs = 1;
+        return (ATOM)(0xC000 + i);
+    }
+    return 0;
+}
+ATOM WINAPI GlobalDeleteAtom(ATOM a)
+{
+    if (a >= 0xC000 && a < 0xC000 + 64 && prism_atoms[a - 0xC000].refs) prism_atoms[a - 0xC000].refs--;
+    return 0;
+}
+UINT WINAPI GlobalGetAtomName(ATOM a, LPSTR buf, int n)
+{
+    if (a < 0xC000 || a >= 0xC000 + 64 || !prism_atoms[a - 0xC000].refs || !buf || n <= 0) return 0;
+    strncpy(buf, prism_atoms[a - 0xC000].name, (size_t)n - 1);
+    buf[n - 1] = 0;
+    return (UINT)strlen(buf);
+}
+
+/* Running another program: there is none on this machine to run (ERROR_FILE_NOT_FOUND, below 32 as a failure is). */
+UINT WINAPI WinExec(LPCSTR cmd, UINT show) { (void)cmd; (void)show; return 2; }
+
+/* The top-level windows are this program's own: there is no other program on this desktop to list. */
+BOOL WINAPI EnumWindows(WNDENUMPROC fn, LPARAM lp)
+{
+    int i;
+    for (i = 0; fn && i < MAX_WINDOWS; i++)
+        if (windows[i].used && !fn(windows[i].hwnd, lp)) break;
+    return TRUE;
+}
+
+/*
  * Turn whatever the outside world has done into messages, before the queue is examined. Supplied by
  * src/env/win32-net.c when a target links it; undefined -- and therefore null -- when it does not.
  */

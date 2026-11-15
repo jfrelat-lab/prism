@@ -820,6 +820,11 @@ typedef struct tagWNDCLASSEXA {
     LPCSTR lpszMenuName, lpszClassName; HICON hIconSm;
 } WNDCLASSEX, WNDCLASSEXA, *LPWNDCLASSEX;
 ATOM WINAPI RegisterClassEx(const WNDCLASSEX *c);
+ATOM WINAPI GlobalAddAtom(LPCSTR name);
+UINT WINAPI WinExec(LPCSTR cmd, UINT show);
+ATOM WINAPI GlobalFindAtom(LPCSTR name);
+ATOM WINAPI GlobalDeleteAtom(ATOM a);
+UINT WINAPI GlobalGetAtomName(ATOM a, LPSTR buf, int n);
 ATOM WINAPI RegisterClassExA(const WNDCLASSEXA *c);
 ATOM WINAPI RegisterClassA(const WNDCLASSA *c);
 ATOM WINAPI RegisterClassW(const WNDCLASSW *c);
@@ -951,6 +956,11 @@ typedef DWORD (WINAPI *LPTHREAD_START_ROUTINE)(LPVOID);
 #define PC_RESERVED 0x01
 #define THREAD_PRIORITY_HIGHEST 2
 #define THREAD_PRIORITY_NORMAL 0
+#define THREAD_PRIORITY_ABOVE_NORMAL 1
+#define THREAD_PRIORITY_BELOW_NORMAL (-1)
+#define THREAD_PRIORITY_LOWEST (-2)
+#define THREAD_PRIORITY_IDLE (-15)
+#define THREAD_PRIORITY_TIME_CRITICAL 15
 #define NORMAL_PRIORITY_CLASS 0x00000020
 #define HIGH_PRIORITY_CLASS 0x00000080
 #define CREATE_SUSPENDED 0x00000004
@@ -2203,6 +2213,10 @@ typedef HKEY *PHKEY;
 #define ERROR_SUCCESS       0
 #define ERROR_MORE_DATA     234
 LONG WINAPI RegOpenKeyEx(HKEY key, LPCTSTR sub, DWORD opt, DWORD sam, PHKEY out);
+LONG WINAPI RegOpenKey(HKEY key, LPCTSTR sub, PHKEY out);
+/* The top-level windows, each to the callback until it returns FALSE */
+typedef BOOL (CALLBACK *WNDENUMPROC)(HWND, LPARAM);
+BOOL WINAPI EnumWindows(WNDENUMPROC fn, LPARAM lp);
 LONG WINAPI RegCreateKeyEx(HKEY key, LPCTSTR sub, DWORD res, LPTSTR cls, DWORD opt,
                            DWORD sam, void *sa, PHKEY out, DWORD *disp);
 LONG WINAPI RegQueryValueEx(HKEY key, LPCTSTR name, DWORD *res, DWORD *type,

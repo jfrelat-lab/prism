@@ -46,6 +46,8 @@ export const MSVC_DEFINES = {
   __int64: 'long long', __int32: 'int', __int16: 'short', __int8: 'char', __w64: '', __forceinline: 'inline',
   __cdecl: '', _cdecl: '', __stdcall: '', _stdcall: '', __fastcall: '', _fastcall: '', '__declspec(x)': '',
   wchar_t: 'unsigned short',
+  // an optimiser hint, which a compiler may ignore (Doom 3's Simd_Generic.cpp: __assume( count > 0 ))
+  '__assume(x)': '((void)0)',
 };
 
 /** Which compiler a `cxx` option says the program was written for. */
