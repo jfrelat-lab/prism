@@ -520,13 +520,16 @@ const STDINT = `
 
 #ifndef _PRISM_STDINT_H
 #define _PRISM_STDINT_H
+#ifndef _PRISM_INTN_T
+#define _PRISM_INTN_T
 typedef signed char int8_t;
-typedef unsigned char uint8_t;
 typedef short int16_t;
-typedef unsigned short uint16_t;
 typedef int int32_t;
-typedef unsigned int uint32_t;
 typedef long long int64_t;
+#endif
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
 typedef unsigned long long uint64_t;
 typedef long long intmax_t;
 typedef unsigned long long uintmax_t;
@@ -1071,6 +1074,16 @@ const SYS_TYPES = `
 typedef unsigned char u_int8_t;
 typedef unsigned short u_int16_t;
 typedef unsigned int u_int32_t;
+typedef unsigned long long u_int64_t;
+/* ...and the signed sized integers, as glibc's <sys/types.h> declares them too (Ogg's os_types.h on Linux); one
+   definition with <stdint.h>'s */
+#ifndef _PRISM_INTN_T
+#define _PRISM_INTN_T
+typedef signed char int8_t;
+typedef short int16_t;
+typedef int int32_t;
+typedef long long int64_t;
+#endif
 typedef unsigned char u_char;
 typedef unsigned short u_short;
 typedef unsigned int u_int;
