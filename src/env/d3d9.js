@@ -379,7 +379,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     g.linkProgram(prog);
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
     const u = (n) => g.getUniformLocation(prog, n);
-    p = { prog, attrs, aref: at ? u('prism_aref') : null, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
+    p = { prog, attrs, aref: at ? u('prism_aref') : null, tf: psObj.ffp ? u('prism_ff_tfactor') : null, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
       ff: vsObj?.ffp ? { world: u('prism_ff_world'), view: u('prism_ff_view'), proj: u('prism_ff_proj'), mat: u('prism_ff_mat'), ambient: u('prism_ff_ambient'), light: u('prism_ff_light') } : null,
       s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])],
       dims: new Map([...psObj.samplers.map((sm) => [sm.index, sm.dim]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, sm.dim]) : [])]), bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
@@ -447,26 +447,61 @@ function createDevice(g, params, { floatRT, onPresent }) {
     ffCache.set(`v${sig}`, o);
     return o;
   }
-  // Its pixel stage: stage 0 as D3D9 sets it by default (its texture times the diffuse colour, the texture's
-  // alpha), or the diffuse colour where no texture is bound; the specular colour added after, when enabled.
-  // Any other stage setting is refused by name.
+  // Its pixel stage: the texture stages' cascade, stage k combining its two arguments by its colour and alpha
+  // operations into CURRENT, up to the first stage whose COLOROP is DISABLE; the specular colour added after, when
+  // enabled. CURRENT starts as the diffuse colour. Where no texture is bound, an operation that reads TEXTURE becomes
+  // SELECTARG1 CURRENT, as Wine's wined3d does it (is_invalid_op): the default stage 0 then passes the diffuse colour
+  // through, and so does GameMaker 8's MODULATE TEXTURE DIFFUSE for its untextured shapes. ALPHAOP DISABLE on an
+  // enabled stage keeps CURRENT's alpha. Anything else is refused by name.
+  const FF_OP = {
+    2: (a) => a, 3: (a, b) => b, 4: (a, b) => `${a} * ${b}`, 5: (a, b) => `min(2.0 * ${a} * ${b}, 1.0)`, 6: (a, b) => `min(4.0 * ${a} * ${b}, 1.0)`,
+    7: (a, b) => `min(${a} + ${b}, 1.0)`, 8: (a, b) => `clamp(${a} + ${b} - 0.5, 0.0, 1.0)`, 9: (a, b) => `clamp(2.0 * (${a} + ${b} - 0.5), 0.0, 1.0)`,
+    10: (a, b) => `max(${a} - ${b}, 0.0)`, 11: (a, b) => `min(${a} + ${b} - ${a} * ${b}, 1.0)`,
+  };
+  // BLENDDIFFUSEALPHA, BLENDTEXTUREALPHA, BLENDFACTORALPHA, BLENDCURRENTALPHA: arg1 * alpha + arg2 * (1 - alpha)
+  const FF_BLEND = { 12: 'prism_col0.a', 13: 'tex.a', 14: 'prism_ff_tfactor.a', 16: 'cur.a' };
+  const FF_SAMPLER = { '2D': ['sampler2D', 'xy'], Cube: ['samplerCube', 'xyz'], '3D': ['sampler3D', 'xyz'] };
   function ffPixel() {
-    const t0 = tss[0], tex = !!textures[0];
-    const def = [TSS.COLOROP, TSS.COLORARG1, TSS.COLORARG2, TSS.ALPHAOP, TSS.ALPHAARG1, TSS.ALPHAARG2].every((t) => t0.get(t) === tssDefault(0)[t]);
-    if (!def && !(t0.get(TSS.COLOROP) === 1)) fail(`texture stage 0 without a pixel shader: COLOROP ${t0.get(TSS.COLOROP)} ALPHAOP ${t0.get(TSS.ALPHAOP)} (args ${t0.get(TSS.COLORARG1)}, ${t0.get(TSS.COLORARG2)}): only the default stage is supported yet`);
-    if (tss[1].get(TSS.COLOROP) !== 1) fail('texture stage 1 without a pixel shader is not supported yet');
-    const textured = tex && t0.get(TSS.COLOROP) !== 1, spec = !!rs.get(RS.SPECULARENABLE);
-    const sig = `p${textured ? 't' : ''}${spec ? 's' : ''}`;
+    const spec = !!rs.get(RS.SPECULARENABLE), stages = [];
+    for (let k = 0; k < 8; k++) {
+      const t = tss[k], cop = t.get(TSS.COLOROP);
+      if (cop === 1) break;
+      const aop = t.get(TSS.ALPHAOP), args = [TSS.COLORARG1, TSS.COLORARG2, TSS.ALPHAARG1, TSS.ALPHAARG2].map((s) => t.get(s));
+      for (const op of [cop, aop]) if (op !== 1 && !FF_OP[op] && !FF_BLEND[op]) fail(`texture stage ${k} without a pixel shader: D3DTOP ${op} is not supported yet`);
+      for (const a of args) if ((a & 15) > 4 || (a & ~0x3f)) fail(`texture stage ${k} without a pixel shader: D3DTA ${a} (TEMP, CONSTANT) is not supported yet`);
+      if ((t.get(28) ?? 1) !== 1) fail(`texture stage ${k} without a pixel shader: D3DTSS_RESULTARG ${t.get(28)} is not supported yet`);
+      const h = textures[k], isTex = (a) => (a & 15) === 2;
+      const invalid = (op, a1, a2) => !h && op !== 1 && ((isTex(a1) && op !== 3) || (isTex(a2) && op !== 2));
+      let [c1, c2, a1, a2] = args, co = cop, ao = aop;
+      if (invalid(co, c1, c2)) { co = 2; c1 = 1; }
+      if (invalid(ao, a1, a2)) { ao = 2; a1 = 1; }
+      const reads = co === 13 || ao === 13 || [c1, c2, a1, a2].some(isTex);
+      stages.push({ k, cop: co, aop: ao, args: [c1, c2, a1, a2], tex: reads && h ? objects.get(h).dim : null });
+    }
+    const sig = `p${spec ? 's' : ''}|${stages.map((s) => `${s.cop},${s.aop},${s.args.join(',')},${s.tex ?? '-'}`).join('|')}`;
     let o = ffCache.get(sig);
     if (o) return o;
-    const inputs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, ...(spec ? [{ semantic: 'COLOR', index: 1, name: 'prism_col1' }] : []),
-      ...(textured ? [{ semantic: 'TEXCOORD', index: 0, name: 'prism_t0' }] : [])];
-    const glsl = ['#version 300 es', 'precision highp float;', ...inputs.map((i) => `in vec4 ${i.name};`), ...(textured ? ['uniform highp sampler2D prism_s0;'] : []),
-      'layout(location = 0) out vec4 prism_o0;', 'void main() {',
-      textured ? '  vec4 t = texture(prism_s0, prism_t0.xy);\n  vec4 c = vec4(t.rgb * prism_col0.rgb, t.a);' : '  vec4 c = prism_col0;',
-      ...(spec ? ['  c.rgb = min(c.rgb + prism_col1.rgb, 1.0);'] : []), '  prism_o0 = c;', '}', ''].join('\n');
+    const texd = stages.filter((s) => s.tex), col1 = spec || stages.some((s) => s.args.some((a) => (a & 15) === 4));
+    const inputs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, ...(col1 ? [{ semantic: 'COLOR', index: 1, name: 'prism_col1' }] : []),
+      ...texd.map((s) => ({ semantic: 'TEXCOORD', index: s.k, name: `prism_t${s.k}` }))];
+    // an argument: its source, then COMPLEMENT (1 - x), then ALPHAREPLICATE (its alpha in every channel)
+    const arg = (a, ch) => {
+      let x = ['prism_col0', 'cur', 'tex', 'prism_ff_tfactor', 'prism_col1'][a & 15];
+      if (a & 0x10) x = `(1.0 - ${x})`;
+      return `${x}.${a & 0x20 ? (ch === 'a' ? 'a' : 'aaa') : ch}`;
+    };
+    const combine = (op, a, b) => (FF_BLEND[op] ? `mix(${b}, ${a}, ${FF_BLEND[op]})` : FF_OP[op](a, b));
+    const body = ['  vec4 cur = prism_col0, tex;'];
+    for (const s of stages) {
+      body.push(`  tex = ${s.tex ? `texture(prism_s${s.k}, prism_t${s.k}.${FF_SAMPLER[s.tex][1]})` : 'vec4(1.0)'};`,
+        `  cur = vec4(${combine(s.cop, arg(s.args[0], 'rgb'), arg(s.args[1], 'rgb'))}, ${s.aop === 1 ? 'cur.a' : combine(s.aop, arg(s.args[2], 'a'), arg(s.args[3], 'a'))});`);
+    }
+    const glsl = ['#version 300 es', 'precision highp float;', ...inputs.map((i) => `in vec4 ${i.name};`),
+      ...texd.map((s) => `uniform highp ${FF_SAMPLER[s.tex][0]} prism_s${s.k};`), 'uniform vec4 prism_ff_tfactor;',
+      'layout(location = 0) out vec4 prism_o0;', 'void main() {', ...body,
+      ...(spec ? ['  cur.rgb = min(cur.rgb + prism_col1.rgb, 1.0);'] : []), '  prism_o0 = cur;', '}', ''].join('\n');
     o = { kind: 'pixel', ffp: true, sh: compile(g.FRAGMENT_SHADER, glsl, 'the fixed function\'s pixel stage'), glsl, inputs,
-      samplers: textured ? [{ name: 'texture0', index: 0, dim: '2D' }] : [], outputs: [{ semantic: 'COLOR', index: 0 }] };
+      samplers: texd.map((s) => ({ name: `texture${s.k}`, index: s.k, dim: s.tex })), outputs: [{ semantic: 'COLOR', index: 0 }] };
     ffCache.set(sig, o);
     return o;
   }
@@ -635,6 +670,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (p.vp) g.uniform4f(p.vp, viewport.x, viewport.y, viewport.width, viewport.height);
     if (p.zr) g.uniform2f(p.zr, viewport.minZ, viewport.maxZ);
     if (p.aref) g.uniform1f(p.aref, (rs.get(RS.ALPHAREF) & 255) / 255);
+    if (p.tf) { const f = rs.get(RS.TEXTUREFACTOR) >>> 0; g.uniform4f(p.tf, ((f >> 16) & 255) / 255, ((f >> 8) & 255) / 255, (f & 255) / 255, (f >>> 24) / 255); }
     if (p.ff) ffUniforms(p, vsObj);
     bindSamplers(p);
     for (const [unit, loc] of p.bc) { const c = samp[unit][4]; g.uniform4f(loc, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }
