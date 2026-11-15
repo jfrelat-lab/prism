@@ -288,7 +288,10 @@ export class Sema {
           ns = ent.ns; scope = null;
           continue;
         }
-        found = ent.k === 'template' ? this.instantiate(ent.tmpl, (p.targs ?? this.fail(`template ${p.name} needs arguments`, node)).map((a) => this.templateArg(a, env, node)), node) : ent.type;
+        // A class template's instance named by its injected name and given arguments is the template again: inside
+        // a class derived from idList<idStr>, `idList<int> m_ids` is idList<int> (Doom 3's idListGUILocal).
+        const tmpl = ent.k === 'template' ? ent.tmpl : p.targs && ent.k === 'type' && ent.type.k === 'class' && ent.type.cls.template ? ent.type.cls.template : null;
+        found = tmpl ? this.instantiate(tmpl, (p.targs ?? this.fail(`template ${p.name} needs arguments`, node)).map((a) => this.templateArg(a, env, node)), node) : ent.type;
       }
       ns = null;
       if (more) {

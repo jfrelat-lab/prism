@@ -343,6 +343,12 @@ export const exprMethods = {
       const f = V.k === 'memptr' ? e.memberOverload.find((g) => T.same(this.memberPointerType(g).to, V.to)) : null;
       return f ? { rank: EXACT, gen: () => this.memberPointer({ funcs: [f] }, e.node).c } : null;
     }
+    // An overloaded function named without being called (`nameofclass::CreateInstance`, idClass having a second,
+    // CreateInstance( const char * )): the pointer type it is converted to picks the one of that type.
+    if (e.funcs && !e.c && !e.templates && V.k === 'ptr' && V.to.k === 'func') {
+      const f = e.funcs.find((g) => (!g.cls || g.isStatic) && T.same(g.type, V.to, { top: false }));
+      if (f) return { rank: EXACT, gen: () => { this.use(f); return f.cname; } };
+    }
     const from = this.decay(e), F = from.t;
     if (T.same(F, V, { top: false })) return { rank: EXACT, gen: () => from.c };
     if (T.isArith(V) && T.isArith(F)) {
@@ -391,6 +397,8 @@ export const exprMethods = {
   qualifiesTo(f, v) {
     let allConst = true;
     for (;;) {
+      // an array is no level of its own: its elements are qualified as it is (idDrawVert (*)[3] to const idDrawVert (*)[3])
+      if (f.k === 'array' && v.k === 'array') { if (f.n !== v.n) return false; f = f.of; v = v.of; continue; }
       if (f.c && !v.c) return false;
       if (v.c && !f.c && !allConst) return false;
       allConst = allConst && !!v.c;
@@ -861,7 +869,8 @@ export const exprMethods = {
         const v = this.parseNumber(n.v);
         return { c: n.v, t: v.type, lv: false, zero: !T.isFloat(v.type) && v.value === 0 };
       }
-      case 'chr': return { c: n.v, t: /^L/.test(n.v) ? T.INT : T.CHAR, lv: false };
+      // '\0' is an integral constant of value 0, so a null pointer constant (C++03 4.10): Doom 3's classname != '\0'
+      case 'chr': return { c: n.v, t: /^L/.test(n.v) ? T.INT : T.CHAR, lv: false, zero: this.charValue(n.v) === 0 };
       // `false` is an integral constant 0, so a null pointer constant in C++98: `if (_fd == false)` (animation_he.cpp).
       case 'bool': return { c: n.v ? '1' : '0', t: T.BOOL, lv: false, zero: !n.v };
       case 'str': return { c: n.parts.join(' '), t: T.array(T.cst(T.CHAR), this.stringLength(n) + 1), lv: true, str: true };

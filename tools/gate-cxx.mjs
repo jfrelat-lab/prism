@@ -1860,6 +1860,50 @@ template<etype_t t> void List(Obj &o) { o.GetVariable("list", t); }
 int main() { Obj o; Var<float, ev_float> f; Var<int, ev_string> s; f.LinkTo(o, "speed"); s.LinkTo(o, "name"); List<ev_void>(o); printf("\\n"); return 0; }
 `);
 
+// An injected class name with arguments; an overload set picked by its target pointer type.
+C('injected-name-overload-target', `
+// Doom 3's idListGUILocal and idTypeInfo: inside a class derived from idList<idStr>, idList<int> is idList<int>; and
+// an overloaded static member function named as an argument, the parameter's pointer type picking one.
+#include <stdio.h>
+template<class type> class idList { public: type list[4]; int num; idList() : num(0) {}
+  const type &operator[](int i) const { return list[i]; } type &operator[](int i) { return list[i]; } };
+struct idStr { const char *s; };
+static void SetStateInt(const char *n, const int v) { printf("%s=%d\\n", n, v); }
+class Gui : protected idList<idStr> { public: idList<int> m_ids;
+  int Sel(int sel) { m_ids.list[1] = 42; list[0].s = "base"; SetStateInt(list[0].s, m_ids[ sel ]); return m_ids[sel]; } };
+class C;
+struct Info { const char *n; C *(*make)(void); Info(const char *a, C *(*m)(void)) : n(a), make(m) {} };
+class C { public: static Info Type; static C *CreateInstance(void); static C *CreateInstance(const char *name); };
+Info C::Type("C", C::CreateInstance);
+C *C::CreateInstance(void) { printf("CreateInstance()\\n"); return 0; }
+C *C::CreateInstance(const char *name) { printf("CreateInstance(%s)\\n", name); return 0; }
+int main() { Gui g; printf("%d\\n", g.Sel(1)); C::Type.make(); C::CreateInstance("x"); return 0; }
+`);
+
+// A qualification conversion through an array; '\\0' as a null pointer constant.
+C('array-qualification-null-char', `
+// Doom 3's idSurface_Patch::SampleSinglePatch( const idDrawVert ctrl[3][3], ... ) given an idDrawVert[3][3], and
+// Game_local's classname != '\\0', '\\0' being a null pointer constant.
+#include <stdio.h>
+struct V { int x; };
+static int f(const V c[3][3]) { return c[1][2].x; }
+static const char *name(int i) { return i ? "light" : 0; }
+int main() { V s[3][3]; s[1][2].x = 5; printf("%d\\n", f(s));
+  for (int i = 0; i < 2; i++) { const char *classname = name(i); if (classname != '\\0') printf("%s\\n", classname); else printf("none\\n"); }
+  return 0; }
+`);
+
+// A class enumerator hides a global typedef of its name.
+C('enumerator-hides-typedef', `
+// Doom 3's idRegister (ui/RegExp.h): a class enumerator FLOAT hiding a global typedef of that name in the class's
+// member functions, defined outside it.
+#include <stdio.h>
+typedef float FLOAT;
+class idRegister { public: enum REGTYPE { VEC4 = 0, FLOAT, BOOL, INT }; int type; const char *Name() const; };
+const char *idRegister::Name() const { switch (type) { case VEC4: return "vec4"; case FLOAT: return "float"; default: return "other"; } }
+int main() { FLOAT f = 1.5f; idRegister r; r.type = idRegister::FLOAT; printf("%s %g\\n", r.Name(), (double)f); return 0; }
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);

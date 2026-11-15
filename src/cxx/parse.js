@@ -510,6 +510,9 @@ class CxxParser {
     const values = [];
     while (!this.isP('}')) {
       const n = this.ident();
+      // An enumerator hides a type of its name from an enclosing scope: idRegister's FLOAT over windows.h's typedef
+      // float FLOAT, so `case FLOAT:` in its member functions is the value.
+      if (this.scope.find(n) === 'type' && !this.scope.names.has(n)) this.scope.set(n, 'var');
       let e = null;
       if (this.eatP('=')) e = this.assignment();
       values.push({ name: n, e });
