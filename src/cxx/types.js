@@ -111,7 +111,9 @@ export function mangle(t) {
     case 'func': return `F${mangle(t.ret)}${t.params.map(mangle).join('')}${t.variadic ? 'z' : ''}E`;
     // A template's value argument: Itanium's L<value>E, a minus sign spelt n.
     // ...and an address argument L_Z<name>E, its name as C has it.
-    case 'tvalue': return typeof t.value === 'string' ? `L_Z${t.value.length - 1}${t.value.slice(1).replace(/\W/g, '_')}E` : `Li${t.value < 0 ? `n${-t.value}` : t.value}E`;
+    // a C constant expression's (#text): named by a digest of it, as an array's length in C text is
+    case 'tvalue': return typeof t.value === 'string' && t.value[0] === '#' ? `Lx${[...t.value].reduce((h, ch) => (Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0), 0x811c9dc5).toString(36)}E`
+      : typeof t.value === 'string' ? `L_Z${t.value.length - 1}${t.value.slice(1).replace(/\W/g, '_')}E` : `Li${t.value < 0 ? `n${-t.value}` : t.value}E`;
     case 'memptr': return `${c}M${t.cls.cname.length}${t.cls.cname}${mangle(t.to)}`;
     default: throw new Error(`mangle: ${t.k}`);
   }

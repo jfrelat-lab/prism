@@ -2233,6 +2233,38 @@ int main(void)
 }
 `);
 
+// GCC inline assembly as Doom 3 writes it: the clock-ticks template and the breakpoint.
+C('gcc-asm-clock-ticks', `
+#include <stdio.h>
+#include <sys/time.h>
+/* Doom 3's sys/linux/main.cpp Sys_GetClockTicks: push/pop %ebx, xor, cpuid, rdtsc, mov to "=r" outputs (with the
+   clobbers it leaves out: the native build is a gcc 12 PIE, which needs them; PRISM reads them as it reads none). */
+static double ticks(void) {
+	unsigned long lo, hi;
+	__asm__ __volatile__ (
+		"push %%ebx\\n"
+		"xor %%eax,%%eax\\n"
+		"cpuid\\n"
+		"rdtsc\\n"
+		"mov %%eax,%0\\n"
+		"mov %%edx,%1\\n"
+		"pop %%ebx\\n"
+		: "=r" (lo), "=r" (hi) : : "eax", "ecx", "edx" );	/* the clobbers id left out: gcc 12 needs them */
+	return (double) lo + (double) 0xFFFFFFFF * hi;
+}
+/* ...and idlib/Lib.cpp's AssertFailed: int $0x03, here never reached */
+static void trap(int t) { if (t) __asm__ __volatile__ ("int $0x03"); }
+int main(void) {
+	struct timeval tv;
+	double a, b;
+	gettimeofday(&tv, 0); a = ticks();
+	gettimeofday(&tv, 0); b = ticks();
+	trap(0);
+	printf("counted %d, advanced %d\\n", a > 0, b > a);
+	return 0;
+}
+`);
+
 const active = cases.filter(c => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-run: ${active.length} cases\n`);

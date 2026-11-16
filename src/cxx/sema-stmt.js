@@ -661,6 +661,17 @@ export const stmtMethods = {
    * OpcodeV1(this, &KyraEngine_v1::o1_magicInMouseItem), ... }`), the rest default-constructed.
    */
   arrayFromBraces(target, type, items, cx, node) {
+    // an array of arrays: each row from its own braces, the rows not given default-constructed (Doom 3's
+    // idPlane pointLightFrustums[6][6] = { { idPlane( ... ), ... }, ... })
+    if (type.of.k === 'array') {
+      const rows = [];
+      items.forEach((x, i) => {
+        if (x.k !== 'braces') this.fail('an array of arrays of objects initialised without the braces of each row', node);
+        rows.push(...this.arrayFromBraces(`${target}[${i}]`, type.of, x.items, cx, node));
+      });
+      for (let i = items.length; i < type.n; i++) rows.push(...this.arrayFromBraces(`${target}[${i}]`, type.of, [], cx, node));
+      return rows;
+    }
     const elem = type.of.cls;
     const lines = [];
     items.forEach((x, i) => {
@@ -1060,7 +1071,7 @@ export const stmtMethods = {
     if (type.k === 'array' && elem) {
       // An array of aggregates with braces is C's, element by element.
       if (it.init?.k === 'braces' && (this.isAggregate(elem) || this.isCxxAggregate(elem))) { braces(decl); return; }
-      if (type.of.k === 'class' && it.init?.k === 'braces') {
+      if ((type.of.k === 'class' || type.of.k === 'array') && it.init?.k === 'braces') {
         this.out.vars.push(`${decl.replace(/^(static )?const /, '$1')};`);
         dynamic(this.arrayFromBraces(ent.cname, type, it.init.items, this.initContext(env), it), null);
         if (this.dtorOf(elem)) this.finis.push(...this.destroy([{ c: ent.cname, cls: elem, count: type.n }], this.initContext(env)).map((l) => `  ${l}`));

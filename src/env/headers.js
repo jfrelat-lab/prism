@@ -1290,6 +1290,11 @@ struct _XVisual {
 };
 typedef struct _XVisual Visual;
 typedef int Status;
+/* an extension's numbers on this display (XInitExtension, XAddExtension), and Xlib's untyped pointer */
+typedef char *XPointer;
+typedef struct _XExtCodes { int extension, major_opcode, first_event, first_error; } XExtCodes;
+XExtCodes *XInitExtension(Display *dpy, const char *name);
+int XGetErrorDatabaseText(Display *dpy, const char *name, const char *message, const char *default_string, char *buf, int length);
 typedef int Bool;
 
 typedef struct {
@@ -2045,6 +2050,73 @@ export const HEADERS = {
   'crtdbg.h': CRTDBG_H,
   'X11/Xlib.h': XLIB,
   'X11/Xutil.h': XUTIL,
+  /*
+   * What an extension's client library is written against, for one whose server side is absent here: Doom 3 links
+   * NVIDIA's libXNVCtrl (sys/linux/libXNVCtrl), which asks for NV-CONTROL and gives up when the server has none.
+   * The wire types are Xmd.h's and Xproto.h's; the request macros are Xlibint.h's, through _XGetRequest as modern
+   * Xlib has them. x11.js answers XInitExtension with NULL, so no request is ever built -- one that were would be
+   * refused by name.
+   */
+  'X11/Xmd.h': `
+#ifndef _PRISM_XMD_H
+#define _PRISM_XMD_H
+typedef unsigned int CARD32;
+typedef unsigned short CARD16;
+typedef unsigned char CARD8;
+typedef int INT32;
+typedef short INT16;
+typedef signed char INT8;
+typedef CARD8 BYTE;
+typedef CARD8 BOOL;
+#define B32
+#define B16
+#endif
+`,
+  'X11/Xproto.h': `
+#ifndef _PRISM_XPROTO_H
+#define _PRISM_XPROTO_H
+#include <X11/Xmd.h>
+#define X_Reply 1
+#define X_Error 0
+#define xTrue 1
+#define xFalse 0
+typedef struct { BYTE type, data1; CARD16 sequenceNumber; CARD32 length, data00, data01, data02, data03, data04, data05; } xGenericReply;
+typedef union { xGenericReply generic; } xReply;
+typedef struct { BYTE type, errorCode; CARD16 sequenceNumber; CARD32 resourceID; CARD16 minorCode; CARD8 majorCode, pad1;
+    CARD32 pad3, pad4, pad5, pad6, pad7; } xError;
+typedef struct { struct { BYTE type, detail; CARD16 sequenceNumber; } u; CARD32 pad[7]; } xEvent;
+#endif
+`,
+  'X11/Xlibint.h': `
+#ifndef _PRISM_XLIBINT_H
+#define _PRISM_XLIBINT_H
+#include <X11/Xlib.h>
+#include <X11/Xproto.h>
+#include <stdlib.h>
+/* Xlib's allocator is the C library's */
+#define Xmalloc(size) malloc(size)
+#define Xcalloc(n, size) calloc(n, size)
+#define Xrealloc(p, size) realloc(p, size)
+#define Xfree(p) free(p)
+#define LockDisplay(d)
+#define UnlockDisplay(d)
+#define SyncHandle()
+#define GetReq(name, req) (req = (x##name##Req *)_XGetRequest(dpy, X_##name, sz_x##name##Req))
+#define GetReqExtra(name, n, req) (req = (x##name##Req *)_XGetRequest(dpy, X_##name, sz_x##name##Req + (n)))
+void *_XGetRequest(Display *dpy, CARD8 type, size_t len);
+Status _XReply(Display *dpy, xReply *rep, int extra, Bool discard);
+void _XRead(Display *dpy, char *data, long size);
+void _XEatData(Display *dpy, unsigned long n);
+unsigned long _XSetLastRequestRead(Display *dpy, xGenericReply *rep);
+#endif
+`,
+  'X11/extensions/Xext.h': `
+#ifndef _PRISM_XEXT_H
+#define _PRISM_XEXT_H
+#include <X11/Xlib.h>
+int XMissingExtension(Display *dpy, const char *ext_name);
+#endif
+`,
   /*
    * <X11/XKBlib.h>: what a client asks of the keyboard extension before using it. XkbQueryExtension answers that the
    * server has none (src/env/x11.js), so Doom 3's input.cpp keeps have_xkb false and maps keys without it.

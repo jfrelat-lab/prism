@@ -455,6 +455,36 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       return 0;
     },
     XKeycodeToKeysym: (_dpy, code) => keys.sym(code | 0) || keysymFor(code | 0),
+    /*
+     * Extensions this server does not have (XInitExtension: none -- XQueryExtension says so too), and libXext's
+     * bookkeeping a client library keeps of them: XExtensionInfo { head, cur, ndisplays } and per display
+     * XExtDisplayInfo { next, display, codes, data }, codes NULL for an extension that is absent.
+     */
+    XInitExtension: () => 0,
+    XextCreateExtension: () => { const p = M.rt.malloc(12); for (let k = 0; k < 12; k++) M.u8[p + k] = 0; return p; },
+    XextDestroyExtension: () => {},
+    XextFindDisplay: () => 0,
+    XextAddDisplay: (_info, dpy, _name, _hooks, _nevents, data) => {
+      const p = M.rt.malloc(16);
+      for (let k = 0; k < 16; k++) M.u8[p + k] = 0;
+      M.mod.dv.setInt32(p + 4, dpy, true); M.mod.dv.setInt32(p + 12, data, true);
+      return p;
+    },
+    XextRemoveDisplay: () => 1,
+    XMissingExtension: () => 0,
+    XGetErrorDatabaseText: (_dpy, _name, _msg, dflt, buf, n) => {
+      if (!buf || n <= 0) return 0;
+      const s = dflt ? M.mod.cstr(dflt) : '';
+      let k = 0;
+      for (; k < s.length && k < n - 1; k++) M.u8[buf + k] = s.charCodeAt(k) & 255;
+      M.u8[buf + k] = 0;
+      return 0;
+    },
+    _XGetRequest: () => { throw new Error('x11: a protocol request for an extension this server does not have'); },
+    _XReply: () => { throw new Error('x11: a protocol reply from an extension this server does not have'); },
+    _XRead: () => { throw new Error('x11: _XRead: no extension protocol here'); },
+    _XEatData: () => { throw new Error('x11: _XEatData: no extension protocol here'); },
+    _XSetLastRequestRead: () => 0,
     // XKB: the library is version 1.0 and the server has no such extension, which a client takes in its stride
     XkbLibraryVersion: (major, minor) => { if (major) M.mod.dv.setInt32(major, 1, true); if (minor) M.mod.dv.setInt32(minor, 0, true); return 1; },
     XkbQueryExtension: () => 0,

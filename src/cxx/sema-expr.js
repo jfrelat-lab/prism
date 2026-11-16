@@ -288,6 +288,7 @@ export const exprMethods = {
     // A pointer parameter's: the array it was given (which decays), or the address `&name` gave, a constant.
     if (bound?.k === 'tvalue' && bound.sym) return bound.decays ? { ent: bound.sym, path: [], owner: null }
       : { ent: { k: 'enumerator', value: 0, ctext: `(&${bound.sym.cname})`, type: T.ptr(bound.sym.type) }, path: [], owner: null };
+    if (bound?.k === 'tvalue' && bound.ctext) return { ent: { k: 'enumerator', value: 0, ctext: `((int)${bound.ctext})`, type: bound.vtype ?? T.INT }, path: [], owner: null };
     if (bound?.k === 'tvalue') return { ent: { k: 'enumerator', value: bound.value, type: bound.vtype ?? T.INT }, path: [], owner: null };
     for (let s = env.scope; s; s = s.parent) {
       if (s.cls) {
@@ -931,6 +932,26 @@ export const exprMethods = {
         else if (cx.fn) { const p = this.temp(cx, T.ptr(e.t)); addr = `(${p} = &${e.c}, ${n.op}*${p}, ${p})`; }
         return { c: `(${n.op}${e.c})`, t: e.t, lv: true, ...(addr ? { addr } : {}) };
       }
+      /*
+       * offsetof: C's own, on the class's C struct and its members' C names, which the C compiler folds to a constant.
+       * `ctext` keeps the text for a template argument (sema.js templateArg).
+       */
+      case 'offsetof': {
+        const t = this.stripRef(this.declType(n.type.specs, n.type.derivs, cx.env, n));
+        if (t.k !== 'class') this.fail(`offsetof of ${T.show(t)}`, n);
+        let cls = this.complete(t.cls, n);
+        const path = [];
+        for (const name of n.member) {
+          const m = this.memberEntity(cls, name);
+          if (!m || m.ent.k !== 'var' || !m.ent.field) this.fail(`offsetof: ${cls.name} has no data member ${name}`, n);
+          path.push(...m.path, m.ent.cname);
+          const mt = this.stripRef(m.ent.type);
+          cls = mt.k === 'class' ? this.complete(mt.cls, n) : null;
+        }
+        this.needStruct(t.cls);
+        const c = `__builtin_offsetof(struct ${t.cls.cname}, ${path.join('.')})`;
+        return { c, t: T.UINT, lv: false, ctext: c };
+      }
       case 'sizeof': {
         if (n.type) return { c: `sizeof(${this.ct(this.stripRef(this.declType(n.type.specs, n.type.derivs, cx.env, n)))})`, t: T.UINT, lv: false };
         const sub = { ...cx, fn: cx.fn ? { ...cx.fn, temps: [], ntemp: cx.fn.ntemp } : null, pending: [], sizeofOnly: true };
@@ -1456,6 +1477,9 @@ export const exprMethods = {
       return { c: `((${this.ct(V)})${s.c})`, t: V, lv: false };
     }
     if (!T.isScalar(V) || !T.isScalar(s.t)) this.fail(`cast from ${T.show(e.t)} to ${T.show(V)}`, node);
+    // An address made an integer is no constant C can fold: at file scope it is computed before main, as C++ does
+    // (Doom 3's idMatX::tempPtr = (float *)( ( (int) idMatX::temp + 15 ) & ~15 ))
+    if (cx.constOnly && T.isInteger(V) && s.t.k === 'ptr') cx.dynamic = true;
     return { c: `((${this.ct(V)})${s.c})`, t: V, lv: false, zero: e.zero && V.k === 'ptr' && V.to.k === 'void' };
   },
 

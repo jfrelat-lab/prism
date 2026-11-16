@@ -314,6 +314,8 @@ export class Sema {
       if (v !== null) return { k: 'tvalue', value: v };
       const e = a.expr.k === 'unary' && a.expr.op === '&' ? a.expr.e : a.expr;
       const ent = e.k === 'id' ? this.lookupName(e.name, env) : null;
+      // a constant C folds and this front end does not: offsetof (Doom 3's idQueueTemplate< pathNode_t, offsetof( pathNode_t, next ) >)
+      if (a.expr.k === 'offsetof') { const e = this.expr(a.expr, { env, fn: null, pending: [], constOnly: true, node }); return { k: 'tvalue', value: `#${e.ctext}`, ctext: e.ctext }; }
       if (ent?.ent?.k === 'var' && ent.ent.global) return { k: 'tvalue', value: `&${ent.ent.cname ?? e.name.parts.map((x) => x.name).join('::')}`, sym: ent.ent, decays: e === a.expr };
       this.fail('a template argument that is not a constant', node);
     }

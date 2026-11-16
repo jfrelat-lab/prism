@@ -1773,16 +1773,26 @@ export class FunctionEmitter {
    *
    * The registers are JavaScript temporaries, so a push/pop pair of the same register around the
    * code is the identity and emits nothing; an unbalanced one is refused.
+   *
+   * Widened again for Doom 3's two, over EAX to EDX:
+   *
+   *  - sys/linux/main.cpp's Sys_GetClockTicks: `push %%ebx ; xor %%eax,%%eax ; cpuid ; rdtsc ;
+   *    mov %%eax,%0 ; mov %%edx,%1 ; pop %%ebx`, outputs "=r". The size suffix is optional, xor of a
+   *    register with itself zeroes it, cpuid with EAX = 0 answers its basic leaf (the highest leaf, then
+   *    the vendor in EBX, EDX, ECX: "GenuineIntel", as the oracle's i386 reports), and an output in a
+   *    register ("=r") receives what is moved to it, as one in memory does.
+   *  - idlib/Lib.cpp's AssertFailed: `int $0x03`, the breakpoint. With no debugger attached, SIGTRAP's
+   *    default action ends the process: abort.
    */
   #gccAsmMoves(text, operands) {
     const bare = (c) => String(c ?? '').replace(/^L?"|"$/g, '');
     const pinned = (n) => {
       const c = operands[n] ? bare(operands[n].constraint).replace(/[=+&%]/g, '') : null;
-      return c === 'a' ? 'eax' : c === 'd' ? 'edx' : null;
+      return c === 'a' ? 'eax' : c === 'd' ? 'edx' : c === 'b' ? 'ebx' : c === 'c' ? 'ecx' : null;
     };
     // An operand as written: {reg}, {n} (a C operand), or {sym} (a global by assembler name).
     const operand = (s) => {
-      let m = /^%%?(eax|edx)$/.exec(s);
+      let m = /^%%?(e[abcd]x)$/.exec(s);
       if (m) return { reg: m[1] };
       m = /^%(\d+)$/.exec(s);
       if (m && operands[+m[1]]) return pinned(+m[1]) ? { reg: pinned(+m[1]) } : { n: +m[1] };
@@ -1794,9 +1804,11 @@ export class FunctionEmitter {
     // The template is the string token as written: its line breaks are still a backslash and an n.
     for (const l of text.replace(/\\[nt]/g, '\n').split(/[;\n]/).map((x) => x.trim()).filter(Boolean)) {
       if (l === 'rdtsc') { plan.push({ op: 'rdtsc' }); continue; }
-      let m = /^(pushl|popl)\s+%%?(eax|edx)$/.exec(l);
+      if (l === 'cpuid') { plan.push({ op: 'cpuid' }); continue; }
+      if (/^int\s+\$(0x0*3|3)$/.test(l) || l === 'int3') { plan.push({ op: 'trap' }); continue; }
+      let m = /^(push|pop)l?\s+%%?(e[abcd]x)$/.exec(l);
       if (m) {
-        if (m[1] === 'pushl') stack.push({ reg: m[2], at: plan.length });
+        if (m[1] === 'push') stack.push({ reg: m[2], at: plan.length });
         else {
           const top = stack.pop();
           if (!top || top.reg !== m[2]) return false;
@@ -1804,6 +1816,8 @@ export class FunctionEmitter {
         }
         continue;
       }
+      m = /^xorl?\s+%%?(e[abcd]x)\s*,\s*%%?(e[abcd]x)$/.exec(l);
+      if (m) { plan.push({ op: 'xor', src: m[1], dst: m[2] }); continue; }
       m = /^imull\s+(\S+)$/.exec(l);
       if (m) {
         const by = operand(m[1]);
@@ -1811,17 +1825,18 @@ export class FunctionEmitter {
         plan.push({ op: 'imul', by });
         continue;
       }
-      m = /^movl\s+(\S+?)\s*,\s*(\S+)$/.exec(l);
+      m = /^movl?\s+(\S+?)\s*,\s*(\S+)$/.exec(l);
       const src = m && operand(m[1]), dst = m && operand(m[2]);
       if (!src || !dst) return false;
-      if (dst.n !== undefined && !/m/.test(bare(operands[dst.n].constraint))) return false;
+      // a C operand written to: one in memory ("m"), or an output in a register ("=r")
+      if (dst.n !== undefined && !/m/.test(bare(operands[dst.n].constraint)) && !/^[=+].*r/.test(bare(operands[dst.n].constraint))) return false;
       if (!src.reg && !dst.reg) return false;                 // memory to memory is not an instruction
       plan.push({ op: 'mov', src, dst });
     }
     if (!plan.length || stack.length) return false;
-    const reg = { eax: this.newTmp(), edx: this.newTmp() };
-    this.#declareTmp(reg.eax); this.#declareTmp(reg.edx);
-    this.out.push(`${reg.eax}=0;${reg.edx}=0;`);
+    const reg = { eax: this.newTmp(), ebx: this.newTmp(), ecx: this.newTmp(), edx: this.newTmp() };
+    for (const r of Object.values(reg)) this.#declareTmp(r);
+    this.out.push(`${reg.eax}=0;${reg.ebx}=0;${reg.ecx}=0;${reg.edx}=0;`);
     // What a register held when it was pushed, for the pop that brings it back.
     for (const p of plan) if (p.op === 'restore') { p.from.t = this.newTmp(); this.#declareTmp(p.from.t); }
     const saves = plan.filter((p) => p.op === 'restore').map((p) => p.from);
@@ -1842,7 +1857,14 @@ export class FunctionEmitter {
     for (const p of plan) for (const o of [p.src, p.by]) if (o && o.n !== undefined) read(o);
     plan.forEach((p, i) => {
       for (const s of saves) if (s.at === i) this.out.push(`${s.t}=${reg[s.reg]};`);
-      if (p.op === 'rdtsc') {
+      if (p.op === 'cpuid') {
+        // the basic leaf (EAX = 0): the highest leaf, then "Genu" "ineI" "ntel" in EBX, EDX, ECX; any other leaf zeroes
+        this.out.push(`if(${reg.eax}===0){${reg.eax}=1;${reg.ebx}=0x756e6547;${reg.edx}=0x49656e69;${reg.ecx}=0x6c65746e;}else{${reg.eax}=0;${reg.ebx}=0;${reg.ecx}=0;${reg.edx}=0;}`);
+      } else if (p.op === 'trap') {
+        this.out.push('M.rt.abort();');
+      } else if (p.op === 'xor') {
+        this.out.push(`${reg[p.dst]}=(${reg[p.dst]}^${reg[p.src]})>>>0;`);
+      } else if (p.op === 'rdtsc') {
         this.out.push(`{const _t=M.rt.__prism_rdtsc();${reg.eax}=Number(_t&0xffffffffn)>>>0;${reg.edx}=Number(_t>>32n&0xffffffffn)>>>0;}`);
       } else if (p.op === 'restore') {
         this.out.push(`${reg[p.reg]}=${p.from.t};`);

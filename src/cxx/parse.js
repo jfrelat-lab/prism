@@ -1276,7 +1276,16 @@ class CxxParser {
         this.expectP(')');
         return { k: 'fcast', type: { specs, derivs: [] }, args, loc };
       }
-      if (t.v === '__builtin_offsetof') this.fail('offsetof in C++ is not supported');
+      // offsetof( type, member ), through <stddef.h>'s __builtin_offsetof: the member a name, or names joined by '.'
+      if (t.v === '__builtin_offsetof') {
+        this.next(); this.expectP('(');
+        const type = this.typeId();
+        this.expectP(',');
+        const member = [this.ident()];
+        while (this.eatP('.')) member.push(this.ident());
+        this.expectP(')');
+        return { k: 'offsetof', type, member, loc };
+      }
       if (this.isIdent() || this.isP('::') || this.isP('~') || this.isKw('operator')) return { k: 'id', name: this.qualName(), loc };
     }
     if (t.k === PUNCT && t.v === '::') return { k: 'id', name: this.qualName(), loc };

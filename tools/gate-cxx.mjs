@@ -1924,6 +1924,42 @@ static int f(int restrict) { return restrict * 2; }
 int main() { bool restrict = true; S s; s.restrict = 4; printf("%d %d %d\\n", (int)restrict, f(3), s.restrict); return 0; }
 `);
 
+// offsetof in C++, as a template's value argument.
+C('offsetof-template-arg', `
+// Doom 3's idQueueTemplate< pathNode_t, offsetof( pathNode_t, next ) > (game/ai/AI_pathing.cpp): offsetof in C++,
+// a nested member too, and as a template's value argument.
+#include <stdio.h>
+#include <stddef.h>
+typedef unsigned char byte;
+template< class type, int nextOffset > class idQueueTemplate { public: idQueueTemplate() { first = last = 0; }
+  void Add( type *e ) { *((type**)(((byte*)e)+nextOffset)) = 0; if (last) *((type**)(((byte*)last)+nextOffset)) = e; else first = e; last = e; }
+  type *Get() { type *e = first; if (e) { first = *((type**)(((byte*)e)+nextOffset)); if (!first) last = 0; } return e; }
+  type *first, *last; };
+struct pathNode_t { int dir; float delta[2]; pathNode_t *next; struct { int a, b; } inner; };
+int main() { pathNode_t a, b, c; a.dir = 1; b.dir = 2; c.dir = 3;
+  idQueueTemplate<pathNode_t, offsetof( pathNode_t, next )> q; q.Add(&a); q.Add(&b); q.Add(&c);
+  for (pathNode_t *n; (n = q.Get()); ) printf("%d ", n->dir);
+  printf("| %d %d\\n", (int)offsetof(pathNode_t, next), (int)offsetof(pathNode_t, inner.b)); return 0; }
+`);
+
+// File-scope initialisers C cannot fold: 2-D arrays of objects, an address aligned through an integer.
+C('file-scope-dynamic-init', `
+// Doom 3's file-scope initialisers: a 2-D array of objects with constructors from nested braces
+// (tr_stencilshadow.cpp's pointLightFrustums), and a pointer aligned through an integer (idMatX::tempPtr).
+#include <stdio.h>
+class idPlane { public: float a, b; idPlane() : a(-1), b(-1) {} idPlane(float x, float y) : a(x), b(y) {} };
+idPlane frustums[3][2] = { { idPlane(1, 2), idPlane(3, 4) }, { idPlane(5, 6) } };
+struct idMatX { static float temp[20]; static float *tempPtr; };
+float idMatX::temp[20];
+float *idMatX::tempPtr = (float *)(((int)idMatX::temp + 15) & ~15);
+int main() {
+  for (int i = 0; i < 3; i++) for (int j = 0; j < 2; j++) printf("%g,%g ", frustums[i][j].a, frustums[i][j].b);
+  int off = (int)((char *)idMatX::tempPtr - (char *)idMatX::temp);
+  printf("\\naligned %d, within %d\\n", ((int)idMatX::tempPtr & 15) == 0, off >= 0 && off < 16);
+  return 0;
+}
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);
