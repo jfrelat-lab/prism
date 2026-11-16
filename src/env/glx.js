@@ -67,6 +67,9 @@ export function installGlx(M, { frames = null, onFrame = null, onSwap = null } =
     XF86VidModeSetViewPort: refuse('XF86VidModeSetViewPort'),
     XF86VidModeGetGamma: refuse('XF86VidModeGetGamma'),
     XF86VidModeSetGamma: refuse('XF86VidModeSetGamma'),
+    XF86VidModeGetGammaRampSize: refuse('XF86VidModeGetGammaRampSize'),
+    XF86VidModeGetGammaRamp: refuse('XF86VidModeGetGammaRamp'),
+    XF86VidModeSetGammaRamp: refuse('XF86VidModeSetGammaRamp'),
     XF86DGADirectVideo: (_dpy, _screen, flags) => {
       if (flags & ~0x4) throw new Error(`glx: XF86DGADirectVideo with flags 0x${(flags >>> 0).toString(16)}: only the DGA mouse is implemented`);
       if (M.x11) M.x11.dgaMouse = (flags & 0x4) !== 0;         // XF86DGADirectMouse
@@ -85,6 +88,7 @@ export function glxBuiltins(T) {
     glXSwapBuffers: f(V, P, U), glXDestroyContext: f(V, P, P),
     XF86VidModeQueryVersion: f(I, P, P, P), XF86DGAQueryVersion: f(I, P, P, P),
     XF86VidModeGetAllModeLines: f(I, P, I, P, P), XF86VidModeSwitchToMode: f(I, P, I, P),
-    XF86VidModeSetViewPort: f(I, P, I, I, I), XF86VidModeGetGamma: f(I, P, I, P), XF86VidModeSetGamma: f(I, P, I, P), XF86DGADirectVideo: f(I, P, I, I),
+    XF86VidModeSetViewPort: f(I, P, I, I, I), XF86VidModeGetGamma: f(I, P, I, P), XF86VidModeSetGamma: f(I, P, I, P),
+    XF86VidModeGetGammaRampSize: f(I, P, I, P), XF86VidModeGetGammaRamp: f(I, P, I, I, P, P, P), XF86VidModeSetGammaRamp: f(I, P, I, I, P, P, P), XF86DGADirectVideo: f(I, P, I, I),
   };
 }

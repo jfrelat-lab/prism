@@ -175,6 +175,7 @@ int _snprintf(char *dst, size_t n, const char *fmt, ...);
 int _vsnprintf(char *dst, size_t n, const char *fmt, char *ap);
 FILE *fopen(const char *name, const char *mode);
 FILE *freopen(const char *name, const char *mode, FILE *stream);
+FILE *tmpfile(void);
 int fclose(FILE *stream);
 size_t fread(void *dst, size_t size, size_t count, FILE *stream);
 size_t fwrite(const void *src, size_t size, size_t count, FILE *stream);
@@ -344,6 +345,7 @@ namespace std {}
 #define INFINITY (1.0e308 * 10.0)
 #define NAN (INFINITY - INFINITY)
 #define HUGE_VAL INFINITY
+#define HUGE 3.40282347e+38F
 
 /*
  * The M_ constants. Not ISO C -- they are X/Open, and glibc hides them behind _USE_MATH_DEFINES on
@@ -2043,6 +2045,34 @@ export const HEADERS = {
   'crtdbg.h': CRTDBG_H,
   'X11/Xlib.h': XLIB,
   'X11/Xutil.h': XUTIL,
+  /*
+   * <X11/XKBlib.h>: what a client asks of the keyboard extension before using it. XkbQueryExtension answers that the
+   * server has none (src/env/x11.js), so Doom 3's input.cpp keeps have_xkb false and maps keys without it.
+   */
+  'X11/XKBlib.h': `
+#ifndef _PRISM_XKBLIB_H
+#define _PRISM_XKBLIB_H
+#include <X11/Xlib.h>
+#ifndef _PRISM_KEYCODE_DEFINED
+#define _PRISM_KEYCODE_DEFINED
+typedef unsigned char KeyCode;
+#endif
+#define XkbMajorVersion 1
+#define XkbMinorVersion 0
+#define XkbUseCoreKbd 0x0100
+typedef struct _XkbStateRec {
+    unsigned char group, locked_group;
+    unsigned short base_group, latched_group;
+    unsigned char mods, base_mods, latched_mods, locked_mods, compat_state;
+    unsigned char grab_mods, compat_grab_mods, lookup_mods, compat_lookup_mods;
+    unsigned short ptr_buttons;
+} XkbStateRec, *XkbStatePtr;
+Bool XkbLibraryVersion(int *major, int *minor);
+Bool XkbQueryExtension(Display *dpy, int *opcode, int *event, int *error, int *major, int *minor);
+Status XkbGetState(Display *dpy, unsigned int device, XkbStatePtr state);
+KeySym XkbKeycodeToKeysym(Display *dpy, KeyCode kc, int group, int level);
+#endif
+`,
   'X11/Xatom.h': XATOM,
   'X11/keysym.h': KEYSYMDEF,
   'X11/extensions/XShm.h': XSHM,
@@ -2081,6 +2111,8 @@ int shmdt(const void *addr);
 int shmctl(int id, int cmd, struct shmid_ds *buf);
 `,
   'sys/socket.h': `
+#ifndef _PRISM_SYS_SOCKET_H
+#define _PRISM_SYS_SOCKET_H
 #include <sys/types.h>
 struct sockaddr { unsigned short sa_family; char sa_data[14]; };
 int socket(int domain, int type, int protocol);
@@ -2137,8 +2169,11 @@ int connect(int fd, const struct sockaddr *addr, unsigned int len);
 #define IPPROTO_UDP 17
 #define IPPROTO_IP 0
 #define SO_BROADCAST 6
+#endif
 `,
   'netinet/in.h': `
+#ifndef _PRISM_NETINET_IN_H
+#define _PRISM_NETINET_IN_H
 struct in_addr { unsigned int s_addr; };
 struct sockaddr_in { unsigned short sin_family; unsigned short sin_port; struct in_addr sin_addr; char sin_zero[8]; };
 int gethostname(char *name, size_t len);
@@ -2151,13 +2186,20 @@ unsigned int ntohl(unsigned int v);
 #define INADDR_NONE 0xffffffff
 #define INADDR_LOOPBACK 0x7f000001
 #define IPPORT_USERRESERVED 5000
+#endif
 `,
   'arpa/inet.h': `
+#ifndef _PRISM_ARPA_INET_H
+#define _PRISM_ARPA_INET_H
 #include <netinet/in.h>
 unsigned int inet_addr(const char *s);
 char *inet_ntoa(struct in_addr in);
+int inet_aton(const char *s, struct in_addr *addr);
+#endif
 `,
   'netdb.h': `
+#ifndef _PRISM_NETDB_H
+#define _PRISM_NETDB_H
 struct hostent { char *h_name; char **h_aliases; int h_addrtype; int h_length; char **h_addr_list; };
 struct hostent *gethostbyname(const char *name);
 struct hostent *gethostbyaddr(const void *addr, unsigned int len, int type);
@@ -2168,6 +2210,7 @@ struct servent *getservbyname(const char *name, const char *proto);
 int gethostbyname_r(const char *name, struct hostent *ret, char *buf, size_t buflen, struct hostent **result, int *h_errnop);
 int gethostbyaddr_r(const void *addr, unsigned int len, int type, struct hostent *ret, char *buf, size_t buflen, struct hostent **result, int *h_errnop);
 #define HOST_NOT_FOUND 1
+#endif
 `,
   /* poll(2), glibc's i386 layout. Like the sockets it watches, it answers that nothing can be. */
   'sys/poll.h': `

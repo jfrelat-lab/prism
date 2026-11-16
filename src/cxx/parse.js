@@ -29,8 +29,8 @@ export class CxxError extends Error {
 
 const BUILTIN = new Set(['void', 'bool', 'char', 'short', 'int', 'long', 'float', 'double', 'signed',
   'unsigned', '__signed', '__signed__', '_Bool', 'wchar_t']);
-const CV = new Set(['const', 'volatile', '__const', '__const__', '__volatile', '__volatile__', 'restrict',
-  '__restrict', '__restrict__']);
+// `restrict` is C99's and no C++ keyword (g++ knows __restrict): Doom 3 names a variable so (RenderSystem_init.cpp)
+const CV = new Set(['const', 'volatile', '__const', '__const__', '__volatile', '__volatile__', '__restrict', '__restrict__']);
 const STORAGE = new Set(['static', 'extern', 'typedef', 'register', 'auto', 'mutable']);
 const FUNCSPEC = new Set(['inline', '__inline', '__inline__', 'virtual', 'explicit', 'friend']);
 export const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'class', 'struct', 'union', 'enum',

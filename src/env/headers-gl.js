@@ -1708,6 +1708,23 @@ export const GLX_H = `#ifndef _PRISM_GLX_H
 #include <GL/gl.h>
 typedef struct __GLXcontextRec *GLXContext;
 typedef unsigned long GLXDrawable;   /* an XID; PRISM's Xlib.h spells Window and Drawable this way */
+/*
+ * GLX 1.1 and GLX_ARB_get_proc_address, as every <GL/glx.h> of the period declares them: Doom 3 takes its qglX names
+ * from them under GLX_VERSION_1_1 (renderer/qgl_linked.h) and its extension entry points from glXGetProcAddressARB.
+ * Declared here; glx.js implements the 1.0 five, and these are still to come at link time.
+ */
+#define GLX_VERSION_1_0 1
+#define GLX_VERSION_1_1 1
+#define GLX_ARB_get_proc_address 1
+#define GLX_VENDOR 1
+#define GLX_VERSION 2
+#define GLX_EXTENSIONS 3
+const char *glXQueryExtensionsString(Display *dpy, int screen);
+const char *glXQueryServerString(Display *dpy, int screen, int name);
+const char *glXGetClientString(Display *dpy, int name);
+int glXQueryVersion(Display *dpy, int *major, int *minor);
+typedef void (*__GLXextFuncPtr)(void);
+__GLXextFuncPtr glXGetProcAddressARB(const unsigned char *procName);
 #define GLX_RGBA 4
 #define GLX_DOUBLEBUFFER 5
 #define GLX_RED_SIZE 8
@@ -1746,6 +1763,9 @@ Bool XF86VidModeSetViewPort(Display *dpy, int screen, int x, int y);
 typedef struct { float red, green, blue; } XF86VidModeGamma;
 Bool XF86VidModeGetGamma(Display *dpy, int screen, XF86VidModeGamma *gamma);
 Bool XF86VidModeSetGamma(Display *dpy, int screen, XF86VidModeGamma *gamma);
+Bool XF86VidModeGetGammaRampSize(Display *dpy, int screen, int *size);
+Bool XF86VidModeGetGammaRamp(Display *dpy, int screen, int size, unsigned short *red, unsigned short *green, unsigned short *blue);
+Bool XF86VidModeSetGammaRamp(Display *dpy, int screen, int size, unsigned short *red, unsigned short *green, unsigned short *blue);
 #endif
 `;
 const XF86DGA_H = `#ifndef _PRISM_XF86DGA_H

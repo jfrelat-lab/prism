@@ -26,7 +26,7 @@ export const stmtMethods = {
     f.type.params.forEach((p, i) => {
       const name = this.paramName(f, i);
       // A pinned class by value arrives by its address: the object is the caller's.
-      scope.set(name, { k: 'var', name, type: p, cname: this.pinnedType(p) ? `(*${name})` : name });
+      scope.set(f.params[i]?.name ?? name, { k: 'var', name, type: p, cname: this.pinnedType(p) ? `(*${name})` : name });
     });
     const lines = [];
     // A parameter passed by value is the callee's object: destroyed when the function returns --
@@ -71,7 +71,7 @@ export const stmtMethods = {
     const fn = { f, temps: [], ntemp: 0, cleanups: [{ vars: [], kind: 'fn' }], usesEnd: false };
     const scope = new Scope(cls.scope);
     const cx = { env: { scope, cls, bind: cls.bind ?? null }, fn, pending: [], node: f.defNode ?? f.node };
-    f.type.params.forEach((p, i) => { const name = this.paramName(f, i); scope.set(name, { k: 'var', name, type: p, cname: name }); });
+    f.type.params.forEach((p, i) => { const name = this.paramName(f, i); scope.set(f.params[i]?.name ?? name, { k: 'var', name, type: p, cname: name }); });
     const lines = [];
     const call = `${f.cname}__base(${['this', ...f.type.params.map((_, i) => this.paramName(f, i))].join(', ')});`;
     const vb = (v) => `this->__vb${cls.vbases.indexOf(v)}`;
@@ -449,7 +449,7 @@ export const stmtMethods = {
     const cppName = this.lastName(it.decl.name);
     // MSVC's for scope (forStmt): a for statement's variable lives on in the enclosing block, under a C
     // name of its own, so that the next `for (sInt i = 0; ...)` there can declare another.
-    const name = cx.forScopeName ? `${cppName}__for${++this.anon}` : cppName;
+    const name = cx.forScopeName ? `${cppName}__for${++this.anon}` : T.cIdent(cppName);
     let type = this.declType(it.specs, it.decl.derivs, cx.env, it);
     if (type.k === 'array' && type.n == null && it.init?.k === 'braces') type = T.array(type.of, this.nestBraces(it.init, type).items.length);
     if (type.k === 'array' && type.n == null && it.init?.k === 'str') type = T.array(type.of, this.stringLength(it.init) + 1);

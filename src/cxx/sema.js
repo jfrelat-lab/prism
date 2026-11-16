@@ -587,7 +587,7 @@ export class Sema {
           continue;
         }
         const bits = m.bits ? this.constInt(m.bits, cenv) : null;
-        const field = { k: 'var', name, type, cname: name, field: cls, bits, mutable: !!m.specs.mutable };
+        const field = { k: 'var', name, type, cname: T.cIdent(name), field: cls, bits, mutable: !!m.specs.mutable };
         cls.fields.push(field);
         cls.scope.set(name, field);
       }

@@ -1915,6 +1915,15 @@ static int open_socket(const char *net_interface, int port) { if (net_interface)
 int main() { void (*proc)(void); proc = hello; proc(); net_interface n; n.ip = 3; printf("%d %d %d\\n", open_socket("eth0", 27666), open_socket(0, 1), n.ip); return 0; }
 `);
 
+// restrict is a name in C++.
+C('restrict-as-a-name', `
+// Doom 3's RenderSystem_init.cpp: bool restrict, a name in C++ and C99's keyword in the C PRISM lowers C++ to.
+#include <stdio.h>
+struct S { int restrict; };
+static int f(int restrict) { return restrict * 2; }
+int main() { bool restrict = true; S s; s.restrict = 4; printf("%d %d %d\\n", (int)restrict, f(3), s.restrict); return 0; }
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);

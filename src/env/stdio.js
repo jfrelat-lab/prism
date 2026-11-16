@@ -1012,6 +1012,12 @@ export function installStdio(M, {
     htonl: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) | 0,
     ntohl: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >>> 8) & 0xff00) | ((v >>> 24) & 0xff)) | 0,
     inet_addr: () => 0,
+    inet_aton: (s, addr) => {
+      const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(M.mod.cstr(s));
+      if (!m || m.slice(1).some((x) => +x > 255)) return 0;
+      if (addr) for (let k = 0; k < 4; k++) M.u8[addr + k] = +m[k + 1];
+      return 1;
+    },
     inet_ntoa: () => 0,
     signal: () => 0,
     raise: () => 0,

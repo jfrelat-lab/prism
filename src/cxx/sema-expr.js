@@ -241,7 +241,7 @@ export const exprMethods = {
     const ret = this.sret(f) ? T.VOID : f.type.ret.k === 'ref' ? T.ptr(f.type.ret.to) : f.type.ret;
     return this.ct(ret, `${f.cname}${suffix}(${ps.length ? ps.join(', ') : 'void'})`);
   },
-  paramName(f, i) { return f.params[i]?.name ?? `__p${i}`; },
+  paramName(f, i) { return f.params[i]?.name ? T.cIdent(f.params[i].name) : `__p${i}`; },
 
   // ---------------------------------------------------------------- temporaries
   /** A new function-level temporary of type t; its C name. */

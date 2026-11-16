@@ -455,6 +455,11 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       return 0;
     },
     XKeycodeToKeysym: (_dpy, code) => keys.sym(code | 0) || keysymFor(code | 0),
+    // XKB: the library is version 1.0 and the server has no such extension, which a client takes in its stride
+    XkbLibraryVersion: (major, minor) => { if (major) M.mod.dv.setInt32(major, 1, true); if (minor) M.mod.dv.setInt32(minor, 0, true); return 1; },
+    XkbQueryExtension: () => 0,
+    XkbGetState: (_dpy, _dev, st) => { if (st) for (let k = 0; k < 18; k++) M.u8[st + k] = 0; return 0; },
+    XkbKeycodeToKeysym: (_dpy, code) => keys.sym(code & 255) || keysymFor(code & 255),
 
     /*
      * XLookupString, which is the OTHER way an X client asks what a key was -- and it was a stub

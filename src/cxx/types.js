@@ -10,6 +10,9 @@
 //                         that takes the object first (a virtual one is reached through a thunk)
 // Any of them may carry `c: true` (const). A reference never does; its referent may.
 
+/** A C++ name as a C identifier: C99's restrict is a keyword there and none in C++ (Doom 3's bool restrict). */
+export const cIdent = (name) => (name === 'restrict' ? 'restrict__' : name);
+
 export const VOID = { k: 'void' };
 const prims = new Map();
 export const prim = (name) => { let t = prims.get(name); if (!t) prims.set(name, t = { k: 'prim', name }); return t; };
