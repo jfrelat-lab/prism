@@ -12,8 +12,15 @@
 // render-target pixel position, its centre at x + 0.5 in GL's terms.
 //
 // SHADERS. A shader is HLSL carried in the blob D3DXCompileShader returns (hlsl.js: makeBlob,
-// translateHLSL) or real SM2/SM3 bytecode (not yet: refused by name). With no vertex shader the
-// vertices must be pretransformed (XYZRHW); the fixed function's transform and lighting is not yet here.
+// translateHLSL) or shader bytecode, ps_1_x to vs/ps_3_0 (sm9.js). With none set, the fixed function
+// (ffVertex, ffPixel): transform, lighting, the texture stages.
+//
+// DIRECT3D 11 AT FEATURE LEVEL 9_x is this device too: MIRAGE's d3d11.dll drives it as Microsoft's own
+// 10level9 layer drives a Direct3D 9 driver, each shader's Aon9 chunk (SM2 bytecode) going to sm9.js. What
+// that asked for is Direct3D 9's as well (several streams, Reset, a rectangle of a texture), but for the
+// index format SetIndices may give. Feature level 10 and above (SM4/5, constant buffers, texture arrays,
+// geometry and compute shaders) is not grafted here: it would be a model of its own, held to Wine and DXVK
+// in Direct3D 11 as this one is in Direct3D 9.
 import { translateHLSL, blobHLSL, hlslConstants } from './hlsl.js';
 import { translateBytecode, bytecodeVersion } from './sm9.js';
 
