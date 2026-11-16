@@ -147,6 +147,7 @@ export const BUILTINS = new Map(Object.entries({
   remove: { ret: I, params: [P] },
   rename: { ret: I, params: [P, P] },
   strerror: { ret: P, params: [I] },
+  strsignal: { ret: P, params: [I] },
   select: { ret: I, params: [I, P, P, P, P] },
   fscanf: { ret: I, params: [P, P], variadic: true },
   sscanf: { ret: I, params: [P, P], variadic: true },

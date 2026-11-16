@@ -31,6 +31,11 @@ const STD32 = { STDIN: 0x7000_0001, STDOUT: 0x7000_0002, STDERR: 0x7000_0003, FI
  */
 const STD16 = { STDIN: 0x100, STDOUT: 0x102, STDERR: 0x104, FIRST: 5 };
 
+const SIGNAL_NAMES = { 1: 'Hangup', 2: 'Interrupt', 3: 'Quit', 4: 'Illegal instruction', 5: 'Trace/breakpoint trap', 6: 'Aborted',
+  7: 'Bus error', 8: 'Floating point exception', 9: 'Killed', 10: 'User defined signal 1', 11: 'Segmentation fault', 12: 'User defined signal 2',
+  13: 'Broken pipe', 14: 'Alarm clock', 15: 'Terminated', 17: 'Child exited', 18: 'Continued', 19: 'Stopped (signal)', 20: 'Stopped',
+  21: 'Stopped (tty input)', 22: 'Stopped (tty output)' };
+
 export function installStdio(M, {
   files = {}, readChar = () => -1, env = {},
   /*
@@ -527,6 +532,8 @@ export function installStdio(M, {
 
     /** There is one errno value worth reporting honestly, and it is "no such file". */
     strerror: () => M.mod.intern([...enc.encode('No such file or directory'), 0]),
+    // a signal's description, glibc's words for the Linux i386 numbers <signal.h> defines
+    strsignal: (sig) => M.mod.intern([...enc.encode(SIGNAL_NAMES[sig] ?? `Unknown signal ${sig}`), 0]),
 
     /*
      * A small `fscanf`, covering what Quake asks of it: whitespace, `%d`, `%f`, `%s` and literal
@@ -1096,7 +1103,7 @@ export function installStdio(M, {
     fsync: () => 0,
     fdatasync: () => 0,
     // Answered by name: the page, one processor, and EINVAL for a name this host has no answer to.
-    sysconf: (name) => (name === 30 ? 4096 : name === 83 || name === 84 ? 1 : (setErrno(22), -1)),
+    sysconf: (name) => (name === 30 ? 4096 : name === 83 || name === 84 ? 1 : name === 85 || name === 86 ? Math.floor(M.u8.length / 4096) : (setErrno(22), -1)),
     // No terminal: isatty() says 0, and these fail the way they do on a descriptor that is not one.
     tcgetattr: () => (setErrno(25), -1),
     tcsetattr: () => (setErrno(25), -1),
@@ -1182,7 +1189,8 @@ export function installStdio(M, {
      * so that a program which checks its result -- Tcl's pipe and exec code, its socket options --
      * takes its own error path: ENOSYS for processes and links, ECHILD for a wait with no children.
      */
-    pipe: () => (setErrno(38), -1), fork: () => (setErrno(38), -1), execvp: () => (setErrno(38), -1),
+    pipe: () => (setErrno(38), -1), fork: () => (setErrno(38), -1), execvp: () => (setErrno(38), -1), execv: () => (setErrno(38), -1),
+    execl: () => (setErrno(38), -1), execlp: () => (setErrno(38), -1),
     dup: () => (setErrno(38), -1), dup2: () => (setErrno(38), -1),
     symlink: () => (setErrno(38), -1), link: () => (setErrno(38), -1), chown: () => 0,
     wait: () => (setErrno(10), -1), waitpid: () => (setErrno(10), -1),

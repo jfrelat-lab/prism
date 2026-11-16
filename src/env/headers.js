@@ -667,7 +667,8 @@ char *ctime(const long *t);
 long mktime(struct tm *tm);
 double difftime(long a, long b);
 size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tm);
-int gettimeofday(struct timeval *tv, void *tz);
+struct timezone;
+int gettimeofday(struct timeval *tv, struct timezone *tz);
 int nanosleep(const struct timespec *req, struct timespec *rem);
 int utimes(const char *path, const struct timeval *times);
 
@@ -945,6 +946,9 @@ int symlink(const char *target, const char *path);
 int link(const char *from, const char *to);
 int chown(const char *path, int owner, int group);
 int execvp(const char *file, char *const argv[]);
+int execv(const char *path, char *const argv[]);
+int execl(const char *path, const char *arg, ...);
+int execlp(const char *file, const char *arg, ...);
 int getuid(void);
 int getgid(void);
 int getpid(void);
@@ -960,6 +964,8 @@ long sysconf(int name);
 #define _SC_PAGE_SIZE 30
 #define _SC_NPROCESSORS_CONF 83
 #define _SC_NPROCESSORS_ONLN 84
+#define _SC_PHYS_PAGES 85
+#define _SC_AVPHYS_PAGES 86
 #define STDIN_FILENO 0
 #define STDOUT_FILENO 1
 #define STDERR_FILENO 2
@@ -1232,12 +1238,23 @@ int ioctl(int fd, unsigned long request, ...);
 #define TIOCM_RNG 0x080
 #define TIOCM_DSR 0x100
 #endif
+#ifndef SIOCGIFCONF
+#define SIOCGIFCONF 0x8912
+#define SIOCGIFFLAGS 0x8913
+#define SIOCGIFADDR 0x8915
+#define SIOCGIFBRDADDR 0x8919
+#define SIOCGIFNETMASK 0x891b
+#define SIOCGIFHWADDR 0x8927
+#define SIOCGIFINDEX 0x8933
+#endif
 #endif
 `;
 
 const XLIB = `
 #ifndef _PRISM_XLIB_H
 #define _PRISM_XLIB_H
+/* as the real one does: a client reaches fd_set and the sized types through it (Doom 3's sys/linux/input.cpp) */
+#include <sys/types.h>
 /*
  * Xlib, declared for a host that implements the LIBRARY and not the protocol -- see src/env/x11.js.
  * Measured, not speculative: the games' platform layers (Doom's i_video.c first), then the core
@@ -2130,6 +2147,9 @@ unsigned short ntohs(unsigned short v);
 unsigned int htonl(unsigned int v);
 unsigned int ntohl(unsigned int v);
 #define INADDR_ANY 0
+#define INADDR_BROADCAST 0xffffffff
+#define INADDR_NONE 0xffffffff
+#define INADDR_LOOPBACK 0x7f000001
 #define IPPORT_USERRESERVED 5000
 `,
   'arpa/inet.h': `
@@ -2206,6 +2226,73 @@ struct count_info { int bytes; int blocks; int ptr; };
   'alloca.h': 'void *alloca(unsigned long n);\n',
   // MSVC's and glibc's malloc.h both declare alloca; MSVC's spells it _alloca too
   'malloc.h': '#include <stdlib.h>\nvoid *alloca(unsigned long n);\nvoid *_alloca(unsigned long n);\n',
+  /*
+   * <pthread.h>, its types in glibc's i386 sizes (a program embeds them in its own structures) and the calls Doom 3's
+   * posix layer makes. Declarations: there is one thread of control here, and what pthread_create does with a
+   * second is the environment's to answer -- src/env has no thread yet.
+   */
+  'pthread.h': `
+#ifndef _PRISM_PTHREAD_H
+#define _PRISM_PTHREAD_H
+#include <time.h>
+typedef unsigned long pthread_t;
+typedef union { char __size[36]; long __align; } pthread_attr_t;
+typedef union { char __size[24]; long __align; } pthread_mutex_t;
+typedef union { char __size[4]; int __align; } pthread_mutexattr_t;
+typedef union { char __size[48]; long long __align; } pthread_cond_t;
+typedef union { char __size[4]; int __align; } pthread_condattr_t;
+typedef unsigned int pthread_key_t;
+typedef int pthread_once_t;
+#define PTHREAD_CREATE_JOINABLE 0
+#define PTHREAD_CREATE_DETACHED 1
+#define PTHREAD_MUTEX_NORMAL 0
+#define PTHREAD_MUTEX_RECURSIVE 1
+#define PTHREAD_MUTEX_ERRORCHECK 2
+#define PTHREAD_MUTEX_DEFAULT PTHREAD_MUTEX_NORMAL
+#define PTHREAD_CANCEL_ENABLE 0
+#define PTHREAD_CANCEL_DISABLE 1
+#define PTHREAD_CANCEL_DEFERRED 0
+#define PTHREAD_CANCEL_ASYNCHRONOUS 1
+#define PTHREAD_CANCELED ((void *)-1)
+#define PTHREAD_ONCE_INIT 0
+#define PTHREAD_MUTEX_INITIALIZER { { 0 } }
+#define PTHREAD_COND_INITIALIZER { { 0 } }
+int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start)(void *), void *arg);
+int pthread_join(pthread_t thread, void **ret);
+int pthread_detach(pthread_t thread);
+pthread_t pthread_self(void);
+int pthread_equal(pthread_t a, pthread_t b);
+void pthread_exit(void *ret);
+int pthread_cancel(pthread_t thread);
+void pthread_testcancel(void);
+int pthread_setcancelstate(int state, int *old);
+int pthread_setcanceltype(int type, int *old);
+int pthread_attr_init(pthread_attr_t *attr);
+int pthread_attr_destroy(pthread_attr_t *attr);
+int pthread_attr_setdetachstate(pthread_attr_t *attr, int state);
+int pthread_attr_getdetachstate(const pthread_attr_t *attr, int *state);
+int pthread_attr_setstacksize(pthread_attr_t *attr, unsigned int size);
+int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr);
+int pthread_mutex_destroy(pthread_mutex_t *m);
+int pthread_mutex_lock(pthread_mutex_t *m);
+int pthread_mutex_trylock(pthread_mutex_t *m);
+int pthread_mutex_unlock(pthread_mutex_t *m);
+int pthread_mutexattr_init(pthread_mutexattr_t *attr);
+int pthread_mutexattr_destroy(pthread_mutexattr_t *attr);
+int pthread_mutexattr_settype(pthread_mutexattr_t *attr, int type);
+int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *attr);
+int pthread_cond_destroy(pthread_cond_t *c);
+int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m);
+int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, const struct timespec *abstime);
+int pthread_cond_signal(pthread_cond_t *c);
+int pthread_cond_broadcast(pthread_cond_t *c);
+int pthread_key_create(pthread_key_t *key, void (*destructor)(void *));
+int pthread_key_delete(pthread_key_t key);
+void *pthread_getspecific(pthread_key_t key);
+int pthread_setspecific(pthread_key_t key, const void *value);
+int pthread_once(pthread_once_t *once, void (*init)(void));
+#endif
+`,
   'sys/time.h': `
 #include <sys/types.h>
 #ifndef _PRISM_TIMEVAL_DEFINED
@@ -2223,6 +2310,8 @@ int getitimer(int which, struct itimerval *val);
 #define ITIMER_PROF 2
 `,
   'signal.h': `
+#ifndef _PRISM_SIGNAL_H
+#define _PRISM_SIGNAL_H
 /*
  * sig_atomic_t is C89 (7.7): the type a handler and the interrupted program may share. Lua reaches
  * for it through llimits.h, which defines l_signalT as sig_atomic_t. Its absence surfaced as a parse
@@ -2253,6 +2342,9 @@ int raise(int sig);
 #define SIGCHLD 17
 #define SIGTTIN 21
 #define SIGTTOU 22
+#define SIGSTOP 19
+#define SIGTSTP 20
+#define SIGCONT 18
 // DJGPP's numeric-coprocessor signal, which Quake installs a handler for.
 #define SIGNOFP 20
 
@@ -2267,12 +2359,20 @@ int raise(int sig);
  * be CALLED later, and this one has no source of signals behind it at all.
  */
 typedef unsigned long sigset_t[32];
+/*
+ * What an SA_SIGINFO handler is given: glibc's 128 bytes, the three fields every kind of signal fills first. Its
+ * handler shares sa_handler's place, as glibc lays the union out and names its members by macro (Doom 3's
+ * Sys_FPE_handler, installed through sa_sigaction).
+ */
+typedef struct { int si_signo, si_errno, si_code; int __pad[29]; } siginfo_t;
 struct sigaction {
-    __sighandler_t sa_handler;
+    union { __sighandler_t sa_handler; void (*sa_sigaction)(int, siginfo_t *, void *); } __sigaction_handler;
     sigset_t sa_mask;
     int sa_flags;
     void (*sa_restorer)(void);
 };
+#define sa_handler __sigaction_handler.sa_handler
+#define sa_sigaction __sigaction_handler.sa_sigaction
 /* The sa_flags a program sets. Linux i386 values, the ABI PRISM targets. */
 #define SA_NOCLDSTOP 0x00000001
 #define SA_NOCLDWAIT 0x00000002
@@ -2285,6 +2385,7 @@ int sigaction(int sig, const struct sigaction *act, struct sigaction *old);
 int sigemptyset(sigset_t *set);
 int sigfillset(sigset_t *set);
 int sigaddset(sigset_t *set, int sig);
+#endif
 `,
   'ctype.h': CTYPE,
   'sys/types.h': SYS_TYPES,
@@ -2305,6 +2406,52 @@ int getopt(int argc, char * const argv[], const char *optstring);
   'sys/stat.h': SYS_STAT,
   'sys/mman.h': SYS_MMAN,
   'sys/ioctl.h': SYS_IOCTL,
+  /* POSIX's home for select and fd_set, which PRISM keeps in <sys/types.h> and <sys/time.h> as glibc reaches them */
+  'sys/select.h': '#include <sys/types.h>\n#include <sys/time.h>\n',
+  'netinet/tcp.h': '#ifndef _PRISM_NETINET_TCP_H\n#define _PRISM_NETINET_TCP_H\n#define TCP_NODELAY 1\n#define TCP_MAXSEG 2\n#endif\n',
+  /*
+   * <net/if.h>: an interface request and the list SIOCGIFCONF fills, in glibc's i386 layout (32 bytes a request:
+   * the name, then a 16-byte union), and the IFF_ flags. Doom 3's posix_net.cpp lists its interfaces through it.
+   */
+  'net/if.h': `
+#ifndef _PRISM_NET_IF_H
+#define _PRISM_NET_IF_H
+#include <sys/socket.h>
+#define IFNAMSIZ 16
+#define IF_NAMESIZE 16
+#define IFF_UP 0x1
+#define IFF_BROADCAST 0x2
+#define IFF_DEBUG 0x4
+#define IFF_LOOPBACK 0x8
+#define IFF_POINTOPOINT 0x10
+#define IFF_RUNNING 0x40
+#define IFF_NOARP 0x80
+#define IFF_PROMISC 0x100
+#define IFF_MULTICAST 0x1000
+struct ifreq {
+    char ifr_name[IFNAMSIZ];
+    union { struct sockaddr ifru_addr, ifru_dstaddr, ifru_broadaddr, ifru_netmask, ifru_hwaddr; short ifru_flags; int ifru_ivalue; int ifru_mtu; char ifru_slave[IFNAMSIZ]; char *ifru_data; } ifr_ifru;
+};
+#define ifr_addr ifr_ifru.ifru_addr
+#define ifr_dstaddr ifr_ifru.ifru_dstaddr
+#define ifr_broadaddr ifr_ifru.ifru_broadaddr
+#define ifr_netmask ifr_ifru.ifru_netmask
+#define ifr_hwaddr ifr_ifru.ifru_hwaddr
+#define ifr_flags ifr_ifru.ifru_flags
+#define ifr_ifindex ifr_ifru.ifru_ivalue
+#define ifr_metric ifr_ifru.ifru_ivalue
+#define ifr_mtu ifr_ifru.ifru_mtu
+#define ifr_data ifr_ifru.ifru_data
+struct ifconf {
+    int ifc_len;
+    union { char *ifcu_buf; struct ifreq *ifcu_req; } ifc_ifcu;
+};
+#define ifc_buf ifc_ifcu.ifcu_buf
+#define ifc_req ifc_ifcu.ifcu_req
+unsigned int if_nametoindex(const char *name);
+char *if_indextoname(unsigned int index, char *name);
+#endif
+`,
   'pc.h': PCH,
   // The DOS/DJGPP set, so MAME's own src/msdos/msdos.c compiles as its makefile intends.
   ...DJGPP_HEADERS,
