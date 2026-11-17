@@ -1215,7 +1215,8 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
         const weakHere = p.weak.has(d.name);
         if (!isInternal && fn.defined && fn.weakDef && !weakHere) {
           fn.weakDef.weakDuplicate = true;
-        } else if (!isInternal && fn.defined && weakNames.has(link)) { d.weakDuplicate = true; continue; }
+        // weakNames holds the names as written; in a module `link` is qualified (game$...), so the name is asked
+        } else if (!isInternal && fn.defined && weakNames.has(d.name)) { d.weakDuplicate = true; continue; }
         else if (!isInternal && fn.defined) {
           duplicates.push({ name: d.name, unit: basename(p.file), module: p.module ?? MAIN });
         }

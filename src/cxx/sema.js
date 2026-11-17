@@ -140,7 +140,19 @@ export class Sema {
       }
       case 'typedef': {
         const type = this.declType(it.specs, it.decl.derivs, env, it);
-        env.scope.set(this.lastName(it.decl.name), { k: 'type', type });
+        const name = this.lastName(it.decl.name);
+        /*
+         * An unnamed class or enumeration given a name by its typedef has that name for linkage (C++ 7.1.3/8): what
+         * mangles a function taking it, the same in every unit. Its counter name (__anonN, __enumN) is the unit's own,
+         * so Doom 3's netadr_t was _Z16Sys_IsLANAddress8__anon11 in one unit and __anon13 in another.
+         */
+        if (!it.decl.derivs.length && type.k === 'class' && type.cls.name === '<anonymous>' && !type.cls.typedefName) {
+          type.cls.typedefName = name; type.cls.name = name; type.cls.cname = this.scopedName(name, env);
+        }
+        if (!it.decl.derivs.length && type.k === 'enum' && !type.en.name && !type.en.typedefName) {
+          type.en.typedefName = name; type.en.name = name; type.en.cname = this.scopedName(name, env);
+        }
+        env.scope.set(name, { k: 'type', type });
         return null;
       }
       case 'decl': case 'func':
