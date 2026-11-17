@@ -147,7 +147,21 @@ export const SLOT = {
    * and clicks the page reports (a menu), 2 the mouse captured and its motion reported (play).
    */
   MOUSE_MODE: 44,  // guest → host
+  /*
+   * HOW LONG THE PROGRAM WAITED, in tenths of a millisecond, every Atomics.wait it made added (idleWait): the pacer,
+   * parking between frames, the keyboard, sound, the network. The page reads the share of each second that was NOT
+   * waiting and shows the frame rate the program would reach running all the time. Wraps; read as a difference.
+   */
+  IDLE: 45,        // guest → host
 };
+
+/** Atomics.wait, its time added to SLOT.IDLE: every wait the guest makes goes through here. */
+export function idleWait(ctrl, array, index, value, ms) {
+  const t = performance.now();
+  const r = Atomics.wait(array, index, value, ms);
+  Atomics.add(ctrl, SLOT.IDLE, Math.round((performance.now() - t) * 10));
+  return r;
+}
 
 export const STATE = { BOOT: 0, FETCHING: 1, COMPILING: 2, RUNNING: 3, EXITED: 4, ERROR: 5 };
 
@@ -217,7 +231,7 @@ export function makePacer(ctrl, fps) {
 
   /** Sleep without spinning. Waiting on STOP with an expected 0 returns at once if stop is set. */
   // The same WAKE channel `park` uses, so one notify from the page releases every kind of wait.
-  const nap = (ms) => { Atomics.wait(ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 50)); };
+  const nap = (ms) => { idleWait(ctrl, ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 50)); };
 
   Atomics.store(ctrl, SLOT.FPS, Math.round(fps * 1000));
 
@@ -307,7 +321,7 @@ export function makeParker(ctrl) {
     if (Atomics.load(ctrl, SLOT.STOP)) return false;
     // WAKE is held at 0 for ever and used only as a channel: waiting on it always parks for the
     // timeout, and any notify from the page cuts the wait short.
-    Atomics.wait(ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 100));
+    idleWait(ctrl, ctrl, SLOT.WAKE, 0, Math.min(Math.max(ms, 1), 100));
     return !Atomics.load(ctrl, SLOT.STOP);
   };
 }
@@ -453,7 +467,7 @@ export function makeKeyboard(views) {
         if (which === 1 && v === 0) continue;
         return v;
       }
-      Atomics.wait(ctrl, SLOT.KBD_HEAD, head, 100);
+      idleWait(ctrl, ctrl, SLOT.KBD_HEAD, head, 100);
     }
   }
 }

@@ -26,7 +26,7 @@
 // expected to notice. Answering with the value asked for is truthful here because the ring really
 // does carry whatever rate it is told.
 
-import { SLOT } from './webhost.js';
+import { SLOT, idleWait } from './webhost.js';
 
 // <linux/soundcard.h>, the values PRISM's own header declares. The two are one thing in two places.
 const SNDCTL_DSP_RESET = 0x5000, SNDCTL_DSP_SPEED = 0x5002, SNDCTL_DSP_STEREO = 0x5003,
@@ -225,7 +225,7 @@ export function installDsp(M, { publish = null, blockWhenFull = false, micros = 
       while (room() < frames) {
         const read = Atomics.load(publish.ctrl, SLOT.AUDIO_READ);
         // A bounded wait, so a consumer that has gone away cannot wedge the program for ever.
-        Atomics.wait(publish.ctrl, SLOT.AUDIO_READ, read, 50);
+        idleWait(publish.ctrl, publish.ctrl, SLOT.AUDIO_READ, read, 50);
         if (++spins > 200) break;
       }
     }

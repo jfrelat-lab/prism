@@ -32,7 +32,7 @@ let soundWorker = null;
 let audioCtx = null, audioNode = null;
 let imageData = null, lut = null, palGen = -1;
 let glFrame = null;                        // the latest WebGL frame, an ImageBitmap (PIXFMT 2)
-let statTimer = 0, lastStatAt = 0, lastFrame = 0;
+let statTimer = 0, lastStatAt = 0, lastFrame = 0, lastIdle = 0;
 
 // ---------------------------------------------------------------- the text surface
 //
@@ -1617,7 +1617,7 @@ async function startRun(typedAs = null) {
   $('stage').classList.add('running');
   $('vmState').textContent = 'running'; $('vmState').className = 'pill on';
   renderChooser();
-  lastFrame = 0; lastStatAt = performance.now(); palGen = -1;
+  lastFrame = 0; lastStatAt = performance.now(); lastIdle = views ? Atomics.load(views.ctrl, SLOT.IDLE) : 0; palGen = -1;
   clearInterval(statTimer);
   // On a timer as well as on rAF, because rAF does not fire in a hidden tab and a status line that
   // goes silent reads as a crash. The PROGRAM is no longer paced by any of this: it keeps its own
@@ -1839,6 +1839,15 @@ function stats() {
   const graphics = w > 0 && !Atomics.load(ctrl, SLOT.TEXTMODE);
   const now = performance.now();
   const fps = (frame - lastFrame) * 1000 / (now - lastStatAt);
+  /*
+   * ...and what it would reach running all the time: the rate over the share of the interval the worker was not
+   * waiting (SLOT.IDLE, every Atomics.wait it made). A program that spends nearly all its time working is at its
+   * maximum already; one held back by the pacer or by sleeping shows how much room it has. MIRAGE shows the same.
+   */
+  const idle = Atomics.load(ctrl, SLOT.IDLE), waited = ((idle - lastIdle) | 0) / 10;
+  const busy = 1 - Math.min(1, Math.max(0, waited / (now - lastStatAt)));
+  const maxFps = busy > 0.95 ? fps : fps / Math.max(busy, 0.01);
+  lastIdle = idle;
   // The MEASURED rate only. There used to be a "of N fps" target here, taken from the descriptor —
   // and it became a lie the moment the program started pacing itself from its own
   // drv->frames_per_second. A number the host cannot know should not be printed as if it did.
@@ -1852,7 +1861,7 @@ function stats() {
     (graphics ? ` · ${w}x${h} · ${Atomics.load(ctrl, SLOT.PENS)} pens`
       : ` · text ${TEXT_COLS}x${TEXT_ROWS}` +
         (w > 0 ? ` · guest ${w}x${h} @0x${Atomics.load(ctrl, SLOT.PIXELS).toString(16)} (textmode still on)` : '')) +
-    (frame ? ` · frame ${frame} · ${fps.toFixed(1)} fps` : '') +
+    (frame ? ` · frame ${frame} · ${fps.toFixed(1)} fps · max ≈ ${Math.round(maxFps)}` : '') +
     (frame && $('speed').value !== '100' ? ` · ${$('speed').value === '0' ? 'unlimited' : $('speed').value + '%'}` : '');
   lastFrame = frame; lastStatAt = now;
   if (state === STATE.EXITED || state === STATE.ERROR) finish(state);
