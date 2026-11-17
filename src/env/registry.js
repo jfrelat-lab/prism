@@ -42,6 +42,7 @@ import { installPopen } from './popen.js';
 import { installDsp } from './dsp.js';
 import { installDl } from './dl.js';
 import { installThreads, pthreadBuiltins } from '../runtime/threads.js';
+import { OPENAL_HEADERS } from './headers-openal.js';
 import { installSDL2, sdl2Builtins, SDL2_VARS } from './sdl2.js';
 import { installSDL2GL, sdl2glBuiltins, SDL2GL_VARS } from './sdl2gl.js';
 import { SDL2_HEADERS } from './headers-sdl2.js';
@@ -168,6 +169,11 @@ export const ENV = {
    * POSIX threads (src/runtime/threads.js): each a worker over the shared image, run one at a time by the
    * home thread. Its sleeps replace stdio's, so stdio goes first. The host passes `spawn` and `image`.
    */
+  /*
+   * OpenAL 1.1's headers and nothing else: what a build compiles against where the library is the
+   * program's own business -- Doom 3's Linux client links openal/stubs.cpp, its own empty al* functions.
+   */
+  openal: { install: () => ({}), headers: OPENAL_HEADERS },
   pthread: { needs: ['stdio'], install: (M, _c, o) => installThreads(M, o), builtins: pthreadBuiltins(T) },
   /*
    * The VGA ROM font, for a platform layer that has to RASTERISE text rather than hand it to a

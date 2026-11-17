@@ -985,7 +985,41 @@ export function installStdio(M, {
       return 0;
     },
     readlink: () => -1,
-    ioctl: () => -1,
+    /*
+     * The interfaces of a machine with no network: loopback alone, `lo` at 127.0.0.1/8, which is what
+     * a Linux box answers with every cable out. Doom 3's posix_net.cpp lists them at startup with
+     * SIOCGIFCONF, SIOCGIFADDR and SIOCGIFNETMASK and stops the game if the first fails; a socket's
+     * FIONBIO is granted. Everything else is refused as before.
+     */
+    ioctl: (fd, req, rest) => {
+      if (!handles.get(fd | 0)?.socket) return (setErrno(25), -1);                 // ENOTTY
+      // variadic: the tail arrives as an array (or a va reader, through a pointer), as dsp.js reads it
+      const arg = Array.isArray(rest) ? (rest[0] | 0) : typeof rest === 'object' && rest ? rest.ptr() : (rest | 0);
+      const dv = M.mod.dv, IFREQ = 32;
+      const loopback = (at, ip) => {                                               // a sockaddr_in at ifr_addr
+        M.u8.fill(0, at + 16, at + 32);
+        dv.setUint16(at + 16, 2, true);                                            // AF_INET
+        dv.setUint32(at + 20, ip, false);
+      };
+      switch (req >>> 0) {
+        case 0x5421: return 0;                                                     // FIONBIO
+        case 0x8912: {                                                             // SIOCGIFCONF
+          const len = dv.getInt32(arg, true), buf = dv.getUint32(arg + 4, true);
+          if (len < IFREQ) { dv.setInt32(arg, 0, true); return 0; }
+          M.u8.fill(0, buf, buf + IFREQ);
+          M.u8.set([0x6c, 0x6f], buf);                                             // "lo"
+          loopback(buf, 0x7f000001);
+          dv.setInt32(arg, IFREQ, true);
+          return 0;
+        }
+        case 0x8915: case 0x891b: {                                                // SIOCGIFADDR, SIOCGIFNETMASK
+          if (M.mod.cstr(arg) !== 'lo') return (setErrno(19), -1);                 // ENODEV
+          loopback(arg, (req >>> 0) === 0x8915 ? 0x7f000001 : 0xff000000);
+          return 0;
+        }
+      }
+      return (setErrno(22), -1);                                                   // EINVAL
+    },
     /*
      * SysV shared memory and UDP both FAIL, and say so through their ordinary error returns. Doom
      * falls back to a plain XImage when shmget fails, and single-player never opens a socket. A
@@ -995,8 +1029,18 @@ export function installStdio(M, {
     shmat: () => -1,
     shmdt: () => -1,
     shmctl: () => -1,
-    socket: () => -1,
-    bind: () => -1,
+    /*
+     * An INTERNET socket can be made, on that loopback-only machine, so its interfaces can be asked
+     * about (ioctl above); binding one fails with EADDRNOTAVAIL, which is the same refusal the
+     * programs here already took from socket() itself. Other families are still refused.
+     */
+    socket: (domain) => {
+      if ((domain | 0) !== 2) return (setErrno(97), -1);                          // EAFNOSUPPORT
+      const h = take();
+      handles.set(h, { socket: true, key: null, bytes: new Uint8Array(0), pos: 0, read: false, write: false, eof: true });
+      return h;
+    },
+    bind: () => (setErrno(99), -1),                                                // EADDRNOTAVAIL
     sendto: () => -1,
     recvfrom: () => -1,
     sendmsg: () => -1,

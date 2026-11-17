@@ -17,7 +17,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { toolchainCompile } from './toolchain.js';
 import { join, basename, dirname, resolve as resolvePath } from 'node:path';
-import { compileProgram, bindLateBuiltins, loadSnapshot, snapshotProgram } from './compile.js';
+import { compileProgram, bindLateBuiltins, loadSnapshot, snapshotProgram, threadImage } from './compile.js';
 import { cacheEnabled, buildKey, recordingResolver, loadCached, storeCached } from './build-cache.js';
 import { HEADERS } from './env/headers.js';
 import { bindWin32Exports } from './env/dl.js';
@@ -455,6 +455,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     paged: c.paged ?? envNames(target.env).includes('vgaplanar'),
     // ...and a DEVICE WINDOW for the EGA (env `ega`): every integer access tests for A000h (emit.js).
     window: c.window ?? envNames(target.env).includes('ega'),
+    // ...and a SHARED image for a program with threads: each runs in a worker over this memory (src/runtime/threads.js).
+    shared: !!c.shared || envNames(target.env).includes('pthread'),
     ...(c.directCalls === undefined ? {} : { directCalls: c.directCalls }),
   };
   const compileWith = (res) => compileProgram(units, {
@@ -503,6 +505,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   for (const [name, m] of Object.entries(target.modules ?? {})) {
     if (!name.startsWith('_') && m.soname) sonames[m.soname] = name;
   }
+  // A threaded program's threads instantiate it from this; the tool passes how to start one (pthread.spawn).
+  if (envNames(target.env).includes('pthread') && program.src) program.M.threadHost = { image: threadImage(program), ...(program.M.threadHost ?? {}) };
   const env = buildEnv(program.M, target.env ?? ['stdio'],
     { ...envExtra, dl: { modules: sonames, ...(envExtra.dl ?? {}) } });
   // Slots of environment functions whose address the program took, now that they exist.

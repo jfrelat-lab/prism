@@ -22,6 +22,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { virtualClock, sleepingClock } from '../src/env/clock.js';
+import { nodeSpawn } from './threads-node.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const TARGETS = join(ROOT, 'targets');
@@ -150,6 +151,8 @@ try {
        * of the wait it asked for. --realclock gets the faithful one back, which sleeps for real.
        */
       sdl2: { clock: sdlClock }, sdl12: { clock: sdlClock },
+      // a threaded program's threads, each a Node worker over its shared image (src/runtime/threads.js)
+      pthread: { spawn: nodeSpawn },
     },
   });
 } catch (e) {
@@ -565,7 +568,11 @@ try {
    * out, and whatever it drew is a snapshot of an unfinished run, not the frame that was asked for.
    */
   if (e.message === '__leash') leashed = true;
-  else if (e.message !== '__frames_done') console.log(`exited: ${e.message}`);
+  else if (e.message !== '__frames_done') {
+    console.log(`exited: ${e.message}`);
+    // --stack: where, in the emitted JavaScript (each frame names the C function it was emitted from)
+    if (flag('stack')) console.log(String(e.stack).split('\n').slice(1, 25).join('\n'));
+  }
 }
 const runSecs = (performance.now() - runT0) / 1000;
 /**
