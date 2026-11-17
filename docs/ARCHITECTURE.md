@@ -440,6 +440,43 @@ This is where reproducibility is traded for faithfulness, so it is the browser o
 the deterministic clock, and the frame-for-frame differential against a native build stays meaningful
 because the clock decides *when*, never *what*.
 
+### Threads: a worker each, one running at a time
+
+A thread cannot be a coroutine here. The emitted code is synchronous JavaScript, so a C function
+cannot be suspended in the middle of its loop and resumed later. Doom 3's async thread
+(`sys/linux/main.cpp`) is exactly such a loop: it sleeps to the next 16 ms tick, then runs
+`common->Async()`. So each thread gets what a suspension needs, its own JavaScript stack: a **Web
+Worker** that instantiates the same compiled program a second time over the same SharedArrayBuffer
+(`attachThread` in `src/compile.js`). The new instance has the same functions at the same table
+indices and the same globals at the same addresses, and its shadow stack is a block of the heap.
+
+What a second instance does NOT share is the JavaScript state of the machine: the heap's free lists,
+open files, the GL context, the clock and the keyboard. That state stays in the **home thread** (the
+program's main thread). Every library call another thread makes is forwarded there, with numbers as
+arguments; a pointer means the same thing on both sides. Calls that only touch memory, such as
+`memcpy` and the maths functions, stay local, and so do the ones that *are* the calling thread:
+`alloca`, setjmp/longjmp and the C++ exception state.
+
+**One thread runs at a time, and the home thread decides which** (`src/runtime/threads.js`). A thread
+hands control back when it blocks: a contended mutex, a condition wait, a sleep, a join, or its end.
+The home thread passes control on at its own blocking points, and whenever the program asks the time
+(`M.pollThreads`). That second rule is how a sleeping thread wakes at its deadline while the main loop
+runs. This is what makes the forwarding safe: while a thread runs, the home thread is waiting in
+`threads.js`, free to serve its calls, so no library state is ever touched by two threads at once.
+
+The scheduling also stays reproducible. Threads sleep on the guest clock, and when every thread sleeps,
+the deterministic clock jumps to the first wake-up. The interleaving then follows from the program's
+own calls, not from the host's scheduler, and the gates stay meaningful. The real clock is waited
+for. Two threads never run truly in parallel. What the program gets is threads of control, which is
+all a 2004 engine's design asks for.
+
+In the page the **page** starts a thread's worker, not the guest's worker: a worker blocked in guest
+code cannot start one of its own (see COMPAT.md, the sound server). `tools/gate-threads.mjs` holds
+creation, joins, the three mutex kinds, condition queues, keys, `pthread_once`, cancellation and an
+`exit()` from a thread to gcc `-pthread`. Cancellation is the exception: the oracle's qemu-user
+crashes in glibc's forced unwind, so that case's expected output is written by hand. `--selftest`
+removes the main thread's locking and must turn the gate red.
+
 ### Numbers, and what is left
 
 ⚠️ **Speed: three numbers, and they measure three different things.** Confusing them is how the

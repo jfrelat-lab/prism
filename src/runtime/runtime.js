@@ -56,6 +56,14 @@ export class ExitCalled extends Error {
 const EPOCH_US = 855_100_800_000_000;
 
 /*
+ * The guest clock as gettimeofday reports it, in microseconds since 1970: the real clock's when
+ * installRealClock has put one in, else the deterministic one. Threads sleep on it (threads.js), and
+ * when every thread sleeps the deterministic clock is moved on to the first wake-up.
+ */
+export const guestMicros = (M) => (M.realClock ? M.realClock.now() + EPOCH_US : (M.wallMicros ?? EPOCH_US));
+export const setGuestMicros = (M, us) => { if (!M.realClock) M.wallMicros = us; };
+
+/*
  * THE RUN LEASH. `M.leashDeadline` is a performance.now() value past which the program is stopped.
  *
  * It is checked from the CLOCK, not from a frame boundary, because a frame boundary assumes the
@@ -239,7 +247,11 @@ export function makeMachine(mod = new Module()) {
     icall(p, args, packedTail = 0) {
       if (!isFuncPtr(p)) throw new Trap(`call through a non-function pointer 0x${(p >>> 0).toString(16)}`);
       const f = M.funcs[funcIndex(p)];
-      if (!f) throw new Trap(`call through an unbound function pointer (index ${funcIndex(p)})`);
+      if (!f) {
+        // a thread's machine: bound in the home thread after the program loaded (threads.js)
+        if (M.icallMissing) return M.icallMissing(p, args, packedTail);
+        throw new Trap(`call through an unbound function pointer (index ${funcIndex(p)})`);
+      }
       if (packedTail) {
         /*
          * A call through a pointer of VARIADIC type to a function that is NOT variadic. i386 cdecl lays
@@ -1260,6 +1272,7 @@ function makeLibc(M) {
 
     gettimeofday: (tv, _tz) => {
       checkLeash(M);
+      M.pollThreads?.();
       M.wallMicros = (M.wallMicros ?? EPOCH_US) + 28571;
       if (tv) {
         M.mod.dv.setInt32(tv, Math.floor(M.wallMicros / 1e6), true);
@@ -1313,7 +1326,7 @@ function makeLibc(M) {
      */
     // The time source is microseconds; M.clockOf, when a toolchain's libc counts otherwise (Watcom's
     // does, src/env/watcom.js), turns it into that libc's clock_t.
-    clock: () => { M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockOf ? M.clockOf(M.clockTicks) >>> 0 : M.clockTicks; },
+    clock: () => { M.pollThreads?.(); M.clockTicks = (M.clockTicks + 16667) >>> 0; return M.clockOf ? M.clockOf(M.clockTicks) >>> 0 : M.clockTicks; },
     // uclock returns a 64-bit count, so a BigInt — see the i64 note in emit.js.
     uclock: () => { M.uclockTicks += 19886n; return M.uclockTicks; },
     // A fixed date, so a run is reproducible -- moving on with the program's clock where it has one
@@ -1588,6 +1601,8 @@ export function vaReader(M, ap) {
   const { int, ptr } = M.abi ?? { int: 4, ptr: 4 };
   const i32 = () => { const v = dv.getInt32(p, true); p += 4; return v; };
   return {
+    // where it started reading: what a thread forwards in its place (threads.js)
+    __va: ap | 0,
     i32,
     long: i32,
     int: int === 2 ? () => { const v = dv.getInt16(p, true); p += 2; return v; } : i32,
@@ -2020,7 +2035,7 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
     return micros;
   }
 
-  M.rt.clock = () => { const us = advance(); return (M.clockOf ? M.clockOf(us) : us) >>> 0; };
+  M.rt.clock = () => { M.pollThreads?.(); const us = advance(); return (M.clockOf ? M.clockOf(us) : us) >>> 0; };
   /*
    * gettimeofday too, from the same scaled clock. Doom times itself with it rather than with clock(),
    * so leaving it on the deterministic counter meant Doom ran as fast as the host could go — the same
@@ -2028,6 +2043,8 @@ export function installRealClock(M, { now, speed = () => 100, paused = () => fal
    */
   M.rt.gettimeofday = (tv, _tz) => {
     checkLeash(M);
+    // the program asks the time: the threads due by now run first (threads.js)
+    M.pollThreads?.();
     // EPOCH_US for the same reason as the deterministic one: tv_sec must never be zero.
     const us = advance() + EPOCH_US;
     if (tv) {

@@ -470,6 +470,7 @@ export const BUILTINS = new Map(Object.entries({
   gmtime_r: { ret: P, params: [P, P] }, localtime_r: { ret: P, params: [P, P] }, tzset: { ret: V, params: [] },
   pipe: { ret: I, params: [P] }, fork: { ret: I, params: [] }, dup: { ret: I, params: [I] }, dup2: { ret: I, params: [I, I] },
   symlink: { ret: I, params: [P, P] }, link: { ret: I, params: [P, P] }, chown: { ret: I, params: [P, I, I] }, execvp: { ret: I, params: [P, P] },
+  execv: { ret: I, params: [P, P] }, execl: { ret: I, params: [P, P], variadic: true }, execlp: { ret: I, params: [P, P], variadic: true },
   wait: { ret: I, params: [P] }, waitpid: { ret: I, params: [I, P, I] }, utime: { ret: I, params: [P, P] }, uname: { ret: I, params: [P] },
   getgrnam: { ret: P, params: [P] }, getgrgid: { ret: P, params: [U] }, getpwent: { ret: P, params: [] }, setpwent: { ret: V, params: [] }, endpwent: { ret: V, params: [] },
   getsockopt: { ret: I, params: [I, I, I, P, P] }, getpeername: { ret: I, params: [I, P, P] }, getsockname: { ret: I, params: [I, P, P] },
@@ -1664,6 +1665,56 @@ export function loadSnapshot({ meta, image, src = null, factory = null }, { shar
   return { M, F, src, mod, failures: [], duplicates: [], undefined: [], undefinedVars: [],
            externPlaced: new Map(meta.externPlaced ?? []), funcTypes: new Map(meta.externFuncTypes ?? []),
            safepoints: meta.safepoints, run: makeRunner(M, F, mod, meta.model), bundled: true };
+}
+
+/*
+ * ---- ANOTHER THREAD OF A RUNNING PROGRAM (src/runtime/threads.js).
+ *
+ * `threadImage` is what a thread's worker needs to instantiate the program a second time: the emitted
+ * JavaScript and the function table's shape -- not the memory image, which it shares. Which functions
+ * the home thread has bound beyond the emitted ones (an environment's, bound by address after
+ * loading) travels too, so the thread binds the same slots.
+ */
+export function threadImage(program) {
+  const { mod } = program;
+  const link = program.link ?? program.threadLink;
+  if (!link || !program.src) throw new CompileError('threads: only a whole-program build with its source can start a thread');
+  if (link.paged) throw new CompileError('threads: a paged build cannot start a thread');
+  return {
+    src: program.src,
+    meta: {
+      model: mod.model, emitted: link.emitted, builtinRefs: link.builtinRefs, funcTable: mod.funcTable.length,
+      funcs: [...mod.funcs].map(([name, f]) => [name, f.index, typeForRuntime(f.type), !!f.fn]),
+    },
+  };
+}
+
+/**
+ * The program, instantiated over `init.buffer` -- the running program's own memory -- in a thread's
+ * worker. Nothing is initialised: the image is live. `prepare(M)` runs before any function is bound,
+ * so the library the bindings take is the thread's (threads.js runThread).
+ */
+export function attachThread(init, prepare) {
+  const { meta, src, buffer } = init;
+  const mod = new Module({ buffer, model: meta.model });
+  const M = makeMachine(mod);
+  mod.funcTable.length = 0;
+  for (let i = 0; i < meta.funcTable; i++) mod.funcTable.push(null);
+  for (const [name, index, type] of meta.funcs) mod.funcs.set(name, { name, index, addr: FUNC_TAG | index, fn: null, type });
+  prepare(M);
+  const F = Object.create(null);
+  const rebind = new Function(src)()(M, F, mod.dv);
+  for (const name of meta.emitted) mod.bindFunc(name, F[name]);
+  wireRebind(F, mod, meta.emitted, rebind);
+  for (const name of meta.builtinRefs) bindBuiltinAddr(mod, M, name);
+  const emitted = new Set(meta.emitted);
+  for (const [name, , , bound] of meta.funcs) {
+    if (!bound || emitted.has(name) || mod.funcs.get(name).fn) continue;
+    const base = name.slice(name.lastIndexOf('$') + 1), impl = M.rt[base], b = BUILTINS.get(base);
+    if (b?.variadic) { const fixed = b.params?.length ?? 0; mod.bindFunc(name, (...a) => impl(...a.slice(0, fixed), vaReader(M, a[fixed]))); }
+    else mod.bindFunc(name, impl);
+  }
+  return { M, F, mod };
 }
 
 /** A per-unit view: the unit's own statics shadow the shared names. */

@@ -89,14 +89,16 @@ export class Module {
    * thread with no copy, which is what lets a browser display a frame while the guest's own main
    * loop — synchronous C that never yields — keeps running in a worker.
    */
-  constructor({ memory = 64 * 1024 * 1024, stack = null, shared = false, model = 'i386' } = {}) {
+  /* `buffer` is an image that already exists -- another thread's view of a running program (threads.js). */
+  constructor({ memory = 64 * 1024 * 1024, stack = null, shared = false, model = 'i386', buffer = null } = {}) {
     const layout = LAYOUTS[model];
     if (!layout) throw new Error(`module: unknown ABI model '${model}'`);
     this.layout = layout;
     this.model = model;
     if (layout.space !== null) memory = layout.space;      // a model with a bounded space sets it
     stack = stack ?? layout.stack;
-    this.buffer = shared ? new SharedArrayBuffer(memory) : new ArrayBuffer(memory);
+    this.buffer = buffer ?? (shared ? new SharedArrayBuffer(memory) : new ArrayBuffer(memory));
+    if (buffer) memory = buffer.byteLength;
     this.u8 = new Uint8Array(this.buffer);
     this.dv = new DataView(this.buffer);
     this.size = memory;
