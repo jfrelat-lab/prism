@@ -424,6 +424,20 @@ if ((frameCap || pngPath) && dibBase && program.F.BitBlt) {
   program.F.BitBlt = wrapped;
   program.mod.bindFunc('BitBlt', wrapped);
 }
+/*
+ * A GLX program presents with glXSwapBuffers, which it may reach through dlsym (Doom 3 takes all of libGL
+ * that way) -- so the entry point itself is wrapped, before the program runs and looks it up. A line every
+ * 25 frames says the loop is moving.
+ */
+if (target.host === "glx" && program.M.rt.glXSwapBuffers) {
+  const swap = program.M.rt.glXSwapBuffers;
+  program.M.rt.glXSwapBuffers = (...a) => {
+    const r = swap(...a);
+    if (++frames % 25 === 0) console.log(`frame ${frames}`);
+    if (frameCap && frames >= frameCap) throw new Error("__frames_done");
+    return r;
+  };
+}
 if ((frameCap || pngPath) && program.M.svgalib && program.F.VID_Update) {
   const inner = program.F.VID_Update;
   const wrapped = function (...a) {
@@ -636,6 +650,16 @@ if (mgl) {
     for (const b of pixels) if (b) nz++;
     writeIndexedPng(pngPath, { pixels, width, height, palette });
     console.log(`  ${nz} non-zero pixels of ${pixels.length}, ${new Set(pixels).size} colours -> ${pngPath}`);
+  }
+} else if (target.host === "glx" && program.M.gl) {
+  // the GL picture, top row first; writeRgbPng reads B, G, R
+  const { width: w, height: h } = program.M.gl.state.win;
+  console.log(`\nframes ${frames} · display ${w}x${h} · GLX, ${program.M.gl.backend ?? "soft"}` + fpsNote());
+  if (pngPath && w > 0 && h > 0) {
+    const rgba = program.M.gl.readPixels(), bgra = new Uint8Array(rgba.length);
+    for (let i = 0; i < rgba.length; i += 4) { bgra[i] = rgba[i + 2]; bgra[i + 1] = rgba[i + 1]; bgra[i + 2] = rgba[i]; bgra[i + 3] = 255; }
+    writeRgbPng(pngPath, { bytes: bgra, width: w, height: h });
+    console.log(`  wrote ${pngPath}`);
   }
 } else if (target.host === 'sdl2') {
   /*

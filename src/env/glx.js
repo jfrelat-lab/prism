@@ -22,10 +22,25 @@ export function installGlx(M, { frames = null, onFrame = null, onSwap = null } =
   const createWindow = M.rt.XCreateWindow;
   M.rt.XCreateWindow = (...a) => { s.window = { w: a[4] | 0, h: a[5] | 0 }; return createWindow(...a); };
   const refuse = (name) => () => { throw new Error(`glx: ${name} after its QueryVersion answered "not present"`); };
-  let warned = false;
-  const missing = () => {
-    if (!warned) { warned = true; M.write('Xlib:  extension "XFree86-VidModeExtension" missing on display ":0".\n'); }
-    return 0;
+  /*
+   * The gamma ramp, as a server with the VidMode extension keeps it: 256 entries a channel, identity until
+   * a program sets one, which is kept (s.gammaRamp) for a host to apply. Doom 3's glimp.cpp calls these
+   * without asking QueryVersion and reads the ramp size into an uninitialised local, so a display that
+   * answered "missing" left it a garbage size, a NULL malloc and a resample written from address 0 over
+   * the engine's statics. Every X server of its day had the extension; this answers as one did.
+   */
+  const RAMP = 256;
+  const ramp = () => (s.gammaRamp ??= [0, 1, 2].map(() => Uint16Array.from({ length: RAMP }, (_, i) => i * 257)));
+  const gammaRampSize = (_dpy, _screen, out) => { if (out) dv().setInt32(out, RAMP, true); return 1; };
+  const getGammaRamp = (_dpy, _screen, size, r, g, b) => {
+    if (size !== RAMP) return 0;
+    [r, g, b].forEach((p, c) => { if (p) ramp()[c].forEach((v, i) => dv().setUint16(p + 2 * i, v, true)); });
+    return 1;
+  };
+  const setGammaRamp = (_dpy, _screen, size, r, g, b) => {
+    if (size !== RAMP) return 0;
+    [r, g, b].forEach((p, c) => { if (p) for (let i = 0; i < RAMP; i++) ramp()[c][i] = dv().getUint16(p + 2 * i, true); });
+    return 1;
   };
   Object.assign(M.rt, {
     /*
@@ -82,14 +97,9 @@ export function installGlx(M, { frames = null, onFrame = null, onSwap = null } =
     XF86VidModeGetAllModeLines: refuse('XF86VidModeGetAllModeLines'),
     XF86VidModeSwitchToMode: refuse('XF86VidModeSwitchToMode'),
     XF86VidModeSetViewPort: refuse('XF86VidModeSetViewPort'),
-    /*
-     * The gamma calls, as Xlib answers them on a display without the extension: False, the outputs
-     * untouched, and the one warning XMissingExtension prints. Doom 3's glimp.cpp calls them without
-     * asking QueryVersion first, and takes False as "no hardware gamma" -- a picture at the server's
-     * own gamma, which is what a display without VidMode gave it.
-     */
-    XF86VidModeGetGamma: missing, XF86VidModeSetGamma: missing, XF86VidModeGetGammaRampSize: missing,
-    XF86VidModeGetGammaRamp: missing, XF86VidModeSetGammaRamp: missing,
+    // the ramp calls (see RAMP above); the 1.0 gamma triple is still refused
+    XF86VidModeGetGamma: refuse('XF86VidModeGetGamma'), XF86VidModeSetGamma: refuse('XF86VidModeSetGamma'),
+    XF86VidModeGetGammaRampSize: gammaRampSize, XF86VidModeGetGammaRamp: getGammaRamp, XF86VidModeSetGammaRamp: setGammaRamp,
     XF86DGADirectVideo: (_dpy, _screen, flags) => {
       if (flags & ~0x4) throw new Error(`glx: XF86DGADirectVideo with flags 0x${(flags >>> 0).toString(16)}: only the DGA mouse is implemented`);
       if (M.x11) M.x11.dgaMouse = (flags & 0x4) !== 0;         // XF86DGADirectMouse

@@ -339,8 +339,11 @@ export function targetUnits(target, root) {
     for (const f of m.units ?? []) {
       const full = join(dir, f);
       if (!existsSync(full)) throw new Error(`target '${target.name}': module ${name} missing unit ${f}`);
-      // A module's `defines` are its build's own (ET's SConscript.cgame adds CGAMEDLL to every unit).
-      units.push({ file: full, source: readFileSync(full, 'latin1'), module: name, ...(m.defines ? { defines: m.defines } : {}) });
+      // A module's `defines` are its build's own (ET's SConscript.cgame adds CGAMEDLL to every unit), and
+      // unitDefines reach its units too: Doom 3's game gets GAME_DLL on its own units, not on the idlib it links.
+      const over = perUnit[f.toLowerCase()];
+      const defines = m.defines || over ? { ...(m.defines ?? {}), ...(over ?? {}) } : null;
+      units.push({ file: full, source: readFileSync(full, 'latin1'), module: name, ...(defines ? { defines } : {}) });
     }
   }
   const own = [...units];

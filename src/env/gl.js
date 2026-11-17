@@ -216,13 +216,14 @@ const compare = (fn, a, b) => {
 const floatFormat = (internal) => (internal === 0x881a || internal === 0x881b ? 'half' : internal === 0x8814 || internal === 0x8815 ? 'float' : null);
 function baseFormat(internal) {
   switch (internal) {
-    case 1: case FMT.LUMINANCE: case 0x803f: case 0x8040: return 'L';
-    case 2: case FMT.LUMINANCE_ALPHA: return 'LA';
-    case 3: case FMT.RGB: case 0x8051: case 0x8050: case 0x8052: return 'RGB';
-    case 4: case FMT.RGBA: case 0x8056: case 0x8057: case 0x8058: case 0x881a: case 0x8814: return 'RGBA';
+    // GL 1.1's sized formats (table 3.16) by their base: the texels are kept at 8 bits a component here
+    case 1: case FMT.LUMINANCE: case 0x803f: case 0x8040: case 0x8041: case 0x8042: return 'L';
+    case 2: case FMT.LUMINANCE_ALPHA: case 0x8043: case 0x8044: case 0x8045: case 0x8046: case 0x8047: case 0x8048: return 'LA';
+    case 3: case FMT.RGB: case 0x2a10: case 0x804f: case 0x8050: case 0x8051: case 0x8052: case 0x8053: case 0x8054: return 'RGB';
+    case 4: case FMT.RGBA: case 0x8055: case 0x8056: case 0x8057: case 0x8058: case 0x8059: case 0x805a: case 0x805b: case 0x881a: case 0x8814: return 'RGBA';
     case 0x881b: case 0x8815: return 'RGB';
-    case FMT.ALPHA: case 0x803c: return 'A';
-    case FMT.INTENSITY: case 0x804b: return 'I';
+    case FMT.ALPHA: case 0x803b: case 0x803c: case 0x803d: case 0x803e: return 'A';
+    case FMT.INTENSITY: case 0x804a: case 0x804b: case 0x804c: case 0x804d: return 'I';
     default: throw new Error(`gl: texture internal format 0x${internal.toString(16)}`);
   }
 }
@@ -255,7 +256,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // current coordinate (s, t, r, q) and coordinate array.
   const newUnit = () => ({
     bound: 0, boundCube: 0, envMode: TEX.MODULATE, combine: newCombine(),
-    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] }],
+    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] },
+      { mode: 0x2400, object: [0, 0, 0, 0], eye: [0, 0, 0, 0] }, { mode: 0x2400, object: [0, 0, 0, 0], eye: [0, 0, 0, 0] }],   // S T R Q
     matrix: [ident()], caps: new Set(), coord: [0, 0, 0, 1], array: { on: false },
   });
   const newTexture = () => ({ levels: [], base: 'RGBA', min: TEX.NL, mag: TEX.LINEAR, wrapS: TEX.REPEAT, wrapT: TEX.REPEAT, wrapR: TEX.REPEAT, gpu: null, dirty: true });
@@ -328,7 +330,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     bound3D: 0, default3D: newTexture(),
     arrays: { vertex: { on: false }, color: { on: false }, tex: { on: false }, normal: { on: false } },
     // glTexGen: per coordinate (s, t) its mode and object plane; the caps TEXTURE_GEN_S/T turn it on.
-    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] }],
+    texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] },
+      { mode: 0x2400, object: [0, 0, 0, 0], eye: [0, 0, 0, 0] }, { mode: 0x2400, object: [0, 0, 0, 0], eye: [0, 0, 0, 0] }],   // S T R Q
     unpackAlign: 4, packAlign: 4,
     // The stencil buffer exists only when the window asked for one (glut.js: GLUT_STENCIL); with no
     // stencil bits the test passes and nothing is written (GL 1.1 4.1.4).
@@ -2098,6 +2101,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (v !== 0x2400 && v !== 0x2401 && v !== 0x2402) throw new Error(`gl: texture generation mode 0x${v.toString(16)}`);
       g.mode = v;
     },
+    // the scalar float form: a mode (Doom 3's RB_SetDefaultGLState sets GL_OBJECT_LINEAR with it)
+    glTexGenf: (coord, pname, v) => exec.glTexGenfv(coord, pname, [v]),
+    // a residency hint, which an implementation may ignore (GL 1.1, 3.8.7)
+    glPrioritizeTextures: () => {},
     glTexGenfv: (coord, pname, v) => {
       const g = (xunit()?.texGen ?? s.texGen)[coord - 0x2000];
       if (!g) throw new Error(`gl: glTexGenfv coordinate 0x${coord.toString(16)}`);
@@ -3696,7 +3703,7 @@ export function glBuiltins(T) {
     glEvalCoord1fv: f(V, P), glEvalCoord1dv: f(V, P), glEvalCoord2fv: f(V, P), glEvalCoord2dv: f(V, P),
     glEvalPoint1: f(V, I), glEvalPoint2: f(V, I, I), glEvalMesh1: f(V, U, I, I), glEvalMesh2: f(V, U, I, I, I, I), glRecti: f(V, I, I, I, I), glRects: f(V, T.SHORT, T.SHORT, T.SHORT, T.SHORT), glRectd: f(V, D, D, D, D),
     glRectfv: f(V, P, P), glRectiv: f(V, P, P), glRectsv: f(V, P, P), glRectdv: f(V, P, P), glLightf: f(V, U, U, F), glMaterialf: f(V, U, U, F),
-    glColorMaterial: f(V, U, U), glPixelStorei: f(V, U, I), glTexGeni: f(V, U, U, I), glTexGenfv: f(V, U, U, P), glNormalPointer: f(V, U, I, P),
+    glColorMaterial: f(V, U, U), glPixelStorei: f(V, U, I), glTexGeni: f(V, U, U, I), glTexGenf: f(V, U, U, F), glPrioritizeTextures: f(V, I, P, P), glTexGenfv: f(V, U, U, P), glNormalPointer: f(V, U, I, P),
     glGetBooleanv: f(V, U, P), glGetTexLevelParameteriv: f(V, U, I, U, P), glGetTexLevelParameterfv: f(V, U, I, U, P),
     glLightfv: f(V, U, U, P), glMaterialfv: f(V, U, U, P),
     glLightModelfv: f(V, U, P), glLightModelf: f(V, U, F), glLightModeli: f(V, U, I), glIsTexture: f(U, U),

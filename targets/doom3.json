@@ -764,16 +764,27 @@
     "sound/OggVorbis/vorbissrc",
     "sys/linux/oss/include"
   ],
-  "env": [
-    "stdio",
-    "x11",
-    "gl",
-    "glx",
-    "dl",
-    "dsp",
-    "pthread",
-    "openal"
-  ],
+  "_env": "The GL extensions are what RenderSystem_init.cpp's R_CheckPortableExtensions requires (multitexture, combine, cube maps, dot3) and what its ARB2 path draws with (vertex and fragment programs, vertex buffer objects); gl.js draws programs on its WebGL rasteriser only.",
+  "env": {
+    "stdio": {},
+    "x11": {},
+    "gl": {
+      "extensions": [
+        "GL_ARB_multitexture",
+        "GL_ARB_texture_env_combine",
+        "GL_ARB_texture_env_dot3",
+        "GL_ARB_texture_cube_map",
+        "GL_ARB_vertex_buffer_object",
+        "GL_ARB_vertex_program",
+        "GL_ARB_fragment_program"
+      ]
+    },
+    "glx": {},
+    "dl": {},
+    "dsp": {},
+    "pthread": {},
+    "openal": {}
+  },
   "host": "glx",
   "compile": {
     "cxx": {
@@ -783,9 +794,9 @@
     "collect": true,
     "stack": 8
   },
+  "_compile": "The stack is a Linux process's 8 MB (ulimit -s 8192): the decl, image and dmap code alloca large buffers (_alloca16), and the model's 1 MB is overrun while the decls initialise.",
   "_files": "What the INSTALLATION provides: FindDLL looks for gamex86.so beside the executable and then in the game directory before it dlopens what it found, and a real install had the file there. PRISM links the module into the program; dlopen finds it by its name (src/env/dl.js).",
   "files": {
     "demo/gamex86.so": "PRISM links this module into the program; dlopen finds it by this name (src/env/dl.js).\n"
-  },
-  "_compile": "The stack is a Linux process's 8 MB (ulimit -s 8192): the decl, image and dmap code alloca large buffers (_alloca16), and the model's 1 MB is overrun while the decls initialise."
+  }
 }
