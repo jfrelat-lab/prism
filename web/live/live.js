@@ -559,6 +559,8 @@ const STORE = 'prism.live.files';
 let files = [];
 let active = 0;
 let worker = null, views = null, keyboard = null;
+// A console program's other POSIX threads (../thread.js), started at its worker's request.
+let threadWorkers = [];
 
 function load() {
   try {
@@ -849,6 +851,12 @@ $('run').onclick = () => {
   worker.onmessage = (e) => {
     const m = e.data;
     if (m.type === 'out') emit(m.text);
+    else if (m.type === 'thread') {
+      const t = new Worker(new URL('../thread.js', import.meta.url), { type: 'module' });
+      t.onerror = (err) => say(`thread ${m.init.tid}: ${err.message || 'failed to start'}\n`, 'err');
+      t.postMessage(m.init);
+      threadWorkers.push(t);
+    }
     else if (m.type === 'built') { $('status').textContent = 'running'; reportBuild(m); }
     else if (m.type === 'emitted') $('emitted').innerHTML = highlightJS(m.source);
     else if (m.type === 'threw') term(`\nthe program threw: ${m.message}\n`, 'err');
@@ -885,6 +893,7 @@ function stop(quiet) {
   if (frameListener) { window.removeEventListener('message', frameListener); frameListener = null; }
   if (views) { Atomics.store(views.ctrl, SLOT.STOP, 1); wake(views.ctrl); }
   if (worker) { const w = worker; worker = null; setTimeout(() => w.terminate(), 100); }
+  for (const t of threadWorkers.splice(0)) setTimeout(() => t.terminate(), 100);
   if (!quiet) {
     /*
      * Terminate, and say so. A program in an endless loop is the ONE case a page like this must

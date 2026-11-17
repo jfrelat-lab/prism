@@ -8,7 +8,7 @@
 // The only messages sent back are things the page cannot read for itself: log lines, and the one-off
 // handoff of the shared image.
 
-import { compileProgram, bindLateBuiltins, loadSnapshot } from '../src/compile.js';
+import { compileProgram, bindLateBuiltins, loadSnapshot, threadImage } from '../src/compile.js';
 import { toolchainCompile } from '../src/toolchain.js';
 import { installRealClock, installSpinDamping } from '../src/runtime/runtime.js';
 import { endpoints, at } from './endpoints.js';
@@ -606,6 +606,19 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       failures: prog.failures.map((f) => `${f.fn ? `${f.fn}: ` : ''}${f.message}`),
       source: prog.src, srcUnits: prog.srcUnits,
     });
+  }
+
+  /*
+   * POSIX THREADS (src/runtime/threads.js): a thread is this program instantiated again in a worker of
+   * its own, over the same memory. The PAGE starts that worker, not this one -- this worker's `run`
+   * never returns to its event loop, so a worker it created would never be started (the sound server
+   * taught that). A bundle's thread imports the bundle's module; a compiled program's evaluates its source.
+   */
+  if (envNames(program.env).includes('pthread')) {
+    prog.M.threadHost = {
+      image: threadImage(prog, bundle ? { module: new URL(at(`${bundleAt}.js`), self.location.href).href } : {}),
+      spawn: (init) => { self.postMessage({ type: 'thread', init }); return null; },
+    };
   }
 
   /*

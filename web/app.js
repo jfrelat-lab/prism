@@ -29,6 +29,8 @@ const cx = canvas.getContext('2d', { alpha: false });
 
 let worker = null, views = null, guest = null;
 let soundWorker = null;
+// The program's other POSIX threads (web/thread.js), started here at its worker's request.
+let threadWorkers = [];
 let audioCtx = null, audioNode = null;
 let imageData = null, lut = null, palGen = -1;
 let glFrame = null;                        // the latest WebGL frame, an ImageBitmap (PIXFMT 2)
@@ -1559,6 +1561,16 @@ async function startRun(typedAs = null) {
       guest = new Uint8Array(m.image);
       log(`guest memory: ${(guest.length / 1048576).toFixed(0)} MB shared with the page`);
     }
+    /*
+     * A thread the program creates: its worker is started HERE, because the program's own worker is
+     * inside `run` and would never start one (src/runtime/threads.js). pthread_create waits for it.
+     */
+    else if (m.type === 'thread') {
+      const t = new Worker(new URL('./thread.js', import.meta.url), { type: 'module' });
+      t.onerror = (err) => log(`thread ${m.init.tid}: ${err.message || 'failed to start'}`, 'error');
+      t.postMessage(m.init);
+      threadWorkers.push(t);
+    }
     else if (m.type === 'failed') {
       log(`build failed: ${m.message}`, 'error');
       if (LIVE) parent.postMessage({ type: 'prism-live-failed', message: m.message }, location.origin);
@@ -1675,6 +1687,8 @@ function stop(quiet) {
    * bring it back, and leaving it would keep a thread and 64 MB alive across every later run.
    */
   if (soundWorker) { const s = soundWorker; soundWorker = null; setTimeout(() => s.terminate(), 150); }
+  // and its threads, parked waiting for a turn that will not come
+  for (const t of threadWorkers.splice(0)) setTimeout(() => t.terminate(), 150);
   clearInterval(statTimer); statTimer = 0;
   stopAudio();
   if (!quiet) log('stopped');

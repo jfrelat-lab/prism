@@ -13,7 +13,9 @@
 //   * postMessage for OUTPUT, which works in the other direction while the thread is blocked —
 //     sending does not need this worker's loop, only the page's.
 
-import { compileProgram } from '../../src/compile.js';
+import { compileProgram, threadImage } from '../../src/compile.js';
+import { envBuiltins } from '../../src/env/registry.js';
+import { installThreads } from '../../src/runtime/threads.js';
 import { installRealClock } from '../../src/runtime/runtime.js';
 import { nowDefines } from './envs.js';
 import { installStdio } from '../../src/env/stdio.js';
@@ -62,8 +64,15 @@ async function run({ files, argv, control, stdinText, language }) {
   const includes = Object.fromEntries(files.filter(f => !UNIT.test(f.name))
     .map(f => [f.name, f.source]));
 
+  /*
+   * A program that includes <pthread.h> gets threads (src/runtime/threads.js): its memory shared, so
+   * another worker can run the same program over it, and pthread's entry points as builtins. The code is
+   * the witness, as envs.js has it for the platform layers.
+   */
+  const threads = files.some((f) => /^\s*#\s*include\s*[<"]pthread\.h[>"]/m.test(f.source));
   const t0 = performance.now();
   const prog = compileProgram(units, {
+    ...(threads ? { shared: true, extraBuiltins: envBuiltins(['stdio', 'pthread']) } : {}),
     includes,
     defines: nowDefines(),       // today's __DATE__ and __TIME__, not the compiler's fixed pair
     memory: 64 * 1024 * 1024,
@@ -126,6 +135,8 @@ async function run({ files, argv, control, stdinText, language }) {
     stdinPending: () => keyboard.pending() > 0,
   });
   if (stdinText) for (const ch of stdinText) keyboard.push(0, ch.charCodeAt(0) & 0xff);
+  // Its threads' workers are started by the PAGE (this worker never returns to its event loop).
+  if (threads) installThreads(prog.M, { image: threadImage(prog), spawn: (init) => { post('thread', { init }); return null; } });
 
   /*
    * WHAT THE PROGRAM PRINTS, as it prints it. `prog.run` never returns, so this cannot be collected
@@ -142,10 +153,13 @@ async function run({ files, argv, control, stdinText, language }) {
     code = prog.run(argv && argv.length ? argv : ['prog']).code;
   } catch (err) {
     post('threw', { message: String(err && err.message || err) });
+    prog.M.threads?.shutdown();
     Atomics.store(ctrl, SLOT.STATE, STATE.ERROR);
     post('done', { code: -1, ms: performance.now() - t1 });
     return;
   }
+  // the threads still parked finish with the program
+  prog.M.threads?.shutdown();
   Atomics.store(ctrl, SLOT.STATE, STATE.EXITED);
   post('done', { code, ms: performance.now() - t1 });
 }

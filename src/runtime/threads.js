@@ -310,7 +310,8 @@ export function pthreadBuiltins(T) {
  *
  * `image` is what a thread instantiates: { meta, src } (threadImage in compile.js).
  */
-export function installThreads(M, { spawn = null, image = null, stackSize = DEFAULT_STACK } = {}) {
+export function installThreads(M, { spawn = M.threadHost?.spawn ?? null, image = M.threadHost?.image ?? null, stackSize = DEFAULT_STACK } = {}) {
+  // (a host may set M.threadHost = { spawn, image } before the environments install, instead of passing them)
   if (!(M.mod.buffer instanceof SharedArrayBuffer) && spawn) throw new Error('threads: the program must be compiled with shared memory');
   const sched = new SharedArrayBuffer(SCHED_BYTES);
   const S = new Int32Array(sched), D = new Float64Array(sched), mb = mailbox(sched);

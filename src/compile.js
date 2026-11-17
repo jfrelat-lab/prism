@@ -1664,7 +1664,8 @@ export function loadSnapshot({ meta, image, src = null, factory = null }, { shar
   installPIT(installPorts(M), M);
   return { M, F, src, mod, failures: [], duplicates: [], undefined: [], undefinedVars: [],
            externPlaced: new Map(meta.externPlaced ?? []), funcTypes: new Map(meta.externFuncTypes ?? []),
-           safepoints: meta.safepoints, run: makeRunner(M, F, mod, meta.model), bundled: true };
+           safepoints: meta.safepoints, run: makeRunner(M, F, mod, meta.model), bundled: true,
+           threadLink: { emitted: meta.emitted, builtinRefs: meta.builtinRefs, paged: !!meta.paged } };
 }
 
 /*
@@ -1675,13 +1676,14 @@ export function loadSnapshot({ meta, image, src = null, factory = null }, { shar
  * the home thread has bound beyond the emitted ones (an environment's, bound by address after
  * loading) travels too, so the thread binds the same slots.
  */
-export function threadImage(program) {
+export function threadImage(program, { module = null } = {}) {
   const { mod } = program;
   const link = program.link ?? program.threadLink;
-  if (!link || !program.src) throw new CompileError('threads: only a whole-program build with its source can start a thread');
+  // a static bundle ships its code as a module the thread imports (`module`, its URL) rather than as source
+  if (!link || !(program.src || module)) throw new CompileError('threads: only a whole-program build, with its source or its bundle, can start a thread');
   if (link.paged) throw new CompileError('threads: a paged build cannot start a thread');
   return {
-    src: program.src,
+    src: module ? null : program.src, module,
     meta: {
       model: mod.model, emitted: link.emitted, builtinRefs: link.builtinRefs, funcTable: mod.funcTable.length,
       funcs: [...mod.funcs].map(([name, f]) => [name, f.index, typeForRuntime(f.type), !!f.fn]),
@@ -1703,7 +1705,7 @@ export function attachThread(init, prepare) {
   for (const [name, index, type] of meta.funcs) mod.funcs.set(name, { name, index, addr: FUNC_TAG | index, fn: null, type });
   prepare(M);
   const F = Object.create(null);
-  const rebind = new Function(src)()(M, F, mod.dv);
+  const rebind = (init.factory ?? new Function(src)())(M, F, mod.dv);
   for (const name of meta.emitted) mod.bindFunc(name, F[name]);
   wireRebind(F, mod, meta.emitted, rebind);
   for (const name of meta.builtinRefs) bindBuiltinAddr(mod, M, name);
