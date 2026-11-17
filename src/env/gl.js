@@ -2575,6 +2575,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (v === null) throw new Error(`gl: glGetTexLevelParameteriv 0x${p.toString(16)}`);
       dv().setInt32(out, v, true);
     },
+    // the same answers, as floats (GL 1.1 has both)
+    glGetTexLevelParameterfv: (target, level, p, out) => {
+      const tmp = M.rt.malloc(4);
+      exec.glGetTexLevelParameteriv(target, level, p, tmp);
+      dv().setFloat32(out, dv().getInt32(tmp, true), true);
+      M.rt.free(tmp);
+    },
     /*
      * The integer state Quake III asks for. MAX_TEXTURE_SIZE: this layer has no limit of its own and
      * answers what Mesa 22's llvmpipe answers, 16384, so the program and its reference size images
@@ -3551,7 +3558,7 @@ export function glBuiltins(T) {
     glEvalPoint1: f(V, I), glEvalPoint2: f(V, I, I), glEvalMesh1: f(V, U, I, I), glEvalMesh2: f(V, U, I, I, I, I), glRecti: f(V, I, I, I, I), glRects: f(V, T.SHORT, T.SHORT, T.SHORT, T.SHORT), glRectd: f(V, D, D, D, D),
     glRectfv: f(V, P, P), glRectiv: f(V, P, P), glRectsv: f(V, P, P), glRectdv: f(V, P, P), glLightf: f(V, U, U, F), glMaterialf: f(V, U, U, F),
     glColorMaterial: f(V, U, U), glPixelStorei: f(V, U, I), glTexGeni: f(V, U, U, I), glTexGenfv: f(V, U, U, P), glNormalPointer: f(V, U, I, P),
-    glGetBooleanv: f(V, U, P), glGetTexLevelParameteriv: f(V, U, I, U, P),
+    glGetBooleanv: f(V, U, P), glGetTexLevelParameteriv: f(V, U, I, U, P), glGetTexLevelParameterfv: f(V, U, I, U, P),
     glLightfv: f(V, U, U, P), glMaterialfv: f(V, U, U, P),
     glLightModelfv: f(V, U, P), glLightModelf: f(V, U, F), glLightModeli: f(V, U, I), glIsTexture: f(U, U),
     glFogf: f(V, U, F), glFogi: f(V, U, I), glFogfv: f(V, U, P),

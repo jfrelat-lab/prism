@@ -1082,15 +1082,18 @@ const SYS_TYPES = `
 typedef unsigned char u_int8_t;
 typedef unsigned short u_int16_t;
 typedef unsigned int u_int32_t;
-typedef unsigned long long u_int64_t;
 /* ...and the signed sized integers, as glibc's <sys/types.h> declares them too (Ogg's os_types.h on Linux); one
-   definition with <stdint.h>'s */
+   definition with <stdint.h>'s. The 64-bit ones only where the ABI has a 64-bit integer: a real-mode model has
+   no long long, and a DOS program that includes <sys/types.h> must still parse (tools/gate-bundle.mjs). */
+#ifndef __PRISM_REALMODE__
+typedef unsigned long long u_int64_t;
 #ifndef _PRISM_INTN_T
 #define _PRISM_INTN_T
 typedef signed char int8_t;
 typedef short int16_t;
 typedef int int32_t;
 typedef long long int64_t;
+#endif
 #endif
 typedef unsigned char u_char;
 typedef unsigned short u_short;

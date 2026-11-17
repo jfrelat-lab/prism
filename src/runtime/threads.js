@@ -504,11 +504,15 @@ export function installThreads(M, { spawn = M.threadHost?.spawn ?? null, image =
   const api = {
     sched, calls,
     get live() { return live; },
-    /* The program has ended: every worker still parked wakes and finishes. */
+    /*
+     * The program has ended: every worker still parked wakes and finishes, and a host's worker that
+     * is still running is terminated -- Node aborts the whole process when it exits with a worker
+     * mid-way through loading (a V8 check in ExecuteAsyncModule), so none is left to the exit.
+     */
     shutdown() {
       Atomics.store(S, RUN, -1);
       Atomics.notify(S, RUN);
-      for (const w of workers.values()) w?.unref?.();
+      for (const w of workers.values()) { w?.unref?.(); w?.terminate?.(); }
     },
     workers,
   };

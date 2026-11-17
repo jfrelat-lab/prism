@@ -574,6 +574,8 @@ try {
     if (flag('stack')) console.log(String(e.stack).split('\n').slice(1, 25).join('\n'));
   }
 }
+// a threaded program's threads end with it (src/runtime/threads.js)
+program.M.threads?.shutdown();
 const runSecs = (performance.now() - runT0) / 1000;
 /**
  * ` · 1.2 s, 257 rendered frames/s (virtual clock, unthrottled)` — and it says WHICH CLOCK, because

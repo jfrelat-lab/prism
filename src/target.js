@@ -422,6 +422,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
   const options = {
     defines: target.defines ?? {},
     memory: (c.memory ?? 64) * 1024 * 1024,
+    // ...and the stack, in MB, when the platform's was larger than the model's (Linux's 8 MB for Doom 3).
+    ...(c.stack ? { stack: c.stack * 1024 * 1024 } : {}),
     pack: c.pack ?? null,
     // The language the program was written in, which is a compiler option and not a source change:
     // `inline` is a C99 keyword, and a C89 program is free to call a variable that.

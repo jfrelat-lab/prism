@@ -775,6 +775,8 @@ void glGetTexGendv(GLenum coord, GLenum pname, GLdouble *params);
 void glGetTexGenfv(GLenum coord, GLenum pname, GLfloat *params);
 void glGetTexGeniv(GLenum coord, GLenum pname, GLint *params);
 void glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, GLvoid *pixels);
+void glGetTexLevelParameterfv(GLenum target, GLint level, GLenum pname, GLfloat *params);
+void glGetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint *params);
 void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params);
 void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params);
 void glHint(GLenum target, GLenum mode);
@@ -1710,10 +1712,10 @@ typedef struct __GLXcontextRec *GLXContext;
 typedef unsigned long GLXDrawable;   /* an XID; PRISM's Xlib.h spells Window and Drawable this way */
 /*
  * GLX 1.1 and GLX_ARB_get_proc_address, as every <GL/glx.h> of the period declares them: Doom 3 takes its qglX names
- * from them under GLX_VERSION_1_1 (renderer/qgl_linked.h) and its extension entry points from glXGetProcAddressARB.
- * Declared here; glx.js implements the 1.0 five, and these are still to come at link time.
+ * from them under GLX_VERSION_1_1 (renderer/qgl_linked.h) and its extension entry points from glXGetProcAddressARB,
+ * which glx.js implements. (No GLX_VERSION_1_0: Mesa's glx.h starts at 1_1, and tools/gate-gl-abi.mjs holds the two
+ * to the same macros.)
  */
-#define GLX_VERSION_1_0 1
 #define GLX_VERSION_1_1 1
 #define GLX_ARB_get_proc_address 1
 #define GLX_VENDOR 1

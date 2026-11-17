@@ -1393,7 +1393,15 @@ export const exprMethods = {
   assignExpr(n, cx) {
     const a = this.expr(n.a, cx), b = this.expr(n.b, cx);
     if (a.t.k === 'class') {
-      const o = this.overloaded(n.op, [a, b], cx, n);
+      /*
+       * The IMPLICIT copy assignment is a candidate whenever the class declares none of its own, beside
+       * whatever other operator= it has (C++98 12.8/10) -- and from an object of the class itself it wins,
+       * an exact match against a derived-to-base conversion. Doom 3's idToken declares operator=(const
+       * idStr &) and operator=(const char *) only, so `*token = idLexer::token` copies type, line and the
+       * rest memberwise; taking the idStr one dropped them, and every unread token lost its type.
+       */
+      const sameClass = n.op === '=' && b.t.k === 'class' && b.t.cls === a.t.cls && !this.userAssign(a.t.cls);
+      const o = sameClass ? null : this.overloaded(n.op, [a, b], cx, n);
       if (o) return o;
       if (n.op !== '=') this.fail(`no operator${n.op} for ${T.show(a.t)}`, n);
       // No user operator=: memberwise, which is a plain struct assignment unless a member has its own.

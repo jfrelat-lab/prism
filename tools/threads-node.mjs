@@ -17,4 +17,6 @@ export function nodeSpawn(init) {
   return w;
 }
 
-if (!isMainThread && workerData?.sched) runThread(workerData, attachThread);
+// After the module has finished evaluating, not during it: the thread blocks for its whole life, and a
+// worker terminated inside an unfinished (async) module evaluation aborts Node (a V8 check).
+if (!isMainThread && workerData?.sched) setImmediate(() => runThread(workerData, attachThread));

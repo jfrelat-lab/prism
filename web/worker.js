@@ -548,6 +548,7 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
        */
       paged: program.compile?.paged ?? envNames(program.env).includes('vgaplanar'),
     memory: program.memory,
+      ...(program.compile?.stack ? { stack: program.compile.stack * 1024 * 1024 } : {}),
       shared: true,                    // the page reads pixels straight out of this image
       /*
        * Safepoints, when the descriptor asks for them. They cost a decrement and a compare on every

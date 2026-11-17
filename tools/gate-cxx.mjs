@@ -1960,6 +1960,35 @@ int main() {
 }
 `);
 
+// The implicit copy assignment beside user operator= overloads that are not one.
+C('implicit-copy-assign-beside-overloads', `
+// Doom 3's idToken (idlib/Token.h) declares operator=(const idStr &) and operator=(const char *) and no
+// copy assignment: one is still declared implicitly, and from an idToken it is the one chosen -- it copies
+// the derived members (type, line) and assigns the base through idStr's own operator=.
+#include <stdio.h>
+#include <string.h>
+class Str { public: char s[16]; int assigned;
+  Str() : assigned(0) { s[0] = 0; }
+  void operator=( const Str &o ) { strcpy( s, o.s ); assigned++; }
+  void operator=( const char *t ) { strcpy( s, t ); assigned += 10; } };
+class Token : public Str { public: int type, line;
+  Token() : type(0), line(0) {}
+  void operator=( const Str &o ) { Str::operator=( o ); type = -1; }
+  void operator=( const char *t ) { Str::operator=( t ); type = -2; } };
+int main() {
+  Token a, b; Str plain;
+  b = "brace"; b.type = 5; b.line = 7;
+  a = b;                   // the implicit Token::operator=(const Token &)
+  printf("%s %d %d %d\\n", a.s, a.type, a.line, a.assigned);
+  strcpy( plain.s, "str" );
+  a = plain;               // operator=(const Str &): type -1
+  printf("%s %d %d\\n", a.s, a.type, a.assigned);
+  a = "text";              // operator=(const char *): type -2
+  printf("%s %d %d\\n", a.s, a.type, a.assigned);
+  return 0;
+}
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);

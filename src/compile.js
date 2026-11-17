@@ -1053,7 +1053,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx, stack = null } = {}) {
   checkCxxOption(cxx);
   checkFloatToInt(floatToInt);
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
@@ -1062,7 +1062,9 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
   // once, because it is read per unit.
   const envTable = withEnvBuiltins(extraBuiltins);
   const failures = [];
-  const mod = new Module({ ...(memory ? { memory } : {}), shared, model });
+  // `stack`: the shadow stack's size in bytes, when the program's own platform gave it more than the
+  // model's default -- Linux's 8 MB (ulimit -s) for a program that alloca's large buffers, as Doom 3 does.
+  const mod = new Module({ ...(memory ? { memory } : {}), ...(stack ? { stack } : {}), shared, model });
   const M = makeMachine(mod);
   // A text console in guest memory from the start, so stdout has somewhere real to land. The host
   // replaces `readChar` with a blocking one; headless, stdin is simply at EOF.
@@ -1615,7 +1617,7 @@ export function snapshotProgram(program) {
   pages.forEach((p, i) => image.set(u8.subarray(p * PAGE, Math.min((p + 1) * PAGE, u8.length)), i * PAGE));
   const meta = {
     format: 1,
-    model: link.model, memory: mod.size, safepoints: link.safepoints, window: link.window, paged: !!link.paged,
+    model: link.model, memory: mod.size, stack: mod.stackTop + 16 - mod.stackLimit, safepoints: link.safepoints, window: link.window, paged: !!link.paged,
     brk: mod.brk, farBrk: mod.farBrk, pages,
     symbols: [...mod.symbols].map(([name, s]) => [name, s.addr, s.size ?? 0, s.kind ?? null]),
     // In table order: a function's address IS its index, and the emitted code has them as constants.
@@ -1638,7 +1640,7 @@ export function snapshotProgram(program) {
  */
 export function loadSnapshot({ meta, image, src = null, factory = null }, { shared = false } = {}) {
   if (meta.format !== 1) throw new CompileError(`snapshot: format ${meta.format} is not one this build reads`);
-  const mod = new Module({ memory: meta.memory, shared, model: meta.model });
+  const mod = new Module({ memory: meta.memory, ...(meta.stack ? { stack: meta.stack } : {}), shared, model: meta.model });
   const M = makeMachine(mod);
   installConsole(M);
   const PAGE = 65536;
