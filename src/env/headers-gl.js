@@ -1386,6 +1386,97 @@ void glPointParameterfvARB(GLenum pname, const GLfloat *params);
 #define GL_POINT_SPRITE_ARB 0x8861
 #define GL_COORD_REPLACE_ARB 0x8862
 #endif
+/* ARB_texture_cube_map, ARB_texture_env_combine with ARB_texture_env_dot3, and the two program extensions
+   (src/env/glarb.js): what Doom 3's renderer asks for, advertised to a target that names them. */
+#ifndef GL_ARB_texture_cube_map
+#define GL_ARB_texture_cube_map 1
+#define GL_NORMAL_MAP_ARB 0x8511
+#define GL_REFLECTION_MAP_ARB 0x8512
+#define GL_TEXTURE_CUBE_MAP_ARB 0x8513
+#define GL_TEXTURE_BINDING_CUBE_MAP_ARB 0x8514
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB 0x8515
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_X_ARB 0x8516
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_Y_ARB 0x8517
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_Y_ARB 0x8518
+#define GL_TEXTURE_CUBE_MAP_POSITIVE_Z_ARB 0x8519
+#define GL_TEXTURE_CUBE_MAP_NEGATIVE_Z_ARB 0x851A
+#define GL_PROXY_TEXTURE_CUBE_MAP_ARB 0x851B
+#define GL_MAX_CUBE_MAP_TEXTURE_SIZE_ARB 0x851C
+#endif
+#ifndef GL_ARB_texture_env_combine
+#define GL_ARB_texture_env_combine 1
+#define GL_COMBINE_ARB 0x8570
+#define GL_COMBINE_RGB_ARB 0x8571
+#define GL_COMBINE_ALPHA_ARB 0x8572
+#define GL_RGB_SCALE_ARB 0x8573
+#define GL_ADD_SIGNED_ARB 0x8574
+#define GL_INTERPOLATE_ARB 0x8575
+#define GL_CONSTANT_ARB 0x8576
+#define GL_PRIMARY_COLOR_ARB 0x8577
+#define GL_PREVIOUS_ARB 0x8578
+#define GL_SOURCE0_RGB_ARB 0x8580
+#define GL_SOURCE1_RGB_ARB 0x8581
+#define GL_SOURCE2_RGB_ARB 0x8582
+#define GL_SOURCE0_ALPHA_ARB 0x8588
+#define GL_SOURCE1_ALPHA_ARB 0x8589
+#define GL_SOURCE2_ALPHA_ARB 0x858A
+#define GL_OPERAND0_RGB_ARB 0x8590
+#define GL_OPERAND1_RGB_ARB 0x8591
+#define GL_OPERAND2_RGB_ARB 0x8592
+#define GL_OPERAND0_ALPHA_ARB 0x8598
+#define GL_OPERAND1_ALPHA_ARB 0x8599
+#define GL_OPERAND2_ALPHA_ARB 0x859A
+#endif
+#ifndef GL_ARB_texture_env_dot3
+#define GL_ARB_texture_env_dot3 1
+#define GL_DOT3_RGB_ARB 0x86AE
+#define GL_DOT3_RGBA_ARB 0x86AF
+#endif
+#ifndef GL_ARB_vertex_program
+#define GL_ARB_vertex_program 1
+#define GL_VERTEX_PROGRAM_ARB 0x8620
+#define GL_PROGRAM_LENGTH_ARB 0x8627
+#define GL_PROGRAM_STRING_ARB 0x8628
+#define GL_PROGRAM_ERROR_POSITION_ARB 0x864B
+#define GL_PROGRAM_BINDING_ARB 0x8677
+#define GL_PROGRAM_ERROR_STRING_ARB 0x8874
+#define GL_PROGRAM_FORMAT_ASCII_ARB 0x8875
+#define GL_PROGRAM_FORMAT_ARB 0x8876
+#define GL_PROGRAM_INSTRUCTIONS_ARB 0x88A0
+#define GL_MAX_PROGRAM_INSTRUCTIONS_ARB 0x88A1
+#define GL_PROGRAM_UNDER_NATIVE_LIMITS_ARB 0x88B6
+#define GL_MAX_PROGRAM_LOCAL_PARAMETERS_ARB 0x88B4
+#define GL_MAX_PROGRAM_ENV_PARAMETERS_ARB 0x88B5
+#endif
+#ifndef GL_ARB_fragment_program
+#define GL_ARB_fragment_program 1
+#define GL_FRAGMENT_PROGRAM_ARB 0x8804
+#define GL_MAX_TEXTURE_COORDS_ARB 0x8871
+#define GL_MAX_TEXTURE_IMAGE_UNITS_ARB 0x8872
+#endif
+typedef void (*PFNGLPROGRAMSTRINGARBPROC)(GLenum target, GLenum format, GLsizei len, const void *string);
+typedef void (*PFNGLBINDPROGRAMARBPROC)(GLenum target, GLuint program);
+typedef void (*PFNGLGENPROGRAMSARBPROC)(GLsizei n, GLuint *programs);
+typedef void (*PFNGLPROGRAMENVPARAMETER4FVARBPROC)(GLenum target, GLuint index, const GLfloat *params);
+typedef void (*PFNGLPROGRAMLOCALPARAMETER4FVARBPROC)(GLenum target, GLuint index, const GLfloat *params);
+typedef void (*PFNGLVERTEXATTRIBPOINTERARBPROC)(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+typedef void (*PFNGLENABLEVERTEXATTRIBARRAYARBPROC)(GLuint index);
+typedef void (*PFNGLDISABLEVERTEXATTRIBARRAYARBPROC)(GLuint index);
+#ifdef GL_GLEXT_PROTOTYPES
+void glProgramStringARB(GLenum target, GLenum format, GLsizei len, const void *string);
+void glBindProgramARB(GLenum target, GLuint program);
+void glGenProgramsARB(GLsizei n, GLuint *programs);
+void glDeleteProgramsARB(GLsizei n, const GLuint *programs);
+void glProgramEnvParameter4fARB(GLenum target, GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+void glProgramEnvParameter4fvARB(GLenum target, GLuint index, const GLfloat *params);
+void glProgramLocalParameter4fARB(GLenum target, GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+void glProgramLocalParameter4fvARB(GLenum target, GLuint index, const GLfloat *params);
+void glGetProgramivARB(GLenum target, GLenum pname, GLint *params);
+void glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer);
+void glEnableVertexAttribArrayARB(GLuint index);
+void glDisableVertexAttribArrayARB(GLuint index);
+void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+#endif
 #endif
 `;
 

@@ -110,6 +110,14 @@
  *                 with GL_GENERATE_MIPMAP, drawn GL_NEAREST_MIPMAP_NEAREST in three bands that read
  *                 levels 1, 2 and 3 -- levels the program never gave
  *
+ * And what Doom 3's ARB path asks for (the WebGL rasteriser's: gate-gl-webgl only):
+ *
+ *   arb-programs  ARB_vertex_program + ARB_fragment_program: generic attributes, program.env and .local,
+ *                 state.matrix rows, a cube map and a 2D texture on units 0 and 1, TXP, KIL, CMP, LRP,
+ *                 POW, EX2/LG2, RSQ, _SAT; a quad under OPTION ARB_position_invariant and one transformed
+ *                 by the program; then a vertex program alone over the fixed fragment stage
+ *   dot3          ARB_texture_env_dot3: DOT3_RGB and DOT3_RGBA of a texture against the primary colour
+ *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
  */
 #include <stdio.h>
@@ -130,6 +138,36 @@
 #define glPointParameterfvARB glPointParameterfv
 #define glActiveTextureARB glActiveTexture
 #define glClientActiveTextureARB glClientActiveTexture
+/* The program extensions have no core names: libOpenGL does not export them, the driver hands them out. */
+#ifdef PRISM_OSMESA
+#include <GL/osmesa.h>
+#define PROC(n) OSMesaGetProcAddress(n)
+#else
+#include <EGL/egl.h>
+#define PROC(n) eglGetProcAddress(n)
+#endif
+static PFNGLPROGRAMSTRINGARBPROC p_ProgramString; static PFNGLBINDPROGRAMARBPROC p_BindProgram;
+static PFNGLGENPROGRAMSARBPROC p_GenPrograms; static PFNGLPROGRAMENVPARAMETER4FVARBPROC p_EnvParam;
+static PFNGLPROGRAMLOCALPARAMETER4FVARBPROC p_LocalParam; static PFNGLVERTEXATTRIBPOINTERARBPROC p_AttribPointer;
+static PFNGLENABLEVERTEXATTRIBARRAYARBPROC p_EnableAttrib; static PFNGLDISABLEVERTEXATTRIBARRAYARBPROC p_DisableAttrib;
+static void arbProcs(void) {
+  p_ProgramString = (PFNGLPROGRAMSTRINGARBPROC)PROC("glProgramStringARB"); p_BindProgram = (PFNGLBINDPROGRAMARBPROC)PROC("glBindProgramARB");
+  p_GenPrograms = (PFNGLGENPROGRAMSARBPROC)PROC("glGenProgramsARB"); p_EnvParam = (PFNGLPROGRAMENVPARAMETER4FVARBPROC)PROC("glProgramEnvParameter4fvARB");
+  p_LocalParam = (PFNGLPROGRAMLOCALPARAMETER4FVARBPROC)PROC("glProgramLocalParameter4fvARB");
+  p_AttribPointer = (PFNGLVERTEXATTRIBPOINTERARBPROC)PROC("glVertexAttribPointerARB");
+  p_EnableAttrib = (PFNGLENABLEVERTEXATTRIBARRAYARBPROC)PROC("glEnableVertexAttribArrayARB");
+  p_DisableAttrib = (PFNGLDISABLEVERTEXATTRIBARRAYARBPROC)PROC("glDisableVertexAttribArrayARB");
+}
+#define glProgramStringARB p_ProgramString
+#define glBindProgramARB p_BindProgram
+#define glGenProgramsARB p_GenPrograms
+#define glProgramEnvParameter4fvARB p_EnvParam
+#define glProgramLocalParameter4fvARB p_LocalParam
+#define glVertexAttribPointerARB p_AttribPointer
+#define glEnableVertexAttribArrayARB p_EnableAttrib
+#define glDisableVertexAttribArrayARB p_DisableAttrib
+#else
+static void arbProcs(void) {}
 #endif
 
 static const char *scene = "tex-nearest";
@@ -446,6 +484,147 @@ static void display(void) {
       glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
       glMatrixMode(GL_TEXTURE); glLoadIdentity(); glMatrixMode(GL_MODELVIEW);
     }
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "arb-programs")) {
+    static const char *vpInvariant =
+      "!!ARBvp1.0\n"
+      "OPTION ARB_position_invariant;\n"
+      "PARAM scale = program.env[0];\n"
+      "PARAM bias = program.local[0];\n"
+      "TEMP r;\n"
+      "MUL r, vertex.attrib[8], scale;\n"
+      "ADD result.texcoord[1], r, bias;\n"
+      "MOV result.texcoord[0], vertex.attrib[9];\n"
+      "MOV result.texcoord[2], vertex.attrib[10];\n"
+      "MOV result.color, vertex.color;\n"
+      "END\n";
+    static const char *vpTransform =
+      "!!ARBvp1.0\n"
+      "PARAM mvp[4] = { state.matrix.mvp };\n"
+      "DP4 result.position.x, vertex.position, mvp[0];\n"
+      "DP4 result.position.y, vertex.position, mvp[1];\n"
+      "DP4 result.position.z, vertex.position, mvp[2];\n"
+      "DP4 result.position.w, vertex.position, mvp[3];\n"
+      "MOV result.texcoord[0], vertex.attrib[9];\n"
+      "MAD result.texcoord[1], vertex.attrib[8], program.env[0], program.local[0];\n"
+      "MOV result.texcoord[2], vertex.attrib[10];\n"
+      "SWZ result.color, vertex.color, z, y, x, 1;\n"
+      "END\n";
+    static const char *fp =
+      "!!ARBfp1.0\n"
+      "TEMP c, t, s, k;\n"
+      "TEX c, fragment.texcoord[0], texture[0], CUBE;\n"
+      "TEX t, fragment.texcoord[1], texture[1], 2D;\n"
+      "TXP s, fragment.texcoord[2], texture[1], 2D;\n"
+      "SUB k, fragment.color.x, 0.15;\n"
+      "KIL k.x;\n"
+      "LRP c, t.x, c, s;\n"
+      "DP3 k, fragment.color, fragment.color;\n"
+      "RSQ k, k.x;\n"
+      "MUL_SAT k, k, 0.5;\n"
+      "CMP c.z, -fragment.color.y, c.z, k.x;\n"
+      "POW t.y, t.y, {2.5}.x;\n"
+      "EX2 s.x, fragment.color.z;\n"
+      "LG2 s.y, s.x;\n"
+      "MAD result.color, c, fragment.color, t.y;\n"
+      "MOV result.color.w, s.y;\n"
+      "END\n";
+    static const unsigned char faces[6][2 * 2 * 3] = {
+      { 255,0,0, 200,0,0, 150,0,0, 100,0,0 }, { 0,255,255, 0,200,200, 0,150,150, 0,100,100 },
+      { 0,255,0, 0,200,0, 0,150,0, 0,100,0 }, { 255,0,255, 200,0,200, 150,0,150, 100,0,100 },
+      { 0,0,255, 0,0,200, 0,0,150, 0,0,100 }, { 255,255,0, 200,200,0, 150,150,0, 100,100,0 } };
+    static const unsigned char checker4[4 * 4 * 3] = {
+      255,255,255, 30,30,30, 255,255,255, 30,30,30,  30,30,30, 200,120,40, 30,30,30, 200,120,40,
+      255,255,255, 30,30,30, 255,255,255, 30,30,30,  30,30,30, 200,120,40, 30,30,30, 200,120,40 };
+    static const GLfloat env0[4] = { 2, 2, 1, 1 }, local0[4] = { 0.25f, -0.5f, 0, 0 };
+    static const GLushort quad[6] = { 0, 1, 2, 0, 2, 3 };
+    GLfloat pos[4][4], uv[4][4], dir[4][4], proj[4][4];
+    GLubyte col[4][4] = { { 255, 40, 40, 255 }, { 40, 255, 60, 255 }, { 60, 80, 255, 255 }, { 20, 255, 255, 128 } };
+    GLuint tx[2], prog[3];
+    arbProcs();
+    /* a program the driver refuses draws nothing: say which, and where */
+#define LOAD(target, text) do { GLint at; glProgramStringARB(target, GL_PROGRAM_FORMAT_ASCII_ARB, (GLsizei)strlen(text), text); \
+      glGetIntegerv(GL_PROGRAM_ERROR_POSITION_ARB, &at); \
+      if (at != -1) fprintf(stderr, "arb-programs: refused at %d: %s\n", at, (const char *)glGetString(GL_PROGRAM_ERROR_STRING_ARB)); } while (0)
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glGenTextures(2, tx);
+    glActiveTextureARB(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP_ARB, tx[0]);
+    for (int f = 0; f < 6; f++) glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + f, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, faces[f]);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glActiveTextureARB(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, tx[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_BYTE, checker4);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glActiveTextureARB(GL_TEXTURE0);
+    glGenProgramsARB(3, prog);
+    glBindProgramARB(GL_VERTEX_PROGRAM_ARB, prog[0]);
+    LOAD(GL_VERTEX_PROGRAM_ARB, vpInvariant);
+    glProgramLocalParameter4fvARB(GL_VERTEX_PROGRAM_ARB, 0, local0);
+    glBindProgramARB(GL_VERTEX_PROGRAM_ARB, prog[1]);
+    LOAD(GL_VERTEX_PROGRAM_ARB, vpTransform);
+    glProgramLocalParameter4fvARB(GL_VERTEX_PROGRAM_ARB, 0, local0);
+    glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, prog[2]);
+    LOAD(GL_FRAGMENT_PROGRAM_ARB, fp);
+    glProgramEnvParameter4fvARB(GL_VERTEX_PROGRAM_ARB, 0, env0);
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(4, GL_FLOAT, 0, pos); glColorPointer(4, GL_UNSIGNED_BYTE, 0, col);
+    glVertexAttribPointerARB(8, 4, GL_FLOAT, GL_FALSE, 0, uv); glEnableVertexAttribArrayARB(8);
+    glVertexAttribPointerARB(9, 4, GL_FLOAT, GL_FALSE, 0, dir); glEnableVertexAttribArrayARB(9);
+    glVertexAttribPointerARB(10, 4, GL_FLOAT, GL_FALSE, 0, proj); glEnableVertexAttribArrayARB(10);
+    glEnable(GL_VERTEX_PROGRAM_ARB); glEnable(GL_FRAGMENT_PROGRAM_ARB);
+    for (int pass = 0; pass < 3; pass++) {
+      /* the quad's corners: x0..x1 by y0..y1; u, v across it; a cube direction sweeping five faces; a
+         projective coordinate whose w grows from 1 to 2 */
+      float x0 = pass == 0 ? 10 : pass == 1 ? 170 : 10, x1 = pass == 2 ? 310 : x0 + 140, y0 = pass == 2 ? 10 : 60, y1 = pass == 2 ? 50 : 220;
+      for (int i = 0; i < 4; i++) {
+        float u = i == 1 || i == 2, v = i >= 2, w = 1 + u;
+        pos[i][0] = u ? x1 : x0; pos[i][1] = v ? y1 : y0; pos[i][2] = 0; pos[i][3] = 1;
+        uv[i][0] = u; uv[i][1] = v; uv[i][2] = 0; uv[i][3] = 1;
+        dir[i][0] = 2 * u - 1; dir[i][1] = 0.4f; dir[i][2] = 2 * v - 1; dir[i][3] = 1;
+        proj[i][0] = u * w; proj[i][1] = v * w; proj[i][2] = 0; proj[i][3] = w;
+      }
+      if (pass == 2) glDisable(GL_FRAGMENT_PROGRAM_ARB);
+      glBindProgramARB(GL_VERTEX_PROGRAM_ARB, prog[pass == 1 ? 1 : 0]);
+      glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, quad);
+    }
+    glDisable(GL_VERTEX_PROGRAM_ARB);
+    glDisableVertexAttribArrayARB(8); glDisableVertexAttribArrayARB(9); glDisableVertexAttribArrayARB(10);
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "dot3")) {
+    /* a normal map's texels against the primary colour as a light vector, both biased by -0.5 */
+    static const unsigned char normals[4 * 4] = { 128,128,255,255,  255,128,128,200,  128,255,128,100,  60,60,230,40 };
+    GLuint t;
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glGenTextures(1, &t);
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, normals);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE_ARB);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB_ARB, GL_TEXTURE); glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB_ARB, GL_SRC_COLOR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB_ARB, GL_PRIMARY_COLOR_ARB); glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB_ARB, GL_SRC_COLOR);
+    for (int strip = 0; strip < 2; strip++) {
+      float x0 = 20 + strip * 150;
+      glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB_ARB, strip ? GL_DOT3_RGBA_ARB : GL_DOT3_RGB_ARB);
+      glBegin(GL_QUADS);
+      glColor4ub(255, 128, 128, 255); glTexCoord2f(0, 0); glVertex2f(x0, 20);
+      glColor4ub(128, 128, 255, 255); glTexCoord2f(1, 0); glVertex2f(x0 + 130, 20);
+      glColor4ub(128, 255, 128, 255); glTexCoord2f(1, 1); glVertex2f(x0 + 130, 220);
+      glColor4ub(200, 200, 200, 128); glTexCoord2f(0, 1); glVertex2f(x0, 220);
+      glEnd();
+    }
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glDisable(GL_TEXTURE_2D);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "combine")) {

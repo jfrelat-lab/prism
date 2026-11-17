@@ -37,5 +37,7 @@
   "accum": 79,
   "float-texture": 0,
   "local-viewer": 11,
-  "spotlight": 0
+  "spotlight": 0,
+  "dot3": 0,
+  "arb-programs": 0
 }

@@ -29,6 +29,7 @@
 
 import { GL_H } from './headers-gl.js';
 import { makeGLSL, makeGLSLWebGL } from './glsl.js';
+import { makeArbPrograms } from './glarb.js';
 
 const MODELVIEW = 0x1700, PROJECTION = 0x1701, TEXTURE_MATRIX = 0x1702;
 const CAP = {
@@ -43,7 +44,7 @@ const CAP = {
 const MAP_SIZE = [4, 1, 3, 1, 2, 3, 4, 3, 4];    // COLOR_4, INDEX, NORMAL, TEXTURE_COORD_1..4, VERTEX_3, VERTEX_4
 const MAP_CAPS = [...MAP_SIZE.map((_, k) => 0x0d90 + k), ...MAP_SIZE.map((_, k) => 0x0db0 + k), 0x0d80];
 // What glEnable acts on (the rest are named in CAP): texture generation, colour material.
-const KNOWN_CAPS = new Set([...MAP_CAPS, 0x0b24, 0x0b42, 0x0de0, 0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861]);
+const KNOWN_CAPS = new Set([...MAP_CAPS, 0x0b24, 0x0b42, 0x0de0, 0x0b90, 0x0b44, 0x0b50, 0x0b71, 0x0ba1, 0x0de1, 0x0be2, 0x0bc0, 0x0b60, 0x0c11, 0x8037, 0x0c60, 0x0c61, 0x0b57, 0x8861, 0x8513, 0x8620, 0x8804]);
 /*
  * glPushAttrib's groups: the fields of the state each saves, and its enables. Texture units 1 and 2,
  * and the ENABLE group's every capability, are glPushAttrib's own (they are not plain fields).
@@ -109,9 +110,12 @@ const TYPE_BYTES = { 0x1400: 1, 0x1401: 1, 0x1402: 2, 0x1403: 2, 0x1404: 4, 0x14
  * Quake II and III take glMultiTexCoord2fARB and two units from it -- and would change its path.
  */
 const EXTENSIONS = 'GL_EXT_compiled_vertex_array';
-export const OPTIONAL_EXTENSIONS = new Set(['GL_ARB_multitexture', 'GL_ARB_vertex_buffer_object', 'GL_ARB_point_parameters', 'GL_ARB_point_sprite']);
+export const OPTIONAL_EXTENSIONS = new Set(['GL_ARB_multitexture', 'GL_ARB_vertex_buffer_object', 'GL_ARB_point_parameters', 'GL_ARB_point_sprite',
+  // GL 1.3's combiner under its ARB names, with DOT3; cube maps; and the two program extensions (glarb.js), which
+  // draw on the WebGL rasteriser only
+  'GL_ARB_texture_env_combine', 'GL_ARB_texture_env_dot3', 'GL_ARB_texture_cube_map', 'GL_ARB_vertex_program', 'GL_ARB_fragment_program']);
 // Capabilities that belong to a texture unit (2D texturing, coordinate generation).
-const UNIT_CAPS = new Set([0x0de1, 0x0c60, 0x0c61, 0x0c62, 0x0c63]);
+const UNIT_CAPS = new Set([0x0de1, 0x0c60, 0x0c61, 0x0c62, 0x0c63, 0x8513]);
 const FLAT = 0x1d00, CCW = 0x0901, BACK = 0x0405, FRONT = 0x0404, FRONT_AND_BACK = 0x0408;
 const POINT = 0x1b00, LINE = 0x1b01, FILL = 0x1b02;
 const PNAME = { AMBIENT: 0x1200, DIFFUSE: 0x1201, SPECULAR: 0x1202, POSITION: 0x1203, EMISSION: 0x1600, SHININESS: 0x1601, AMBIENT_AND_DIFFUSE: 0x1602 };
@@ -133,12 +137,19 @@ const TEX = {
  */
 const UNITS = 3;
 /*
+ * The units a texture can be bound to: UNITS for the fixed function, which samples only those, and the
+ * eight an ARB fragment program addresses (glarb.js; Doom 3's interaction program samples seven).
+ */
+const PROGRAM_UNITS = 8;
+const CUBE_MAP = 0x8513, CUBE_FACE0 = 0x8515;
+const isCubeFace = (target) => target >= CUBE_FACE0 && target < CUBE_FACE0 + 6;
+/*
  * GL_COMBINE (GL 1.3, ARB_texture_env_combine): each unit's function of up to three arguments, each a
  * source (its texture, the constant colour, the primary colour, the previous unit's) through an operand
  * (the colour, its alpha, or one minus either), separately for RGB and alpha, scaled and clamped.
  * Neverball's ball shadow is two of them. The defaults are the specification's.
  */
-const COMBINE_FN = { 0x1e01: 0, 0x2100: 1, 0x0104: 2, 0x8574: 3, 0x8575: 4, 0x84e7: 5 };   // REPLACE MODULATE ADD ADD_SIGNED INTERPOLATE SUBTRACT
+const COMBINE_FN = { 0x1e01: 0, 0x2100: 1, 0x0104: 2, 0x8574: 3, 0x8575: 4, 0x84e7: 5, 0x86ae: 6, 0x86af: 7 };   // REPLACE MODULATE ADD ADD_SIGNED INTERPOLATE SUBTRACT DOT3_RGB DOT3_RGBA
 const COMBINE_SRC = { 0x1702: 0, 0x8576: 1, 0x8577: 2, 0x8578: 3 };                          // TEXTURE CONSTANT PRIMARY_COLOR PREVIOUS
 const COMBINE_OP = { 0x300: 0, 0x301: 1, 0x302: 2, 0x303: 3 };                               // SRC_COLOR, 1 - it, SRC_ALPHA, 1 - it
 const newCombine = () => ({
@@ -243,7 +254,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // A texture unit other than 0: its binding, environment, coordinate generation, matrix stack, enables,
   // current coordinate (s, t, r, q) and coordinate array.
   const newUnit = () => ({
-    bound: 0, envMode: TEX.MODULATE, combine: newCombine(),
+    bound: 0, boundCube: 0, envMode: TEX.MODULATE, combine: newCombine(),
     texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] }],
     matrix: [ident()], caps: new Set(), coord: [0, 0, 0, 1], array: { on: false },
   });
@@ -332,7 +343,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // ARB_point_sprite's COORD_REPLACE gives each point's fragments texture coordinates across it.
     pointMin: 0, pointMax: 64, pointAtten: [1, 0, 0], coordReplace: false,
     // ARB_multitexture: the selected server and client units; units 1 and 2 (see UNITS).
-    activeUnit: 0, clientUnit: 0, units: [null, newUnit(), newUnit()],
+    activeUnit: 0, clientUnit: 0, units: Array.from({ length: PROGRAM_UNITS }, (_, k) => (k ? newUnit() : null)),
+    boundCube: 0,                          // unit 0's GL_TEXTURE_CUBE_MAP (the others': units[k].boundCube)
     // ARB_vertex_buffer_object: a buffer is a block of the program's own memory, so an array pointer
     // into a bound buffer is an ordinary pointer once its base is added -- the arrays, glDrawArrays
     // and glDrawElements read it unchanged. id -> { ptr, size }; the two bindings by target.
@@ -358,7 +370,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     stats: { triangles: 0, culled: 0, clipped: 0, fragments: 0, gpuDraws: 0 },
     strings: new Map(),
   };
-  const glsl = makeGLSL(M);                 // shaders and programs (src/env/glsl.js)
+  const glsl = makeGLSL(M);
+  const arb = makeArbPrograms({
+    s, M, gpuState: () => gpuState(), triangleIndices: (...a) => triangleIndices(...a),
+    layout: (...a) => layout(...a), inBuffer: (p) => inBuffer(p), webgl: () => webgl,
+    upload: (id, t) => (t.cube ? webgl.uploadCube(id, t) : webgl.upload(id, t)),
+    mul, invert4, MODELVIEW, PROJECTION, TEXTURE_MATRIX, CULL_FACE: CAP.CULL_FACE,
+  });                 // shaders and programs (src/env/glsl.js)
   // The stack a matrix command acts on: GL_TEXTURE's is the active unit's.
   const stackOf = (mode) => (mode === TEXTURE_MATRIX && s.activeUnit ? s.units[s.activeUnit].matrix : s.stacks[mode]);
   const top = () => { const st = stackOf(s.mode); return st[st.length - 1]; };
@@ -368,7 +386,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   const xunit = () => (s.activeUnit ? s.units[s.activeUnit] : null);
   const clientTex = () => (s.clientUnit ? s.units[s.clientUnit].array : s.arrays.tex);
   const texture3D = () => (s.bound3D ? s.textures.get(s.bound3D) : s.default3D);
-  const targetTexture = (target) => (target === TEX3D ? texture3D() : target === TEX1D ? s.textures.get(s.bound1D) : texture());
+  /*
+   * A CUBE MAP (ARB_texture_cube_map) is one texture object of six faces, each with its own levels; the
+   * object's own `levels` are face 0's, which is what the completeness and size questions read.
+   */
+  const newCube = () => { const faces = Array.from({ length: 6 }, () => ({ levels: [] })); return { ...newTexture(), cube: true, faces, levels: faces[0].levels }; };
+  const cubeTexture = () => s.textures.get(s.activeUnit ? s.units[s.activeUnit].boundCube : s.boundCube);
+  const targetTexture = (target) => (target === TEX3D ? texture3D() : target === TEX1D ? s.textures.get(s.bound1D)
+    : target === CUBE_MAP || isCubeFace(target) ? cubeTexture() : texture());
   // The texture unit 0's fixed function samples: the 2D one if enabled, else the 1D one, else none.
   const unit0 = () => (s.caps.has(CAP.TEXTURE_2D) ? s.bound : s.caps.has(TEX1D) ? s.bound1D : null);
   /*
@@ -1130,7 +1155,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       : f === 0x8575 ? a0 * a2 + a1 * (1 - a2) : a0 - a1);
     const out = [0, 0, 0, 0];
     const argRGB = (i, k) => { const v = src(c.srcRGB[i]), o = c.opRGB[i]; return o === 0x300 ? v[k] : o === 0x301 ? 1 - v[k] : o === 0x302 ? v[3] : 1 - v[3]; };
-    for (let k = 0; k < 3; k++) out[k] = clamp01(fn(c.rgb, argRGB(0, k), argRGB(1, k), argRGB(2, k)) * c.scaleRGB);
+    if (c.rgb === 0x86ae || c.rgb === 0x86af) {
+      let d = 0;
+      for (let k = 0; k < 3; k++) d += (argRGB(0, k) - 0.5) * (argRGB(1, k) - 0.5);
+      const v = clamp01(4 * d * c.scaleRGB);
+      out[0] = out[1] = out[2] = v;
+      if (c.rgb === 0x86af) { out[3] = v; return out; }
+    } else for (let k = 0; k < 3; k++) out[k] = clamp01(fn(c.rgb, argRGB(0, k), argRGB(1, k), argRGB(2, k)) * c.scaleRGB);
     const argA = (i) => { const a = src(c.srcA[i])[3]; return c.opA[i] === 0x302 ? a : 1 - a; };
     out[3] = clamp01(fn(c.alpha, argA(0), argA(1), argA(2)) * c.scaleA);
     return out;
@@ -2121,6 +2152,11 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glFogi: (p, v) => exec.glFogf(p, v),
     glFogfv: (p, v) => { if (p === FOG.COLOR) s.fog.colour = v.map(clamp01); else exec.glFogf(p, v[0]); },
     glBindTexture: (target, id) => {
+      if (target === CUBE_MAP) {
+        if (id && !s.textures.has(id)) s.textures.set(id, newCube());
+        if (s.activeUnit) s.units[s.activeUnit].boundCube = id; else s.boundCube = id;
+        return;
+      }
       if (target === TEX1D) {
         if (s.activeUnit) throw new Error('gl: GL_TEXTURE_1D on a texture unit other than 0 is not implemented');
         if (id && !s.textures.has(id)) s.textures.set(id, { ...newTexture(), oneD: true });
@@ -2153,8 +2189,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       else throw new Error(`gl: glPointParameter 0x${p.toString(16)}`);
     },
     glPointParameterfARB: (p, v) => exec.glPointParameterfvARB(p, [v]),
-    glActiveTextureARB: (unit) => { const k = unit - 0x84c0; if (k < 0 || k >= UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`); s.activeUnit = k; },
-    glClientActiveTextureARB: (unit) => { const k = unit - 0x84c0; if (k < 0 || k >= UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`); s.clientUnit = k; },
+    glActiveTextureARB: (unit) => { const k = unit - 0x84c0; if (k < 0 || k >= PROGRAM_UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`); s.activeUnit = k; },
+    glClientActiveTextureARB: (unit) => { const k = unit - 0x84c0; if (k < 0 || k >= PROGRAM_UNITS) throw new Error(`gl: texture unit 0x${unit.toString(16)}`); s.clientUnit = k; },
     glColor3fv: (v) => { s.colour = [v[0], v[1], v[2], 1]; },
     glColor4ubv: (v) => { s.colour = [v[0] / 255, v[1] / 255, v[2] / 255, v[3] / 255]; },
     glColor4ub: (r, g, b, a) => { s.colour = [(r & 255) / 255, (g & 255) / 255, (b & 255) / 255, (a & 255) / 255]; },
@@ -2223,6 +2259,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
        * 16384 a side (MAX_TEXTURE_SIZE); refused, the level reads back 0 by 0, GL_RGBA (as Mesa's does).
        */
       if (target === 0x8064) { const ok = w <= 16384 && h <= 16384; s.proxy2D[level] = ok ? { w, h, internal } : { w: 0, h: 0, internal: 0x1908 }; return; }
+      if (isCubeFace(target)) {
+        const t = cubeTexture();
+        if (!t?.cube) throw new Error('gl: glTexImage2D on a cube face with no cube map bound');
+        t.base = baseFormat(internal);
+        t.faces[target - CUBE_FACE0].levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4), internal, float: false, floats: null };
+        t.dirty = true; t.gpuOwned = false;
+        return;
+      }
       const t = texture();
       t.base = baseFormat(internal);
       t.levels[level] = { w, h, data: texels ?? new Uint8Array(w * h * 4), internal, float: floatFormat(internal), floats: texels?.floats ?? null };
@@ -2435,6 +2479,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   // GLSL's entry points: what they change is part of the state a draw is made with.
   for (const [name, fn] of Object.entries(glsl.api)) api[name] = (...a) => { gpuCache = null; return fn(...a); };
+  // ...and the ARB programs' (glarb.js)
+  for (const [name, fn] of Object.entries(arb.api)) api[name] = (...a) => { gpuCache = null; return fn(...a); };
   function copyFramebuffer(L, xo, yo, x, y, w, h) {
     const { data: fb, width: W, height: H } = readBuffer();
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
@@ -2471,6 +2517,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glEndList: () => { s.lists.set(s.recordingId, s.recording); s.recording = null; },
     glDeleteLists: (n, range) => { for (let k = 0; k < range; k++) s.lists.delete(n + k); },
     glGetString: (name) => {
+      // GL_PROGRAM_ERROR_STRING_ARB changes with every program loaded: interned anew
+      if (name === 0x8874) return M.mod.intern([...new TextEncoder().encode(arb.errorString()), 0]);
       const text = { 0x1f00: 'PRISM', 0x1f01: 'PRISM software rasteriser', 0x1f02: version, 0x1f03: extensionString }[name];
       if (text === undefined) return 0;
       if (!s.strings.has(name)) s.strings.set(name, M.mod.intern([...new TextEncoder().encode(text), 0]));
@@ -2493,6 +2541,12 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       for (let k = 0; k < 16; k++) dv().setFloat64(out + 8 * k, Math.fround(m[k]), true);
     },
     glTexSubImage2D: (target, level, x, y, w, h, format, type, ptr) => {
+      if (isCubeFace(target)) {
+        const t = cubeTexture(), L = t.faces[target - CUBE_FACE0].levels[level], src = toRGBA(format, w, h, ptr, type);
+        for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
+        t.dirty = true; t.gpuOwned = false;
+        return;
+      }
       const t = texture(), L = t.levels[level], src = toRGBA(format, w, h, ptr, type);
       for (let j = 0; j < h; j++) L.data.set(src.subarray(j * w * 4, (j + 1) * w * 4), ((y + j) * L.w + x) * 4);
       if (webgl && t.gpuOwned) { webgl.texSubImage(s.activeUnit ? s.units[s.activeUnit].bound : s.bound, level, x, y, w, h, t.levels[level]?.float ? Float32Array.from(src, (b) => b / 255) : src); gpuCache = null; return; }
@@ -2592,6 +2646,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
       const vals = store ? store : p >= 0x0d58 && p <= 0x0d5b ? [s.win?.accum ? 16 : 0] : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [UNITS]
         : p === 0x84e0 ? [0x84c0 + s.activeUnit] : p === 0x84e1 ? [0x84c0 + s.clientUnit]
+        // MAX_TEXTURE_COORDS and MAX_TEXTURE_IMAGE_UNITS (the program units), PROGRAM_ERROR_POSITION, MAX_CUBE_MAP_TEXTURE_SIZE
+        : p === 0x8871 ? [PROGRAM_UNITS] : p === 0x8872 ? [PROGRAM_UNITS] : p === 0x864b ? [arb.errorPosition()] : p === 0x851c ? [16384]
         : p === 0x0b07 ? [s.raster.x, s.raster.y, s.raster.z * 2147483647, 1].map(Math.round) : p === 0x0b08 ? [s.raster.valid ? 1 : 0] : null;
       if (!vals) throw new Error(`gl: glGetIntegerv 0x${p.toString(16)}`);
       vals.forEach((v, k) => dv().setInt32(out + 4 * k, v, true));
@@ -2600,6 +2656,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // The arrays' elements first..first+count-1, between a Begin and an End of the mode.
     glDrawArrays: (mode, first, count) => {
       if (s.recording) throw new Error('gl: glDrawArrays inside a display list is not implemented');
+      if (arb.active()) { arb.draw(mode, count, (i) => first + i); return; }
       if (gpuArrays(mode, count, (i) => first + i)) return;
       exec.glBegin(mode);
       for (let i = 0; i < count; i++) exec.glArrayElement(first + i);
@@ -2610,7 +2667,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       if (s.recording) throw new Error('gl: glDrawElements inside a display list is not implemented');
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
       if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
-      if (gpuArrays(mode, count, size === 4 ? (i) => dv().getUint32(ptr + 4 * i, true) : size === 2 ? (i) => dv().getUint16(ptr + 2 * i, true) : (i) => M.u8[ptr + i])) return;
+      const indexAt = size === 4 ? (i) => dv().getUint32(ptr + 4 * i, true) : size === 2 ? (i) => dv().getUint16(ptr + 2 * i, true) : (i) => M.u8[ptr + i];
+      if (arb.active()) { arb.draw(mode, count, indexAt); return; }
+      if (gpuArrays(mode, count, indexAt)) return;
       exec.glBegin(mode);
       /*
        * One index is one vertex: within a call the arrays cannot change, so an index met again reuses
@@ -2887,9 +2946,10 @@ vec4 unit(int i, vec4 t, vec4 c, vec4 prim) {
   if (env[i] == 3) {
     vec4 T = source(b, t), k = kc[i];
     ivec4 A = cA[i], B = cB[i], C = cC[i];
-    vec3 rgb = fnc(A.x, opc(C.x, pick(A.z, T, k, prim, c)), opc(C.y, pick(A.w, T, k, prim, c)), opc(C.z, pick(B.x, T, k, prim, c)));
-    float a = fna(A.y, opa(C.w & 3, pick(B.y, T, k, prim, c)), opa((C.w >> 2) & 3, pick(B.z, T, k, prim, c)), opa((C.w >> 4) & 3, pick(B.w, T, k, prim, c)));
-    return clamp(vec4(rgb * sc[i].x, a * sc[i].y), 0.0, 1.0);
+    vec3 a0 = opc(C.x, pick(A.z, T, k, prim, c)), a1 = opc(C.y, pick(A.w, T, k, prim, c));
+    vec3 rgb = A.x >= 6 ? vec3(4.0 * dot(a0 - 0.5, a1 - 0.5)) : fnc(A.x, a0, a1, opc(C.z, pick(B.x, T, k, prim, c)));
+    float a = A.x == 7 ? rgb.r : fna(A.y, opa(C.w & 3, pick(B.y, T, k, prim, c)), opa((C.w >> 2) & 3, pick(B.z, T, k, prim, c)), opa((C.w >> 4) & 3, pick(B.w, T, k, prim, c)));
+    return clamp(vec4(rgb * sc[i].x, a * (A.x == 7 ? sc[i].x : sc[i].y)), 0.0, 1.0);
   }
   if (b == 5) t = vec4(t.r); else if (b == 2) t = vec4(t.rrr, 1.0); else if (b == 3) t = vec4(t.rrr, t.a);
   bool hasA = b == 1 || b == 3 || b == 4 || b == 5;
@@ -3065,7 +3125,10 @@ void main() {
    */
   let applied = { program: 'fixed' }, culling = false;
   const texParams = new Map();                // texture id -> its min, mag and wraps as last set
-  const gpuTex3 = new Map(), texParams3 = new Map();   // the same for GL_TEXTURE_3D (its default object is id 0)
+  const gpuTex3 = new Map(), texParams3 = new Map();
+  // ARB programs (drawProgram): cube textures, the linked programs by their pair, and their buffers
+  const gpuTexCube = new Map(), arbProgs = new Map(), arbBuffers = [];
+  let arbVao = null, arbIndexBuffer = null;   // the same for GL_TEXTURE_3D (its default object is id 0)
   const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
   function apply(st, tnlKey = null) {
     // The program first: a GLSL program's (its uniforms, and the depth range's flip, which its vertex
@@ -3289,6 +3352,82 @@ void main() {
         g.texImage2D(g.TEXTURE_2D, lv, L.float === 'half' ? g.RGBA16F : g.RGBA32F, L.w, L.h, 0, g.RGBA, g.FLOAT, f);
       });
       g.texParameteri(g.TEXTURE_2D, g.TEXTURE_MAX_LEVEL, t.levels.length - 1);
+      key = null;
+    },
+    /* A cube map's six faces, every level, as one WebGL cube texture. */
+    uploadCube(id, t) {
+      flush();
+      let tx = gpuTexCube.get(id);
+      if (!tx) { tx = g.createTexture(); gpuTexCube.set(id, tx); }
+      g.bindTexture(g.TEXTURE_CUBE_MAP, tx);
+      g.pixelStorei(g.UNPACK_ALIGNMENT, 1);
+      t.faces.forEach((face, f) => face.levels.forEach((L, lv) => {
+        if (L) g.texImage2D(g.TEXTURE_CUBE_MAP_POSITIVE_X + f, lv, g.RGBA, L.w, L.h, 0, g.RGBA, g.UNSIGNED_BYTE, L.data);
+      }));
+      g.texParameteri(g.TEXTURE_CUBE_MAP, g.TEXTURE_MAX_LEVEL, Math.max(0, t.faces[0].levels.length - 1));
+      g.bindTexture(g.TEXTURE_CUBE_MAP, null);
+      key = null;
+    },
+    /*
+     * A draw under ARB programs (glarb.js): gl.js's raster state applied as for any draw, then the pair's
+     * GLSL program, its uniforms, its textures on WebGL units 8 and up (the fixed function's own bindings
+     * stay as they are), the arrays' bytes in a vertex array object of its own, and the triangles. The fixed
+     * program is bound again by the next draw that applies one.
+     */
+    drawProgram(st, link, uploads, attribs, consts, indices, uniforms, textures, cull) {
+      flush();
+      apply(st);
+      let p = arbProgs.get(link.key);
+      if (!p) {
+        const prog = g.createProgram();
+        g.attachShader(prog, shader(g.VERTEX_SHADER, link.vs));
+        g.attachShader(prog, shader(g.FRAGMENT_SHADER, link.fs));
+        link.inputs.forEach((n, i) => g.bindAttribLocation(prog, i, `a_${n}`));
+        g.linkProgram(prog);
+        if (!g.getProgramParameter(prog, g.LINK_STATUS)) throw new Error(`gl: ARB program: link: ${g.getProgramInfoLog(prog)}`);
+        const loc = (n) => g.getUniformLocation(prog, n);
+        p = { prog, envV: loc('prism_envV'), envF: loc('prism_envF'), localV: loc('prism_localV'), localF: loc('prism_localF'),
+          mats: link.matrices.map((m) => [m, loc(`prism_m_${m}`)]), tex: new Map([...link.samplers.keys()].map((u) => [u, loc(`prism_tex${u}`)])) };
+        arbProgs.set(link.key, p);
+      }
+      g.useProgram(p.prog);
+      delete applied.program;                       // the next fixed-function draw binds its program again
+      if (p.envV) g.uniform4fv(p.envV, uniforms.envV);
+      if (p.envF) g.uniform4fv(p.envF, uniforms.envF);
+      if (p.localV && uniforms.localV) g.uniform4fv(p.localV, uniforms.localV);
+      if (p.localF && uniforms.localF) g.uniform4fv(p.localF, uniforms.localF);
+      for (const [m, l] of p.mats) if (l) g.uniformMatrix4fv(l, false, uniforms.matrices[m]);
+      for (const t of textures) {
+        const unit = 8 + t.unit, target = t.cube ? g.TEXTURE_CUBE_MAP : g.TEXTURE_2D;
+        g.activeTexture(g.TEXTURE0 + unit);
+        const tx = t.id ? (t.cube ? gpuTexCube : gpuTex).get(t.id) : null;
+        g.bindTexture(target, tx ?? null);
+        if (tx && t.params) {
+          const [mn, mg, ws, wt] = t.params;
+          g.texParameteri(target, g.TEXTURE_MIN_FILTER, FILT[mn]); g.texParameteri(target, g.TEXTURE_MAG_FILTER, FILT[mg]);
+          g.texParameteri(target, g.TEXTURE_WRAP_S, WRAP[ws]); g.texParameteri(target, g.TEXTURE_WRAP_T, WRAP[wt]);
+          if (t.cube) g.texParameteri(target, g.TEXTURE_WRAP_R, WRAP[ws]);
+        }
+        const l = p.tex.get(t.unit);
+        if (l) g.uniform1i(l, unit);
+      }
+      g.activeTexture(g.TEXTURE0);
+      if (cull) { g.enable(g.CULL_FACE); g.cullFace(cull[0]); g.frontFace(cull[1]); culling = true; }
+      else if (culling) { g.disable(g.CULL_FACE); culling = false; }
+      arbVao ??= g.createVertexArray();
+      g.bindVertexArray(arbVao);
+      for (let i = 0; i < 16; i++) g.disableVertexAttribArray(i);
+      uploads.forEach((bytes, i) => { g.bindBuffer(g.ARRAY_BUFFER, arbBuffers[i] ??= g.createBuffer()); g.bufferData(g.ARRAY_BUFFER, bytes, g.STREAM_DRAW); });
+      for (const a of attribs) {
+        g.bindBuffer(g.ARRAY_BUFFER, arbBuffers[a.range]);
+        g.enableVertexAttribArray(a.loc); g.vertexAttribPointer(a.loc, a.size, a.type, a.norm, a.stride, a.offset);
+      }
+      for (const c of consts) g.vertexAttrib4fv(c.loc, c.value);
+      g.bindBuffer(g.ELEMENT_ARRAY_BUFFER, arbIndexBuffer ??= g.createBuffer());
+      g.bufferData(g.ELEMENT_ARRAY_BUFFER, indices, g.STREAM_DRAW);
+      g.drawElements(g.TRIANGLES, indices.length, indices instanceof Uint16Array ? g.UNSIGNED_SHORT : g.UNSIGNED_INT, 0);
+      g.bindVertexArray(null);
+      g.bindBuffer(g.ARRAY_BUFFER, vertexBuffer);
       key = null;
     },
     upload3D(id, t) {
@@ -3579,6 +3718,16 @@ export function glBuiltins(T) {
     glColorPointer: f(V, I, U, I, P), glTexCoordPointer: f(V, I, U, I, P), glArrayElement: f(V, I), glLockArraysEXT: f(V, I, I), glUnlockArraysEXT: f(V),
     // ARB_vertex_buffer_object, ARB_multitexture, ARB_point_parameters: by their ARB names, as GetProcAddress hands them out.
     glColor4ub: f(V, U, U, U, U), glIsEnabled: f(U, U), glGetMaterialfv: f(V, U, U, P),
+    // ARB_vertex_program / ARB_fragment_program (glarb.js)
+    glProgramStringARB: f(V, U, U, I, P), glBindProgramARB: f(V, U, U), glGenProgramsARB: f(V, I, P), glDeleteProgramsARB: f(V, I, P),
+    glIsProgramARB: f(U, U), glGetProgramivARB: f(V, U, U, P),
+    glProgramEnvParameter4fARB: f(V, U, U, F, F, F, F), glProgramEnvParameter4fvARB: f(V, U, U, P),
+    glProgramEnvParameter4dARB: f(V, U, U, D, D, D, D), glProgramEnvParameter4dvARB: f(V, U, U, P),
+    glProgramLocalParameter4fARB: f(V, U, U, F, F, F, F), glProgramLocalParameter4fvARB: f(V, U, U, P),
+    glProgramLocalParameter4dARB: f(V, U, U, D, D, D, D), glProgramLocalParameter4dvARB: f(V, U, U, P),
+    glGetProgramEnvParameterfvARB: f(V, U, U, P), glGetProgramLocalParameterfvARB: f(V, U, U, P),
+    glVertexAttribPointerARB: f(V, U, I, U, U, I, P), glEnableVertexAttribArrayARB: f(V, U), glDisableVertexAttribArrayARB: f(V, U),
+    glVertexAttrib4fARB: f(V, U, F, F, F, F), glVertexAttrib4fvARB: f(V, U, P),
     glGenBuffersARB: f(V, I, P), glBindBufferARB: f(V, U, U), glBufferDataARB: f(V, U, I, P, U), glBufferSubDataARB: f(V, U, I, I, P),
     glDeleteBuffersARB: f(V, I, P), glIsBufferARB: f(U, U), glActiveTextureARB: f(V, U), glClientActiveTextureARB: f(V, U),
     glPointParameterfARB: f(V, U, F), glPointParameterfvARB: f(V, U, P),
