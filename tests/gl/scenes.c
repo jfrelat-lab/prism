@@ -107,6 +107,8 @@
  *   unpack-rows   GL_UNPACK_ROW_LENGTH, _SKIP_ROWS and _SKIP_PIXELS: textures cut out of one larger
  *                 client image (RGB bytes at alignment 1, floats, a glTexSubImage2D into the middle),
  *                 and a glBitmap read from a bit offset, then the store reset as a mipmap chain does
+ *   client-state  glIsEnabled on the client arrays: one square an answer, white for 1 -- the texture
+ *                 coordinate array as the client unit's, through a client attribute push and pop
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -721,6 +723,41 @@ static void display(void) {
     glDisable(GL_VERTEX_PROGRAM_ARB);
     glDisableVertexAttribArrayARB(8); glDisableVertexAttribArrayARB(9); glDisableVertexAttribArrayARB(10);
     glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "client-state")) {
+    /* every answer is a square, white for 1 and dark for 0; the arrays are never drawn from */
+    GLboolean q[16];
+    int n = 0;
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_NORMAL_ARRAY);
+    q[n++] = glIsEnabled(GL_VERTEX_ARRAY); q[n++] = glIsEnabled(GL_NORMAL_ARRAY);
+    q[n++] = glIsEnabled(GL_COLOR_ARRAY); q[n++] = glIsEnabled(GL_TEXTURE_COORD_ARRAY);
+    /* the texture coordinate array is the client unit's */
+    glClientActiveTextureARB(GL_TEXTURE1_ARB); glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    q[n++] = glIsEnabled(GL_TEXTURE_COORD_ARRAY);
+    glClientActiveTextureARB(GL_TEXTURE0_ARB);
+    q[n++] = glIsEnabled(GL_TEXTURE_COORD_ARRAY);
+    /* the server's active unit does not choose it */
+    glActiveTextureARB(GL_TEXTURE1_ARB); q[n++] = glIsEnabled(GL_TEXTURE_COORD_ARRAY); glActiveTextureARB(GL_TEXTURE0_ARB);
+    /* a client attribute push saves them */
+    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+    glDisableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+    q[n++] = glIsEnabled(GL_VERTEX_ARRAY); q[n++] = glIsEnabled(GL_COLOR_ARRAY);
+    glPopClientAttrib();
+    q[n++] = glIsEnabled(GL_VERTEX_ARRAY); q[n++] = glIsEnabled(GL_COLOR_ARRAY);
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_NORMAL_ARRAY);
+    q[n++] = glIsEnabled(GL_VERTEX_ARRAY); q[n++] = glIsEnabled(GL_NORMAL_ARRAY);
+    glClientActiveTextureARB(GL_TEXTURE1_ARB); glDisableClientState(GL_TEXTURE_COORD_ARRAY); glClientActiveTextureARB(GL_TEXTURE0_ARB);
+    /* and a capability still answers as one */
+    glEnable(GL_BLEND); q[n++] = glIsEnabled(GL_BLEND); glDisable(GL_BLEND);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D);
+    for (int k = 0; k < n; k++) {
+      float x = 16 + (k % 7) * 42, y = 140 - (k / 7) * 60;
+      if (q[k]) glColor3f(1, 1, 1); else glColor3f(0.2f, 0.1f, 0.1f);
+      glRectf(x, y, x + 32, y + 40);
+    }
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "unpack-rows")) {

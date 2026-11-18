@@ -2736,7 +2736,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.fromArrays = true; exec.glEnd(); s.fromArrays = false;
     },
     glIsTexture: (id) => (id && s.textures.has(id) ? 1 : 0),
-    glIsEnabled: (cap) => ((s.activeUnit && UNIT_CAPS.has(cap) ? s.units[s.activeUnit].caps : s.caps).has(cap) ? 1 : 0),
+    // A client array is a client state, not a capability: GL_TEXTURE_COORD_ARRAY answers for the client unit.
+    glIsEnabled: (cap) => (ARRAY[cap] ? ((ARRAY[cap] === 'tex' ? clientTex() : s.arrays[ARRAY[cap]]).on ? 1 : 0) : (s.activeUnit && UNIT_CAPS.has(cap) ? s.units[s.activeUnit].caps : s.caps).has(cap) ? 1 : 0),
     // The front or back material's property, as glMaterialfv left it (GL_COLOR_MATERIAL included).
     glGetMaterialfv: (face, pname, out) => {
       const m = face === BACK ? s.backMaterial : s.material;
