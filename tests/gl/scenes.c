@@ -119,6 +119,9 @@
  *                 state.matrix rows, a cube map and a 2D texture on units 0 and 1, TXP, KIL, CMP, LRP,
  *                 POW, EX2/LG2, RSQ, _SAT; a quad under OPTION ARB_position_invariant and one transformed
  *                 by the program; then a vertex program alone over the fixed fragment stage
+ *   arb-depth-equal  Doom 3's interaction passes: a large and a small mesh under a perspective, their
+ *                 depth laid by the fixed function, then drawn again by an ARB_position_invariant
+ *                 program with GL_EQUAL -- every covered pixel must pass the second time
  *   dot3          ARB_texture_env_dot3: DOT3_RGB and DOT3_RGBA of a texture against the primary colour
  *
  * Every level of a mip chain is a different colour, so a wrong level choice is a wrong colour.
@@ -487,6 +490,67 @@ static void display(void) {
       glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
       glMatrixMode(GL_TEXTURE); glLoadIdentity(); glMatrixMode(GL_MODELVIEW);
     }
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "arb-depth-equal")) {
+    /* Doom 3's two passes: the depth laid by the fixed function, then light drawn by a position-invariant
+       vertex program with GL_EQUAL -- every pixel the first pass covered must pass the second */
+    static const char *vp =
+      "!!ARBvp1.0\n"
+      "OPTION ARB_position_invariant;\n"
+      "MOV result.color, vertex.color;\n"
+      "END\n";
+    static const char *fp =
+      "!!ARBfp1.0\n"
+      "MOV result.color, fragment.color;\n"
+      "END\n";
+    enum { BIG = 21, SMALL = 5 };
+    static GLfloat big[BIG * BIG][3], small[SMALL * SMALL][3];
+    static GLushort bigIdx[(BIG - 1) * (BIG - 1) * 6], smallIdx[(SMALL - 1) * (SMALL - 1) * 6];
+    GLuint prog[2];
+    int nb = 0, ns = 0;
+    arbProcs();
+    for (int j = 0; j < BIG; j++) for (int i = 0; i < BIG; i++) {
+      big[j * BIG + i][0] = -3.1f + i * 0.31f; big[j * BIG + i][1] = -2.3f + j * 0.23f;
+      big[j * BIG + i][2] = 0.4f * (float)((i * 7 + j * 3) % 5) / 5.0f;
+    }
+    for (int j = 0; j < SMALL; j++) for (int i = 0; i < SMALL; i++) {
+      small[j * SMALL + i][0] = -0.9f + i * 0.47f; small[j * SMALL + i][1] = -0.7f + j * 0.37f; small[j * SMALL + i][2] = 0.9f + 0.05f * (i ^ j);
+    }
+    for (int j = 0; j + 1 < BIG; j++) for (int i = 0; i + 1 < BIG; i++) {
+      GLushort a = j * BIG + i;
+      bigIdx[nb++] = a; bigIdx[nb++] = a + 1; bigIdx[nb++] = a + BIG + 1; bigIdx[nb++] = a; bigIdx[nb++] = a + BIG + 1; bigIdx[nb++] = a + BIG;
+    }
+    for (int j = 0; j + 1 < SMALL; j++) for (int i = 0; i + 1 < SMALL; i++) {
+      GLushort a = j * SMALL + i;
+      smallIdx[ns++] = a; smallIdx[ns++] = a + 1; smallIdx[ns++] = a + SMALL + 1; smallIdx[ns++] = a; smallIdx[ns++] = a + SMALL + 1; smallIdx[ns++] = a + SMALL;
+    }
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-0.37, 0.41, -0.29, 0.31, 0.7, 37.0);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glTranslatef(0.13f, -0.07f, -5.3f); glRotatef(-31.7f, 1, 0.2f, 0); glRotatef(17.3f, 0, 0.3f, 1);
+    /* the programs loaded first, as Doom 3 loads its own at start-up (draw_arb2.cpp R_ReloadARBPrograms_f) */
+    glGenProgramsARB(2, prog);
+    glBindProgramARB(GL_VERTEX_PROGRAM_ARB, prog[0]);
+    glProgramStringARB(GL_VERTEX_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB, (GLsizei)strlen(vp), vp);
+    glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, prog[1]);
+    glProgramStringARB(GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB, (GLsizei)strlen(fp), fp);
+    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); glDepthMask(GL_TRUE);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    /* pass 1: depth, in a dark grey, by the fixed function */
+    glColor3ub(40, 40, 40);
+    glVertexPointer(3, GL_FLOAT, 0, big); glDrawElements(GL_TRIANGLES, nb, GL_UNSIGNED_SHORT, bigIdx);
+    glVertexPointer(3, GL_FLOAT, 0, small); glDrawElements(GL_TRIANGLES, ns, GL_UNSIGNED_SHORT, smallIdx);
+    /* pass 2: the same surfaces, GL_EQUAL, by the programs */
+    glEnable(GL_VERTEX_PROGRAM_ARB); glEnable(GL_FRAGMENT_PROGRAM_ARB);
+    glDepthFunc(GL_EQUAL); glDepthMask(GL_FALSE);
+    glColor3ub(250, 210, 40);
+    glVertexPointer(3, GL_FLOAT, 0, big); glDrawElements(GL_TRIANGLES, nb, GL_UNSIGNED_SHORT, bigIdx);
+    glColor3ub(60, 200, 250);
+    glVertexPointer(3, GL_FLOAT, 0, small); glDrawElements(GL_TRIANGLES, ns, GL_UNSIGNED_SHORT, smallIdx);
+    glDisable(GL_VERTEX_PROGRAM_ARB); glDisable(GL_FRAGMENT_PROGRAM_ARB);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDepthFunc(GL_LESS); glDepthMask(GL_TRUE); glDisable(GL_DEPTH_TEST);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "arb-programs")) {

@@ -72,6 +72,7 @@ export function makeArbPrograms(ctx) {
         if (ir.kind !== (target === VP ? 'vertex' : 'fragment')) throw new ArbError(`a ${ir.kind} program given to the ${target === VP ? 'vertex' : 'fragment'} target`, 0);
         const p = object(target);
         p.ir = ir; p.version++;
+        if (target === VP) s.vertexProgramLoaded = true;   // gl.js vertexWork
         st.errorPos = -1; st.errorString = '';
       } catch (e) {
         if (!(e instanceof ArbError)) throw e;

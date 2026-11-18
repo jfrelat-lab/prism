@@ -436,7 +436,9 @@ vec4 prism_log(float x) { float a = abs(x), f = floor(log2(a)); return vec4(f, a
 
   // Vertex shader
   const posInvariant = vp?.options.has('ARB_position_invariant') ?? true;
-  if (posInvariant) matrices.add('mvp');
+  // The fixed function's own expression (gl.js tnlVS): GLSL ES makes a position invariant across two
+  // shaders only when both compute it alike, and Doom 3's GL_EQUAL light passes need it to the bit.
+  if (posInvariant) { matrices.add('modelview'); matrices.add('projection'); }
   const vsLines = [];
   if (vp) vsLines.push(...vsBody);
   else for (const v of vary) vertexInputs.add(v);          // the fixed function passes its arrays through
@@ -463,7 +465,7 @@ vec4 prism_log(float x) { float a = abs(x), f = floor(log2(a)); return vec4(f, a
     // every result the program writes, read by the fragment stage or not, and every one it reads
     ...[...new Set([...vary, ...vpWrites])].map((v) => `  vec4 r_${v} = vec4(0.0, 0.0, 0.0, 1.0);`),
     ...(vp ? vsLines : vary.map((v) => `  r_${v} = a_${v};`)),
-    posInvariant ? '  r_pos = prism_m_mvp * a_pos;' : '',
+    posInvariant ? '  r_pos = prism_m_projection * (prism_m_modelview * a_pos);' : '',
     '  gl_Position = r_pos;',
     // the colour results are clamped on their way to the fragment stage (ARB_vertex_program 2.14.5)
     ...vary.map((v) => (v === 'col' || v === 'col2' ? `  v_${v} = clamp(r_${v}, 0.0, 1.0);` : `  v_${v} = r_${v};`)),

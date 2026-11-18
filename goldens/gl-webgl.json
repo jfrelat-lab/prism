@@ -39,5 +39,6 @@
   "local-viewer": 11,
   "spotlight": 0,
   "dot3": 0,
-  "arb-programs": 0
+  "arb-programs": 0,
+  "arb-depth-equal": 12
 }

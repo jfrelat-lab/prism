@@ -235,6 +235,7 @@ function baseFormat(internal) {
  */
 export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 PRISM', onLost = null, extensions = [], tnl = true } = {}) {
   for (const e of extensions) if (!OPTIONAL_EXTENSIONS.has(e)) throw new Error(`gl: extension ${e} is not implemented`);
+  const vertexPrograms = extensions.includes('GL_ARB_vertex_program');   // see vertexWork
   const extensionString = [EXTENSIONS, ...extensions].join(' ');
   // Every GL 1.1 entry point gl.h declares, implemented here or not: what a libGL opened with dlopen
   // exports (src/env/dl.js), as opengl32.dll does for GetProcAddress (src/env/opengl32.c).
@@ -839,8 +840,14 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * -- its triangles are in clip space -- where the shader's batch ends at each one: Tux Racer's
    * menus move the matrix for every widget, and taking them to the GPU made 526 draws a frame and
    * the frame three times slower (gl-bench).
+   *
+   * And wherever vertex programs are advertised or one has been loaded: ARB_position_invariant
+   * promises that a program's position equals the fixed function's to the bit, and Doom 3 relies on
+   * it, laying depth with the fixed function and then drawing light with GL_EQUAL. The program's
+   * position is the shader's `proj * (mv * pos)`; a vertex transformed here in double precision would
+   * differ in its last bits.
    */
-  const vertexWork = () => s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
+  const vertexWork = () => vertexPrograms || s.vertexProgramLoaded || s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
     || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
   const SMALL_DRAW = 128;
   const gpuPrimitive = (mode) => !!webgl && tnl && s.renderMode === RENDER && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
@@ -3024,6 +3031,8 @@ uniform vec4 sceneAmb, mF[4], mB[4]; uniform vec2 sh;
 uniform vec4 lPos[8], lAmb[8], lDif[8], lSpe[8], lAtt[8], lSpot[8];
 uniform mat4 tm[3]; uniform vec4 genS[3], genT[3], clipP[6];
 uniform int zFlip;
+// invariant here and in an ARB_position_invariant program (arbprog.js), which computes it alike
+invariant gl_Position;
 ${q}out vec4 vF; ${q}out vec4 vB; out vec2 uv; out float eyeZ; out vec2 uv1; out vec2 uv2; out float clipD[6];
 vec4 lit(vec4 a, vec4 d, vec4 sp, vec4 e, float shin, vec3 n, vec3 p) {
   vec3 c = e.rgb + sceneAmb.rgb * a.rgb, view = fl[13] == 1 ? normalize(-p) : vec3(0.0, 0.0, 1.0);
