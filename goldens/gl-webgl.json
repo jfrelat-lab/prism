@@ -41,5 +41,7 @@
   "dot3": 0,
   "arb-programs": 0,
   "arb-depth-equal": 12,
-  "cube-fixed": 17
+  "cube-fixed": 17,
+  "texgen-projective": 23,
+  "fog-pass": 6
 }

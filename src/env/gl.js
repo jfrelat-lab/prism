@@ -686,6 +686,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     let tu = s.tex[0], tv = s.tex[1];
     const tr = s.tex.length > 2 ? s.tex[2] : 0;      // not s.tex[2] ?? 0: a read past the end is V8's slow path, once a vertex
     const genS = s.caps.has(0x0c60), genT = s.caps.has(0x0c61);
+    if (s.caps.has(0x0c62) || s.caps.has(0x0c63)) throw new Error('gl: generated r and q are drawn by the WebGL path only');
     if ((genS && s.texGen[0].mode === 0x2402) || (genT && s.texGen[1].mode === 0x2402)) {
       const sm = sphereMap(mv, eye);
       if (genS && s.texGen[0].mode === 0x2402) tu = sm[0];
@@ -735,6 +736,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   };
   function unitCoord(u, x, y, z, w, mv, eye) {
     const c = u.coord, genS = u.caps.has(0x0c60), genT = u.caps.has(0x0c61), g = u.texGen, tm = u.matrix.at(-1);
+    if (u.caps.has(0x0c62) || u.caps.has(0x0c63)) throw new Error('gl: generated r and q are drawn by the WebGL path only');
     // A surface's own coordinate, as given (Neverball's unit 2 for every textured face): q is 1.
     if (!genS && !genT && c[3] === 1 && isIdentity(tm)) return [c[0], c[1]];
     let cs = c[0], ct = c[1];
@@ -790,7 +792,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   // What the fixed-function vertex shader needs of the state, as typed arrays (makeWebGL's drawArrays).
   function tnlUniforms() {
-    const mv = s.stacks[MODELVIEW].at(-1), lit = s.caps.has(CAP.LIGHTING), fl = new Int32Array(14);
+    const mv = s.stacks[MODELVIEW].at(-1), lit = s.caps.has(CAP.LIGHTING), fl = new Int32Array(20);
     fl[0] = lit ? 1 : 0; fl[1] = s.caps.has(CAP.NORMALIZE) ? 1 : 0; fl[2] = lit && s.twoSide ? 1 : 0; fl[13] = lit && s.localViewer ? 1 : 0;
     if (lit && s.caps.has(0x0b57)) {
       const { face, mode } = s.colourMaterial;
@@ -807,18 +809,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     }
     const clipP = new Float32Array(24);
     for (let i = 0; i < 6; i++) if (s.clipPlanes[i] && s.caps.has(CAP.CLIP_PLANE0 + i)) { fl[6] |= 1 << i; clipP.set(s.clipPlanes[i], 4 * i); }
-    const tm = new Float32Array(48), genS = new Float32Array(12), genT = new Float32Array(12);
+    const tm = new Float32Array(48), genS = new Float32Array(12), genT = new Float32Array(12), genR = new Float32Array(12), genQ = new Float32Array(12);
     for (let k = 0; k < UNITS; k++) {
       const caps = k ? s.units[k].caps : s.caps, g = k ? s.units[k].texGen : s.texGen;
       fl[7 + 2 * k] = genMode(caps, g, 0); fl[8 + 2 * k] = genMode(caps, g, 1);
+      fl[14 + 2 * k] = genMode(caps, g, 2); fl[15 + 2 * k] = genMode(caps, g, 3);
       genS.set(g[0].mode === 0x2400 ? g[0].eye : g[0].object, 4 * k); genT.set(g[1].mode === 0x2400 ? g[1].eye : g[1].object, 4 * k);
+      genR.set(g[2].mode === 0x2400 ? g[2].eye : g[2].object, 4 * k); genQ.set(g[3].mode === 0x2400 ? g[3].eye : g[3].object, 4 * k);
       tm.set(k ? s.units[k].matrix.at(-1) : s.stacks[TEXTURE_MATRIX].at(-1), 16 * k);
     }
     const mat = (m) => [...m.ambient, ...m.diffuse, ...m.specular, ...m.emission];
     return {
       mv: Float32Array.from(mv), proj: Float32Array.from(s.stacks[PROJECTION].at(-1)), nmat: Float32Array.from(normalMatrixOf(mv)), fl,
       sceneAmb: Float32Array.from(s.sceneAmbient), mF: Float32Array.from(mat(s.material)), mB: Float32Array.from(mat(s.backMaterial)),
-      sh: Float32Array.of(s.material.shininess, s.backMaterial.shininess), lPos, lAmb, lDif, lSpe, lAtt, lSpot, tm, genS, genT, clipP,
+      sh: Float32Array.of(s.material.shininess, s.backMaterial.shininess), lPos, lAmb, lDif, lSpe, lAtt, lSpot, tm, genS, genT, genR, genQ, clipP,
     };
   }
   /*
@@ -857,8 +861,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * position is the shader's `proj * (mv * pos)`; a vertex transformed here in double precision would
    * differ in its last bits.
    */
-  const vertexWork = () => vertexPrograms || s.vertexProgramLoaded || cubeUnit0() || s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
-    || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
+  const generates = (caps) => caps.has(0x0c60) || caps.has(0x0c61) || caps.has(0x0c62) || caps.has(0x0c63);
+  const vertexWork = () => vertexPrograms || s.vertexProgramLoaded || cubeUnit0() || s.caps.has(CAP.LIGHTING) || anyUserPlane()
+    || generates(s.caps) || generates(s.units[1].caps) || generates(s.units[2].caps);
   const SMALL_DRAW = 128;
   const gpuPrimitive = (mode) => !!webgl && tnl && s.renderMode === RENDER && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
   function recordVertex(x, y, z, w) {
@@ -3043,15 +3048,16 @@ in vec4 pos; in vec4 col; in vec4 tc0; in vec3 nrm; in vec4 tc1; in vec4 tc2;
 uniform mat4 mv, proj; uniform mat3 nmat;
 // fl: lighting, normalize, two sides, colour material (1 ambient and diffuse, 2 ambient, 3 diffuse, 4 specular,
 // 5 emission), its faces (1 front, 2 back, 3 both), the lights on (bits), the clip planes on (bits), then
-// each unit's generation of s and t (1 object linear, 2 sphere map), a local viewer.
-uniform int fl[14];
+// each unit's generation of s and t (1 object linear, 2 sphere map, 3 eye linear), a local viewer, then each
+// unit's generation of r and q.
+uniform int fl[20];
 uniform vec4 sceneAmb, mF[4], mB[4]; uniform vec2 sh;
 uniform vec4 lPos[8], lAmb[8], lDif[8], lSpe[8], lAtt[8], lSpot[8];
-uniform mat4 tm[3]; uniform vec4 genS[3], genT[3], clipP[6];
+uniform mat4 tm[3]; uniform vec4 genS[3], genT[3], genR[3], genQ[3], clipP[6];
 uniform int zFlip;
 // invariant here and in an ARB_position_invariant program (arbprog.js), which computes it alike
 invariant gl_Position;
-${q}out vec4 vF; ${q}out vec4 vB; out vec2 uv; out float eyeZ; out vec2 uv1; out vec2 uv2; out float clipD[6];
+${q}out vec4 vF; ${q}out vec4 vB; out vec3 uvp; out float eyeZ; out vec3 uvp1; out vec3 uvp2; out float clipD[6];
 vec4 lit(vec4 a, vec4 d, vec4 sp, vec4 e, float shin, vec3 n, vec3 p) {
   vec3 c = e.rgb + sceneAmb.rgb * a.rgb, view = fl[13] == 1 ? normalize(-p) : vec3(0.0, 0.0, 1.0);
   for (int i = 0; i < 8; i++) {
@@ -3069,12 +3075,15 @@ vec4 lit(vec4 a, vec4 d, vec4 sp, vec4 e, float shin, vec3 n, vec3 p) {
   }
   return clamp(vec4(c, d.a), 0.0, 1.0);
 }
-vec2 coord(int k, vec4 c, vec2 sm, vec4 eye) {
-  int gs = fl[7 + 2 * k], gt = fl[8 + 2 * k];
+// (s, t, q) after generation and the texture matrix: q is divided out by the fragment, as a projection needs.
+vec3 coord(int k, vec4 c, vec2 sm, vec4 eye) {
+  int gs = fl[7 + 2 * k], gt = fl[8 + 2 * k], gr = fl[14 + 2 * k], gq = fl[15 + 2 * k];
   if (gs == 1) c.x = dot(genS[k], vec4(pos.xyz, 1.0)); else if (gs == 2) c.x = sm.x; else if (gs == 3) c.x = dot(genS[k], eye);
   if (gt == 1) c.y = dot(genT[k], vec4(pos.xyz, 1.0)); else if (gt == 2) c.y = sm.y; else if (gt == 3) c.y = dot(genT[k], eye);
+  if (gr == 1) c.z = dot(genR[k], vec4(pos.xyz, 1.0)); else if (gr == 3) c.z = dot(genR[k], eye);
+  if (gq == 1) c.w = dot(genQ[k], vec4(pos.xyz, 1.0)); else if (gq == 3) c.w = dot(genQ[k], eye);
   vec4 t = tm[k] * c;
-  return t.xy / t.w;
+  return t.xyw;
 }
 void main() {
   vec4 eye = mv * pos, cp = proj * eye;
@@ -3096,12 +3105,19 @@ void main() {
     vF = lit(aF, dF, sF, eF, sh.x, n, p);
     vB = fl[2] == 1 ? lit(aB, dB, sB, eB, sh.y, -n, p) : vF;
   } else { vF = clamp(col, 0.0, 1.0); vB = vF; }
-  uv = coord(0, tc0, sm, eye); uv1 = coord(1, tc1, sm, eye); uv2 = coord(2, tc2, sm, eye);
+  uvp = coord(0, tc0, sm, eye); uvp1 = coord(1, tc1, sm, eye); uvp2 = coord(2, tc2, sm, eye);
   for (int i = 0; i < 6; i++) clipD[i] = dot(clipP[i], eye);
 }`;
-  const tnlFS = (src, q) => src.replace('in vec4 v; ', `${q}in vec4 vF; ${q}in vec4 vB; in float clipD[6]; `)
-    .replace('void main() {\n', 'uniform int twoSided, clipMask;\nvoid main() {\n  for (int i = 0; i < 6; i++) if ((clipMask & (1 << i)) != 0 && clipD[i] < 0.0) discard;\n  vec4 v = twoSided == 1 && !gl_FrontFacing ? vB : vF;\n');
-  const TNL_UNIFORMS = ['mv', 'proj', 'nmat', 'fl', 'sceneAmb', 'mF', 'mB', 'sh', 'lPos', 'lAmb', 'lDif', 'lSpe', 'lAtt', 'lSpot', 'tm', 'genS', 'genT', 'clipP'];
+  // The coordinates come as (s, t, q) and are divided here, per fragment: per vertex, a projected
+  // texture (Doom 3's blend lights, GL_Q generated) would slide across the triangle.
+  const tnlFS = (src, q) => {
+    const multi = src.includes('in vec2 uv1;');
+    return src.replace('in vec4 v; ', `${q}in vec4 vF; ${q}in vec4 vB; in float clipD[6]; `)
+      .replace('in vec2 uv;', 'in vec3 uvp;').replace('in vec2 uv1; in vec2 uv2;', 'in vec3 uvp1; in vec3 uvp2;')
+      .replace('void main() {\n', 'uniform int twoSided, clipMask;\nvoid main() {\n  for (int i = 0; i < 6; i++) if ((clipMask & (1 << i)) != 0 && clipD[i] < 0.0) discard;\n  vec4 v = twoSided == 1 && !gl_FrontFacing ? vB : vF;\n'
+        + `  vec2 uv = uvp.xy / uvp.z;${multi ? ' vec2 uv1 = uvp1.xy / uvp1.z, uv2 = uvp2.xy / uvp2.z;' : ''}\n`);
+  };
+  const TNL_UNIFORMS = ['mv', 'proj', 'nmat', 'fl', 'sceneAmb', 'mF', 'mB', 'sh', 'lPos', 'lAmb', 'lDif', 'lSpe', 'lAtt', 'lSpot', 'tm', 'genS', 'genT', 'genR', 'genQ', 'clipP'];
   const tnlPrograms = new Map();
   const tnlProgram = (key) => {
     let rec = tnlPrograms.get(key);
@@ -3112,8 +3128,8 @@ void main() {
     let vs = tnlVS(q), fs = tnlFS(isMulti ? FS_MULTI : FS_FIXED, q);
     // A cube map on unit 0 (cubeUnit0): unit 0's (s, t, r) through its texture matrix, as a direction.
     if (isCube) {
-      vs = vs.replace('out vec2 uv;', 'out vec2 uv; out vec3 uvc;').replace('  uv = coord(0, tc0, sm, eye);', '  uvc = (tm[0] * tc0).xyz; uv = coord(0, tc0, sm, eye);');
-      fs = fs.replace('uniform sampler2D tex;', 'uniform samplerCube tex;').replace('in vec2 uv;', 'in vec2 uv; in vec3 uvc;').replace('texture(tex, uv)', 'texture(tex, uvc)');
+      vs = vs.replace('out vec3 uvp;', 'out vec3 uvp; out vec3 uvc;').replace('  uvp = coord(0, tc0, sm, eye);', '  uvc = (tm[0] * tc0).xyz; uvp = coord(0, tc0, sm, eye);');
+      fs = fs.replace('uniform sampler2D tex;', 'uniform samplerCube tex;').replace('in vec3 uvp;', 'in vec3 uvp; in vec3 uvc;').replace('texture(tex, uv)', 'texture(tex, uvc)');
     }
     g.attachShader(p, shader(g.VERTEX_SHADER, vs));
     g.attachShader(p, shader(g.FRAGMENT_SHADER, fs));
