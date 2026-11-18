@@ -104,6 +104,9 @@
  *   float-texture ARB_texture_float: an RGBA16F texture given floats (GL_FLOAT), and an RGBA32F one as a
  *                 framebuffer object's colour, drawn into and then textured (values within [0, 1]: the
  *                 software rasteriser keeps 8 bits a channel)
+ *   unpack-rows   GL_UNPACK_ROW_LENGTH, _SKIP_ROWS and _SKIP_PIXELS: textures cut out of one larger
+ *                 client image (RGB bytes at alignment 1, floats, a glTexSubImage2D into the middle),
+ *                 and a glBitmap read from a bit offset, then the store reset as a mipmap chain does
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
  *                 and colour, under a window-sized glOrtho
  *   generate-mipmap  an 8x8 texture given as GL_FLOAT texels (some below 0, some above 1) to a texture
@@ -596,6 +599,64 @@ static void display(void) {
     glDisable(GL_VERTEX_PROGRAM_ARB);
     glDisableVertexAttribArrayARB(8); glDisableVertexAttribArrayARB(9); glDisableVertexAttribArrayARB(10);
     glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "unpack-rows")) {
+    /* one 7x6 RGB source, each texel naming its own row and column; every texture is a window of it */
+    static unsigned char src[6][7][3];
+    static float fsrc[6][7][4];
+    static const unsigned char bits[4][3] = { { 0xf0, 0x0f, 0xaa }, { 0x3c, 0xc3, 0x55 }, { 0x0f, 0xf0, 0xff }, { 0x81, 0x7e, 0x00 } };
+    GLuint t[4];
+    for (int j = 0; j < 6; j++) for (int i = 0; i < 7; i++) {
+      src[j][i][0] = 30 + i * 35; src[j][i][1] = 20 + j * 45; src[j][i][2] = (i + j) & 1 ? 230 : 40;
+      fsrc[j][i][0] = i / 6.0f; fsrc[j][i][1] = j / 5.0f; fsrc[j][i][2] = (i * j) % 3 / 2.0f; fsrc[j][i][3] = 1;
+    }
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    glGenTextures(4, t);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 7);
+    /* the whole source, then a 4x2 window two rows and three columns in */
+    glBindTexture(GL_TEXTURE_2D, t[0]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_BYTE, src);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 2); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 3);
+    glBindTexture(GL_TEXTURE_2D, t[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, src);
+    /* another window, and a 2x2 piece of the source written into its middle */
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 1); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 2);
+    glBindTexture(GL_TEXTURE_2D, t[2]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_BYTE, src);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 1, 2, 2, GL_RGB, GL_UNSIGNED_BYTE, src);
+    /* floats: rows of 7 RGBA floats, from row 1, column 2 */
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 1); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 2);
+    glBindTexture(GL_TEXTURE_2D, t[3]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 0, GL_RGBA, GL_FLOAT, fsrc);
+    glEnable(GL_TEXTURE_2D);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    for (int k = 0; k < 4; k++) {
+      float x0 = 8 + k * 78;   /* 72 wide: no texel edge on a pixel centre */
+      glBindTexture(GL_TEXTURE_2D, t[k]);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      glBegin(GL_QUADS);
+      glTexCoord2f(0, 0); glVertex2f(x0, 90); glTexCoord2f(1, 0); glVertex2f(x0 + 72, 90);
+      glTexCoord2f(1, 1); glVertex2f(x0 + 72, 230); glTexCoord2f(0, 1); glVertex2f(x0, 230);
+      glEnd();
+    }
+    glDisable(GL_TEXTURE_2D);
+    /* a bitmap: rows of 24 bits, one row and five bits in */
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 24); glPixelStorei(GL_UNPACK_SKIP_ROWS, 1); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 5);
+    glColor3ub(250, 220, 60);
+    for (int k = 0; k < 6; k++) {
+      glRasterPos2f(20.5f + k * 40, 20.5f + (k & 1) * 30);   /* a pixel centre: exactly on an edge, rounding decides */
+      glBitmap(13, 3, 0, 0, 0, 0, &bits[0][0]);
+    }
+    /* as a mipmap chain's loop leaves it, then GLU expects it */
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); glPixelStorei(GL_UNPACK_SKIP_ROWS, 0); glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glDeleteTextures(4, t);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "dot3")) {

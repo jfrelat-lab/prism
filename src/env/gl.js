@@ -333,6 +333,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     texGen: [{ mode: 0x2400, object: [1, 0, 0, 0], eye: [1, 0, 0, 0] }, { mode: 0x2400, object: [0, 1, 0, 0], eye: [0, 1, 0, 0] },
       { mode: 0x2400, object: [0, 0, 0, 0], eye: [0, 0, 0, 0] }, { mode: 0x2400, object: [0, 0, 0, 0], eye: [0, 0, 0, 0] }],   // S T R Q
     unpackAlign: 4, packAlign: 4,
+    // GL_UNPACK_ROW_LENGTH, _SKIP_ROWS, _SKIP_PIXELS (GL 1.1 table 3.1): where the client image's rows start.
+    unpackRowLength: 0, unpackSkipRows: 0, unpackSkipPixels: 0,
     // The stencil buffer exists only when the window asked for one (glut.js: GLUT_STENCIL); with no
     // stencil bits the test passes and nothing is written (GL 1.1 4.1.4).
     stencilBits: 0, stencil: null,
@@ -1772,9 +1774,13 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const n = { [FMT.RGBA]: 4, [FMT.RGB]: 3, [FMT.LUMINANCE]: 1, [FMT.ALPHA]: 1, [FMT.LUMINANCE_ALPHA]: 2, [FMT.INTENSITY]: 1 }[format];
     if (!n) throw new Error(`gl: pixel format 0x${format.toString(16)} (colour index needs an extension PRISM does not advertise)`);
     if (type !== 0x1401 && type !== 0x1406) throw new Error(`gl: texel type 0x${type.toString(16)} (GL_UNSIGNED_BYTE or GL_FLOAT)`);
-    let row = Math.ceil(w * n / s.unpackAlign) * s.unpackAlign;
+    // GL 1.1 3.6.3: a row is ROW_LENGTH pixels when that is set, else the image's width, rounded up to
+    // the alignment; SKIP_ROWS rows and SKIP_PIXELS pixels are passed over before the first texel.
+    const l = s.unpackRowLength > 0 ? s.unpackRowLength : w, size = type === 0x1406 ? 4 : 1;
+    let row = Math.ceil(l * n * size / s.unpackAlign) * s.unpackAlign;
+    ptr += s.unpackSkipRows * row + s.unpackSkipPixels * n * size;
     if (type === 0x1406) {
-      const frow = Math.ceil(w * n * 4 / s.unpackAlign) * s.unpackAlign, packed = new Uint8Array(w * h * n), d = dv();
+      const frow = row, packed = new Uint8Array(w * h * n), d = dv();
       for (let j = 0; j < h; j++) for (let i = 0; i < w * n; i++) {
         const f = d.getFloat32(ptr + j * frow + 4 * i, true);
         packed[j * w * n + i] = Math.round((f > 1 ? 1 : f > 0 ? f : 0) * 255);
@@ -1924,13 +1930,17 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glPushClientAttrib: (mask) => {
       const other = mask & ~(0x1 | 0x2);
       if (other) throw new Error(`gl: glPushClientAttrib of the groups 0x${other.toString(16)} is not implemented`);
-      (s.clientAttribStack ??= []).push({ mask, unpackAlign: s.unpackAlign, packAlign: s.packAlign, arrays: mask & 0x2 ? JSON.parse(JSON.stringify(s.arrays)) : null,
+      (s.clientAttribStack ??= []).push({ mask, unpackAlign: s.unpackAlign, packAlign: s.packAlign,
+        unpackRowLength: s.unpackRowLength, unpackSkipRows: s.unpackSkipRows, unpackSkipPixels: s.unpackSkipPixels, arrays: mask & 0x2 ? JSON.parse(JSON.stringify(s.arrays)) : null,
         unitArrays: mask & 0x2 ? s.units.map((u) => u && JSON.parse(JSON.stringify(u.array))) : null });
     },
     glPopClientAttrib: () => {
       const a = s.clientAttribStack?.pop();
       if (!a) return;
-      if (a.mask & 0x1) { s.unpackAlign = a.unpackAlign; s.packAlign = a.packAlign; }
+      if (a.mask & 0x1) {
+        s.unpackAlign = a.unpackAlign; s.packAlign = a.packAlign;
+        s.unpackRowLength = a.unpackRowLength; s.unpackSkipRows = a.unpackSkipRows; s.unpackSkipPixels = a.unpackSkipPixels;
+      }
       if (a.arrays) { s.arrays = a.arrays; a.unitArrays.forEach((x, k) => { if (x) s.units[k].array = x; }); }
     },
     glPopMatrix: () => { const st = stackOf(s.mode); if (st.length > 1) st.pop(); },
@@ -2087,11 +2097,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glLightf: (li, pname, v) => exec.glLightfv(li, pname, [v]),
     glMaterialf: (face, pname, v) => exec.glMaterialfv(face, pname, [v]),
-    // The alignments are kept; the other modes (swap, LSB first, row length, skips -- 0x0cf0-0x0cf4,
-    // 0x0d00-0x0d04) are accepted at their defaults only, as GLU restores them, and refused otherwise.
+    // The alignments and the unpack row length and skips are kept; the other modes (swap, LSB first --
+    // 0x0cf0-0x0cf1 -- and the pack row length and skips, 0x0d00-0x0d04) are accepted at their defaults
+    // only, as GLU restores them, and refused otherwise.
     glPixelStorei: (p, v) => {
       if (p === 0x0cf5) s.unpackAlign = v;
       else if (p === 0x0d05) s.packAlign = v;
+      else if (p === 0x0cf2 && v >= 0) s.unpackRowLength = v;
+      else if (p === 0x0cf3 && v >= 0) s.unpackSkipRows = v;
+      else if (p === 0x0cf4 && v >= 0) s.unpackSkipPixels = v;
       else if (!(((p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04)) && v === 0)) throw new Error(`gl: glPixelStorei 0x${p.toString(16)} = ${v}`);
     },
     // Texture coordinate generation: GL_OBJECT_LINEAR, the mode a terrain textured by position uses.
@@ -2432,8 +2446,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glTexImage1D: (a) => [...a.slice(0, 7), a[7] ? toRGBA(a[5], a[3], 1, a[7], a[6]) : null],
     glBitmap: (a) => {
-      const [w, h, , , , , ptr] = a, stride = Math.ceil(Math.ceil(w / 8) / s.unpackAlign) * s.unpackAlign;
-      const rows = ptr && w > 0 && h > 0 ? Array.from({ length: h }, (_, j) => Array.from({ length: w }, (_, i) => (M.u8[ptr + j * stride + (i >> 3)] >> (7 - (i & 7))) & 1)) : null;
+      const [w, h, , , , , ptr] = a, l = s.unpackRowLength > 0 ? s.unpackRowLength : w;
+      const stride = Math.ceil(Math.ceil(l / 8) / s.unpackAlign) * s.unpackAlign, base = ptr + s.unpackSkipRows * stride, k0 = s.unpackSkipPixels;
+      const rows = ptr && w > 0 && h > 0 ? Array.from({ length: h }, (_, j) => Array.from({ length: w }, (_, i) => (M.u8[base + j * stride + ((k0 + i) >> 3)] >> (7 - ((k0 + i) & 7))) & 1)) : null;
       return [...a.slice(0, 6), rows];
     },
     glMap1f: (a) => mapPoints(a, false, 1), glMap1d: (a) => mapPoints(a, true, 1),
@@ -2649,8 +2664,9 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
      * alike. Any other name is refused, naming itself.
      */
     glGetIntegerv: (p, out) => {
-      // The pixel store: the two alignments kept, the other modes 0 (glPixelStorei accepts only that).
-      const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
+      // The pixel store: the two alignments and the unpack row length and skips kept, the other modes 0.
+      const store = p === 0x0cf5 ? [s.unpackAlign] : p === 0x0d05 ? [s.packAlign] : p === 0x0cf2 ? [s.unpackRowLength]
+        : p === 0x0cf3 ? [s.unpackSkipRows] : p === 0x0cf4 ? [s.unpackSkipPixels] : (p >= 0x0cf0 && p <= 0x0cf4) || (p >= 0x0d00 && p <= 0x0d04) ? [0] : null;
       const vals = store ? store : p >= 0x0d58 && p <= 0x0d5b ? [s.win?.accum ? 16 : 0] : p === 0x0d57 ? [s.stencilBits] : p === 0x0d33 ? [16384] : p === 0x0ba2 ? s.viewport : p === 0x0d32 ? [6] : p === 0x84e2 ? [UNITS]
         : p === 0x84e0 ? [0x84c0 + s.activeUnit] : p === 0x84e1 ? [0x84c0 + s.clientUnit]
         // MAX_TEXTURE_COORDS and MAX_TEXTURE_IMAGE_UNITS (the program units), PROGRAM_ERROR_POSITION, MAX_CUBE_MAP_TEXTURE_SIZE
