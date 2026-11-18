@@ -119,6 +119,9 @@
  *                 state.matrix rows, a cube map and a 2D texture on units 0 and 1, TXP, KIL, CMP, LRP,
  *                 POW, EX2/LG2, RSQ, _SAT; a quad under OPTION ARB_position_invariant and one transformed
  *                 by the program; then a vertex program alone over the fixed fragment stage
+ *   cube-fixed    a cube map in the fixed function, as Doom 3 draws its skies: a box around the eye with
+ *                 its corners' directions as (s, t, r), GL_TEXTURE_CUBE_MAP over an enabled GL_TEXTURE_2D,
+ *                 by arrays under a turning texture matrix, then in immediate mode tinted
  *   arb-depth-equal  Doom 3's interaction passes: a large and a small mesh under a perspective, their
  *                 depth laid by the fixed function, then drawn again by an ARB_position_invariant
  *                 program with GL_EQUAL -- every covered pixel must pass the second time
@@ -492,6 +495,59 @@ static void display(void) {
     }
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "cube-fixed")) {
+    /* a sky as Doom 3 draws one: a box around the eye, its coordinates the directions to its corners,
+       GL_TEXTURE_CUBE_MAP enabled over GL_TEXTURE_2D, no program */
+    static const unsigned char faces[6][2 * 2 * 3] = {
+      { 255,40,40, 200,0,0, 150,0,60, 100,30,0 }, { 0,255,255, 0,200,160, 40,150,150, 0,100,120 },
+      { 60,255,0, 0,200,40, 0,150,0, 30,100,0 }, { 255,0,255, 200,60,200, 150,0,150, 100,0,140 },
+      { 0,0,255, 40,0,200, 0,60,150, 0,0,100 }, { 255,255,0, 200,200,60, 150,150,0, 120,100,0 } };
+    static const unsigned char checker[2 * 2 * 3] = { 255,255,255, 0,0,0, 0,0,0, 255,255,255 };
+    static GLfloat box[24][3];
+    static const signed char corner[6][4][3] = {
+      { {1,-1,-1}, {1,1,-1}, {1,1,1}, {1,-1,1} }, { {-1,-1,1}, {-1,1,1}, {-1,1,-1}, {-1,-1,-1} },
+      { {-1,1,-1}, {-1,1,1}, {1,1,1}, {1,1,-1} }, { {-1,-1,1}, {-1,-1,-1}, {1,-1,-1}, {1,-1,1} },
+      { {-1,-1,1}, {1,-1,1}, {1,1,1}, {-1,1,1} }, { {1,-1,-1}, {-1,-1,-1}, {-1,1,-1}, {1,1,-1} } };
+    GLuint tx[2];
+    for (int f = 0; f < 6; f++) for (int v = 0; v < 4; v++) for (int c = 0; c < 3; c++) box[f * 4 + v][c] = 10.0f * corner[f][v][c];
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glGenTextures(2, tx);
+    glBindTexture(GL_TEXTURE_2D, tx[1]);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, checker);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(GL_TEXTURE_CUBE_MAP_ARB, tx[0]);
+    for (int f = 0; f < 6; f++) glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + f, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, faces[f]);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-0.5, 0.5, -0.375, 0.375, 0.5, 100.0);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST);
+    /* the 2D texture stays enabled: the cube map outranks it */
+    glEnable(GL_TEXTURE_2D); glEnable(GL_TEXTURE_CUBE_MAP_ARB);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glVertexPointer(3, GL_FLOAT, 0, box); glTexCoordPointer(3, GL_FLOAT, 0, box);
+    /* left half: the box seen up and to the right, by arrays; the coordinates turned by the texture matrix */
+    glViewport(0, 0, 160, 240);
+    glRotatef(-25.0f, 1, 0, 0); glRotatef(35.0f, 0, 1, 0);
+    glMatrixMode(GL_TEXTURE); glLoadIdentity(); glRotatef(20.0f, 0, 0, 1);
+    glColor3ub(255, 255, 255);
+    glDrawArrays(GL_QUADS, 0, 24);
+    glMatrixMode(GL_TEXTURE); glLoadIdentity();
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    /* right half: down and to the left, in immediate mode, tinted by the primary colour */
+    glViewport(160, 0, 160, 240);
+    glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+    glRotatef(30.0f, 1, 0, 0); glRotatef(-120.0f, 0, 1, 0);
+    glColor3ub(255, 200, 160);
+    glBegin(GL_QUADS);
+    for (int i = 0; i < 24; i++) { glTexCoord3fv(box[i]); glVertex3fv(box[i]); }
+    glEnd();
+    glDisable(GL_TEXTURE_CUBE_MAP_ARB); glDisable(GL_TEXTURE_2D);
+    glViewport(0, 0, 320, 240);
+    glDeleteTextures(2, tx);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "arb-depth-equal")) {
     /* Doom 3's two passes: the depth laid by the fixed function, then light drawn by a position-invariant
        vertex program with GL_EQUAL -- every pixel the first pass covered must pass the second */
@@ -624,6 +680,8 @@ static void display(void) {
     for (int f = 0; f < 6; f++) glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X_ARB + f, 0, GL_RGB, 2, 2, 0, GL_RGB, GL_UNSIGNED_BYTE, faces[f]);
     glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_CUBE_MAP_ARB, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    /* enabled, as Doom 3 leaves its normalisation cube map: under a fragment program it is the program's */
+    glEnable(GL_TEXTURE_CUBE_MAP_ARB);
     glActiveTextureARB(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, tx[1]);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 4, 4, 0, GL_RGB, GL_UNSIGNED_BYTE, checker4);
@@ -656,7 +714,7 @@ static void display(void) {
         dir[i][0] = 2 * u - 1; dir[i][1] = 0.4f; dir[i][2] = 2 * v - 1; dir[i][3] = 1;
         proj[i][0] = u * w; proj[i][1] = v * w; proj[i][2] = 0; proj[i][3] = w;
       }
-      if (pass == 2) glDisable(GL_FRAGMENT_PROGRAM_ARB);
+      if (pass == 2) { glDisable(GL_FRAGMENT_PROGRAM_ARB); glActiveTextureARB(GL_TEXTURE0); glDisable(GL_TEXTURE_CUBE_MAP_ARB); }
       glBindProgramARB(GL_VERTEX_PROGRAM_ARB, prog[pass == 1 ? 1 : 0]);
       glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, quad);
     }

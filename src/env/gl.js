@@ -403,6 +403,15 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   // The texture unit 0's fixed function samples: the 2D one if enabled, else the 1D one, else none.
   const unit0 = () => (s.caps.has(CAP.TEXTURE_2D) ? s.bound : s.caps.has(TEX1D) ? s.bound1D : null);
   /*
+   * GL_TEXTURE_CUBE_MAP enabled on unit 0 outranks its 2D and 1D targets (ARB_texture_cube_map), and the
+   * fixed function then samples the cube by the coordinate's (s, t, r) after the texture matrix: Doom 3
+   * draws its skies so (draw_common.cpp, TG_SKYBOX_CUBE). Only the WebGL path's shader-transformed
+   * programs draw it; elsewhere the draw is refused rather than drawn untextured.
+   */
+  // Under an ARB program the cube is the program's to sample (glarb.js), the normalisation cube map Doom
+  // 3 leaves enabled through its light passes among them.
+  const cubeUnit0 = () => s.caps.has(CUBE_MAP) && !glsl.current() && !arb.active();
+  /*
    * Component k of element i of array a, as glArrayElement reads it -- defined once, not per element.
    * Every type GL 1.1 allows an array (2.8): bytes, shorts and ints, signed or not, floats and
    * doubles. A colour or a normal of an integer type is NORMALIZED (2.13, Table 2.6: the largest
@@ -653,6 +662,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   }
   function vertex(x, y, z, w = 1) {
     if (s.gpuPrim) { recordVertex(x, y, z, w); return; }
+    if (cubeUnit0()) throw new Error('gl: a cube map in the fixed function is drawn by the WebGL rasteriser\'s shader-transformed path only (this draw took the other)');
     const mv = s.stacks[MODELVIEW].at(-1), pr = s.stacks[PROJECTION].at(-1);
     const eye = xform(mv, x, y, z, w);
     const clip = xform(pr, eye[0], eye[1], eye[2], eye[3]);
@@ -847,7 +857,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
    * position is the shader's `proj * (mv * pos)`; a vertex transformed here in double precision would
    * differ in its last bits.
    */
-  const vertexWork = () => vertexPrograms || s.vertexProgramLoaded || s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
+  const vertexWork = () => vertexPrograms || s.vertexProgramLoaded || cubeUnit0() || s.caps.has(CAP.LIGHTING) || s.caps.has(0x0c60) || s.caps.has(0x0c61) || anyUserPlane()
     || s.units[1].caps.has(0x0c60) || s.units[1].caps.has(0x0c61) || s.units[2].caps.has(0x0c60) || s.units[2].caps.has(0x0c61);
   const SMALL_DRAW = 128;
   const gpuPrimitive = (mode) => !!webgl && tnl && s.renderMode === RENDER && !glsl.current() && mode >= 4 && mode <= 9 && vertexWork() && s.polyMode[0] === FILL && s.polyMode[1] === FILL;
@@ -893,7 +903,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const tri = triangleIndices(mode, Array.from({ length: n }, (_, i) => i), flat, cut02);
     if (!tri || !tri.length) return;
     const st = gpuState();
-    webgl.primitive(st, `tnl${st.multi ? '-multi' : ''}${flat ? '-flat' : ''}`, tnlCached(), s.caps.has(CAP.CULL_FACE) ? [s.cullFace, s.frontFace] : null,
+    webgl.primitive(st, `tnl${st.multi ? '-multi' : ''}${st.cube >= 0 ? '-cube' : ''}${flat ? '-flat' : ''}`, tnlCached(), s.caps.has(CAP.CULL_FACE) ? [s.cullFace, s.frontFace] : null,
       rec.subarray(0, n * REC), n, tri);
     s.stats.triangles += tri.length / 3; s.stats.gpuDraws++;
     // GL_COLOR_MATERIAL: the material follows the current colour, as vertex() leaves it.
@@ -951,7 +961,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const t0 = s.tex, u = s.units;
     const consts = { 1: s.colour, 2: [t0[0], t0[1], t0.length > 2 ? t0[2] : 0, 1], 4: [...s.normal, 0], 5: u[1].coord, 6: u[2].coord };
     const st = gpuState();
-    const key = `tnl${st.multi ? '-multi' : ''}${flat ? '-flat' : ''}`;
+    const key = `tnl${st.multi ? '-multi' : ''}${st.cube >= 0 ? '-cube' : ''}${flat ? '-flat' : ''}`;
     webgl.drawArrays(st, key, tnlCached(), uploads, attribs, consts, indices, s.caps.has(CAP.CULL_FACE) ? [s.cullFace, s.frontFace] : null);
     s.stats.triangles += tri.length / 3; s.stats.gpuDraws++;
     return true;
@@ -1710,13 +1720,20 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
   function gpuState() {
     if (gpuCache) return gpuCache;
     // A GLSL program samples the bound texture whether or not GL_TEXTURE_2D is enabled.
-    const id0 = glsl.current() ? s.bound : unit0(), t = id0 !== null ? s.textures.get(id0) : null, textured = !!(t && complete(t));
-    const stages = glsl.current() ? [] : textureStages(), multi = stages.length && !oneUnit(stages) ? multiKey(stages) : '';
+    const cube = cubeUnit0(), tc = cube ? s.textures.get(s.boundCube) : null, cubed = !!(tc && complete(tc));
+    if (cube) {
+      if (s.units[1].caps.has(CAP.TEXTURE_2D) || s.units[2].caps.has(CAP.TEXTURE_2D) || s.envMode === TEX.COMBINE) throw new Error('gl: a fixed-function cube map beside other units or GL_COMBINE is not implemented');
+      if (s.caps.has(0x0c60) || s.caps.has(0x0c61)) throw new Error('gl: texture coordinate generation on a fixed-function cube map is not implemented');
+      if (cubed && tc.dirty && !tc.gpuOwned) { webgl.uploadCube(s.boundCube, tc); tc.dirty = false; }
+    }
+    const id0 = glsl.current() ? s.bound : cube ? null : unit0(), t = id0 !== null ? s.textures.get(id0) : null, textured = !!(t && complete(t));
+    const stages = glsl.current() || cube ? [] : textureStages(), multi = stages.length && !oneUnit(stages) ? multiKey(stages) : '';
     if (textured && t.dirty && !t.gpuOwned) { webgl.upload(id0, t); t.dirty = false; }
     const t3 = glsl.current() ? texture3D() : null, textured3 = !!(t3 && complete(t3));
     if (textured3 && t3.dirty) { webgl.upload3D(s.bound3D, t3); t3.dirty = false; }
     return gpuCache = {
-      tex: textured ? id0 : -1, base: textured ? t.base : '', env: s.envMode,
+      tex: textured ? id0 : -1, base: textured ? t.base : cubed ? tc.base : '', env: s.envMode,
+      cube: cubed ? s.boundCube : -1, cubeParams: cubed ? `${tc.min},${tc.mag},${tc.wrapS},${tc.wrapT},${tc.wrapR}` : '',
       min: textured ? t.min : 0, mag: textured ? t.mag : 0, wrapS: textured ? t.wrapS : 0, wrapT: textured ? t.wrapT : 0,
       multi,
       tex3: textured3 ? s.bound3D : -1, params3: textured3 ? `${t3.min},${t3.mag},${t3.wrapS},${t3.wrapT},${t3.wrapR}` : '',
@@ -3088,11 +3105,17 @@ void main() {
   const tnlProgram = (key) => {
     let rec = tnlPrograms.get(key);
     if (rec) return rec;
-    const isMulti = key.includes('multi'), q = key.includes('flat') ? 'flat ' : '';
+    const isMulti = key.includes('multi'), isCube = key.includes('cube'), q = key.includes('flat') ? 'flat ' : '';
     if (isMulti) multiProgram();                       // FS_MULTI is written when that program is made
     const p = g.createProgram();
-    g.attachShader(p, shader(g.VERTEX_SHADER, tnlVS(q)));
-    g.attachShader(p, shader(g.FRAGMENT_SHADER, tnlFS(isMulti ? FS_MULTI : FS_FIXED, q)));
+    let vs = tnlVS(q), fs = tnlFS(isMulti ? FS_MULTI : FS_FIXED, q);
+    // A cube map on unit 0 (cubeUnit0): unit 0's (s, t, r) through its texture matrix, as a direction.
+    if (isCube) {
+      vs = vs.replace('out vec2 uv;', 'out vec2 uv; out vec3 uvc;').replace('  uv = coord(0, tc0, sm, eye);', '  uvc = (tm[0] * tc0).xyz; uv = coord(0, tc0, sm, eye);');
+      fs = fs.replace('uniform sampler2D tex;', 'uniform samplerCube tex;').replace('in vec2 uv;', 'in vec2 uv; in vec3 uvc;').replace('texture(tex, uv)', 'texture(tex, uvc)');
+    }
+    g.attachShader(p, shader(g.VERTEX_SHADER, vs));
+    g.attachShader(p, shader(g.FRAGMENT_SHADER, fs));
     [['pos', 0], ['col', 1], ['tc0', 2], ['nrm', 4], ['tc1', 5], ['tc2', 6]].forEach(([nm, i]) => g.bindAttribLocation(p, i, nm));
     g.linkProgram(p);
     if (!g.getProgramParameter(p, g.LINK_STATUS)) throw new Error(`gl: link: ${g.getProgramInfoLog(p)}`);
@@ -3160,6 +3183,7 @@ void main() {
   const gpuTex3 = new Map(), texParams3 = new Map();
   // ARB programs (drawProgram): cube textures, the linked programs by their pair, and their buffers
   const gpuTexCube = new Map(), arbProgs = new Map(), arbBuffers = [];
+  const cubeParams = new Map();                // cube texture id -> its filters and wraps as the fixed function last set them
   let arbVao = null, arbIndexBuffer = null;   // the same for GL_TEXTURE_3D (its default object is id 0)
   const put = (k, v, send) => { if (applied[k] !== v) { applied[k] = v; send(); } };
   function apply(st, tnlKey = null) {
@@ -3189,6 +3213,15 @@ void main() {
         g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_S, WRAP[st.wrapS]); g.texParameteri(g.TEXTURE_2D, g.TEXTURE_WRAP_T, WRAP[st.wrapT]);
       }
     }
+    if (st.cube >= 0) {
+      put('texCube', st.cube, () => g.bindTexture(g.TEXTURE_CUBE_MAP, gpuTexCube.get(st.cube)));
+      if (cubeParams.get(st.cube) !== st.cubeParams) {
+        cubeParams.set(st.cube, st.cubeParams);
+        const [mn, mg, ws, wt, wr] = st.cubeParams.split(',').map(Number), C = g.TEXTURE_CUBE_MAP;
+        g.texParameteri(C, g.TEXTURE_MIN_FILTER, FILT[mn]); g.texParameteri(C, g.TEXTURE_MAG_FILTER, FILT[mg]);
+        g.texParameteri(C, g.TEXTURE_WRAP_S, WRAP[ws]); g.texParameteri(C, g.TEXTURE_WRAP_T, WRAP[wt]); g.texParameteri(C, g.TEXTURE_WRAP_R, WRAP[wr]);
+      }
+    }
     if (st.tex3 >= 0) {
       put('tex3', st.tex3, () => g.bindTexture(g.TEXTURE_3D, gpuTex3.get(st.tex3)));
       if (texParams3.get(st.tex3) !== st.params3) {
@@ -3200,7 +3233,7 @@ void main() {
       }
     }
     if (st.multi) applyUnits(st.multi);
-    put('textured', st.tex >= 0, () => g.uniform1i(U.textured, st.tex >= 0 ? 1 : 0));
+    put('textured', st.tex >= 0 || st.cube >= 0, () => g.uniform1i(U.textured, st.tex >= 0 || st.cube >= 0 ? 1 : 0));
     put('base', st.base, () => g.uniform1i(U.base, BASES[st.base] ?? 0));
     put('env', st.env, () => g.uniform1i(U.env, ENVS[st.env] ?? 0));
     put('blend', st.blend, () => { if (st.blend) { const [sf, df] = st.blend.split(',').map(Number); g.enable(g.BLEND); g.blendFunc(sf, df); } else g.disable(g.BLEND); });
@@ -3398,6 +3431,7 @@ void main() {
       }));
       g.texParameteri(g.TEXTURE_CUBE_MAP, g.TEXTURE_MAX_LEVEL, Math.max(0, t.faces[0].levels.length - 1));
       g.bindTexture(g.TEXTURE_CUBE_MAP, null);
+      delete applied.texCube;
       key = null;
     },
     /*
@@ -3439,6 +3473,7 @@ void main() {
           g.texParameteri(target, g.TEXTURE_MIN_FILTER, FILT[mn]); g.texParameteri(target, g.TEXTURE_MAG_FILTER, FILT[mg]);
           g.texParameteri(target, g.TEXTURE_WRAP_S, WRAP[ws]); g.texParameteri(target, g.TEXTURE_WRAP_T, WRAP[wt]);
           if (t.cube) g.texParameteri(target, g.TEXTURE_WRAP_R, WRAP[ws]);
+          (t.cube ? cubeParams : texParams).delete(t.id);   // the fixed function sets its own again
         }
         const l = p.tex.get(t.unit);
         if (l) g.uniform1i(l, unit);
