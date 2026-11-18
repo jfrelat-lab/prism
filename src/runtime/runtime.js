@@ -1191,6 +1191,26 @@ function makeLibc(M) {
     },
     __builtin_clz: (v) => (v >>> 0) === 0 ? 32 : Math.clz32(v >>> 0),
     __builtin_ctz: (v) => { const u = v >>> 0; if (!u) return 32; let n = 0; let x = u; while (!(x & 1)) { x >>>= 1; n++; } return n; },
+    __builtin_ctzll: (v) => {
+      let x = BigInt.asUintN(64, typeof v === 'bigint' ? v : BigInt(v | 0));
+      if (x === 0n) return 64;
+      let n = 0;
+      while (!(x & 1n)) { x >>= 1n; n++; }
+      return n;
+    },
+    // What the block holds: the size asked for, which is within what it has (see malloc's header).
+    malloc_usable_size: (p) => (p ? M.mod.dv.getUint32(p - 8, true) : 0),
+    /*
+     * Every clock is the one gettimeofday reads -- looked up at the call, so a host that installs a
+     * real clock (installRealClock) is followed. struct timespec has timeval's shape on i386: fill it
+     * as one, then make the microseconds nanoseconds.
+     */
+    clock_gettime: (_clk, tp) => {
+      if (!tp) return 0;
+      M.rt.gettimeofday(tp, 0);
+      M.mod.dv.setInt32(tp + 4, M.mod.dv.getInt32(tp + 4, true) * 1000, true);
+      return 0;
+    },
     utimes: () => 0,
     gmtime: () => 0,
     nanosleep: () => 0,
@@ -1486,6 +1506,16 @@ function makeLibc(M) {
     // the result and its own check fails, turning a clean refusal into a miscompile
     // (frame-address.c). Refusing is the honest answer until there is a real call stack to report.
     __builtin_return_address: () => { throw new Trap('__builtin_return_address is not supported'); },
+    /*
+     * The CURRENT frame does have an address: the shadow stack's pointer, below every object of the
+     * callers that lives in memory and above every one a callee will put there -- the ordering
+     * frame-address.c checks, and what QuickJS's stack guard measures depth by. An outer frame's
+     * would need the call stack itself, so level 1 and up still refuse.
+     */
+    __builtin_frame_address: (level) => {
+      if ((level | 0) !== 0) throw new Trap('__builtin_frame_address above level 0 is not supported');
+      return M.sp | 0;
+    },
     // A compiler is always allowed to answer 0 here; PRISM has not folded the argument, so it must.
     __builtin_constant_p: () => 0,
     /**

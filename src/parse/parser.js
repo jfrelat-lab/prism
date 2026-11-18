@@ -47,11 +47,19 @@ export const KEYWORDS = new Set(['auto', 'break', 'case', 'char', 'const', 'cont
    */
   '__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
   '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '_loadds', '__saveregs', '_saveregs',
-  '__export', '_export']);
+  '__export', '_export',
+  // C11's atomic type qualifier; `_Atomic(T)` is its specifier form (see #declSpecifiers).
+  '_Atomic']);
 
 const STORAGE = new Set(['typedef', 'extern', 'static', 'auto', 'register']);
 const QUALS = new Set(['const', 'volatile', 'restrict', '__const', '__const__', '__volatile',
   '__volatile__', '__restrict', '__restrict__',
+  /*
+   * C11's `_Atomic` qualifier asks that every access to the object be indivisible. Under PRISM it
+   * already is: one thread runs guest code at a time and control changes hands only at a blocking
+   * library call (src/runtime/threads.js), so no access is ever interleaved with another.
+   */
+  '_Atomic',
   // See the keyword list above: meaningless in a flat model, and only accepted for one.
   '__far', '_far', '__near', '_near', '__interrupt', '_interrupt',
   '__cdecl', '_cdecl', '__pascal', '_pascal', '__loadds', '_loadds', '__saveregs', '_saveregs',
@@ -549,6 +557,8 @@ export class Parser {
       const v = t.v;
 
       if (STORAGE.has(v)) { this.i++; storage = v === 'typedef' ? 'typedef' : v; continue; }
+      // `_Atomic(T)` names the type T, atomic; bare `_Atomic` is the qualifier, in QUALS.
+      if (v === '_Atomic' && this.isP('(', 1)) { type = this.#typeofSpecifier(); sawTypeSpec = true; continue; }
       if (QUALS.has(v)) { this.i++; cv[v.replace(/^__|__$/g, '')] = true; continue; }
       /*
        * Borland's BARE `interrupt`: `static void interrupt INL_KeyService(void)`. Watcom's spellings
@@ -1165,7 +1175,9 @@ export class Parser {
   #startsDeclaration() {
     const t = this.peek();
     if (t.k !== ID) return false;
-    if (t.v === '__extension__') return true;
+    // `__extension__ ({ ... });` is an expression statement -- glibc's macros write it -- and a
+    // declaration cannot continue with a parenthesis.
+    if (t.v === '__extension__') return !this.isP('(', 1);
     if (STORAGE.has(t.v) || QUALS.has(t.v) || this.#funcspec(t.v)) return true;
     if (TYPE_STARTERS.includes(t.v) || isComplexSpelling(t.v)) return true;
     // `T x;` is a declaration; `T;` and `T:` are not, and neither is `T = 1` (T as a variable).

@@ -397,6 +397,8 @@ float modff(float x, float *ip);
 int finite(double x);
 int isnan(double x);
 int isinf(double x);
+/* C99's isfinite is a macro over any floating type; a float widens to double exactly. */
+#define isfinite(x) finite(x)
 double ceil(double x);
 double fabs(double x);
 double fmod(double x, double y);
@@ -594,6 +596,93 @@ const STDBOOL = `
 #endif
 `;
 
+/*
+ * C11's <stdatomic.h>, as macros over plain accesses. That is exact here, not approximate: one thread
+ * runs guest code at a time and control changes hands only at a blocking library call
+ * (src/runtime/threads.js), so a read-modify-write written out in C is never interleaved with another.
+ * The memory orders therefore order nothing and are accepted and ignored. Generic over the pointee
+ * type through __typeof__, as the standard's functions are: QuickJS's Atomics object uses them on 8-,
+ * 16-, 32- and 64-bit objects.
+ */
+const STDATOMIC = `
+#ifndef _PRISM_STDATOMIC_H
+#define _PRISM_STDATOMIC_H
+#include <stddef.h>
+#include <stdint.h>
+typedef enum {
+    memory_order_relaxed, memory_order_consume, memory_order_acquire,
+    memory_order_release, memory_order_acq_rel, memory_order_seq_cst
+} memory_order;
+#define ATOMIC_VAR_INIT(v) (v)
+#define atomic_init(p, v) ((void)(*(p) = (v)))
+#define kill_dependency(y) (y)
+#define atomic_thread_fence(o) ((void)(o))
+#define atomic_signal_fence(o) ((void)(o))
+#define atomic_is_lock_free(p) ((void)(p), 1)
+#define ATOMIC_BOOL_LOCK_FREE 2
+#define ATOMIC_CHAR_LOCK_FREE 2
+#define ATOMIC_SHORT_LOCK_FREE 2
+#define ATOMIC_INT_LOCK_FREE 2
+#define ATOMIC_LONG_LOCK_FREE 2
+#define ATOMIC_LLONG_LOCK_FREE 2
+#define ATOMIC_POINTER_LOCK_FREE 2
+#define atomic_load(p) (*(p))
+#define atomic_load_explicit(p, o) (*(p))
+#define atomic_store(p, v) ((void)(*(p) = (v)))
+#define atomic_store_explicit(p, v, o) ((void)(*(p) = (v)))
+#define __prism_atomic_rmw(p, v, op) __extension__({ __typeof__(*(p)) *__pa_p = (p); \\
+    __typeof__(*(p)) __pa_o = *__pa_p; *__pa_p = op(__pa_o, (v)); __pa_o; })
+#define __prism_op_xchg(a, b) (b)
+#define __prism_op_add(a, b) ((a) + (b))
+#define __prism_op_sub(a, b) ((a) - (b))
+#define __prism_op_and(a, b) ((a) & (b))
+#define __prism_op_or(a, b) ((a) | (b))
+#define __prism_op_xor(a, b) ((a) ^ (b))
+#define atomic_exchange(p, v) __prism_atomic_rmw(p, v, __prism_op_xchg)
+#define atomic_fetch_add(p, v) __prism_atomic_rmw(p, v, __prism_op_add)
+#define atomic_fetch_sub(p, v) __prism_atomic_rmw(p, v, __prism_op_sub)
+#define atomic_fetch_and(p, v) __prism_atomic_rmw(p, v, __prism_op_and)
+#define atomic_fetch_or(p, v) __prism_atomic_rmw(p, v, __prism_op_or)
+#define atomic_fetch_xor(p, v) __prism_atomic_rmw(p, v, __prism_op_xor)
+#define atomic_exchange_explicit(p, v, o) atomic_exchange(p, v)
+#define atomic_fetch_add_explicit(p, v, o) atomic_fetch_add(p, v)
+#define atomic_fetch_sub_explicit(p, v, o) atomic_fetch_sub(p, v)
+#define atomic_fetch_and_explicit(p, v, o) atomic_fetch_and(p, v)
+#define atomic_fetch_or_explicit(p, v, o) atomic_fetch_or(p, v)
+#define atomic_fetch_xor_explicit(p, v, o) atomic_fetch_xor(p, v)
+#define atomic_compare_exchange_strong(p, e, d) __extension__({ __typeof__(*(p)) *__pa_p = (p); \\
+    __typeof__(*(e)) *__pa_e = (e); __typeof__(*(p)) __pa_d = (d); _Bool __pa_r = *__pa_p == *__pa_e; \\
+    if (__pa_r) *__pa_p = __pa_d; else *__pa_e = *__pa_p; __pa_r; })
+#define atomic_compare_exchange_weak(p, e, d) atomic_compare_exchange_strong(p, e, d)
+#define atomic_compare_exchange_strong_explicit(p, e, d, s, f) atomic_compare_exchange_strong(p, e, d)
+#define atomic_compare_exchange_weak_explicit(p, e, d, s, f) atomic_compare_exchange_strong(p, e, d)
+typedef struct { _Bool __v; } atomic_flag;
+#define ATOMIC_FLAG_INIT { 0 }
+#define atomic_flag_test_and_set(f) __extension__({ atomic_flag *__pa_f = (f); _Bool __pa_o = __pa_f->__v; __pa_f->__v = 1; __pa_o; })
+#define atomic_flag_test_and_set_explicit(f, o) atomic_flag_test_and_set(f)
+#define atomic_flag_clear(f) ((void)((f)->__v = 0))
+#define atomic_flag_clear_explicit(f, o) atomic_flag_clear(f)
+typedef _Atomic(_Bool) atomic_bool;
+typedef _Atomic(char) atomic_char;
+typedef _Atomic(signed char) atomic_schar;
+typedef _Atomic(unsigned char) atomic_uchar;
+typedef _Atomic(short) atomic_short;
+typedef _Atomic(unsigned short) atomic_ushort;
+typedef _Atomic(int) atomic_int;
+typedef _Atomic(unsigned int) atomic_uint;
+typedef _Atomic(long) atomic_long;
+typedef _Atomic(unsigned long) atomic_ulong;
+typedef _Atomic(long long) atomic_llong;
+typedef _Atomic(unsigned long long) atomic_ullong;
+typedef _Atomic(intptr_t) atomic_intptr_t;
+typedef _Atomic(uintptr_t) atomic_uintptr_t;
+typedef _Atomic(size_t) atomic_size_t;
+typedef _Atomic(ptrdiff_t) atomic_ptrdiff_t;
+typedef _Atomic(intmax_t) atomic_intmax_t;
+typedef _Atomic(uintmax_t) atomic_uintmax_t;
+#endif
+`;
+
 const FLOATH = `
 #ifndef _PRISM_FLOAT_H
 #define _PRISM_FLOAT_H
@@ -652,8 +741,20 @@ const TIMEH = `#ifndef _PRISM_TIME_H_ALL
 #include <stddef.h>
 struct tm {
     int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst;
+    /* glibc's two BSD members (__USE_MISC, on by default): i386 layout, 44 bytes. */
+    long tm_gmtoff;
+    const char *tm_zone;
 };
+#ifndef _PRISM_STRUCT_TIMESPEC
+#define _PRISM_STRUCT_TIMESPEC
 struct timespec { long tv_sec; long tv_nsec; };
+#endif
+typedef int clockid_t;
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+#define CLOCK_PROCESS_CPUTIME_ID 2
+#define CLOCK_THREAD_CPUTIME_ID 3
+int clock_gettime(clockid_t clk, struct timespec *tp);
 struct tm *localtime(const long *t);
 struct tm *gmtime(const long *t);
 /* The re-entrant forms fill the caller's struct tm. There is no time zone: tzset has nothing to read. */
@@ -949,6 +1050,10 @@ int link(const char *from, const char *to);
 int chown(const char *path, int owner, int group);
 int execvp(const char *file, char *const argv[]);
 int execv(const char *path, char *const argv[]);
+int execve(const char *path, char *const argv[], char *const envp[]);
+#ifdef _GNU_SOURCE
+extern char **environ;
+#endif
 int execl(const char *path, const char *arg, ...);
 int execlp(const char *file, const char *arg, ...);
 int getuid(void);
@@ -1136,6 +1241,10 @@ const SYS_STAT = `
 #ifndef _PRISM_SYS_STAT_H
 #define _PRISM_SYS_STAT_H
 #include <sys/types.h>
+#ifndef _PRISM_STRUCT_TIMESPEC
+#define _PRISM_STRUCT_TIMESPEC
+struct timespec { long tv_sec; long tv_nsec; };
+#endif
 struct stat {
     dev_t     st_dev;
     ino_t     st_ino;
@@ -1147,10 +1256,14 @@ struct stat {
     off_t     st_size;
     blksize_t st_blksize;
     blkcnt_t  st_blocks;
-    time_t    st_atime;
-    time_t    st_mtime;
-    time_t    st_ctime;
+    /* POSIX.1-2008's nanosecond times, as glibc lays them; the second-only names are macros onto them. */
+    struct timespec st_atim;
+    struct timespec st_mtim;
+    struct timespec st_ctim;
 };
+#define st_atime st_atim.tv_sec
+#define st_mtime st_mtim.tv_sec
+#define st_ctime st_ctim.tv_sec
 #define S_IFMT   0170000
 #define S_IFREG  0100000
 #define S_IFDIR  0040000
@@ -1227,6 +1340,10 @@ const SYS_IOCTL = `
 #ifndef _PRISM_SYS_IOCTL_H
 #define _PRISM_SYS_IOCTL_H
 int ioctl(int fd, unsigned long request, ...);
+/* A terminal's size (asm-generic/termios.h). There is no terminal: TIOCGWINSZ fails with ENOTTY. */
+struct winsize { unsigned short ws_row, ws_col, ws_xpixel, ws_ypixel; };
+#define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
 /* Linux's request numbers for a terminal line (asm-generic/ioctls.h), for programs that name them. */
 #ifndef TIOCMGET
 #define TIOCOUTQ 0x5411
@@ -2343,7 +2460,7 @@ struct count_info { int bytes; int blocks; int ptr; };
   'errnos.h': '#include <errno.h>\n',
   'alloca.h': 'void *alloca(unsigned long n);\n',
   // MSVC's and glibc's malloc.h both declare alloca; MSVC's spells it _alloca too
-  'malloc.h': '#include <stdlib.h>\nvoid *alloca(unsigned long n);\nvoid *_alloca(unsigned long n);\n',
+  'malloc.h': '#include <stdlib.h>\nvoid *alloca(unsigned long n);\nvoid *_alloca(unsigned long n);\nsize_t malloc_usable_size(void *p);\n',
   /*
    * <pthread.h>, its types in glibc's i386 sizes (a program embeds them in its own structures) and the calls Doom 3's
    * posix layer makes. Declarations: there is one thread of control here, and what pthread_create does with a
@@ -2437,8 +2554,14 @@ int getitimer(int which, struct itimerval *val);
  */
 typedef int sig_atomic_t;
 typedef void (*__sighandler_t)(int);
+/* glibc's two public names for it: sig_t by default (__USE_MISC), sighandler_t under _GNU_SOURCE. */
+typedef __sighandler_t sig_t;
+#ifdef _GNU_SOURCE
+typedef __sighandler_t sighandler_t;
+#endif
 __sighandler_t signal(int sig, __sighandler_t h);
 int raise(int sig);
+int kill(int pid, int sig);
 #define SIG_DFL ((__sighandler_t)0)
 #define SIG_IGN ((__sighandler_t)1)
 #define SIGHUP 1
@@ -2616,6 +2739,7 @@ char *if_indextoname(unsigned int index, char *name);
   'stdarg.h': STDARG,
   'stdint.h': STDINT,
   'stdbool.h': STDBOOL,
+  'stdatomic.h': STDATOMIC,
   'float.h': FLOATH,
   'stddef.h': STDDEF,
   'stdio.h': STDIO,

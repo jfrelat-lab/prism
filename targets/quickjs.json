@@ -1,0 +1,34 @@
+{
+  "name": "quickjs",
+  "title": "QuickJS 2025-04-26 (Fabrice Bellard), a JavaScript engine compiled to JavaScript",
+  "dir": "corpus/quickjs/quickjs-2025-04-26",
+  "fetch": "mkdir -p corpus/quickjs && curl -Lo corpus/quickjs/quickjs-2025-04-26.tar.xz https://bellard.org/quickjs/quickjs-2025-04-26.tar.xz && tar -xJf corpus/quickjs/quickjs-2025-04-26.tar.xz -C corpus/quickjs && node tools/build.mjs targets/quickjs.json:qjsc --run --data=corpus/quickjs/quickjs-2025-04-26 --out=corpus/quickjs/quickjs-2025-04-26 '--args=-s -c -o repl.c -m repl.js'",
+  "_doc": "A JavaScript engine, run by the JavaScript engine it is compiled into. Here as an ORACLE as much as a target, as Lua is: QuickJS ships its own self-checking tests (tests/*.js, built on assert), and its compiler qjsc turns JavaScript into bytecode as a C array -- a byte-for-byte comparable output, against a native build of the same qjsc.",
+  "_units": "The Makefile's QJS_LIB_OBJS; each program adds its own main. qjs also links repl.c, which the Makefile GENERATES with qjsc from repl.js (`qjsc -s -c -o repl.c -m repl.js`) -- so qjsc is built first and generates it, as the fetch line does.",
+  "units": {
+    "list": ["quickjs.c", "dtoa.c", "libregexp.c", "libunicode.c", "cutils.c", "quickjs-libc.c"]
+  },
+  "default": "qjs",
+  "variants": {
+    "qjs": {
+      "title": "qjs, the QuickJS interpreter",
+      "addUnits": ["qjs.c", "repl.c"]
+    },
+    "qjsc": {
+      "title": "qjsc, the QuickJS compiler (JavaScript to bytecode in C)",
+      "addUnits": ["qjsc.c"]
+    }
+  },
+  "compile": {
+    "memory": 256,
+    "collect": true
+  },
+  "_defines": "The Makefile's DEFINES on a non-Windows host.",
+  "defines": {
+    "_GNU_SOURCE": "1",
+    "CONFIG_VERSION": "\"2025-04-26\"",
+    "HAVE_CLOSEFROM": "1"
+  },
+  "_env": "pthread: quickjs-libc's os.Worker and quickjs.c's Atomics.wait are POSIX threads. environ: std.getenviron walks it.",
+  "env": ["stdio", "pthread", "environ"]
+}

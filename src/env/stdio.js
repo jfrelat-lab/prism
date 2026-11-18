@@ -301,14 +301,19 @@ export function installStdio(M, {
     }
   };
   // The calendar of `secs` (already shifted to local time when it is local) into ONE static struct tm.
-  const tmOf = (secs, isdst) => {
+  const TM_BYTES = 44;   // glibc i386: nine ints, tm_gmtoff, tm_zone
+  const tmOf = (secs, isdst, gmtoff = 0) => {
     flatShapeOnly('struct tm');
-    if (!M.__tm) { M.__tm = M.rt.malloc(9 * 4); }
+    if (!M.__tm) { M.__tm = M.rt.malloc(TM_BYTES); M.__tmZone = M.rt.malloc(4); M.u8.set([85, 84, 67, 0], M.__tmZone); }
     const d = new Date(secs * 1000);
     const f = [d.getUTCSeconds(), d.getUTCMinutes(), d.getUTCHours(), d.getUTCDate(),
                d.getUTCMonth(), d.getUTCFullYear() - 1900, d.getUTCDay(),
                Math.floor((d - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000) - 1, isdst ? 1 : 0];
     for (let i = 0; i < 9; i++) M.mod.dv.setInt32(M.__tm + i * 4, f[i] | 0, true);
+    // tm_gmtoff and tm_zone: east of UTC in seconds, and a name. The offset is the one localtime
+    // shifted by; the name is UTC's, since the host's zone has no abbreviation to give.
+    M.mod.dv.setInt32(M.__tm + 36, gmtoff | 0, true);
+    M.mod.dv.setUint32(M.__tm + 40, M.__tmZone, true);
     return M.__tm;
   };
 
@@ -842,7 +847,7 @@ export function installStdio(M, {
   // silent bug -- and was one: the size said 56 from the start, so every stat() wrote four bytes past
   // the caller's struct. Chromium B.S.U.'s TextFTGL::findFont has its struct at the top of its frame,
   // and those four bytes were where its caller kept `this`.
-  const ST_MODE = 8, ST_SIZE = 28, ST_BLKSIZE = 32, ST_BLOCKS = 36, ST_SIZE_BYTES = 52;
+  const ST_MODE = 8, ST_SIZE = 28, ST_BLKSIZE = 32, ST_BLOCKS = 36, ST_SIZE_BYTES = 64;   // then st_atim, st_mtim, st_ctim: timespecs, left zero
   const S_IFREG = 0o100000, S_IFDIR = 0o040000;
 
   /*
@@ -1216,12 +1221,12 @@ export function installStdio(M, {
     localtime: (tp) => {
       const secs = tp ? (M.mod.dv.getInt32(tp, true) >>> 0) : Math.floor(M.rt.time(0));
       const off = M.utcOffset(secs);
-      return tmOf(secs + off, M.isDst(secs));
+      return tmOf(secs + off, M.isDst(secs), off);
     },
     gmtime: (tp) => tmOf(tp ? (M.mod.dv.getInt32(tp, true) >>> 0) : Math.floor(M.rt.time(0)), 0),
-    // The caller's struct tm instead of the shared one (nine ints).
-    localtime_r: (tp, res) => { const t = api.localtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + 36); return res; },
-    gmtime_r: (tp, res) => { const t = api.gmtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + 36); return res; },
+    // The caller's struct tm instead of the shared one.
+    localtime_r: (tp, res) => { const t = api.localtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + TM_BYTES); return res; },
+    gmtime_r: (tp, res) => { const t = api.gmtime(tp); if (!t) return 0; M.u8.copyWithin(res, t, t + TM_BYTES); return res; },
     tzset: () => {},
     // The path made absolute and tidy, when it names something that exists (there are no links to follow).
     realpath: (pathPtr, out) => {
@@ -1240,6 +1245,9 @@ export function installStdio(M, {
      * takes its own error path: ENOSYS for processes and links, ECHILD for a wait with no children.
      */
     pipe: () => (setErrno(38), -1), fork: () => (setErrno(38), -1), execvp: () => (setErrno(38), -1), execv: () => (setErrno(38), -1),
+    execve: () => (setErrno(38), -1),
+    // The one process is this one (getpid answers 1): a signal to it is raise's, to any other ESRCH.
+    kill: (pid, sig) => ((pid | 0) === 1 || (pid | 0) === 0 ? api.raise(sig) : (setErrno(3), -1)),
     execl: () => (setErrno(38), -1), execlp: () => (setErrno(38), -1),
     dup: () => (setErrno(38), -1), dup2: () => (setErrno(38), -1),
     symlink: () => (setErrno(38), -1), link: () => (setErrno(38), -1), chown: () => 0,

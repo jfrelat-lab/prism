@@ -17,7 +17,7 @@
 // the build.
 
 import { writeIndexedPng, writeRgbPng } from './png.mjs';
-import { readdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { readdirSync, existsSync, readFileSync, writeFileSync, statSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
@@ -575,7 +575,9 @@ if ((frameCap || pngPath || keyScript.length) && mgl) {
  */
 const runT0 = performance.now();
 try {
-  program.run([target.name, ...args]);
+  const { code } = program.run([target.name, ...args]);
+  // A program that says nothing and fails must not read as one that passed: QuickJS's tests are silent either way.
+  if (code) console.log(`exit status ${code}`);
 } catch (e) {
   /*
    * A leashed run is REPORTED, never silently treated as a completed one: it ended because time ran
@@ -591,6 +593,30 @@ try {
 // a threaded program's threads end with it (src/runtime/threads.js)
 program.M.threads?.shutdown();
 const runSecs = (performance.now() - runT0) / 1000;
+
+/*
+ * --out=<dir>: what the program WROTE, back on disk -- every file of its store that it created or
+ * changed, at its (normalised) name. A tool's output is its result: qjsc's repl.c, a compressor's
+ * archive. Files read and left alone are not copied out.
+ */
+const outDir = opt('out');
+if (outDir && program.M.files) {
+  program.M.flushAll?.();
+  const { store, norm } = program.M.files;
+  const given = new Map(Object.entries(files).map(([k, v]) => [norm(k), v]));
+  let n = 0;
+  for (const [key, raw] of store) {
+    if (typeof raw === 'function') continue;   // a lazy input never opened
+    const was = given.get(key);
+    if (was instanceof Uint8Array && Buffer.compare(was, raw) === 0) continue;
+    const path = join(outDir, key.replace(/^\/+/, ''));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, raw);
+    console.log(`  out: ${path} (${raw.length} bytes)`);
+    n++;
+  }
+  if (!n) console.log(`  out: the program wrote no file`);
+}
 /**
  * ` · 1.2 s, 257 rendered frames/s (virtual clock, unthrottled)` — and it says WHICH CLOCK, because
  * a bare "fps" here would be read as the rate a player sees. It used to say "deterministic clock"
