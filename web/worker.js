@@ -31,6 +31,7 @@ import { installX11 } from '../src/env/x11.js';
 import { keyNames } from '../src/env/scancodes.js';
 import { installGL } from '../src/env/gl.js';
 import { installGlx } from '../src/env/glx.js';
+import { installThreads } from '../src/runtime/threads.js';
 import { installFxMesa } from '../src/env/fxmesa.js';
 import { installDsp } from '../src/env/dsp.js';
 import { installPopen } from '../src/env/popen.js';
@@ -800,6 +801,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * after X11 because GLX takes the window's size from the program's own XCreateWindow.
      */
     installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    // POSIX threads after stdio, whose sleeps they take over (src/runtime/threads.js; M.threadHost was set above)
+    if (envNames(program.env).includes('pthread')) installThreads(prog.M);
     if (envNames(program.env).includes('dl')) installDl(prog.M, { modules: program.sonames ?? {} });
     if (envNames(program.env).includes('dsp')) installDsp(prog.M, { publish: { ctrl, audio } });
     installX11(prog.M, {
@@ -808,7 +811,9 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       mouse,
     });
     const backend = options.gl === 'soft' || typeof OffscreenCanvas === 'undefined' ? 'soft' : 'webgl';
-    installGL(prog.M, { backend, onLost: glLost });
+    // the extensions the target names for its GL (Doom 3 asks for the ARB programs among them)
+    const glOptions = Array.isArray(program.env) ? {} : (program.env?.gl ?? {});
+    installGL(prog.M, { backend, onLost: glLost, extensions: glOptions.extensions ?? [] });
     const publish = glPublisher('GLX', prog);
     installGlx(prog.M, {
       onSwap: (_n, gl) => {

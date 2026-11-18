@@ -1,0 +1,17 @@
+{
+  "title": "DOOM 3 (demo)",
+  "subtitle": "id Software, 2004 · 1.3.1, the GPL source — the Linux demo client, GLX, ARB2 renderer, the game as gamex86.so",
+  "target": "doom3",
+  "host": "glx",
+  "args": "",
+  "argsHint": "`+map game/mars_city1` would start the demo's level directly; without it the game opens on its menu. `+set developer 1` prints what the engine loads.",
+  "fps": 60,
+  "_fps": "Doom 3 runs its game at a fixed 60 Hz (USERCMD_HZ), its async thread ticking every 16 ms.",
+  "needsData": {
+    "dir": "doom3",
+    "marker": "demo/demo00.pk4",
+    "hint": "demo/demo00.pk4 of the Linux demo, doom3-linux-1.1.1286-demo.x86.run (its checksum must be 0xfe75bbef: the Windows demo's pk4 is refused by 1.3.1)"
+  },
+  "controls": [["arrows", "move"], ["Ctrl", "fire"], ["Esc", "menu"], ["~", "console"]],
+  "_why": "id Tech 4 in C++: 394 units, the engine and the game as two modules with their own idlib, POSIX threads for the async tick, and the ARB2 path's vertex and fragment programs translated to WebGL."
+}
