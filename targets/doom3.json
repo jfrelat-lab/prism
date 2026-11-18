@@ -798,5 +798,15 @@
   "_files": "What the INSTALLATION provides: FindDLL looks for gamex86.so beside the executable and then in the game directory before it dlopens what it found, and a real install had the file there. PRISM links the module into the program; dlopen finds it by its name (src/env/dl.js).",
   "files": {
     "demo/gamex86.so": "PRISM links this module into the program; dlopen finds it by this name (src/env/dl.js).\n"
+  },
+  "variants": {
+    "_full": "The demo's own build cannot play its levels with the 1.3.1 game code: the demo's scripts are 1.1's, and the 1.3 game links a field they lack (Weapon.cpp: WEAPON_NETFIRING, multiplayer prediction). In demo mode the file system accepts nothing beside demo00.pk4 (SetRestrictions refuses any other pk4, FileAllowedFromDir any script from a directory), so the scripts cannot be completed. `full` is the build without ID_DEMO_BUILD -- a build option, no source change: BASE_GAMEDIR is base, the demo's pk4 is loaded as a mod (+set fs_game demo; fs_basepath named, since a build without the demo flag looks for base/ beside it and falls back to /usr/local/games/doom3), and a loose demo/script/weapon_base.script that adds the missing declaration to the demo's own is read before the pak. ID_ENFORCE_KEY stays 0, as the demo build has it (BuildDefines.h leaves it to the build): a full build without it wants a CD key in base/doomkey and starts no map. What ID_DEMO_BUILD also selected goes with it: the demo's menu restrictions and its end-of-demo screen (game/Target.cpp).",
+    "full": {
+      "defines": {
+        "ID_DEMO_BUILD": null,
+        "ID_ENFORCE_KEY": "0"
+      },
+      "args": "+set fs_basepath / +set fs_game demo"
+    }
   }
 }

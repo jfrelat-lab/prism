@@ -60,6 +60,7 @@
         { "program": "quake3", "file": "quake3", "date": "Nov 14  2002" },
         { "program": "et", "file": "et", "date": "Jan 31  2012" },
         { "program": "doom3", "file": "doom.x86", "date": "Nov 29  2004" },
+        { "program": "doom3", "variant": "full", "name": "DOOM 3 (demo data, full build)", "file": "doom3.full", "date": "Nov 29  2004" },
         { "program": "lua", "file": "lua", "date": "May  2  2023" },
         { "program": "jumpnbump-sdl", "file": "jumpnbump", "date": "Feb 13  2002" },
         { "program": "jumpnbump-sdl2", "file": "jumpnbump.sdl2", "date": "Sep 16  2025" },
