@@ -485,7 +485,8 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     const key = buildKey(target, units, options);
     const hit = loadCached(root, key, resolve);
     if (hit) {
-      program = loadSnapshot({ meta: hit.meta, image: hit.image, src: hit.src });
+      // In the memory the compile would have made: a threaded program's must be shared (threads.js).
+      program = loadSnapshot({ meta: hit.meta, image: hit.image, src: hit.src }, { shared: options.shared });
       Object.assign(program, hit.reports, { bundled: false, cached: true });
     } else {
       const rec = recordingResolver(resolve);
