@@ -4,7 +4,7 @@
   "target": "doom3",
   "host": "glx",
   "args": "",
-  "argsHint": "`+map game/mars_city1` would start the demo's level directly; without it the game opens on its menu. `+set developer 1` prints what the engine loads.",
+  "argsHint": "`+map game/demo_mars_city1` starts the demo's first level directly (then demo_mars_city2, demo_mc_underground); without it the game opens on its menu. `+set developer 1` prints what the engine loads.",
   "fps": 60,
   "_fps": "Doom 3 runs its game at a fixed 60 Hz (USERCMD_HZ), its async thread ticking every 16 ms.",
   "needsData": {
