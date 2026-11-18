@@ -122,6 +122,9 @@ if (Object.keys(dateDefines).length) target.defines = { ...(target.defines ?? {}
  */
 const realClock = flag('realclock');
 const napBuf = new Int32Array(new SharedArrayBuffer(4));
+// --stdin=<file>: what the program reads on standard input, then end of file -- a scripted player.
+const stdinBytes = opt('stdin') ? readFileSync(opt('stdin')) : null;
+let stdinPos = 0;
 const sdlClock = realClock
   ? sleepingClock((ms) => { Atomics.wait(napBuf, 0, 0, Math.min(ms, 50)); })
   : virtualClock();
@@ -142,7 +145,7 @@ try {
       ...(opt('memory') ? { memory: +opt('memory') } : {}),
     },
     envExtra: {
-      stdio: { files },
+      stdio: { files, ...(stdinBytes ? { readChar: () => (stdinPos < stdinBytes.length ? stdinBytes[stdinPos++] : -1) } : {}) },
       // A real clock, because a program that times itself with a fake one measures fiction.
       pit: { micros: () => performance.now() * 1000 },
       /*

@@ -439,6 +439,7 @@ export function installStdio(M, {
 
     fgetc: (fp) => readByte(fp),
     getc: (fp) => readByte(fp),
+    getchar: () => readByte(STDIN),
     /*
      * C 7.19.7.11: pushing back EOF FAILS, and the stream is unchanged -- the end-of-file indicator
      * included. Accepting it stepped the position back a byte and cleared the flag, so a program
@@ -503,9 +504,9 @@ export function installStdio(M, {
       return bytes.length;
     },
 
-    feof: (fp) => { const h = fileOf(fp); return h && h.eof ? 1 : 0; },
+    feof: (fp) => { if ((fp | 0) === STDIN) return stdinEof ? 1 : 0; const h = fileOf(fp); return h && h.eof ? 1 : 0; },
     ferror: (fp) => { const h = fileOf(fp); return h && h.err ? 1 : 0; },
-    clearerr: (fp) => { const h = fileOf(fp); if (h) { h.eof = false; h.err = false; } },
+    clearerr: (fp) => { if ((fp | 0) === STDIN) stdinEof = false; const h = fileOf(fp); if (h) { h.eof = false; h.err = false; } },
     // fflush(NULL) flushes every stream; an unbuffered one has nothing waiting.
     fflush: (fp) => {
       if ((fp | 0) === 0) { for (const h of handles.values()) flush(h); return 0; }
@@ -574,9 +575,12 @@ export function installStdio(M, {
     h.bytes = bigger.subarray(0, len);
   }
 
+  // Standard input has no handle -- its bytes come from the host's readChar -- so its end-of-file
+  // indicator lives here: feof(stdin) after the host ran out is how a program tells EOF from error.
+  let stdinEof = false;
   function readByte(fp) {
     const f = fp | 0;
-    if (f === STDIN) return readChar();
+    if (f === STDIN) { const c = readChar(); if (c < 0) stdinEof = true; return c; }
     const h = fileOf(fp);
     if (!h) return -1;
     if (!h.read) { h.err = true; return -1; }      // a write-only stream is not readable

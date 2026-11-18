@@ -1,0 +1,57 @@
+{
+  "name": "frotz",
+  "title": "Frotz 2.54 (dfrotz, the dumb interface): the Z-machine that plays Infocom's Zork",
+  "dir": "corpus/frotz/frotz-2.54",
+  "fetch": "mkdir -p corpus/frotz && curl -Lo corpus/frotz/frotz-2.54.tar.gz https://gitlab.com/DavidGriffith/frotz/-/archive/2.54/frotz-2.54.tar.gz && tar -xzf corpus/frotz/frotz-2.54.tar.gz -C corpus/frotz && mkdir -p corpus/frotz/frotz-generated && printf '#define VERSION \"2.54\"\\n#define RELEASE_NOTES \"Official release.\"\\n#define GIT_HASH \"5a86de2f0799bde12699a0189ea12be8c96194a5\"\\n#define GIT_HASH_SHORT \"5a86de2\"\\n#define GIT_DATE \"2022-04-13 23:47:41 -0700\"\\n' > corpus/frotz/frotz-generated/hash.h && printf '#ifndef COMMON_DEFINES_H\\n#define COMMON_DEFINES_H\\n#define RELEASE_NOTES \"Official release.\"\\n#define UNIX\\n#define MAX_UNDO_SLOTS 500\\n#define MAX_FILE_NAME 80\\n#define TEXT_BUFFER_SIZE 512\\n#define INPUT_BUFFER_SIZE 200\\n#define STACK_SIZE 1024\\n#define USE_UTF8\\n#endif /* COMMON_DEFINES_H */\\n' > corpus/frotz/frotz-generated/defs.h",
+  "_doc": "Frotz interprets Infocom's story files; Zork I-III are the originals from historicalsource (MIT), each with a COMPILED/zorkN.z3. The dumb interface is plain stdio -- a prompt, a line read, text written -- which makes a scripted game an exact oracle: the same commands must print the same transcript as a native dfrotz.",
+  "_units": "The Makefile's `dumb` target: src/common's SOURCES, src/dumb's and src/blorb's (Blorb support is on by default).",
+  "units": {
+    "list": [
+      "src/common/buffer.c",
+      "src/common/err.c",
+      "src/common/fastmem.c",
+      "src/common/files.c",
+      "src/common/getopt.c",
+      "src/common/hotkey.c",
+      "src/common/input.c",
+      "src/common/main.c",
+      "src/common/math.c",
+      "src/common/missing.c",
+      "src/common/object.c",
+      "src/common/process.c",
+      "src/common/quetzal.c",
+      "src/common/random.c",
+      "src/common/redirect.c",
+      "src/common/screen.c",
+      "src/common/sound.c",
+      "src/common/stream.c",
+      "src/common/table.c",
+      "src/common/text.c",
+      "src/common/variable.c",
+      "src/dumb/dblorb.c",
+      "src/dumb/dinit.c",
+      "src/dumb/dinput.c",
+      "src/dumb/doutput.c",
+      "src/dumb/dpic.c",
+      "src/blorb/blorblib.c"
+    ]
+  },
+  "_include": "frotz.h includes \"defs.h\" and \"hash.h\", which the Makefile GENERATES into src/common. ../frotz-generated holds them as it writes them on Linux: hash.h from the release's own hash, defs.h with UNIX and USE_UTF8 and the default sizes.",
+  "include": [
+    "src/common",
+    "src/blorb",
+    "../frotz-generated"
+  ],
+  "compile": {
+    "memory": 64,
+    "collect": true
+  },
+  "_defines": "The Makefile's CFLAGS on Linux.",
+  "defines": {
+    "_POSIX_C_SOURCE": "200809L"
+  },
+  "env": [
+    "stdio"
+  ],
+  "_oracle": "Zork I-III (historicalsource/zorkN, MIT: COMPILED/zorkN.z3) played from a command script, `--stdin=<script> --args='-m -p -q -s 1234 -w 80 zork1.z3'`, against a native dfrotz: the same text and byte-identical Quetzal saves. Compare the text with blank lines folded: dfrotz places them from screen cells whose colours make_cell (src/dumb/doutput.c) leaves uninitialised -- dinit.c:216's `== FORMAT_UNKNOWN || FORMAT_DISABLED` resets every -f to normal, so the branch that would set them never runs."
+}

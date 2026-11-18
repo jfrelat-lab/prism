@@ -318,6 +318,8 @@ char *strncat(char *d, const char *s, size_t n);
    that order is strcmp's. Saying so is the whole implementation. */
 int strcoll(const char *a, const char *b);
 char *strdup(const char *s);
+/* POSIX.1-2008: at most n bytes, always terminated. */
+char *strndup(const char *s, size_t n);
 char *strtok(char *s, const char *delim);
 void *memcpy(void *d, const void *s, size_t n);
 void *memmove(void *d, const void *s, size_t n);
@@ -2459,6 +2461,9 @@ struct count_info { int bytes; int blocks; int ptr; };
 `,
   'errnos.h': '#include <errno.h>\n',
   'alloca.h': 'void *alloca(unsigned long n);\n',
+  /* POSIX's path splitting. Both may write into their argument, as POSIX lets them (and glibc's
+     <libgen.h> versions do): the trailing slashes are cut where they stand. */
+  'libgen.h': '#ifndef _PRISM_LIBGEN_H\n#define _PRISM_LIBGEN_H\nchar *basename(char *path);\nchar *dirname(char *path);\n#endif\n',
   // MSVC's and glibc's malloc.h both declare alloca; MSVC's spells it _alloca too
   'malloc.h': '#include <stdlib.h>\nvoid *alloca(unsigned long n);\nvoid *_alloca(unsigned long n);\nsize_t malloc_usable_size(void *p);\n',
   /*

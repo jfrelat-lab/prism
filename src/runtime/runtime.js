@@ -479,6 +479,9 @@ function makeLibc(M) {
   };
 
   const strlenAt = (p) => { let n = 0; while (u8()[p + n] !== 0) n++; return n; };
+  // basename's and dirname's ".": rewritten at each answer, since the caller may write into it.
+  let dotBuf = 0;
+  const pathDot = () => { dotBuf ||= lib.malloc(2); u8()[dotBuf] = 46; u8()[dotBuf + 1] = 0; return dotBuf; };
 
   // strtok's static saved pointer. See strtok below for why it cannot live in a stack frame.
   let strtokSaved = 0;
@@ -1078,6 +1081,36 @@ function makeLibc(M) {
       const n = strlenAt(s) + 1;
       const p = lib.malloc(n);
       if (p) M.u8.copyWithin(p, s, s + n);
+      return p;
+    },
+    strndup: (s, max) => {
+      let n = 0;
+      while (n < (max >>> 0) && u8()[s + n]) n++;
+      const p = lib.malloc(n + 1);
+      if (p) { M.u8.copyWithin(p, s, s + n); u8()[p + n] = 0; }
+      return p;
+    },
+    /*
+     * POSIX basename and dirname (XPG, as <libgen.h> declares them): trailing slashes are cut in the
+     * caller's string, and an empty or NULL path, or one with no slash for dirname, answers "." --
+     * from a buffer of the runtime's, which POSIX allows to be overwritten by the next call.
+     */
+    basename: (p) => {
+      if (!p || !u8()[p]) return pathDot();
+      let end = p + strlenAt(p);
+      while (end > p + 1 && u8()[end - 1] === 47) u8()[--end] = 0;
+      let b = end;
+      while (b > p && u8()[b - 1] !== 47) b--;
+      return b;
+    },
+    dirname: (p) => {
+      if (!p || !u8()[p]) return pathDot();
+      let end = p + strlenAt(p);
+      while (end > p + 1 && u8()[end - 1] === 47) end--;
+      while (end > p && u8()[end - 1] !== 47) end--;
+      if (end === p) return pathDot();
+      while (end > p + 1 && u8()[end - 1] === 47) end--;
+      u8()[end] = 0;
       return p;
     },
     /*
