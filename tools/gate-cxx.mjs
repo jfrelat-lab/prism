@@ -2109,6 +2109,25 @@ if (!FILTER) {
     + 'class menu { public: int x; };\nint D::on() { if (menu) return 1; return 0; }\n'
     + 'int main() { D d; W w; d.menu = &w; printf("%d\\n", d.on()); return 0; }\n';
   option.push(['a data member hides a class of its name declared after it', out(LATECLASS, 'unit.cpp') === '1']);
+  // Abuse's DOS timing.c, built by Watcom C++ 10: `static chain_on=0,chain_counter=0;`, an int with no type.
+  const IMPLICIT = '#include <stdio.h>\nstatic n = 5, m = 2;\nint main() { printf("%d\\n", n * m); return 0; }\n';
+  // ...its `void (__interrupt __far *prev_int8)()` and its `#pragma aux cli = "cli"`, a routine for a C++ name.
+  const FARPTR = '#include <stdio.h>\nstatic void h() { printf("h\\n"); }\nstatic void (__interrupt __far *p)() = h;\nint main() { p(); return 0; }\n';
+  const AUX = '#include <stdio.h>\nvoid quiet();\n#pragma aux quiet = "nop";\nint main() { quiet(); printf("ok\\n"); return 0; }\n';
+  option.push(
+    ['watcom: a declaration with no type is an int', out(IMPLICIT, 'unit.cpp', { compiler: 'watcom' }) === '10'],
+    ['gcc2: the same', out(IMPLICIT, 'unit.cpp', GCC2) === '10'],
+    ['...refused as g++ would', out(IMPLICIT, 'unit.cpp').startsWith('refused')],
+    ['Watcom\'s __interrupt and __far stand inside a declarator\'s parentheses', out(FARPTR, 'unit.cpp', { compiler: 'watcom' }) === 'h'],
+  );
+  // compileProgram, not compile(): the one-unit path resolves no #pragma aux at all, C or C++.
+  const auxRun = (() => {
+    try {
+      return compileProgram([{ file: 'timing.cpp', source: AUX }],
+        { resolve: builtinHeaderResolver({}), memory: 8 << 20, cxx: { compiler: 'watcom' } }).run(['x']).stdout.trim();
+    } catch (e) { return `refused: ${e.message.split('\n')[0]}`; }
+  })();
+  option.push(['a #pragma aux routine defines the C++ function of its name (mangled)', auxRun === 'ok']);
   // What the lowering must never emit, the C front end refuses as gcc does ("array type has
   // incomplete element type") rather than giving the rows a stride of 0.
   const AREA = 'struct Area { short a; short b[4]; };\n';

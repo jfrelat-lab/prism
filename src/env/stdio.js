@@ -98,6 +98,12 @@ export function installStdio(M, {
    */
   function norm(name) {
     let p = String(name).replace(/\\/g, '/').toLowerCase();
+    /*
+     * A drive's ROOT is the store's: there is one drive, C:, and `c:\\lcache00.tmp` (Abuse's DOS
+     * build puts its Lisp cache there) is the file `lcache00.tmp` at the top -- kept as `c:/...` it
+     * named a directory `c:` that never exists, and every file created there failed.
+     */
+    p = p.replace(/^[a-z]:\//, '/');
     // Relative to the current directory, unless absolute or a DOS drive path.
     if (cwd && !p.startsWith('/') && !/^[a-z]:/.test(p)) p = `${cwd}/${p}`;
     while (p.startsWith('./')) p = p.slice(2);
@@ -1355,7 +1361,7 @@ export function installStdio(M, {
        */
       if (!names.size && !directories.has(want)) { setErrno(2); return 0; }
       const h = dirs.length;
-      dirs.push({ names: [...names].sort(), i: 0 });
+      dirs.push({ names: [...names].sort(), i: 0, prefix });
       return DIR_BASE + h;
     },
     readdir: (handle) => {
@@ -1368,6 +1374,8 @@ export function installStdio(M, {
       M.u8.set(bytes, d.buf);
       M.u8[d.buf + bytes.length] = 0;
       M.u8[d.buf + 256] = 0;              // d_type: DT_UNKNOWN
+      // Watcom's d_attr (headers-watcom.js direct.h): a directory is _A_SUBDIR, a file _A_ARCH.
+      M.u8[d.buf + 257] = isDirKey(`${d.prefix ?? ''}${name}`) ? 0x10 : 0x20;
       return d.buf;
     },
     rewinddir: (handle) => { const d = dirs[(handle | 0) - DIR_BASE]; if (d) d.i = 0; },

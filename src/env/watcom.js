@@ -228,6 +228,43 @@ export function installWatcom(M, {
      * deliverKeyboard looking for a vector 9 that was never there.
      */
     _dos_setvect: (num, fn) => { state.vectors.set((num | 0) & 0xff, fn >>> 0); return 0; },
+    _dos_getdrive: (drive) => { if (drive) M.mod.dv.setUint32(drive, 3, true); },
+    /*
+     * _chain_intr: the previous handler runs instead of a return. Here a vector holds either a
+     * program's handler (recorded by _dos_setvect) or nothing -- the BIOS's own has no work to do
+     * that the host does not -- so chaining calls the one that is there.
+     */
+    _chain_intr: (fn) => { if (fn) M.icall(fn >>> 0, []); },
+    // intr(): int386 on a REGPACK, whose EAX..EDX lie where REGS has them and ESI, EDI one word later.
+    intr: (num, rp) => {
+      const r = M.rt.malloc(32);
+      M.u8.fill(0, r, r + 32);
+      M.u8.copyWithin(r, rp, rp + 16);                       // eax ebx ecx edx
+      M.u8.copyWithin(r + 16, rp + 20, rp + 28);              // esi edi
+      api.int386(num, r, r);
+      M.u8.copyWithin(rp, r, r + 16);
+      M.u8.copyWithin(rp + 20, r + 16, r + 24);
+      dv().setUint32(rp + 36, dv().getUint32(r + 24, true) & 1, true);   // flags: carry
+      M.rt.free(r);
+    },
+    // The DOS clock: local time from the runtime's clock. Setting it changes nothing here.
+    _dos_gettime: (t) => {
+      const tm = M.rt.localtime(0), g = (i) => dv().getInt32(tm + i * 4, true);
+      M.u8[t] = g(2); M.u8[t + 1] = g(1); M.u8[t + 2] = g(0); M.u8[t + 3] = 0;
+    },
+    _dos_settime: () => 0,
+    _dos_getdate: (d) => {
+      const tm = M.rt.localtime(0), g = (i) => dv().getInt32(tm + i * 4, true);
+      M.u8[d] = g(3); M.u8[d + 1] = g(4) + 1; dv().setUint16(d + 2, g(5) + 1900, true); M.u8[d + 4] = g(6);
+    },
+    _dos_setdate: () => 0,
+    _bios_keybrd: (service) => biosKeyboard(service & 0xff).eax & 0xffff,
+    _dos_setdrive: (_drive, total) => { if (total) M.mod.dv.setUint32(total, 3, true); },
+    _dos_getdiskfree: (_drive, df) => {
+      // 65535 clusters of 64 sectors of 512 bytes: the most a FAT16 disk of the time could say.
+      [65535, 32768, 64, 512].forEach((v, i) => M.mod.dv.setUint16(df + i * 2, v, true));
+      return 0;
+    },
     _dos_getvect: (num) => state.vectors.get((num | 0) & 0xff) ?? 0,
     _dos_irqenable: () => 0,
     _dos_irqdisable: () => 0,
@@ -411,6 +448,13 @@ export function watcomBuiltins(T) {
     int386x: f(I, I, P, P, P),
     segread: f(V, P),
     _dos_setvect: f(V, U, P),
+    _dos_getdrive: f(V, P),
+    _dos_setdrive: f(V, U, P),
+    _dos_getdiskfree: f(U, U, P),
+    _chain_intr: f(V, P),
+    intr: f(V, I, P),
+    _dos_gettime: f(V, P), _dos_settime: f(U, P), _dos_getdate: f(V, P), _dos_setdate: f(U, P),
+    _bios_keybrd: f(U, U),
     _dos_getvect: f(P, U),
     _dos_irqenable: f(V, U), _dos_irqdisable: f(V, U),
     _enable: f(V), _disable: f(V),

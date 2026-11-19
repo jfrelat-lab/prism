@@ -152,6 +152,11 @@ typedef struct _PRISM_FILE FILE;
 #define _PRISM_FILE_DEFINED
 struct _PRISM_FILE { char __opaque[148]; };
 #endif
+/* Watcom's struct __iobuf: _ptr, _cnt, _link, _flag, _handle, _bufsize, _ungotten under its pack(1) -- 26 bytes. */
+#if defined(__WATCOMC__) && !defined(_PRISM_FILE_DEFINED)
+#define _PRISM_FILE_DEFINED
+struct _PRISM_FILE { char __opaque[26]; };
+#endif
 /*
  * TENTATIVE definitions, not externs — the same reason as errno: these have to EXIST somewhere and no
  * PRISM translation unit defines them. C89's common-symbol rule merges them by name across units, and
@@ -906,6 +911,11 @@ int errno;
 const FCNTL = `
 #ifndef _PRISM_FCNTL_H
 #define _PRISM_FCNTL_H
+/* Watcom's <fcntl.h> brings open()'s mode bits with it: Abuse's fileman.c, built by wpp386, includes
+   <sys/stat.h> only #ifndef __WATCOMC__ and still names S_IRWXU. */
+#ifdef __WATCOMC__
+#include <sys/stat.h>
+#endif
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR   2

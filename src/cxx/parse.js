@@ -30,7 +30,16 @@ export class CxxError extends Error {
 const BUILTIN = new Set(['void', 'bool', 'char', 'short', 'int', 'long', 'float', 'double', 'signed',
   'unsigned', '__signed', '__signed__', '_Bool', 'wchar_t']);
 // `restrict` is C99's and no C++ keyword (g++ knows __restrict): Doom 3 names a variable so (RenderSystem_init.cpp)
-const CV = new Set(['const', 'volatile', '__const', '__const__', '__volatile', '__volatile__', '__restrict', '__restrict__']);
+const CV = new Set(['const', 'volatile', '__const', '__const__', '__volatile', '__volatile__', '__restrict', '__restrict__',
+  /*
+   * Watcom's memory-model and interrupt qualifiers, accepted and ignored as the C front end does
+   * (src/parse/parser.js QUALS): with one flat segment __far and __near describe nothing. __interrupt
+   * changes a calling convention that nothing here can invoke a handler through. Abuse's DOS
+   * event.c keeps `void (__interrupt __far *old)()`.
+   */
+  '__far', '_far', '__near', '_near', '__interrupt', '_interrupt', '__loadds', '_loadds', '__saveregs', '_saveregs']);
+/* The Watcom ones alone: they may also stand INSIDE a declarator's parentheses, before its `*`. */
+const MODEL_QUALS = new Set(['__far', '_far', '__near', '_near', '__interrupt', '_interrupt', '__loadds', '_loadds', '__saveregs', '_saveregs']);
 const STORAGE = new Set(['static', 'extern', 'typedef', 'register', 'auto', 'mutable']);
 const FUNCSPEC = new Set(['inline', '__inline', '__inline__', 'virtual', 'explicit', 'friend']);
 export const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'class', 'struct', 'union', 'enum',
@@ -187,7 +196,7 @@ class CxxParser {
       const it = this.topItem();
       if (it) items.push(...[].concat(it));
     }
-    return { k: 'unit', items };
+    return { k: 'unit', items, auxLines: this.auxLines ?? [] };
   }
 
   topItem() {
@@ -281,6 +290,12 @@ class CxxParser {
     this.next();
     const words = [];
     while (!this.done && !this.peek().bol) words.push(this.next().v);
+    /*
+     * `#pragma aux NAME = "insn" ...`: Watcom's assembly routines are the C front end's to compile
+     * (src/asm/pragma-aux.js), so the line is kept and handed on with the lowered C (index.js cxxToC).
+     * Abuse's DOS timing.c defines cli() and sti() so, in a unit compiled as C++.
+     */
+    if (words[0] === 'pragma' && words[1] === 'aux') (this.auxLines ??= []).push(words.join(' '));
     /*
      * `#pragma pack` is acted on, as the C parser acts on it: it is struct layout. ScummVM 0.10.0
      * packs its file structures between common/pack-start.h and pack-end.h with `#pragma pack(1)`
@@ -813,6 +828,7 @@ class CxxParser {
       if (this.eatP('*')) { ptrs.push({ k: 'ptr', cv: this.cvList() }); continue; }
       if (this.eatP('&')) { ptrs.push({ k: 'ref' }); continue; }
       if (this.isKw('__attribute__')) { this.skipAttribute(); continue; }
+      if (this.peek().k === ID && MODEL_QUALS.has(this.peek().v)) { this.next(); continue; }   // `(__interrupt __far *f)()`
       break;
     }
     let name = null, inner = null;
@@ -861,6 +877,10 @@ class CxxParser {
   /** `(` opening a nested declarator (`(*fp)(int)`), not a parameter list. */
   parenIsDeclarator() {
     if (this.isMemberPointerAhead(1)) return true;
+    // `(__interrupt __far *f)`: Watcom's qualifiers before the `*` still make it a declarator.
+    let k = 1;
+    while (this.peek(k).k === ID && MODEL_QUALS.has(this.peek(k).v)) k++;
+    if (k > 1) return this.isP('*', k) || this.isP('&', k);
     return this.isP('*', 1) || this.isP('&', 1) || (this.isP('(', 1)) || (this.isIdent(1) && !this.isTypeName(1) && this.isP(')', 2) && this.isP('(', 3));
   }
   /** At `(` after a declarator name: a parameter list rather than a direct initialiser `T x(a)`. */

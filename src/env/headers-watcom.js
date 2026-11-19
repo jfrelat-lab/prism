@@ -23,6 +23,25 @@ struct SREGS { unsigned short es, cs, ss, ds, fs, gs; };
 int  int386(int inter_no, const union REGS *in, union REGS *out);
 int  int386x(int inter_no, const union REGS *in, union REGS *out, struct SREGS *seg);
 void segread(struct SREGS *seg);
+/* intr()'s register pack, Watcom's layout: EBP and the segment registers travel too. */
+struct REGPACKX { unsigned int eax, ebx, ecx, edx, ebp, esi, edi; unsigned short ds, es, fs, gs; unsigned int flags; };
+struct REGPACKW { unsigned short ax, _1, bx, _2, cx, _3, dx, _4, bp, _5, si, _6, di, _7;
+                  unsigned short ds, es, fs, gs; unsigned int flags; };
+union REGPACK { struct REGPACKX x; struct REGPACKW w; };
+void intr(int inter_no, union REGPACK *regs);
+/* The DOS clock and calendar (INT 21h AH=2Ch/2Ah), Watcom's structures. */
+struct dostime_t { unsigned char hour, minute, second, hsecond; };
+struct dosdate_t { unsigned char day, month; unsigned short year; unsigned char dayofweek; };
+void _dos_gettime(struct dostime_t *t);
+unsigned _dos_settime(struct dostime_t *t);
+void _dos_getdate(struct dosdate_t *d);
+unsigned _dos_setdate(struct dosdate_t *d);
+/* The current drive, 1 = A:. There is one drive here, C:, and it cannot be changed. */
+void _dos_getdrive(unsigned *drive);
+void _dos_setdrive(unsigned drive, unsigned *total);
+/* A drive's free space, Watcom's layout. Drive C: answers a 2 GB disk with 1 GB free in 32 KB clusters. */
+struct diskfree_t { unsigned short total_clusters, avail_clusters, sectors_per_cluster, bytes_per_sector; };
+unsigned _dos_getdiskfree(unsigned drive, struct diskfree_t *df);
 
 /*
  * The interrupt vector table. A handler is recorded rather than installed -- and recorded rather
@@ -32,6 +51,8 @@ void segread(struct SREGS *seg);
 typedef void (*__prism_isr)(void);
 void _dos_setvect(unsigned interrupt_no, __prism_isr handler);
 __prism_isr _dos_getvect(unsigned interrupt_no);
+/* Pass the interrupt on to another handler -- the previous vector's, recorded by _dos_getvect. */
+void _chain_intr(__prism_isr handler);
 void _dos_irqenable(unsigned irq);
 void _dos_irqdisable(unsigned irq);
 void _enable(void);
@@ -160,6 +181,18 @@ void TSM_Remove(void);
 `;
 
 export const WATCOM_HEADERS = {
+  /* Watcom's C++ String class header, which brings <string.h>: that is all Abuse's doscall.c takes from it (memset). */
+  'string.hpp': '#include <string.h>\n',
+  /* The BIOS keyboard through Watcom's _bios_keybrd: INT 16h AH=0 (read), 1 (ready), 2 (shift state). */
+  'bios.h': `
+#ifndef _PRISM_WATCOM_BIOS_H
+#define _PRISM_WATCOM_BIOS_H
+#define _KEYBRD_READ 0
+#define _KEYBRD_READY 1
+#define _KEYBRD_SHIFTSTATUS 2
+unsigned short _bios_keybrd(unsigned service);
+#endif
+`,
   'graph.h': GRAPH_H,
   'conio.h': CONIO_H,
   'dmx.h': DMX_H,
@@ -175,7 +208,18 @@ export const WATCOM_HEADERS = {
   'direct.h': `
 #ifndef _PRISM_DIRECT_H
 #define _PRISM_DIRECT_H
-struct dirent { char d_name[256]; };
+/* d_name where every PRISM dirent has it; d_attr (byte 257, past the d_type byte readdir writes at 256) carries
+   the DOS attributes -- _A_SUBDIR for a directory -- that Watcom's readdir reports and Abuse's jdir.c sorts by. */
+struct dirent { char d_name[256]; unsigned char __d_type; unsigned char d_attr; };
+#ifndef _A_NORMAL
+#define _A_NORMAL 0x00
+#define _A_RDONLY 0x01
+#define _A_HIDDEN 0x02
+#define _A_SYSTEM 0x04
+#define _A_VOLID 0x08
+#define _A_SUBDIR 0x10
+#define _A_ARCH 0x20
+#endif
 typedef struct __prism_DIR DIR;
 DIR *opendir(const char *path);
 struct dirent *readdir(DIR *d);

@@ -20,6 +20,7 @@ export const isCxxFile = (file) => /\.(cpp|cc|cxx|c\+\+|C)$/.test(file);
  *                                   accepts and g++ refuses (MSVC_RULES below). "gcc" is the default.
  *   cxx: { compiler: "gcc2" }       the program was written for the g++ of the 1990s (2.7, 2.8, egcs),
  *                                   which warned where today's refuses (GCC2_RULES below).
+ *   cxx: { compiler: "watcom" }     Watcom C++ 10 (1994): the same pre-standard rules as gcc2.
  *
  * ONE dialect exists: the C++98 subset src/cxx/parse.js states. `std` is there so that a target
  * SAYS what it was written in, and so that asking for a newer one is refused by name rather than
@@ -27,7 +28,7 @@ export const isCxxFile = (file) => /\.(cpp|cc|cxx|c\+\+|C)$/.test(file);
  */
 const STANDARDS = new Set(['c++98', 'gnu++98', 'c++03', 'gnu++03']);
 const LANGUAGES = new Set(['c', 'c++']);
-const COMPILERS = new Set(['gcc', 'msvc', 'gcc2']);
+const COMPILERS = new Set(['gcc', 'msvc', 'gcc2', 'watcom']);
 const KEYS = new Set(['std', 'language', 'compiler']);
 
 /*
@@ -54,7 +55,12 @@ const KEYS = new Set(['std', 'language', 'compiler']);
  *   - a function converts to void *, as with Visual C++: Abuse's ant.c returns its own ant_ai from
  *     a void *(*)() -- sema-expr.js scalarConv;
  *   - a string literal is a char[] (the ARM's rule; the standard made it const): demo.c writes
- *     "DEMO,VERSION:2" through bFILE::write(void *, size_t) -- sema-expr.js scalarConv.
+ *     "DEMO,VERSION:2" through bFILE::write(void *, size_t) -- sema-expr.js scalarConv;
+ *   - a declaration with no type is an int ("ANSI C++ forbids declaration with no type", a warning):
+ *     Abuse's DOS timing.c has `static chain_on=0,chain_counter=0;` -- sema.js specType.
+ *
+ * Watcom C++ 10, the compiler of the 1990s DOS games, accepted the same things: compiler "watcom"
+ * applies these rules too.
  */
 export const MSVC_DEFINES = {
   __int64: 'long long', __int32: 'int', __int16: 'short', __int8: 'char', __w64: '', __forceinline: 'inline',
@@ -114,5 +120,8 @@ export const CXX_DEFINES = { __cplusplus: '199711L' };
 export function cxxToC(tokens, { file = 'unit.cpp', builtins = null, compiler = 'gcc' } = {}) {
   // PRISM's own headers are C headers: their declarations have C linkage, as if in extern "C".
   const unit = parseCxx(tokens, { cLinkage: (t) => !!t?.loc?.file?.startsWith('<') });
-  return lowerCxx(unit, { tag: file, builtins, msvc: compiler === 'msvc', gcc2: compiler === 'gcc2' });
+  const c = lowerCxx(unit, { tag: file, builtins, msvc: compiler === 'msvc', gcc2: compiler === 'gcc2' || compiler === 'watcom' });
+  // The unit's `#pragma aux` routines, for the C front end: they name the function as the source does,
+  // and compile.js finds its C name (the mangled one) when no C function bears it.
+  return unit.auxLines.length ? `${c}\n${unit.auxLines.map((l) => `#${l}`).join('\n')}\n` : c;
 }

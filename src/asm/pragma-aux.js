@@ -154,6 +154,13 @@ function emitInsn(text, ctx) {
     case 'jnz': case 'jne': { ctx.jumps.add(args[0]); return `if (!zf) { _pc = ${JSON.stringify(args[0])}; continue; }`; }
     case 'jmp': { ctx.jumps.add(args[0]); return `{ _pc = ${JSON.stringify(args[0])}; continue; }`; }
     case 'nop': return '';
+    /*
+     * The interrupt flag, through the environment's _disable/_enable -- so a routine written in
+     * assembly and Watcom's C intrinsics act alike. Abuse's DOS timing.c brackets its PIT
+     * reprogramming with `#pragma aux cli = "cli"` and sti.
+     */
+    case 'cli': return 'M.rt._disable?.();';
+    case 'sti': return 'M.rt._enable?.();';
   }
   throw new AuxError(`unsupported instruction '${op}' in #pragma aux ${ctx.name}: '${s}'`);
 }

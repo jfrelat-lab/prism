@@ -122,7 +122,7 @@ function exportsFromDef(path) {
 }
 
 /** An #include resolver over one source tree plus PRISM's own headers. */
-export function makeResolver(dir, { caseInsensitive = false, include = null } = {}, missing, dosPaths,
+export function makeResolver(dir, { caseInsensitive = false, include = null, systemIncludesFirst = false } = {}, missing, dosPaths,
   envTable = {}, casePaths = null) {
   /*
    * PRISM's OWN headers, by lower-cased name, for a caseInsensitive target.
@@ -199,6 +199,16 @@ export function makeResolver(dir, { caseInsensitive = false, include = null } = 
 
   return function resolver(name, angled, fromFile) {
     const from = angled ? null : fromFile;
+    /*
+     * `systemIncludesFirst`: an ANGLED include is the compiler's own header before the program's. gcc's -I puts
+     * the tree first; Watcom's INCLUDE variable is a plain search path, and Abuse's makefile.wat writes
+     * `set include=$(%WATCOM)\h;inc;../imlib/include` -- so its <dos.h> is Watcom's, where the X11 build's
+     * (gcc -I../imlib/include) is imlib/include/dos.h. A header only the tree has still comes from the tree.
+     */
+    if (angled && systemIncludesFirst) {
+      const sys = envTable[name] ?? HEADERS[name];
+      if (sys !== undefined) return { path: `<${name}>`, text: sys };
+    }
     let hit = lookup(name, from);
 
     /*

@@ -1,13 +1,12 @@
 {
   "name": "abuse",
-  "title": "Abuse 2.00 (Crack dot Com, 1996): Debian 2.0's abuse 2.00-11, the Linux X11 build",
+  "title": "Abuse 2.00 (Crack dot Com, 1996), from Debian 2.0's abuse 2.00-11 source",
   "dir": "corpus/abuse/debian-src/abuse-2.00",
   "fetch": "mkdir -p corpus/abuse/debian-src corpus/abuse/debian-lib/x corpus/abuse/debian-lib/data && curl -Lo corpus/abuse/debian-src/abuse_2.00.orig.tar.gz http://archive.debian.org/debian/dists/hamm/main/source/games/abuse_2.00.orig.tar.gz && curl -Lo corpus/abuse/debian-src/abuse_2.00-11.diff.gz http://archive.debian.org/debian/dists/hamm/main/source/games/abuse_2.00-11.diff.gz && tar -xzf corpus/abuse/debian-src/abuse_2.00.orig.tar.gz -C corpus/abuse/debian-src && cp -R corpus/abuse/debian-src/abuse-2.00.orig corpus/abuse/debian-src/abuse-2.00 && gunzip -c corpus/abuse/debian-src/abuse_2.00-11.diff.gz | patch -p1 -d corpus/abuse/debian-src/abuse-2.00 && curl -Lo corpus/abuse/debian-lib/abuse-lib_2.00-5.deb http://archive.debian.org/debian/dists/hamm/main/binary-i386/games/abuse-lib_2.00-5.deb && (cd corpus/abuse/debian-lib/x && ar x ../abuse-lib_2.00-5.deb) && tar -xzf corpus/abuse/debian-lib/x/data.tar.gz -C corpus/abuse/debian-lib/data",
   "_doc": "Crack dot Com's own source, released to the public domain in 1997, as Debian 2.0 (hamm) built it: abuse_2.00.orig.tar.gz with Debian's abuse_2.00-11.diff.gz applied, as dpkg-source -x does -- the source of the abuse 2.00-11 binary that MIRAGE-LINUX can run, the cross-oracle. The patch is Joey Hess's (1997) and is what let Debian ship the game without Bobby Prince's non-free sound effects: the release's cache.c exits when a .wav is missing, the patched one goes on; it also pins PATH/ABUSE_PATH (the binary was setgid games) and drops a mem_report that crashed without sound. The shareware levels, art and Lisp are Debian's abuse-lib 2.00-5 (public domain, Dave Taylor's 1997 letter in its copyright file).",
-  "_units": "abuse/Makefile.am's abuse_x11R6_SOURCES, and the imlib libraries it links (imlib/Makefile.am) as configure picks them on Linux: libimage, libgui, libpacket, libdir (port/unix/jdir.c), libtime (port/unix/timing.c), libsound (readwav.c + port/sgi/sound.c -- configure's choice for *-linux, the SGI driver talking to lnx_sdrv), libjoy (port/linux/joystick.c), libwinman (port/x11). Not libnet (port/unix/jnet.c): abuse_x11R6_LDADD's IMLIBS does not link it, and listing it defined net_uninit twice.",
+  "_units": "The game and imlib units both platforms build (abuse/Makefile.am's abuse_x11R6_SOURCES, abuse/makefile.wat's gameo objects, imlib's libraries); each variant adds its platform's port and network driver.",
   "units": {
     "list": [
-      "abuse/src/net/mac/tcpip.c",
       "abuse/src/specache.c",
       "abuse/src/netcfg.c",
       "abuse/src/text_gui.c",
@@ -105,28 +104,19 @@
       "imlib/filesel.c",
       "imlib/tools.c",
       "imlib/guistat.c",
-      "imlib/readwav.c",
-      "imlib/port/sgi/sound.c",
-      "imlib/port/unix/jdir.c",
-      "imlib/port/x11/video.c",
-      "imlib/port/x11/mouse.c",
-      "imlib/port/x11/event.c",
-      "imlib/jwindow.c",
-      "imlib/port/linux/joystick.c",
-      "imlib/port/unix/timing.c"
+      "imlib/readwav.c"
     ]
   },
-  "_include": "abuse/Makefile.am's INCLUDES, then imlib's own (-I include).",
   "include": [
     "abuse/inc",
     "imlib/include",
     "abuse/src/net/inc",
     "abuse/src/net/unix"
   ],
+  "_compile": "Every unit is a .c compiled by $(CXX): the Makefiles' COMPILE rule.",
   "compile": {
     "memory": 128,
     "collect": true,
-    "_cxx": "Every unit is a .c compiled by $(CXX): the Makefiles' COMPILE rule.",
     "cxx": {
       "language": {
         "*.c": "c++"
@@ -134,17 +124,85 @@
       "compiler": "gcc2"
     }
   },
-  "_defines": "MYDEFS (MANAGE_MEM, NO_CHECK), and what configure finds on Debian 2.0: HAVE_ATEXIT (AC_CHECK_FUNCS(atexit on_exit, break) stops at the first). NOT NO_XSHM: configure looks for XShmAttach in libXext first, and finds it, so the MIT-SHM path is compiled in; PRISM's X server then says the extension is absent at run time, as a remote server would, and Abuse takes XPutImage. __linux__ as gcc predefines it on Linux: Abuse tests it (6 places).",
   "defines": {
     "MANAGE_MEM": "1",
-    "NO_CHECK": "1",
-    "HAVE_ATEXIT": "1",
-    "__linux__": "1"
+    "NO_CHECK": "1"
   },
-  "env": [
-    "stdio",
-    "x11"
-  ],
-  "_args": "debian/wrapper's: -nosound when /var/lib/games/abuse/sfx is absent, which it is (abuse-sfx is non-free).",
-  "args": "-nosound"
+  "_defines": "MYDEFS in both builds' rules: -DMANAGE_MEM -DNO_CHECK (the opt build's).",
+  "default": "x11",
+  "variants": {
+    "x11": {
+      "title": "Abuse 2.00: Debian 2.0's abuse.x11R6 (Linux, X11)",
+      "_doc": "abuse/Makefile.am's abuse.x11R6, linked with the imlib libraries configure picks on Linux: libsound (readwav.c + port/sgi/sound.c -- configure's choice for *-linux, the SGI driver talking to lnx_sdrv), libdir (port/unix/jdir.c), libjoy (port/linux/joystick.c), libtime (port/unix/timing.c), libwinman (port/x11 + jwindow.c). Not libnet (port/unix/jnet.c): abuse_x11R6_LDADD's IMLIBS does not link it, and listing it defined net_uninit twice.",
+      "addUnits": [
+        "abuse/src/net/mac/tcpip.c",
+        "imlib/port/sgi/sound.c",
+        "imlib/port/unix/jdir.c",
+        "imlib/port/x11/video.c",
+        "imlib/port/x11/mouse.c",
+        "imlib/port/x11/event.c",
+        "imlib/jwindow.c",
+        "imlib/port/linux/joystick.c",
+        "imlib/port/unix/timing.c"
+      ],
+      "_defines": "MYDEFS (MANAGE_MEM, NO_CHECK), and what configure finds on Debian 2.0: HAVE_ATEXIT (AC_CHECK_FUNCS(atexit on_exit, break) stops at the first). NOT NO_XSHM: configure looks for XShmAttach in libXext first, and finds it, so the MIT-SHM path is compiled in; PRISM's X server then says the extension is absent at run time, as a remote server would, and Abuse takes XPutImage. __linux__ as gcc predefines it on Linux: Abuse tests it (6 places).",
+      "defines": {
+        "HAVE_ATEXIT": "1",
+        "__linux__": "1"
+      },
+      "_args": "debian/wrapper's: -nosound when /var/lib/games/abuse/sfx is absent, which it is (abuse-sfx is non-free).",
+      "args": "-nosound",
+      "_run": "--data=<abuse-lib> --mount=/var/lib/games/abuse --exact --cwd=/var/lib/games/abuse, as Debian installs it and debian/wrapper starts it; --input=\"wait 50; click 47 166\" passes the gamma screen.",
+      "env": [
+        "stdio",
+        "x11"
+      ]
+    },
+    "dos4gw": {
+      "title": "Abuse 2.00: the DOS build (Watcom C++ 10, DOS/4GW)",
+      "_doc": "abuse/makefile.wat's gameo.exe (the opt build) as game.lnk links it: the game's objects with src/net/dos4gw/ipx.c for its network, and imlib's Watcom libraries image, winman (port/dos4gw video, mouse, event, doscall + jwindow.c), gui, dir, time, sound (port/dos4gw/sound.c, readwav.c, profile.c), joy, packet. NOT HMI's SOS (c:\\sos\\lib\\sosw1cr.lib): a commercial library the release does not carry -- its functions are left undefined and the game runs -nosound, which never calls them.",
+      "addUnits": [
+        "abuse/src/net/dos4gw/ipx.c",
+        "imlib/port/dos4gw/video.c",
+        "imlib/port/dos4gw/mouse.c",
+        "imlib/port/dos4gw/event.c",
+        "imlib/port/dos4gw/doscall.c",
+        "imlib/jwindow.c",
+        "imlib/port/dos4gw/jdir.c",
+        "imlib/port/dos4gw/timing.c",
+        "imlib/port/dos4gw/joystick.c",
+        "imlib/port/unix/sound.c"
+      ],
+      "_defines": "__WATCOMC__ and __386__ are wpp386's identity macros, which the source tests in 33 places. HAVE_ATEXIT: exitproc.hpp, written for the autoconf build, demands it or HAVE_ON_EXIT; makefile.wat defines neither, and Watcom's library has atexit.",
+      "defines": {
+        "__WATCOMC__": "1000",
+        "__386__": "1",
+        "HAVE_ATEXIT": "1"
+      },
+      "_compile": "/zp1 in every opt rule: byte alignment, so every struct changes size -- including the .spe files' headers it reads. C++ as Watcom C++ 10 took it: the pre-standard rules (compiler \"watcom\", src/cxx/index.js).",
+      "compile": {
+        "pack": 1,
+        "cxx": {
+          "language": {
+            "*.c": "c++"
+          },
+          "compiler": "watcom"
+        }
+      },
+      "args": "-nosound",
+      "env": [
+        "stdio",
+        "crtstatus",
+        "vgadac",
+        "kbd8042",
+        "pit",
+        "watcom"
+      ],
+      "_sound": "imlib's own no-sound driver (port/unix/sound.c) where the sound library's port/dos4gw/sound.c stood: that one is written against HMI's SOS SDK (sos.h, sosm.h, sosw1cr.lib), which the release does not carry, and profile.c reads SOS's configuration for it alone. A departure, stated: the game runs -nosound either way.",
+      "_systemIncludesFirst": "makefile.wat's `set include=$(%WATCOM)\\h;inc;../imlib/include;...`: Watcom's own headers before the tree's, so <dos.h> is Watcom's and not imlib/include/dos.h (which the X11 build, gcc -I, does mean).",
+      "systemIncludesFirst": true,
+      "_dir": "The release as Crack dot Com shipped it, abuse_2.00.orig.tar.gz untouched: Debian's patch is the Linux package's (its game.c pins ABUSE_PATH to /var/lib/games/abuse/ on every platform), so the DOS build takes the tree it was written in.",
+      "dir": "corpus/abuse/debian-src/abuse-2.00.orig"
+    }
+  }
 }

@@ -1291,7 +1291,18 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
     for (const aux of p.unit.aux ?? []) {
       if (auxSeen.has(aux.name)) continue;
       const home = perModule.get(p.module ?? MAIN);
-      const f = home.funcs.get(aux.name) ?? perModule.get(MAIN).funcs.get(aux.name);
+      /*
+       * By its name, or -- from a C++ unit -- by the ONE free function of that name, which C++ has
+       * mangled: Watcom applied an aux pragma to `void cli();` declared in C++ (Abuse's timing.c),
+       * and here that function is _Z3cliv. Two overloads of the name would be a choice; none is made.
+       */
+      const byName = (m) => {
+        if (m.funcs.has(aux.name)) return m.funcs.get(aux.name);
+        const prefix = `_Z${aux.name.length}${aux.name}`;
+        const hits = [...m.funcs.keys()].filter((k) => k.startsWith(prefix) && /^[A-Za-z]/.test(k.slice(prefix.length)));
+        return hits.length === 1 ? m.funcs.get(hits[0]) : undefined;
+      };
+      const f = byName(home) ?? byName(perModule.get(MAIN));
       // Only where the C defines nothing. A program that ships both a pragma and a C body has
       // chosen the C body, and this must not overrule it.
       if (!f || f.defined) continue;

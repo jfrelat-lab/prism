@@ -246,6 +246,8 @@ export class Sema {
   specType(specs, env, node) {
     const s = specs.type;
     let t;
+    // Before the standard, a declaration with no type was an int (GCC2_RULES, src/cxx/index.js).
+    if (!s && this.gcc2) return T.INT;
     if (!s) this.fail('a declaration with no type', node);
     if (s.k === 'builtin') t = this.builtin(s.words, node);
     else if (s.k === 'named') t = s.defined?.info ? this.typeOfInfo(s.defined.info) : this.namedType(s.qname, env, node, s.elaborated);
