@@ -407,9 +407,13 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
          * there first, as a server's one window would hold it, and this part over it. Abuse puts its
          * title whole, then its menu's icons as parts.
          */
-        if (target.window && state.lastPut === 'image' && state.imageData) {
-          draw.putImage(drawable, state.imageData, state.width, state.height, state.width, 8,
-            0, 0, 0, 0, state.width, state.height, state.palette);
+        // The image last PUT whole, not the last one created: XCreateImage names its image as the frame
+        // (Doom publishes it before its first put), and Abuse creates its gamma dialog's 260x175 image
+        // just before putting it at 24,9 -- carried as "the frame", it was drawn again at 0,0.
+        const shown = state.shownWhole;
+        if (target.window && state.lastPut === 'image' && shown) {
+          draw.putImage(drawable, shown.data, shown.w, shown.h, shown.bpl, 8,
+            0, 0, 0, 0, shown.w, shown.h, state.palette);
         }
         state.lastPut = 'surface';
         draw.putImage(drawable, data, w, h, dv().getInt32(img + IMG_BYTES_PER_LINE, true), bpp,
@@ -427,6 +431,7 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       surfaceMode = false;
       state.lastPut = 'image';
       state.imageData = data; state.width = w; state.height = h;
+      state.shownWhole = { data, w, h, bpl: dv().getInt32(img + IMG_BYTES_PER_LINE, true) };
       publishGeometry();
       if (publish) Atomics.add(publish.ctrl, SLOT.FRAME, 1);
       // The frame boundary, which is where a host paces: XPutImage is exactly when an X client
