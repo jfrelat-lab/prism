@@ -52,6 +52,8 @@ export function installStdio(M, {
    * Unanswerable by default: with no way to peek, "nothing is waiting" is the truthful reply.
    */
   stdinPending = () => false,
+  /* The directory the program starts in, as a wrapper script's `cd` leaves it (Debian's Abuse). */
+  cwd: startDir = '',
 } = {}) {
   const u8 = () => M.u8;
   const enc = new TextEncoder();
@@ -64,7 +66,7 @@ export function installStdio(M, {
    * elevation bitmap") or, worse, a wrong course whole. Its course list (Tcl's `cd courses; glob *`)
    * listed the root, so no preview was ever bound.
    */
-  let cwd = '';
+  let cwd = String(startDir).replace(/\\/g, '/').toLowerCase().replace(/^\/+|\/+$/g, '');
   // errno is the program's own global (a tentative definition in errno.h): set it where it lives.
   const setErrno = (v) => { const e = M.mod.symbols.get('errno'); if (e) M.mod.dv.setInt32(e.addr, v, true); };
 
@@ -1174,6 +1176,8 @@ export function installStdio(M, {
      * struct passwd is glibc's i386 layout, 7 fields of 4 bytes (see pwd.h in headers.js).
      */
     getpwuid: (uid) => ((uid | 0) === 0 ? passwd() : 0),
+    // The one user's name, the passwd entry's pw_name ($USER): Abuse's username.c keys its saves on it.
+    getlogin: () => M.mod.dv.getUint32(passwd(), true),
     getpwnam: (namePtr) => (namePtr && M.mod.cstr(namePtr) === environment.USER ? passwd() : 0),
     // ctime is asctime of localtime (C 7.23.3.2).
     ctime: (tp) => M.rt.asctime(api.localtime(tp)),

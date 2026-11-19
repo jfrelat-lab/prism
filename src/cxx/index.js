@@ -18,6 +18,8 @@ export const isCxxFile = (file) => /\.(cpp|cc|cxx|c\+\+|C)$/.test(file);
  *                                   -- an exact unit path first, then `*.ext`, then `*`.
  *   cxx: { compiler: "msvc" }       the program was written for Visual C++ 7.1 and leans on what it
  *                                   accepts and g++ refuses (MSVC_RULES below). "gcc" is the default.
+ *   cxx: { compiler: "gcc2" }       the program was written for the g++ of the 1990s (2.7, 2.8, egcs),
+ *                                   which warned where today's refuses (GCC2_RULES below).
  *
  * ONE dialect exists: the C++98 subset src/cxx/parse.js states. `std` is there so that a target
  * SAYS what it was written in, and so that asking for a newer one is refused by name rather than
@@ -25,7 +27,7 @@ export const isCxxFile = (file) => /\.(cpp|cc|cxx|c\+\+|C)$/.test(file);
  */
 const STANDARDS = new Set(['c++98', 'gnu++98', 'c++03', 'gnu++03']);
 const LANGUAGES = new Set(['c', 'c++']);
-const COMPILERS = new Set(['gcc', 'msvc']);
+const COMPILERS = new Set(['gcc', 'msvc', 'gcc2']);
 const KEYS = new Set(['std', 'language', 'compiler']);
 
 /*
@@ -41,6 +43,18 @@ const KEYS = new Set(['std', 'language', 'compiler']);
  *   - a function converts to void * (kkrieger_oplist.cpp's table of handlers) -- sema-expr.js coerce;
  *   - wchar_t is unsigned short (/Zc:wchar_t-, the default until 2005): _start.cpp passes an sU16 string
  *     to ExtTextOutW -- MSVC_DEFINES.
+ */
+/*
+ * What the g++ of the 1990s accepted with a warning and today's g++ refuses, as the programs built
+ * with it rely on -- each rule where the front end applies it:
+ *
+ *   - a pointer to an integer type converts to a pointer to the same-sized type of the other
+ *     signedness ("changes signedness"): Abuse 2.00's tcpip.hpp passes an int * to accept()'s
+ *     socklen_t *, and Debian 2.0 built it -- sema-expr.js scalarConv;
+ *   - a function converts to void *, as with Visual C++: Abuse's ant.c returns its own ant_ai from
+ *     a void *(*)() -- sema-expr.js scalarConv;
+ *   - a string literal is a char[] (the ARM's rule; the standard made it const): demo.c writes
+ *     "DEMO,VERSION:2" through bFILE::write(void *, size_t) -- sema-expr.js scalarConv.
  */
 export const MSVC_DEFINES = {
   __int64: 'long long', __int32: 'int', __int16: 'short', __int8: 'char', __w64: '', __forceinline: 'inline',
@@ -100,5 +114,5 @@ export const CXX_DEFINES = { __cplusplus: '199711L' };
 export function cxxToC(tokens, { file = 'unit.cpp', builtins = null, compiler = 'gcc' } = {}) {
   // PRISM's own headers are C headers: their declarations have C linkage, as if in extern "C".
   const unit = parseCxx(tokens, { cLinkage: (t) => !!t?.loc?.file?.startsWith('<') });
-  return lowerCxx(unit, { tag: file, builtins, msvc: compiler === 'msvc' });
+  return lowerCxx(unit, { tag: file, builtins, msvc: compiler === 'msvc', gcc2: compiler === 'gcc2' });
 }

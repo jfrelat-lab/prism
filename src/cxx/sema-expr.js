@@ -360,7 +360,8 @@ export const exprMethods = {
     if (V.k === 'ptr') {
       if (e.zero) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})0)` };
       if (F.k !== 'ptr') return null;
-      const dropsConst = F.to.c && !V.to.c;
+      // g++ 2.x: a string literal is a char[], as before the standard made it const (GCC2_RULES).
+      const dropsConst = F.to.c && !V.to.c && !(e.str && this.gcc2);
       if (T.same(F.to, V.to, { top: false })) {
         if (dropsConst && !e.str) return null;
         return { rank: dropsConst ? CONV : F.to.c === V.to.c ? EXACT : QUAL, gen: () => (dropsConst ? `((${this.ct(T.uncst(V))})${from.c})` : from.c) };
@@ -371,7 +372,12 @@ export const exprMethods = {
       if (V.to.k === 'void' && F.to.k !== 'func') return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       // Visual C++ converts a function's address to void * as well: kkrieger_oplist.cpp's KHandlers
       // table keeps its handlers in void * fields (src/cxx/index.js).
-      if (V.to.k === 'void' && F.to.k === 'func' && this.msvc) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
+      // g++ 2.x: int * to unsigned int * and the like, signedness only (GCC2_RULES, src/cxx/index.js).
+      if (this.gcc2 && T.isInteger(F.to) && T.isInteger(V.to) && F.to.k === 'prim' && V.to.k === 'prim'
+        && F.to.name !== 'bool' && V.to.name !== 'bool' && T.intRank(F.to) === T.intRank(V.to)) {
+        return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
+      }
+      if (V.to.k === 'void' && F.to.k === 'func' && (this.msvc || this.gcc2)) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       if (V.to.k === 'class' && F.to.k === 'class') {
         const path = this.derivedPath(F.to.cls, V.to.cls);
         if (path) return { rank: CONV, gen: () => this.upcastPtr(from.c, path, V.to.cls) };

@@ -710,7 +710,10 @@ class CxxParser {
       // expression. A type of the class's own scope keeps its name.
       if (!isFunc && specs.storage !== 'typedef' && d.name?.parts.length === 1) {
         const k = this.scope.find(d.name.parts[0].name);
-        if ((k === 'type' || k === 'template') && (!member || !this.scope.names.has(d.name.parts[0].name))) this.scope.set(d.name.parts[0].name, 'var');
+        // A data member is a name of its class's scope whatever the name means NOW: Abuse's dev.c
+        // includes dev.hpp, whose dev_controll has a member `pmenu`, before pmenu.hpp declares class
+        // pmenu -- and `if (pmenu)` in a member function defined after both is the member.
+        if (member ? !this.scope.names.has(d.name.parts[0].name) : (k === 'type' || k === 'template')) this.scope.set(d.name.parts[0].name, 'var');
       }
       if (specs.storage === 'typedef' && d.name) {
         const tname = d.name.parts[d.name.parts.length - 1].name;

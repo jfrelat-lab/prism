@@ -79,7 +79,13 @@ if (dataArg) {
       else files[`${prefix}${e}`] = new Uint8Array(readFileSync(full));
     }
   };
-  walk(dataArg);
+  /*
+   * --mount=<dir>: the data laid out where the program's installation put it -- `--mount=/var/lib/games/abuse`
+   * is Debian's abuse-lib -- as the page's `mount` does (web/programs/*.json). --exact drops the
+   * basename guess, for a tree with two files of one name; --cwd=<dir> is where the program starts,
+   * as a wrapper script's `cd` puts it.
+   */
+  walk(dataArg, (opt('mount') ?? '').replace(/^\/+|\/+$/g, '').replace(/.+/, (m) => `${m}/`));
 }
 /* Files the INSTALLATION provides -- see targets/*.json's `files`. The player's data wins on a clash. */
 for (const [name, text] of Object.entries(target.files ?? {})) {
@@ -145,7 +151,7 @@ try {
       ...(opt('memory') ? { memory: +opt('memory') } : {}),
     },
     envExtra: {
-      stdio: { files, ...(stdinBytes ? { readChar: () => (stdinPos < stdinBytes.length ? stdinBytes[stdinPos++] : -1) } : {}) },
+      stdio: { files, exactPaths: flag('exact'), cwd: opt('cwd') ?? '', ...(stdinBytes ? { readChar: () => (stdinPos < stdinBytes.length ? stdinBytes[stdinPos++] : -1) } : {}) },
       // A real clock, because a program that times itself with a fake one measures fiction.
       pit: { micros: () => performance.now() * 1000 },
       /*
@@ -156,6 +162,8 @@ try {
       sdl2: { clock: sdlClock }, sdl12: { clock: sdlClock },
       // a threaded program's threads, each a Node worker over its shared image (src/runtime/threads.js)
       pthread: { spawn: nodeSpawn },
+      // The X server's core font, the VGA ROM's glyphs, as the page gives it (web/worker.js): Abuse opens 9x15.
+      x11: { font: new Uint8Array(readFileSync(join(ROOT, 'assets/vga-rom-8x16.bin'))) },
     },
   });
 } catch (e) {

@@ -2083,6 +2083,32 @@ if (!FILTER) {
     ['msvc: a function converts to void *', out(FNVOID, 'unit.cpp', MSVC) === '15'],
     ['...refused as g++ would', out(FNVOID, 'unit.cpp').startsWith('refused')],
   );
+  /*
+   * compiler: "gcc2" -- what the g++ of the 1990s accepted with a warning and today's refuses, as
+   * Abuse 2.00 leans on it and Debian 2.0 built it (src/cxx/index.js). Each rule is a program that
+   * runs with the option beside the same program refused without it.
+   */
+  const GCC2 = { compiler: 'gcc2' };
+  // tcpip.hpp hands accept() an int * for its socklen_t *.
+  const SIGNS = '#include <stdio.h>\nstatic int get(unsigned int *p) { *p = 7; return 1; }\n'
+    + 'int main() { int n = 0; get(&n); printf("%d\\n", n); return 0; }\n';
+  // demo.c writes a string literal through bFILE::write(void *, size_t): before the standard, a literal was a char[].
+  const STRLIT = '#include <stdio.h>\n#include <string.h>\nstatic int len(void *p) { return (int)strlen((char *)p); }\n'
+    + 'int main() { printf("%d\\n", len("DEMO,VERSION:2")); return 0; }\n';
+  option.push(
+    ['gcc2: a pointer converts to the same-sized integer type of the other signedness', out(SIGNS, 'unit.cpp', GCC2) === '7'],
+    ['...refused as g++ would', out(SIGNS, 'unit.cpp').startsWith('refused')],
+    ['gcc2: a function converts to void *', out(FNVOID, 'unit.cpp', GCC2) === '15'],
+    ['gcc2: a string literal converts to void *', out(STRLIT, 'unit.cpp', GCC2) === '14'],
+    ['...refused as g++ would', out(STRLIT, 'unit.cpp').startsWith('refused')],
+  );
+  // Standard C++, no dialect: a data member names the member in its class's member functions even when a
+  // class of that name is declared AFTER it -- Abuse's dev.c includes dev.hpp (a member `pmenu`) before
+  // pmenu.hpp (class pmenu). g++ and clang print 1; PRISM read `if (pmenu)` as a declaration.
+  const LATECLASS = '#include <stdio.h>\nclass W { public: int y; };\nclass D { public: W *a, *menu, *b; int on(); };\n'
+    + 'class menu { public: int x; };\nint D::on() { if (menu) return 1; return 0; }\n'
+    + 'int main() { D d; W w; d.menu = &w; printf("%d\\n", d.on()); return 0; }\n';
+  option.push(['a data member hides a class of its name declared after it', out(LATECLASS, 'unit.cpp') === '1']);
   // What the lowering must never emit, the C front end refuses as gcc does ("array type has
   // incomplete element type") rather than giving the rows a stride of 0.
   const AREA = 'struct Area { short a; short b[4]; };\n';

@@ -144,6 +144,15 @@ const STDIO = `
 #endif
 typedef struct _PRISM_FILE FILE;
 /*
+ * A FILE * here is a token the runtime hands out, never a pointer to the structure -- but a Linux
+ * program may ask its SIZE: Abuse's mdlread.c reserves sizeof(FILE) before an fopen. glibc's i386
+ * struct _IO_FILE is 148 bytes; elsewhere (DJGPP, Watcom, Borland) it stays incomplete.
+ */
+#if defined(__linux__) && !defined(_PRISM_FILE_DEFINED)
+#define _PRISM_FILE_DEFINED
+struct _PRISM_FILE { char __opaque[148]; };
+#endif
+/*
  * TENTATIVE definitions, not externs — the same reason as errno: these have to EXIST somewhere and no
  * PRISM translation unit defines them. C89's common-symbol rule merges them by name across units, and
  * installStdio fills in the three sentinels once the image is linked.
@@ -1052,6 +1061,7 @@ int link(const char *from, const char *to);
 int chown(const char *path, int owner, int group);
 int execvp(const char *file, char *const argv[]);
 int execv(const char *path, char *const argv[]);
+char *getlogin(void);
 int execve(const char *path, char *const argv[], char *const envp[]);
 #ifdef _GNU_SOURCE
 extern char **environ;
@@ -1529,8 +1539,11 @@ typedef struct {
     union { char b[20]; short s[10]; long l[5]; } data;
 } XClientMessageEvent;
 
+/* The fields every event begins with (Xlib's i386 layout): XANY_WINDOW in x11.js is its window. */
+typedef struct { int type; unsigned long serial; Bool send_event; Display *display; Window window; } XAnyEvent;
 typedef union _XEvent {
     int type;
+    XAnyEvent xany;
     XKeyEvent xkey;
     XButtonEvent xbutton;
     XMotionEvent xmotion;
@@ -1688,6 +1701,46 @@ int XSetWindowColormap(Display *d, Window w, Colormap c);
 int XAutoRepeatOn(Display *d);
 int XAutoRepeatOff(Display *d);
 int XMapWindow(Display *d, Window w);
+/* Puts an event back at the head of the queue: the next XNextEvent returns it. */
+int XPutBackEvent(Display *d, XEvent *ev);
+/* Xlib's XDestroyImage is a macro through the image's own f.destroy_image; PRISM's XImage carries no
+   function table, so it is a function with that function's effect: data (unless NULL) and image freed. */
+int XDestroyImage(XImage *img);
+int XResizeWindow(Display *d, Window w, unsigned int width, unsigned int height);
+Bool XQueryExtension(Display *d, const char *name, int *major_opcode, int *first_event, int *first_error);
+Pixmap XCreateBitmapFromData(Display *d, Drawable dr, const char *data, unsigned int width, unsigned int height);
+Bool XTranslateCoordinates(Display *d, Window src, Window dst, int src_x, int src_y, int *dst_x, int *dst_y,
+                           Window *child);
+Status XQueryTree(Display *d, Window w, Window *root, Window *parent, Window **children, unsigned int *n);
+Bool XCheckTypedEvent(Display *d, int type, XEvent *ev);
+Colormap XDefaultColormap(Display *d, int screen);
+int XQueryColor(Display *d, Colormap c, XColor *color);
+int XQueryColors(Display *d, Colormap c, XColor *colors, int n);
+/* A window's attributes, in Xlib's i386 layout (92 bytes): what XGetWindowAttributes fills. */
+typedef struct {
+    int x, y, width, height, border_width, depth;
+    Visual *visual;
+    Window root;
+#if defined(__cplusplus) || defined(c_plusplus)
+    int c_class;
+#else
+    int class;
+#endif
+    int bit_gravity, win_gravity, backing_store;
+    unsigned long backing_planes, backing_pixel;
+    Bool save_under;
+    Colormap colormap;
+    Bool map_installed;
+    int map_state;
+    long all_event_masks, your_event_mask, do_not_propagate_mask;
+    Bool override_redirect;
+    Screen *screen;
+} XWindowAttributes;
+Status XGetWindowAttributes(Display *d, Window w, XWindowAttributes *attrs);
+Status XGetGeometry(Display *d, Drawable dr, Window *root, int *x, int *y, unsigned int *width,
+                    unsigned int *height, unsigned int *border, unsigned int *depth);
+Bool XQueryPointer(Display *d, Window w, Window *root, Window *child, int *root_x, int *root_y,
+                   int *win_x, int *win_y, unsigned int *mask);
 VisualID XVisualIDFromVisual(Visual *v);
 Status XMatchVisualInfo(Display *d, int screen, int depth, int c_class, XVisualInfo *info);
 XVisualInfo *XGetVisualInfo(Display *d, long mask, XVisualInfo *vinfo_template, int *nitems);
@@ -1762,6 +1815,7 @@ typedef struct {
     int format;
     unsigned long nitems;
 } XTextProperty;
+Status XStringListToTextProperty(char **list, int count, XTextProperty *prop);
 
 typedef struct {
     long flags;
@@ -1812,8 +1866,23 @@ typedef struct {
 
 #define InputHint       (1L << 0)
 #define StateHint       (1L << 1)
+#define IconPixmapHint  (1L << 2)
+#define IconWindowHint  (1L << 3)
+#define IconPositionHint (1L << 4)
+#define IconMaskHint    (1L << 5)
+#define WindowGroupHint (1L << 6)
+#define AllHints (InputHint|StateHint|IconPixmapHint|IconWindowHint|IconPositionHint|IconMaskHint|WindowGroupHint)
+#define XUrgencyHint    (1L << 8)
+#define WithdrawnState  0
 #define NormalState     1
+#define IconicState     3
 #define PropModeReplace 0
+/* XGrabPointer's and XGrabKeyboard's answers (X.h). */
+#define GrabSuccess 0
+#define AlreadyGrabbed 1
+#define GrabInvalidTime 2
+#define GrabNotViewable 3
+#define GrabFrozen 4
 #define CWX             (1<<0)
 #define CWY             (1<<1)
 #define CWWidth         (1<<2)
@@ -1845,6 +1914,7 @@ typedef struct {
   XCharStruct min_bounds, max_bounds; XCharStruct *per_char; int ascent, descent;
 } XFontStruct;
 XFontStruct *XLoadQueryFont(Display *d, const char *name);
+int XUnloadFont(Display *d, Font font);
 int XFreeFont(Display *d, XFontStruct *f);
 
 /*
@@ -2292,6 +2362,8 @@ struct ipc_perm { key_t __key; uid_t uid; gid_t gid; uid_t cuid; gid_t cgid; mod
 #define IPC_STAT 2
 `,
   'sys/shm.h': `
+#ifndef _PRISM_SYS_SHM_H
+#define _PRISM_SYS_SHM_H
 #include <sys/ipc.h>
 /*
  * Declared so Doom's shared-memory path COMPILES; it is never taken, because XShmQueryExtension
@@ -2303,6 +2375,7 @@ int shmget(key_t key, size_t size, int flag);
 void *shmat(int id, const void *addr, int flag);
 int shmdt(const void *addr);
 int shmctl(int id, int cmd, struct shmid_ds *buf);
+#endif
 `,
   'sys/socket.h': `
 #ifndef _PRISM_SYS_SOCKET_H
@@ -2395,6 +2468,8 @@ int inet_aton(const char *s, struct in_addr *addr);
 #ifndef _PRISM_NETDB_H
 #define _PRISM_NETDB_H
 struct hostent { char *h_name; char **h_aliases; int h_addrtype; int h_length; char **h_addr_list; };
+/* The pre-4.2BSD name for the first address, kept by glibc for backward compatibility. */
+#define h_addr h_addr_list[0]
 struct hostent *gethostbyname(const char *name);
 struct hostent *gethostbyaddr(const void *addr, unsigned int len, int type);
 struct servent { char *s_name; char **s_aliases; int s_port; char *s_proto; };
@@ -2540,6 +2615,14 @@ int pthread_once(pthread_once_t *once, void (*init)(void));
 struct timeval { long tv_sec; long tv_usec; };
 #endif
 struct timezone { int tz_minuteswest; int tz_dsttime; };
+/* tz_dsttime's values, which glibc kept until 2.x (__USE_BSD): Abuse's timing.c names DST_USA. */
+#define DST_NONE 0
+#define DST_USA 1
+#define DST_AUST 2
+#define DST_WET 3
+#define DST_MET 4
+#define DST_EET 5
+#define DST_CAN 6
 struct itimerval { struct timeval it_interval; struct timeval it_value; };
 int select(int n, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout);
 int gettimeofday(struct timeval *tv, struct timezone *tz);
@@ -2591,6 +2674,18 @@ int kill(int pid, int sig);
 #define SIGSTOP 19
 #define SIGTSTP 20
 #define SIGCONT 18
+/* The rest of Linux's i386 numbering (asm/signal.h): Abuse's sound.c lists them all. */
+#define SIGSTKFLT 16
+#define SIGURG 23
+#define SIGXCPU 24
+#define SIGXFSZ 25
+#define SIGVTALRM 26
+#define SIGPROF 27
+#define SIGWINCH 28
+#define SIGIO 29
+#define SIGPOLL SIGIO
+#define SIGPWR 30
+#define SIGSYS 31
 // DJGPP's numeric-coprocessor signal, which Quake installs a handler for.
 #define SIGNOFP 20
 

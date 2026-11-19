@@ -61,6 +61,8 @@ const X_BUTTON_MASK = [0, 1 << 8, 1 << 9, 1 << 10];
 export function installX11(M, { publish = null, keyboard = null, mouse = null, onFrame = null, keys = keyNames(),
                                 font = null, windowed = false, onTitle = null } = {}) {
   let peeked = null, errorHandler = 0;
+  // Events a client put back (XPutBackEvent), the last one first: 96 bytes each, as given.
+  const putBack = [];
   const pointerCtl = [2, 1, 4];
   const dv = () => M.mod.dv;
 
@@ -185,6 +187,110 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XAutoRepeatOn: () => 0,
     XAutoRepeatOff: () => 0,
     XMapWindow: (_d, w) => { draw.map(w); events.push({ type: 12 /* Expose */, count: 0 }); return 0; },
+    /*
+     * The one window's geometry, as XCreateWindow set it: depth 8 on the PseudoColor visual, mapped
+     * (map_state IsViewable), the root being the window itself as XRootWindow says.
+     */
+    XPutBackEvent: (_d, ev) => { putBack.push(M.u8.slice(ev, ev + 96)); return 0; },
+    // XCreateImage allocated both; a client that owns the pixels sets data to NULL first (Abuse does).
+    XDestroyImage: (img) => {
+      if (!img) return 0;
+      const data = dv().getUint32(img + IMG_DATA, true);
+      if (data) M.rt.free(data);
+      M.rt.free(img);
+      return 1;
+    },
+    // The one window, at its new size: as XCreateWindow made it, the place kept.
+    XResizeWindow: (_d, _w, w, h) => { makeWindow(state.win.x, state.win.y, w, h, 0); return 0; },
+    // No extension at all, as XInitExtension says: a MIT-SHM client takes its XPutImage path.
+    XQueryExtension: (_d, _name, op, ev, err) => { for (const p of [op, ev, err]) if (p) dv().setInt32(p, 0, true); return 0; },
+    // A one-bit pixmap: only ever an icon here, handed to a window manager there is none of.
+    XCreateBitmapFromData: (d, dr, _data, w, h) => M.rt.XCreatePixmap(d, dr, w, h, 1),
+    // The window is the root (XRootWindow), so a point is where it was, with no child under it.
+    XTranslateCoordinates: (_d, _src, _dst, x, y, dx, dy, child) => {
+      if (dx) dv().setInt32(dx, x | 0, true);
+      if (dy) dv().setInt32(dy, y | 0, true);
+      if (child) dv().setUint32(child, 0, true);
+      return 1;
+    },
+    XQueryTree: (_d, _w, root, parent, children, n) => {
+      if (root) dv().setUint32(root, WINDOW, true);
+      if (parent) dv().setUint32(parent, WINDOW, true);
+      if (children) dv().setUint32(children, 0, true);
+      if (n) dv().setUint32(n, 0, true);
+      return 1;
+    },
+    /*
+     * An event of one type, taken out of the queue if there is one: one put back, or a queued Expose
+     * or ConfigureNotify (written as XNextEvent writes it). Key and pointer events are made at the
+     * moment they are read, so they are not searched -- a gap to close when a client asks for them.
+     */
+    XCheckTypedEvent: (d, type, ev) => {
+      for (let i = putBack.length - 1; i >= 0; i--) {
+        if (new DataView(putBack[i].buffer).getInt32(0, true) === (type | 0)) { M.u8.set(putBack.splice(i, 1)[0], ev); return 1; }
+      }
+      const i = events.findIndex((e) => e.type === (type | 0) && (e.type === 12 || e.type === 22));
+      if (i < 0) return 0;
+      const [e] = events.splice(i, 1);
+      M.u8.fill(0, ev, ev + 96);
+      dv().setInt32(ev, e.type, true);
+      if (e.type === 12) {
+        dv().setUint32(ev + XANY_WINDOW, WINDOW, true);
+        dv().setInt32(ev + XEXPOSE_WIDTH, state.win.w, true);
+        dv().setInt32(ev + XEXPOSE_HEIGHT, state.win.h, true);
+      } else {
+        dv().setUint32(ev + 20, WINDOW, true);
+        for (const [k, o] of [['x', 24], ['y', 28], ['w', 32], ['h', 36]]) dv().setInt32(ev + o, state.win[k], true);
+      }
+      return 1;
+    },
+    XDefaultColormap: () => COLORMAP,
+    // A colour's components from the colormap's pixel -- the palette XStoreColors filled.
+    XQueryColor: (d, c, color) => M.rt.XQueryColors(d, c, color, 1),
+    XQueryColors: (_d, _c, colors, n) => {
+      for (let i = 0; i < (n | 0); i++) {
+        const c = colors + i * 12, p = dv().getUint32(c, true) & 0xff;
+        for (let k = 0; k < 3; k++) dv().setUint16(c + 4 + k * 2, state.palette[p * 3 + k] * 257, true);
+        M.u8[c + 10] = 7;                                 // DoRed | DoGreen | DoBlue
+      }
+      return 1;
+    },
+    // XTextProperty { value, encoding, format, nitems }: the strings NUL-separated, STRING, 8 bits.
+    XStringListToTextProperty: (list, count, prop) => {
+      const strs = []; for (let i = 0; i < (count | 0); i++) strs.push(M.mod.cstr(dv().getUint32(list + i * 4, true)));
+      const bytes = new TextEncoder().encode(strs.join('\0'));
+      const v = M.rt.malloc(bytes.length + 1);
+      M.u8.set(bytes, v); M.u8[v + bytes.length] = 0;
+      dv().setUint32(prop, v, true); dv().setUint32(prop + 4, 31, true);   // XA_STRING
+      dv().setInt32(prop + 8, 8, true); dv().setUint32(prop + 12, bytes.length, true);
+      return 1;
+    },
+    XUnloadFont: () => 1,
+    XGetWindowAttributes: (_d, _w, a) => {
+      M.u8.fill(0, a, a + 92);
+      [state.win.x, state.win.y, state.win.w, state.win.h, 0, 8].forEach((v, i) => dv().setInt32(a + i * 4, v, true));
+      dv().setInt32(a + 24, 1, true);                      // visual (XDefaultVisual's)
+      dv().setUint32(a + 28, WINDOW, true);                // root
+      dv().setInt32(a + 32, 1, true);                      // class InputOutput
+      dv().setUint32(a + 64, COLORMAP, true);              // colormap
+      dv().setInt32(a + 68, 1, true);                      // map_installed
+      dv().setInt32(a + 72, 2, true);                      // map_state IsViewable
+      return 1;
+    },
+    XGetGeometry: (_d, _dr, root, x, y, w, h, border, depth) => {
+      if (root) dv().setUint32(root, WINDOW, true);
+      [[x, state.win.x], [y, state.win.y], [w, state.win.w], [h, state.win.h], [border, 0], [depth, 8]]
+        .forEach(([p, v]) => { if (p) dv().setInt32(p, v, true); });
+      return 1;
+    },
+    // Where the pointer is, in the window and on the screen alike (the window is the root here).
+    XQueryPointer: (_d, _w, root, child, rx, ry, wx, wy, mask) => {
+      if (root) dv().setUint32(root, WINDOW, true);
+      if (child) dv().setUint32(child, 0, true);
+      for (const [p, v] of [[rx, state.pointer.x], [ry, state.pointer.y], [wx, state.pointer.x], [wy, state.pointer.y]]) if (p) dv().setInt32(p, v, true);
+      if (mask) dv().setUint32(mask, (state.buttons & 7) << 8, true);   // Button1Mask is 1 << 8
+      return 1;
+    },
     XVisualIDFromVisual: () => 1,
     XDefaultVisual: () => 1,
     XDestroyWindow: () => 0,
@@ -348,7 +454,7 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      */
     XPending: () => {
       pollManager();
-      const n = (peeked ? 1 : 0) + events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0);
+      const n = putBack.length + (peeked ? 1 : 0) + events.length + (keyboard ? keyboard.pending() : 0) + (mousePending() ? 1 : 0);
       // A client that draws and polls has finished a frame when nothing is waiting for it.
       if (!n && present()) onFrame?.();
       return n;
@@ -361,6 +467,7 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
      * peeks after a KeyRelease to see whether a KeyPress of the same key follows (auto-repeat).
      */
     XPeekEvent: (dpy, ev) => {
+      if (putBack.length) { M.u8.set(putBack[putBack.length - 1], ev); return 0; }
       // Kept only once taken: XNextEvent hands back a kept event first, so it must not see one yet.
       if (!peeked) { const tmp = M.rt.calloc(1, 96); M.rt.XNextEvent(dpy, tmp); peeked = M.u8.slice(tmp, tmp + 96); M.rt.free(tmp); }
       M.u8.set(peeked, ev);
@@ -393,6 +500,7 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
     XSetWMNormalHints: () => {},
 
     XNextEvent: (_dpy, ev) => {
+      if (putBack.length) { M.u8.set(putBack.pop(), ev); return 0; }
       if (peeked) { M.u8.set(peeked, ev); peeked = null; return 0; }
       pollManager();
       if (present()) onFrame?.();

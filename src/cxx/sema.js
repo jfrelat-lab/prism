@@ -63,11 +63,12 @@ const OP_CODE = { '+': 'pl', '-': 'mi', '*': 'ml', '/': 'dv', '%': 'rm', '^': 'e
   new: 'nw', delete: 'dl', 'new[]': 'na', 'delete[]': 'da' };
 
 /** Lower a parsed C++ unit to C text. `tag` names the unit, for its static-initialiser function. */
-export function lowerCxx(unit, { tag = 'unit', builtins = null, msvc = false } = {}) {
+export function lowerCxx(unit, { tag = 'unit', builtins = null, msvc = false, gcc2 = false } = {}) {
   const sema = new Sema(tag);
   sema.builtins = builtins;
   // What Visual C++ 7.1 accepts that g++ refuses (src/cxx/index.js, MSVC rules).
   sema.msvc = msvc;
+  sema.gcc2 = gcc2;
   return sema.run(unit);
 }
 
