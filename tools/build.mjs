@@ -129,6 +129,75 @@ if (Object.keys(dateDefines).length) target.defines = { ...(target.defines ?? {}
 const realClock = flag('realclock');
 const napBuf = new Int32Array(new SharedArrayBuffer(4));
 // --stdin=<file>: what the program reads on standard input, then end of file -- a scripted player.
+/*
+ * --input="wait 50; click 47 166; key enter; shot a.png; ...": a scripted player for an X client,
+ * on a clock of the client's OWN questions -- each time it asks the mouse's state (XPending,
+ * XNextEvent) is one tick. Frames are no clock for a program that waits for a click without drawing:
+ * Abuse's gamma screen draws twice and then polls, and frame-scheduled --keys never arrived.
+ *
+ *   wait N        N polls
+ *   move X Y      the pointer to (X, Y) in the window
+ *   click X Y     move there, then --hold polls later press the left button, and --hold later release
+ *                 it (default 4): the motion first, as a server sends it -- Abuse clicks where its last
+ *                 MotionNotify put the pointer
+ *   rclick X Y    the same with the right button
+ *   key NAME      press and release a key (esc enter space up down left right ctrl tab y n f1, a-z, 0-9, or a hex scan code)
+ *   shot PATH     the window's pixels as a PNG, now
+ */
+const inputSteps = (opt('input') ?? '').split(';').map((s) => s.trim()).filter(Boolean).map((s) => s.split(/\s+/));
+const inputHold = +(opt('hold') ?? 4);
+const SCAN_LETTERS = 'qwertyuiop.....asdfghjkl.......zxcvbnm';
+const scanOf = (name) => {
+  const n = name.toLowerCase();
+  if (KEYNAMES_EARLY[n] !== undefined) return KEYNAMES_EARLY[n];
+  if (/^[a-z]$/.test(n)) { const i = SCAN_LETTERS.indexOf(n); return i < 0 ? null : 0x10 + i; }
+  if (/^[1-9]$/.test(n)) return 1 + +n;
+  if (n === '0') return 0x0b;
+  const v = parseInt(n, 16);
+  return Number.isNaN(v) ? null : v;
+};
+const KEYNAMES_EARLY = {
+  esc: 0x01, enter: 0x1c, space: 0x39, up: 0x48, down: 0x50, left: 0x4b, right: 0x4d,
+  ctrl: 0x1d, y: 0x15, n: 0x31, tab: 0x0f, tilde: 0x29, f1: 0x3b,
+};
+const ASCII_OF = { 0x1c: 13, 0x39: 32, 0x01: 27, 0x0f: 9 };
+const scripted = (() => {
+  if (!inputSteps.length) return null;
+  let tick = 0, step = 0, waitUntil = 0, buttons = 0, releaseAt = -1, pressAt = -1, pressButton = 0, pos = { x: 0, y: 0 };
+  const keys = [];
+  let onShot = null;
+  const advance = () => {
+    tick++;
+    if (pressAt >= 0 && tick >= pressAt) { buttons = pressButton; pressAt = -1; releaseAt = tick + inputHold; }
+    else if (releaseAt >= 0 && tick >= releaseAt) { buttons = 0; releaseAt = -1; }
+    while (step < inputSteps.length && tick >= waitUntil && releaseAt < 0 && pressAt < 0) {
+      const [op, a, b] = inputSteps[step++];
+      if (op === 'wait') { waitUntil = tick + (+a || 0); continue; }
+      if (op === 'move') { pos = { x: +a, y: +b }; continue; }
+      if (op === 'click' || op === 'rclick') {
+        pos = { x: +a, y: +b }; pressButton = op === 'click' ? 1 : 2; pressAt = tick + inputHold;
+        console.log(`[input] ${op} ${a},${b} at poll ${tick}`);
+        continue;
+      }
+      if (op === 'key') {
+        const scan = scanOf(a ?? '');
+        if (scan === null) { console.log(`[input] key '${a}': no such key`); continue; }
+        const ascii = ASCII_OF[scan] ?? (a.length === 1 ? a.toLowerCase().charCodeAt(0) : 0);
+        keys.push({ scan, down: true, ascii }, { scan, down: false, ascii: 0 });
+        console.log(`[input] key ${a} at poll ${tick}`);
+        continue;
+      }
+      if (op === 'shot') { onShot?.(a); continue; }
+      console.log(`[input] '${op}': not a step`);
+    }
+  };
+  return {
+    mouse: { position: () => pos, state: () => { advance(); return buttons; }, take: () => ({ dx: 0, dy: 0 }) },
+    keyboard: { pending: () => keys.length, next: () => keys.shift() ?? null },
+    setShot: (f) => { onShot = f; },
+    done: () => step >= inputSteps.length && releaseAt < 0 && pressAt < 0,
+  };
+})();
 const stdinBytes = opt('stdin') ? readFileSync(opt('stdin')) : null;
 let stdinPos = 0;
 const sdlClock = realClock
@@ -163,7 +232,8 @@ try {
       // a threaded program's threads, each a Node worker over its shared image (src/runtime/threads.js)
       pthread: { spawn: nodeSpawn },
       // The X server's core font, the VGA ROM's glyphs, as the page gives it (web/worker.js): Abuse opens 9x15.
-      x11: { font: new Uint8Array(readFileSync(join(ROOT, 'assets/vga-rom-8x16.bin'))) },
+      x11: { font: new Uint8Array(readFileSync(join(ROOT, 'assets/vga-rom-8x16.bin'))),
+             ...(scripted ? { mouse: scripted.mouse, keyboard: scripted.keyboard } : {}) },
     },
   });
 } catch (e) {
@@ -584,6 +654,18 @@ if ((frameCap || pngPath || keyScript.length) && mgl) {
  * the number you would read off the screen is a frame rate. Quoting this one as fps would compare
  * an unthrottled run against a throttled one.
  */
+// --input's `shot`: the X window's pixels at that moment.
+// --input's `shot`: what the X client last showed -- its window's pixels, or its whole-window image
+// through the palette (the path a full-screen 8-bit put takes), whichever it drew last.
+scripted?.setShot((path) => {
+  const x = program.M.x11, d = x?.window?.();
+  if (x?.lastPut === 'image' && x.imageData) {
+    writeIndexedPng(path, { pixels: program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height), width: x.width, height: x.height, palette: x.palette });
+  } else if (d?.addr) {
+    writeRgbPng(path, { bytes: program.M.u8.subarray(d.addr, d.addr + d.w * d.h * 4), width: d.w, height: d.h });
+  } else { console.log(`[input] shot ${path}: nothing drawn yet`); return; }
+  console.log(`[input] shot -> ${path}`);
+});
 const runT0 = performance.now();
 try {
   const { code } = program.run([target.name, ...args]);
@@ -830,9 +912,17 @@ if (mgl) {
     writeIndexedPng(pngPath, { pixels: px, width: g.width, height: g.height, palette: g.palette });
     console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
   }
+} else if (program.M.x11?.lastPut === 'surface' && program.M.x11.window?.()?.addr) {
+  // An X client that draws into its window's pixels (parts of images, core requests): 0xffRRGGBB.
+  const x = program.M.x11, d = x.window();
+  console.log(`\nframes ${frames} · window ${d.w}x${d.h} (its pixels)` + fpsNote());
+  if (pngPath) {
+    writeRgbPng(pngPath, { bytes: program.M.u8.subarray(d.addr, d.addr + d.w * d.h * 4), width: d.w, height: d.h });
+    console.log(`  -> ${pngPath}`);
+  }
 } else if (program.M.x11?.imageData) {
   const x = program.M.x11;
-  console.log(`\nframes ${frames} · display ${x.width}x${x.height}` + fpsNote());
+  console.log(`\nframes ${frames} · display ${x.width}x${x.height}` + (x.win ? ` · window ${x.win.w}x${x.win.h}` : '') + fpsNote());
   if (pngPath) {
     const px = program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height);
     let nz = 0;

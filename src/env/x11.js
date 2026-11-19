@@ -394,17 +394,31 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
       /*
        * Into the pixels of a drawable that has some -- a pixmap, or a window something has DRAWN into
        * -- the image is converted there. Only an 8-bit frame that is the whole window keeps the path
-       * Doom has always taken: the page reads the image's own buffer, through the palette.
+       * Doom has always taken: the page reads the image's own buffer, through the palette. A PART of
+       * one goes into the window's pixels at its place, however few it has: Abuse's put_part_image
+       * puts a 260x175 dialog at an offset of a 320x200 window, which the image path showed as the
+       * whole frame.
        */
       const target = draw.window(drawable);
       const whole = bpp === 8 && (!target?.window || (pw >>> 0) >= target.w && (ph >>> 0) >= target.h);
-      if (target && (target.addr || !target.window || bpp !== 8) && !(whole && target.window)) {
+      if (target && (target.addr || !target.window || bpp !== 8 || !whole) && !(whole && target.window)) {
+        /*
+         * The window's last whole frame went by the image path, so its pixels never saw it: put it
+         * there first, as a server's one window would hold it, and this part over it. Abuse puts its
+         * title whole, then its menu's icons as parts.
+         */
+        if (target.window && state.lastPut === 'image' && state.imageData) {
+          draw.putImage(drawable, state.imageData, state.width, state.height, state.width, 8,
+            0, 0, 0, 0, state.width, state.height, state.palette);
+        }
+        state.lastPut = 'surface';
         draw.putImage(drawable, data, w, h, dv().getInt32(img + IMG_BYTES_PER_LINE, true), bpp,
           sx | 0, sy | 0, dx | 0, dy | 0, pw >>> 0, ph >>> 0, state.palette);
         if (present()) onFrame?.();
         return 0;
       }
       surfaceMode = false;
+      state.lastPut = 'image';
       state.imageData = data; state.width = w; state.height = h;
       publishGeometry();
       if (publish) Atomics.add(publish.ctrl, SLOT.FRAME, 1);
