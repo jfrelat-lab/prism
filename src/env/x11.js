@@ -414,7 +414,14 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
         state.lastPut = 'surface';
         draw.putImage(drawable, data, w, h, dv().getInt32(img + IMG_BYTES_PER_LINE, true), bpp,
           sx | 0, sy | 0, dx | 0, dy | 0, pw >>> 0, ph >>> 0, state.palette);
-        if (present()) onFrame?.();
+        /*
+         * A put that covers the window is a frame. A PART is not: Abuse's update_dirty puts one per
+         * dirty rectangle, dozens a frame, and presenting (and pacing) each one counted every
+         * rectangle as a frame. The parts stay drawn and are presented where the client next looks
+         * at its connection -- XPending with nothing waiting, XSync, XFlush -- once a frame.
+         */
+        const covers = !target.window || ((pw >>> 0) >= target.w && (ph >>> 0) >= target.h);
+        if (covers && present()) onFrame?.();
         return 0;
       }
       surfaceMode = false;
@@ -454,6 +461,9 @@ export function installX11(M, { publish = null, keyboard = null, mouse = null, o
         state.palette[pixel * 3 + 1] = dv().getUint16(c + 6, true) >> 8;
         state.palette[pixel * 3 + 2] = dv().getUint16(c + 8, true) >> 8;
       }
+      // A window shown through the pens it was put in takes the new colours, as PseudoColor does.
+      draw.recolour(state.palette);
+      if (present()) onFrame?.();
       if (publish) {
         publish.pal.set(state.palette);
         Atomics.store(publish.ctrl, SLOT.PENS, 256);

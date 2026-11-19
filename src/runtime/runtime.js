@@ -1246,7 +1246,11 @@ function makeLibc(M) {
     },
     utimes: () => 0,
     gmtime: () => 0,
-    nanosleep: () => 0,
+    // Waits only on the page's real clock (M.realSleep, as usleep in src/env/stdio.js).
+    nanosleep: (req) => {
+      if (M.realSleep && req) M.realSleep(M.mod.dv.getInt32(req, true) * 1e6 + M.mod.dv.getInt32(req + 4, true) / 1000);
+      return 0;
+    },
 
     __builtin_bswap16: (v) => ((v & 0xff) << 8 | (v >>> 8) & 0xff) & 0xffff,
     __builtin_bswap32: (v) => (((v & 0xff) << 24) | ((v & 0xff00) << 8) |

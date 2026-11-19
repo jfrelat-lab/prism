@@ -76,6 +76,7 @@ export function installX11Draw(M, { font = null } = {}) {
     const d = surface(id);
     if (!d) return null;
     if (d.window) dirty = true;
+    d.idx = null;     // drawn in colours, not pens: the window no longer follows its colormap (recolour)
     const g = gcOf(gc), px = pixels(d), w = d.w, h = d.h, fg = g.fg & 0xffffff;
     const put = g.fn === GX.xor ? (i) => { px[i] ^= fg; }
       : g.fn === GX.clear ? (i) => { px[i] = 0xff000000; }
@@ -318,6 +319,7 @@ export function installX11Draw(M, { font = null } = {}) {
       const d = surface(w);
       if (!d) return 1;
       if (d.window) dirty = true;
+      d.idx = null;
       x |= 0; y |= 0;
       // A zero width or height means "to the edge of the window" (XClearArea(3)).
       const x1 = (cw >>> 0) ? x + (cw >>> 0) : d.w, y1 = (ch >>> 0) ? y + (ch >>> 0) : d.h;
@@ -332,6 +334,7 @@ export function installX11Draw(M, { font = null } = {}) {
       const s = surface(src), t = surface(dst);
       if (!s || !t) return 1;
       if (t.window) dirty = true;
+      t.idx = null;
       const sp = pixels(s), tp = pixels(t), xor = gcOf(gc).fn === GX.xor;
       for (let y = 0; y < (h >>> 0); y++) {
         const ys = (sy | 0) + y, yt = (dy | 0) + y;
@@ -385,19 +388,49 @@ export function installX11Draw(M, { font = null } = {}) {
       if (!t) return false;
       if (t.window) dirty = true;
       const tp = pixels(t);
+      // The clipped span, once: the columns both the image and the drawable hold.
+      const x0 = Math.max(0, -sx, -dx), x1 = Math.min(w, iw - sx, t.w - dx);
+      if (x1 <= x0) return true;
+      const u8 = M.u8, dview = bpp === 8 ? null : dv();
+      // An 8-bit put converts through a 256-entry table, not three palette reads a pixel.
+      let lut = null;
+      if (bpp === 8) {
+        lut = new Uint32Array(256);
+        for (let i = 0; i < 256; i++) lut[i] = 0xff000000 | (palette[i * 3] << 16) | (palette[i * 3 + 1] << 8) | palette[i * 3 + 2];
+      }
+      /*
+       * THE PENS, beside the colours, for a window only 8-bit puts have filled: on a PseudoColor
+       * visual the screen shows pens through the colormap, so storing new colours recolours what is
+       * already there (recolour). Abuse puts its menu icons during a fade-in; converted once, they
+       * stayed as dark as the fade's first step. A put that starts the window whole begins the record.
+       */
+      if (lut && t.window && !t.idx && w >= t.w && h >= t.h && sx === 0 && sy === 0 && dx === 0 && dy === 0) t.idx = new Uint8Array(t.w * t.h);
+      else if (!lut) t.idx = null;
+      const idx = t.idx;
       for (let y = 0; y < h; y++) {
         const ys = sy + y, yt = dy + y;
         if (ys < 0 || ys >= ih || yt < 0 || yt >= t.h) continue;
-        for (let x = 0; x < w; x++) {
-          const xs = sx + x, xt = dx + x;
-          if (xs < 0 || xs >= iw || xt < 0 || xt >= t.w) continue;
-          let v;
-          if (bpp === 8) { const k = M.u8[data + ys * bpl + xs] * 3; v = (palette[k] << 16) | (palette[k + 1] << 8) | palette[k + 2]; }
-          else v = dv().getUint32(data + ys * bpl + xs * 4, true) & 0xffffff;
-          tp[yt * t.w + xt] = 0xff000000 | v;
-        }
+        const src = data + ys * bpl + sx, dst = yt * t.w + dx;
+        if (lut) {
+          for (let x = x0; x < x1; x++) tp[dst + x] = lut[u8[src + x]];
+          if (idx) idx.set(u8.subarray(src + x0, src + x1), dst + x0);
+        } else for (let x = x0; x < x1; x++) tp[dst + x] = 0xff000000 | (dview.getUint32(data + ys * bpl + (sx + x) * 4, true) & 0xffffff);
       }
       return true;
+    },
+    /** New colours for the pens: every window that holds pens shows them (see putImage). */
+    recolour(palette) {
+      let lut = null;
+      for (const d of drawables.values()) {
+        if (!d.window || !d.idx || !d.addr) continue;
+        if (!lut) {
+          lut = new Uint32Array(256);
+          for (let i = 0; i < 256; i++) lut[i] = 0xff000000 | (palette[i * 3] << 16) | (palette[i * 3 + 1] << 8) | palette[i * 3 + 2];
+        }
+        const tp = pixels(d), idx = d.idx;
+        for (let i = 0; i < idx.length; i++) tp[i] = lut[idx[i]];
+        dirty = true;
+      }
     },
     /** Whether a window has been drawn into since the last call, and so has a frame to show. */
     takeDirty() { const d = dirty; dirty = false; return d; },

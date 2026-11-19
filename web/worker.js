@@ -50,7 +50,7 @@ import { installWsock } from '../src/env/wsock.js';
 import { installDl, bindWin32Exports } from '../src/env/dl.js';
 import { installWgl } from '../src/env/wgl.js';
 import { HEADERS } from '../src/env/headers.js';
-import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeMouse, makeParker, SLOT, STATE }
+import { controlViews, makeKeyReader, makePacer, makeKeyboard, makeMouse, makeParker, SLOT, STATE, idleWait }
   from '../src/env/webhost.js';
 import { sleepingClock } from '../src/env/clock.js';
 
@@ -712,7 +712,12 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
      * draws into the XImage buffer it asked Xlib for, so the page reads that address directly —
      * the same "publish what the program already writes" move as Quake's vid_buffer.
      */
-    installStdio(prog.M, { files, readChar: () => keyboard.read() });
+    /*
+     * exactPaths and cwd, for data laid out as an installation put it: Debian's Abuse opens its files
+     * by absolute path under /var/lib/games/abuse and is started there (tools/build.mjs --exact --cwd).
+     */
+    installStdio(prog.M, { files, readChar: () => keyboard.read(),
+      exactPaths: !!program.needsData?.exactPaths, cwd: program.needsData?.cwd ?? '' });
     /*
      * dlopen, for a program that is several shared objects. Nothing is LOADED -- every module is
      * already linked into the same image -- so this answers dlopen/dlsym out of PRISM's own symbol
@@ -747,6 +752,12 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     if (envNames(program.env).includes('dsp')) {
       installDsp(prog.M, { publish: { ctrl, audio } });
     }
+    /*
+     * A client that POINTS (descriptor `pointer: "visible"`): Abuse draws its own cursor where
+     * XQueryPointer says the pointer is, and grabs it only under -grab_pointer, so the page reports
+     * the pointer's place over the picture instead of capturing its motion as it does for Doom.
+     */
+    if (program.pointer === 'visible') mouse.want(1);
     installX11(prog.M, {
       publish: { ctrl, pal },
       keys: keyNames(options.keys),
@@ -2180,6 +2191,20 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     speed: () => Atomics.load(ctrl, SLOT.SPEED),
     paused: () => Atomics.load(ctrl, SLOT.PAUSE) !== 0,
   });
+  /*
+   * ...and a sleep that takes the time it asks for on that clock: usleep, sleep, nanosleep. Abuse
+   * holds itself to 15 frames a second with usleep (game.c calc_speed); returning at once ran the
+   * game flat out. Scaled by the speed setting, nothing at "unlimited", released by Stop.
+   */
+  prog.M.realSleep = (us) => {
+    const pct = Atomics.load(ctrl, SLOT.SPEED);
+    if (!pct || !(us > 0)) return;
+    const until = performance.now() + us / 1000 * 100 / pct;
+    for (let left = until - performance.now(); left > 0; left = until - performance.now()) {
+      if (Atomics.load(ctrl, SLOT.STOP)) return;
+      idleWait(ctrl, ctrl, SLOT.WAKE, Atomics.load(ctrl, SLOT.WAKE), Math.min(left, 50));
+    }
+  };
   /*
    * And the visitor's date and time zone, for the same reason: in the page a game's clock, a file's
    * date or OpenTyrian's Christmas reads what the visitor's calendar does. The gates keep the fixed

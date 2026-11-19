@@ -1,0 +1,26 @@
+{
+  "title": "ABUSE",
+  "subtitle": "Crack dot Com, 1996 · 2.00 as Debian 2.0 built it for Linux — X11",
+  "target": "abuse",
+  "args": "-nosound",
+  "host": "x11",
+  "fps": 60,
+  "pointer": "visible",
+  "needsData": {
+    "dir": "abuse",
+    "mount": "/var/lib/games/abuse/",
+    "exactPaths": true,
+    "cwd": "/var/lib/games/abuse",
+    "hint": "Debian's abuse-lib 2.00 laid out as it installs to /var/lib/games/abuse (art/, levels/, lisp/, addon/, abuse.lsp, light.tbl from the source); sfx/ from abuse-sfx is optional for this build"
+  },
+  "controls": [
+    ["mouse", "aim, menus"],
+    ["left button", "fire, choose"],
+    ["right button", "special weapon"],
+    ["arrows", "move, ↑ jumps"],
+    ["Ctrl / Ins", "weapon"],
+    ["Esc", "menu"]
+  ],
+  "_why": "Public-domain C++ from 1996 compiled whole: 2,916 functions, Debian's X11 port unchanged. The program opens its data by absolute path (ABUSE_PATH=/var/lib/games/abuse) and is started there, hence mount, exactPaths and cwd.",
+  "_sound": "Silent: the X11 build's sound layer is imlib/port/sgi/sound.c's stub, and -nosound is what Debian's own wrapper passed without a sound card."
+}

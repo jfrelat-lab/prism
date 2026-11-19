@@ -1128,10 +1128,14 @@ export function installStdio(M, {
     msync: () => 0,
     chmod: () => 0,
     umask: () => 0,
-    // Neither waits; each counts the time it stands for, which only the time-stamp counter sees
-    // (runtime.js __prism_rdtsc).
-    usleep: (us) => { M.sleptMicros = (M.sleptMicros ?? 0) + (us >>> 0); return 0; },
-    sleep: (s) => { M.sleptMicros = (M.sleptMicros ?? 0) + (s >>> 0) * 1e6; return 0; },
+    /*
+     * On the deterministic clock neither waits; each counts the time it stands for, which only the
+     * time-stamp counter sees (runtime.js __prism_rdtsc). On the page's real clock they WAIT
+     * (M.realSleep, web/worker.js): Abuse's frame limiter is a usleep, and returning at once ran
+     * its 15-frame game as fast as the host could go.
+     */
+    usleep: (us) => { if (M.realSleep) { M.realSleep(us >>> 0); return 0; } M.sleptMicros = (M.sleptMicros ?? 0) + (us >>> 0); return 0; },
+    sleep: (s) => { if (M.realSleep) { M.realSleep((s >>> 0) * 1e6); return 0; } M.sleptMicros = (M.sleptMicros ?? 0) + (s >>> 0) * 1e6; return 0; },
 
     pread: (fd, dst, n, off) => {
       const h = fileOf(fd);
