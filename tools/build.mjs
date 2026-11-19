@@ -163,7 +163,7 @@ const KEYNAMES_EARLY = {
 const ASCII_OF = { 0x1c: 13, 0x39: 32, 0x01: 27, 0x0f: 9 };
 const scripted = (() => {
   if (!inputSteps.length) return null;
-  let tick = 0, step = 0, waitUntil = 0, buttons = 0, releaseAt = -1, pressAt = -1, pressButton = 0, pos = { x: 0, y: 0 };
+  let tick = 0, step = 0, waitUntil = 0, buttons = 0, releaseAt = -1, pressAt = -1, pressButton = 0, pos = null;   // no position until the script moves: the pointer stays where the program put it
   const keys = [];
   let onShot = null;
   const advance = () => {
@@ -234,6 +234,8 @@ try {
       // The X server's core font, the VGA ROM's glyphs, as the page gives it (web/worker.js): Abuse opens 9x15.
       x11: { font: new Uint8Array(readFileSync(join(ROOT, 'assets/vga-rom-8x16.bin'))),
              ...(scripted ? { mouse: scripted.mouse, keyboard: scripted.keyboard } : {}) },
+      // ...and a DOS/4GW program's INT 33h; its keys go through its own INT 9 handler (below).
+      ...(scripted ? { watcom: { mouse: scripted.mouse } } : {}),
     },
   });
 } catch (e) {
@@ -658,14 +660,29 @@ if ((frameCap || pngPath || keyScript.length) && mgl) {
 // --input's `shot`: what the X client last showed -- its window's pixels, or its whole-window image
 // through the palette (the path a full-screen 8-bit put takes), whichever it drew last.
 scripted?.setShot((path) => {
-  const x = program.M.x11, d = x?.window?.();
-  if (x?.lastPut === 'image' && x.imageData) {
+  const x = program.M.x11, d = x?.window?.(), w = program.M.watcom;
+  if (w?.mode === 0x13) {
+    writeIndexedPng(path, { pixels: program.M.u8.subarray(w.pixels, w.pixels + w.width * w.height), width: w.width, height: w.height, palette: program.M.dac?.palette ?? null });
+  } else if (x?.lastPut === 'image' && x.imageData) {
     writeIndexedPng(path, { pixels: program.M.u8.subarray(x.imageData, x.imageData + x.width * x.height), width: x.width, height: x.height, palette: x.palette });
   } else if (d?.addr) {
     writeRgbPng(path, { bytes: program.M.u8.subarray(d.addr, d.addr + d.w * d.h * 4), width: d.w, height: d.h });
   } else { console.log(`[input] shot ${path}: nothing drawn yet`); return; }
   console.log(`[input] shot -> ${path}`);
 });
+/*
+ * --input's keys for a DOS/4GW program: through the INT 9 handler it installed, one press or release
+ * per mouse poll -- the script's clock -- so its code runs between the two.
+ */
+if (scripted && program.M.watcomHost) {
+  const host = program.M.watcomHost, poll = scripted.mouse.state;
+  scripted.mouse.state = () => {
+    const b = poll();
+    const k = scripted.keyboard.pending() ? scripted.keyboard.next() : null;
+    if (k) host.deliverKeyboard(k.down ? k.scan & 0x7f : (k.scan & 0x7f) | 0x80);
+    return b;
+  };
+}
 const runT0 = performance.now();
 try {
   const { code } = program.run([target.name, ...args]);
@@ -910,6 +927,21 @@ if (mgl) {
     let nz = 0;
     for (const b of px) if (b) nz++;
     writeIndexedPng(pngPath, { pixels: px, width: g.width, height: g.height, palette: g.palette });
+    console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
+  }
+} else if (program.M.watcom?.mode === 0x13) {
+  /*
+   * A DOS/4GW program in mode 13h: its picture is the 64,000 bytes at 0xa0000 it writes through a
+   * flat pointer, and its colours are the DAC's (ports 3C8h/3C9h). No frame boundary is counted
+   * here -- nothing marks one in that mode -- so the picture is the screen when the run ended.
+   */
+  const w = program.M.watcom;
+  console.log(`\nmode 13h · display ${w.width}x${w.height}` + fpsNote());
+  if (pngPath) {
+    const px = program.M.u8.subarray(w.pixels, w.pixels + w.width * w.height);
+    let nz = 0;
+    for (const b of px) if (b) nz++;
+    writeIndexedPng(pngPath, { pixels: px, width: w.width, height: w.height, palette: program.M.dac?.palette ?? null });
     console.log(`  ${nz} non-zero pixels of ${px.length}, ${new Set(px).size} colours -> ${pngPath}`);
   }
 } else if (program.M.x11?.lastPut === 'surface' && program.M.x11.window?.()?.addr) {

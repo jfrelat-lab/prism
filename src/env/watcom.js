@@ -53,6 +53,7 @@ export function installWatcom(M, {
   keys = () => 0,            // scan code -> held?
   onPresent = null,
   stopAfterFrames = 0,
+  mouse = null,              // { position?() | take(), state() } -- INT 33h AX=03h/05h/0Bh read it
 } = {}) {
   M.clockOf = watcomClock;
   const mod = M.mod;
@@ -73,7 +74,7 @@ export function installWatcom(M, {
     keys: 0,                 // keyboard interrupts delivered
     // The mouse driver's state, as INT 33h sets it. `handler` is recorded rather than installed --
     // a recorded handler is one this host can CALL. See deliverMouse.
-    mouse: { handler: 0, mask: 0, x: 0, y: 0, minX: 0, maxX: 319, minY: 0, maxY: 199, buttons: 0 },
+    mouse: { handler: 0, mask: 0, x: 0, y: 0, minX: 0, maxX: 319, minY: 0, maxY: 199, buttons: 0, seen: { x: 160, y: 100 } },
   };
   M.watcom = state;
 
@@ -124,13 +125,7 @@ export function installWatcom(M, {
       switch (num | 0) {
         case 0x10: {                                   // BIOS video
           const ah = (r.eax >> 8) & 0xff, al = r.eax & 0xff;
-          if (ah === 0) {                              // set mode
-            state.mode = al;
-            // 13h is 320x200 linear at 0xa0000, which is where the game will write. Nothing to
-            // program: the memory is already there.
-            if (al === 0x13) { state.width = 320; state.height = 200; state.pixels = 0xa0000; }
-            publishGeometry();
-          }
+          if (ah === 0) setVideoMode(al);              // set mode
           setCarry(out, false);
           return 0;
         }
@@ -173,6 +168,26 @@ export function installWatcom(M, {
              */
             state.mouse.mask = r.ecx & 0xffff;
             state.mouse.handler = r.edx >>> 0;
+          } else if (ax === 0x000b) {
+            /*
+             * Motion counters: how far the mouse moved since the last call, in mickeys (one a pixel
+             * here). Abuse's DOS JCMouse::update reads only this and AX=05h, and keeps its own cursor.
+             * From a source that reports a POSITION (build.mjs --input), the motion is the change in
+             * it, from the centre where a reset puts the pointer; from one that reports motion, as it is.
+             */
+            let dx = 0, dy = 0;
+            const at = mouse?.position?.();
+            if (at) { dx = at.x - state.mouse.seen.x; dy = at.y - state.mouse.seen.y; state.mouse.seen = { x: at.x, y: at.y }; }
+            else if (mouse?.take) ({ dx, dy } = mouse.take());
+            setReg(out, R_ECX, dx & 0xffff);
+            setReg(out, R_EDX, dy & 0xffff);
+          } else if (ax === 0x0005 || ax === 0x0003) {
+            // Button press information (05h) and status (03h): AX or BX the buttons down now,
+            // bit 0 left, 1 right, 2 middle -- the channel's own order. The press counts are not kept.
+            const b = mouse?.state ? mouse.state() & 7 : state.mouse.buttons;
+            if (ax === 0x0005) { setReg(out, R_EAX, b); setReg(out, R_EBX, 0); }
+            else setReg(out, R_EBX, b);
+            setReg(out, R_ECX, state.mouse.x); setReg(out, R_EDX, state.mouse.y);
           } else if (ax === 0x0004) {                  // set position
             state.mouse.x = r.ecx & 0xffff;
             state.mouse.y = r.edx & 0xffff;
@@ -336,8 +351,42 @@ export function installWatcom(M, {
    * is the guest's own malloc — which is the truthful answer, since DPMI memory and heap memory are
    * the same memory in one flat image.
    */
+  /** INT 10h AH=00h. 13h is 320x200 linear at 0xa0000, where the game will write: nothing to program. */
+  function setVideoMode(al) {
+    state.mode = al;
+    if (al === 0x13) { state.width = 320; state.height = 200; state.pixels = 0xa0000; }
+    publishGeometry();
+  }
+
+  /*
+   * 0x0300, SIMULATE A REAL-MODE INTERRUPT: BL the interrupt, ES:EDI a real-mode call structure
+   * (edi esi ebp resv ebx edx ecx eax as dwords at 0..28, then flags es ds fs gs ip cs sp ss as words
+   * from 32). Abuse's DOS build makes every BIOS and DOS call this way (imlib/port/dos4gw/doscall.c
+   * RM_intr) -- its INT 10h mode 13h among them, which unanswered left it drawing into a screen that
+   * was never set. Answered: INT 10h AH=00h. DOS AH=48h (conventional memory, for a real-mode buffer)
+   * is REFUSED with CF and AX=8, insufficient memory -- there is no low arena here, and an untouched
+   * AX would have been read back as a segment. Anything else is left alone, CF clear, as a BIOS
+   * leaves a service it does not know.
+   */
+  function simulateRealMode(intr, rm) {
+    const eax = dv().getUint32(rm + 28, true);
+    const ah = (eax >> 8) & 0xff;
+    let flags = dv().getUint16(rm + 32, true) & ~1;
+    if (intr === 0x10 && ah === 0) setVideoMode(eax & 0xff);
+    else if (intr === 0x21 && ah === 0x48) {
+      dv().setUint32(rm + 28, (eax & 0xffff0000) | 8, true);
+      flags |= 1;
+    }
+    dv().setUint16(rm + 32, flags, true);
+  }
+
   function dpmi(r, out) {
     const fn = r.eax & 0xffff;
+    if (fn === 0x0300) {
+      if (r.edi) simulateRealMode(r.ebx & 0xff, r.edi);
+      setCarry(out, false);
+      return 0;
+    }
     if (fn === 0x0500) {
       const info = r.edi;
       if (info) {
