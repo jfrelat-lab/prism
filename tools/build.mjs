@@ -216,7 +216,8 @@ try {
      * than not offering it.
      */
     compile: {
-      safepoints: flag('safepoints') || leashMs > 0,
+      // ...and a DOS/4GW program's timer needs them too: see the INT 8 below.
+      safepoints: flag('safepoints') || leashMs > 0 || (target.env ?? []).includes('watcom'),
       ...(opt('memory') ? { memory: +opt('memory') } : {}),
     },
     envExtra: {
@@ -370,6 +371,22 @@ if (!flag('run')) process.exit(0);
 const args = (opt('args') ?? target.args ?? '').split(/\s+/).filter(Boolean);
 console.log(`\nrunning: ${target.name} ${args.join(' ')}` +
   (leashMs ? ` · leash ${leashMs / 1000}s` : ''));
+/*
+ * A DOS/4GW program's TIME is its INT 8 handler: Abuse's milli_wait spins on the tick_counter only
+ * that handler bumps, and Heretic its ticcount. Nothing delivered it here, so the first wait (Abuse's
+ * fade_in) never ended. Delivered from the safepoint, every --tick back edges (default 20000) --
+ * a count, not a clock, as tools/raven.mjs does, so a run stays reproducible. The page uses a real
+ * clock instead (web/worker.js).
+ */
+if (program.M.watcomHost) {
+  const host = program.M.watcomHost, every = +(opt('tick') ?? 20000), inner = program.M.sp_;
+  program.M.spBudget = every;
+  program.M.sp_ = (id) => {
+    inner.call(program.M, id);
+    program.M.spBudget = every;
+    host.deliverTimer();
+  };
+}
 /*
  * Enforced from the runtime's clock, the port seam and a safepoint back edge -- see checkLeash.
  *

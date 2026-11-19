@@ -37,6 +37,7 @@ import { SLOT } from './webhost.js';
  *   h:  al ah bl bh cl ch dl dh             (the two low bytes of each of the first four)
  */
 const R_EAX = 0, R_EBX = 4, R_ECX = 8, R_EDX = 12, R_ESI = 16, R_EDI = 20, R_CFLAG = 24;
+const REGS_SIZE = 28;
 
 /*
  * Watcom's DOS clock(), measured with Open Watcom's own libc under DOSBox-X: CLOCKS_PER_SEC is 1000,
@@ -121,7 +122,12 @@ export function installWatcom(M, {
     int386: (num, inR, outR) => {
       const r = getRegs(inR);
       const out = outR || inR;
-      if (inR !== out) M.u8.copyWithin(out, inR, inR + 32);
+      /*
+       * sizeof(union REGS) is 28 -- seven dwords, cflag the last -- not 32. A 32-byte copy wrote four
+       * bytes past `out`: in Abuse's JCMouse::update, whose REGS lie on the stack, that was the caller's
+       * saved `this`, and event_waiting asked a null JCMouse whether the mouse had moved -- for ever.
+       */
+      if (inR !== out) M.u8.copyWithin(out, inR, inR + REGS_SIZE);
       switch (num | 0) {
         case 0x10: {                                   // BIOS video
           const ah = (r.eax >> 8) & 0xff, al = r.eax & 0xff;
