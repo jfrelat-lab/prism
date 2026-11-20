@@ -184,6 +184,18 @@ export function makeResolver(dir, { caseInsensitive = false, include = null, sys
     // under that name still wins, exactly as before.
     const env = envTable[name] ?? HEADERS[name];
     if (env !== undefined) return { path: `<${name}>`, text: env };
+    /*
+     * An ANGLED path that climbs out of its include directory names the SYSTEM's headers. STLport is
+     * installed as /usr/include/stlport and reaches the C library's own through it, from its wrapper of
+     * the same name: <../include/stdio.h> (_STLP_NATIVE_C_HEADER, config/stl_gcc.h). Not found as
+     * written, it is the standard header after the climb and the directory it names -- before the
+     * basename search below, which found STLport's stdio.h itself and nested it until the limit.
+     */
+    const climbed = !from && /^(?:\.\.\/)+[^/]+\/(.+)$/.exec(name);
+    if (climbed) {
+      const sys = envTable[climbed[1]] ?? HEADERS[climbed[1]];
+      if (sys !== undefined) return { path: `<${climbed[1]}>`, text: sys };
+    }
     const want = basename(name);
     const loose = find(want, from);
     if (loose) return { path: loose, text: readFileSync(loose, 'latin1') };

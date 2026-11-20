@@ -28,7 +28,7 @@ export const isCxxFile = (file) => /\.(cpp|cc|cxx|c\+\+|C)$/.test(file);
  */
 const STANDARDS = new Set(['c++98', 'gnu++98', 'c++03', 'gnu++03']);
 const LANGUAGES = new Set(['c', 'c++']);
-const COMPILERS = new Set(['gcc', 'msvc', 'gcc2', 'watcom']);
+const COMPILERS = new Set(['gcc', 'msvc', 'gcc2', 'gcc3', 'watcom']);
 const KEYS = new Set(['std', 'language', 'compiler']);
 
 /*
@@ -119,7 +119,7 @@ export const CXX_DEFINES = { __cplusplus: '199711L' };
 
 export function cxxToC(tokens, { file = 'unit.cpp', builtins = null, compiler = 'gcc' } = {}) {
   // PRISM's own headers are C headers: their declarations have C linkage, as if in extern "C".
-  const unit = parseCxx(tokens, { cLinkage: (t) => !!t?.loc?.file?.startsWith('<') });
+  const unit = parseCxx(tokens, { cLinkage: (t) => !!t?.loc?.file?.startsWith('<'), gcc3: compiler === 'gcc3' || compiler === 'gcc2' });
   const c = lowerCxx(unit, { tag: file, builtins, msvc: compiler === 'msvc', gcc2: compiler === 'gcc2' || compiler === 'watcom' });
   // The unit's `#pragma aux` routines, for the C front end: they name the function as the source does,
   // and compile.js finds its C name (the mangled one) when no C function bears it.

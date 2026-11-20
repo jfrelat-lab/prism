@@ -1989,6 +1989,52 @@ int main() {
 }
 `);
 
+// STLport 4.6.2 (corpus/stlport): class template partial specialisation, iterator_traits' shapes
+C('partial-specialisation', `#include <stdio.h>
+template <class T> struct IsPtr { enum { v = 0 }; };
+template <class T> struct IsPtr<T*> { enum { v = 1 }; };
+template <class T> struct IsPtr<const T*> { enum { v = 2 }; };
+template <class It> struct traits { typedef typename It::value_type value_type; };
+template <class T> struct traits<T*> { typedef T value_type; };
+template <class A, class B> struct Pair { A a; B b; };
+template <class A, class B> struct Same { enum { v = 0 }; };
+template <class A> struct Same<A, A> { enum { v = 1 }; };
+template <class A, class B> struct First { typedef void type; };
+template <class A, class B> struct First<Pair<A, B>, int> { typedef A type; };
+template <int N, class T> struct Arr { enum { v = N }; };
+template <class T> struct Arr<3, T> { enum { v = 33 }; };
+struct V { typedef short value_type; };
+int main() {
+  traits<double*>::value_type d = 2.5; traits<V>::value_type s = 7;
+  First<Pair<char, long>, int>::type c = 'x';
+  printf("%d %d %d %g %d %d %d %d %c %d %d\\n", IsPtr<int>::v, IsPtr<int*>::v, IsPtr<const int*>::v, d, (int)sizeof(s),
+    Same<int, int>::v, Same<int, char>::v, (int)sizeof(c), c, Arr<3, int>::v, Arr<4, int>::v);
+  return 0;
+}
+`);
+// `typename _Alloc::template rebind<_Tp>` (14.2p4)
+C('template-keyword-member', `#include <stdio.h>
+template <class T> struct A { template <class U> struct rebind { typedef A<U> other; }; T v; };
+template <class T, class Al> struct Tr { typedef typename Al::template rebind<T> R; typedef typename R::other type; };
+int main() { Tr<char, A<int> >::type x; x.v = 65; printf("%d %d\\n", (int)sizeof(x), x.v); return 0; }
+`);
+// a statement that starts with `typename` declares (6.8)
+C('typename-statement', `#include <stdio.h>
+template <class C> struct Traits { typedef int diff; };
+template <class C> int count(C n) {
+  typename Traits<C>::diff k = 0;
+  for (; n > 0; --n) ++k;
+  return k;
+}
+int main() { printf("%d\\n", count(5)); return 0; }
+`);
+// <cstdio>, <cstring>, <cstdlib> put the C library's names in std as well
+C('c-names-in-std', `#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+int main() { char b[8]; std::strcpy(b, "hi"); std::printf("%s %d\\n", b, std::abs(-3)); std::size_t n = std::strlen(b); return (int)n - 2; }
+`);
+
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-cxx: ${active.length} cases\n`);
@@ -2187,6 +2233,14 @@ if (!FILTER) {
     } catch (e) { return `refused: ${e.message.split('\n')[0]}`; }
   })();
   option.push(['an explicit specialisation of a static member is defined in its unit, used from another', sing === '1 42 1']);
+  // compiler "gcc3": g++ before 3.4 read `Q:: name<` after an opaque qualifier as a template-id with no
+  // keyword (STLport 4.6.2's config/stl_gcc.h writes for it); today's g++, and so "gcc", refuses it.
+  const G3 = '#include <stdio.h>\ntemplate <class T> struct A { template <class U> struct rebind { typedef A<U> other; }; T v; };\n'
+    + 'template <class T, class Al> struct Tr { typedef typename Al:: rebind<T>::other type; };\n'
+    + 'int main() { Tr<char, A<int> >::type x; x.v = 65; printf("%d\\n", x.v); return 0; }\n';
+  const g3 = (compiler) => { try { return compile(G3, { file: 'g3.cpp', cxx: { compiler } }).run().stdout.trim(); } catch (e) { return `refused: ${e.message.split('\n')[0]}`; } };
+  option.push(['gcc3 reads a member template of an opaque qualifier without the keyword', g3('gcc3') === '65']);
+  option.push(['gcc refuses it, as g++ 3.4 and later do', g3('gcc').startsWith('refused')]);
   for (const [what, ok] of option) {
     if (ok) { pass++; if (VERBOSE) console.log(`  ok   option: ${what}`); } else fails.push({ c: { name: `option: ${what}` }, why: 'the option did not do that' });
   }

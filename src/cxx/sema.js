@@ -739,6 +739,15 @@ export class Sema {
   declareSpecialisation(it, env) {
     const ent = this.lookupType(it.name, env);
     if (ent?.k !== 'template') this.fail(`'${it.name}' is not a class template`, it);
+    /*
+     * A PARTIAL specialisation (14.5.4): `template <class _Tp> struct _IsPtr<_Tp*>`. Its arguments are
+     * patterns over its own parameters, matched when an instance is asked for (partialFor) -- STLport's
+     * type_traits.h and _iterator_base.h (iterator_traits<_Tp*>) are made of them.
+     */
+    if (it.template?.length) {
+      (ent.tmpl.partials ??= []).push({ params: it.template, patterns: it.specArgs, ast: it, env });
+      return null;
+    }
     const args = this.withDefaults(ent.tmpl, it.specArgs.map((a) => this.templateArg(a, env, it)), it);
     ent.tmpl.specs.set(args.map(T.mangle).join(','), { ast: it, env });
     return null;
@@ -778,12 +787,15 @@ export class Sema {
     const key = `${tmpl.name}<${args.map(T.mangle).join(',')}>`;
     let cls = this.instances.get(key);
     if (cls) return { k: 'class', cls };
-    const spec = tmpl.specs?.get(args.map(T.mangle).join(','));
-    const bind = new Map([...(tmpl.env.bind ?? []), ...(spec ? [] : tmpl.params.map((p, i) => [p.name, args[i]]))]);
+    const exact = tmpl.specs?.get(args.map(T.mangle).join(','));
+    const partial = exact ? null : this.partialFor(tmpl, args, node);
+    const spec = exact ?? partial;
+    const bind = new Map([...(tmpl.env.bind ?? []), ...(partial ? partial.bind : spec ? [] : tmpl.params.map((p, i) => [p.name, args[i]]))]);
     cls = this.newClass(tmpl.name, tmpl.ast.key, tmpl.ast, tmpl.env);
     cls.name = `${tmpl.name}<${args.map(T.show).join(', ')}>`;
     cls.cname = `${this.scopedName(tmpl.name, tmpl.env)}I${args.map(T.mangle).join('')}E`;
     cls.template = tmpl;
+    cls.targs = args;
     cls.bind = bind;
     this.instances.set(key, cls);
     // Made complete when first needed so: `idList<idCameraEvent*>` may be named before its argument is.
@@ -920,10 +932,84 @@ export class Sema {
     if (specs.cv?.const) a = T.uncst(a);
     return this.bindOne(bind, n, a);
   }
+  /**
+   * The partial specialisation of tmpl these arguments select, with its parameters bound, or null.
+   * Each candidate's patterns are matched against the arguments (matchArg fixes its parameters from
+   * their structure), then checked by substitution: the patterns, its parameters bound, must give
+   * the arguments exactly. Of several that match, the most specialised is taken -- the one whose
+   * patterns say the most beyond a bare parameter (`const _Tp*` over `_Tp*`), which is what 14.5.4.2's
+   * partial ordering decides for the forms the STL uses; two equally specific ones are an ambiguity.
+   */
+  partialFor(tmpl, args, node) {
+    let best = null, bestScore = -1, tie = false;
+    for (const p of tmpl.partials ?? []) {
+      const names = p.params.map((q) => q.name);
+      const bind = new Map();
+      if (p.patterns.length !== args.length) continue;
+      if (!p.patterns.every((pat, i) => this.matchArg(pat, args[i], bind, names))) continue;
+      if (!names.every((n) => bind.has(n))) continue;
+      const penv = { scope: p.env.scope, cls: p.env.cls ?? null, bind: new Map([...(p.env.bind ?? []), ...bind]) };
+      let same = false;
+      try { same = p.patterns.every((pat, i) => T.mangle(this.templateArg(pat, penv, node)) === T.mangle(args[i])); } catch { same = false; }
+      if (!same) continue;
+      const score = p.patterns.reduce((s, pat) => s + this.patternScore(pat, names), 0);
+      if (score > bestScore) { best = { ...p, bind }; bestScore = score; tie = false; } else if (score === bestScore) tie = true;
+    }
+    if (best && tie) this.fail(`${tmpl.name}<${args.map(T.show).join(', ')}>: two partial specialisations match equally`, node);
+    return best;
+  }
+  /** Match one template-argument pattern (a type-id or an expression) against an argument, binding parameters. */
+  matchArg(pat, a, bind, names) {
+    if (pat.expr) {
+      const e = pat.expr;
+      if (e.k === 'id' && e.name.parts.length === 1 && !e.name.global && names.includes(e.name.parts[0].name)) return a.k === 'tvalue' && this.bindOne(bind, e.name.parts[0].name, a);
+      return true;                        // a constant: checked by substitution
+    }
+    if (a.k === 'tvalue') return false;
+    return this.matchType(pat.specs, pat.derivs, a, bind, names);
+  }
+  /** Match a type pattern written `specs derivs` against type a, outermost declarator first. */
+  matchType(specs, derivs, a, bind, names) {
+    const ds = [...derivs];
+    while (ds.length) {
+      const d = ds.pop();
+      if (d.k === 'ref') { if (a.k !== 'ref') return false; a = a.to; continue; }
+      if (d.k === 'ptr') { if (a.k !== 'ptr' || !!d.cv?.const !== !!a.c) return false; a = a.to; continue; }
+      if (d.k === 'array') { if (a.k !== 'array') return false; a = a.of; continue; }
+      if (d.k === 'func') {
+        if (a.k !== 'func' || d.params.length !== a.params.length) return false;
+        if (!d.params.every((q, i) => this.matchType(q.specs, q.decl.derivs, a.params[i], bind, names))) return false;
+        a = a.ret;
+        continue;
+      }
+      return true;                        // another form: checked by substitution
+    }
+    if (specs.cv?.const) { if (!a.c) return false; a = T.uncst(a); }
+    const st = specs.type;
+    if (st?.k !== 'named' || st.qname.parts.length !== 1 || st.qname.global) return true;
+    const part = st.qname.parts[0];
+    if (!part.targs) return names.includes(part.name) ? this.bindOne(bind, part.name, a) : true;
+    // `pair<_T1, _T2>`, `reverse_iterator<_It>`: an instance of that template, its arguments matched in turn
+    if (a.k !== 'class' || !a.cls.targs || a.cls.template?.name !== part.name) return false;
+    if (part.targs.length > a.cls.targs.length) return false;
+    return part.targs.every((q, i) => this.matchArg(q, a.cls.targs[i], bind, names));
+  }
+  /** How much a pattern says beyond a bare parameter: the measure partialFor orders candidates by. */
+  patternScore(pat, names) {
+    if (pat.expr) return pat.expr.k === 'id' && names.includes(pat.expr.name.parts.at(-1)?.name) ? 0 : 1;
+    let n = pat.derivs.length + (pat.specs.cv?.const ? 1 : 0);
+    const st = pat.specs.type;
+    if (st?.k === 'named' && st.qname.parts.length === 1) {
+      const part = st.qname.parts[0];
+      if (part.targs) n += 1 + part.targs.reduce((s, q) => s + this.patternScore(q, names), 0);
+      else if (!names.includes(part.name)) n += 1;
+    } else n += 1;
+    return n;
+  }
   /** Bind template parameter n to type a, or check a against what an earlier argument bound. */
   bindOne(bind, n, a) {
     const prior = bind.get(n);
-    if (prior) return prior.k !== 'tvalue' && T.same(prior, a);
+    if (prior) return prior.k === 'tvalue' ? a.k === 'tvalue' && prior.value === a.value : a.k !== 'tvalue' && T.same(prior, a);
     bind.set(n, a);
     return true;
   }

@@ -87,8 +87,10 @@ class PScope {
  * Parse a preprocessed token stream. `cLinkage(tok)` says whether a token comes from a header PRISM
  * supplies -- C headers, whose declarations have C linkage as if wrapped in extern "C".
  */
-export function parseCxx(tokens, { cLinkage = () => false } = {}) {
-  return new CxxParser(tokens, cLinkage).unit();
+export function parseCxx(tokens, { cLinkage = () => false, gcc3 = false } = {}) {
+  const p = new CxxParser(tokens, cLinkage);
+  p.gcc3 = gcc3;
+  return p.unit();
 }
 
 class CxxParser {
@@ -398,6 +400,7 @@ class CxxParser {
     const global = this.eatP('::');
     // The scope each part is looked up in: the one the part before it opened.
     let sc = global ? this.root : null;
+    let opaque = false;    // the qualifier before this part opened no scope this parser knows
     const kindOf = (n) => { const k = sc ? sc.own(n) : this.scope.find(n); return k === 'ftemplate' ? 'template' : k; };
     for (;;) {
       const part = {};
@@ -408,15 +411,24 @@ class CxxParser {
         if (typeof op === 'string') part.name = `operator${op}`;
         else { part.name = 'operator conv'; part.conv = op; }
       } else {
+        // `_Alloc::template rebind<_Tp>` (14.2p4): after `::` of a dependent qualifier, the keyword says
+        // the name is a template, so the `<` that follows opens its arguments. STLport's _alloc.h.
+        const forced = parts.length > 0 && this.eatKw('template');
+        // g++ before 3.4 needed no keyword: a member of a qualifier whose members it could not see (a
+        // template parameter's) followed by `<` was a template-id. STLport 4.6.2 writes for those
+        // compilers (config/stl_gcc.h defines _STLP_NO_MEMBER_TEMPLATE_KEYWORD): `_Alloc:: rebind<_Tp>`.
+        const guessed = this.gcc3 && opaque && this.isIdent() && this.isP('<', 1);
         part.name = this.ident();
         // After `.` or `->` the object's class is not known here: a member function template seen in
         // some class, then `<...>(`, is read as its arguments (`sc.pixel<2>(6)`).
-        if (this.isP('<') && (kindOf(part.name) === 'template' || (member && this.memberTemplates?.has(part.name) && this.isP('(', this.skipAngles(0))))) part.targs = this.templateArgs();
+        if (this.isP('<') && (forced || guessed || kindOf(part.name) === 'template' || (member && this.memberTemplates?.has(part.name) && this.isP('(', this.skipAngles(0))))) part.targs = this.templateArgs();
       }
       parts.push(part);
       if (this.isP('::') && (this.peek(1).k === ID || this.isP('~', 1))) {
         this.next();
-        sc = (sc ? sc.own(part.name, 'inner') : this.scope.find(part.name, 'inner')) ?? sc;
+        const inner = sc ? sc.own(part.name, 'inner') : this.scope.find(part.name, 'inner');
+        opaque = !inner;
+        sc = inner ?? sc;
         continue;
       }
       break;
@@ -1106,6 +1118,9 @@ class CxxParser {
     if (t.k === PUNCT && t.v === '::' && this.isTypeName()) { const j = this.resolvePath(0).end; return !this.isP('(', j) && !this.isP('.', j) && !this.isP('->', j); }
     if (t.k !== ID) return false;
     if (STORAGE.has(t.v) || (CV.has(t.v)) || t.v === 'class' || t.v === 'struct' || t.v === 'union' || t.v === 'enum') return true;
+    // `typename iterator_traits<_I>::difference_type __n = 0;` (STLport's _iterator_base.h): a statement that
+    // starts with `typename` names a dependent type, and 6.8 settles what follows as a declaration.
+    if (t.v === 'typename') return true;
     // `int(x)` is a cast; `void (*proc)(void)` declares (Doom 3's GLimp_ExtensionPointer)
     if (BUILTIN.has(t.v)) return !this.isP('(', 1) || this.isP('*', 2) || this.isP('&', 2);
     if (!this.startsType()) return false;

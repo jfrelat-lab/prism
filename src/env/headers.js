@@ -198,6 +198,13 @@ long ftell(FILE *stream);
 void rewind(FILE *stream);
 int fgetc(FILE *stream);
 int getc(FILE *stream);
+/* C90's, which the C front end knew as built-ins but no header declared (C++'s <cstdio> needs them by name) */
+int getchar(void);
+char *gets(char *s);
+char *tmpnam(char *s);
+typedef long fpos_t;
+int fgetpos(FILE *stream, fpos_t *pos);
+int fsetpos(FILE *stream, const fpos_t *pos);
 int ungetc(int c, FILE *stream);
 char *fgets(char *dst, int n, FILE *stream);
 int feof(FILE *stream);
@@ -288,6 +295,13 @@ size_t mbstowcs(wchar_t *dst, const char *src, size_t n);
 size_t wcstombs(char *dst, const wchar_t *src, size_t n);
 long atol(const char *s);
 int abs(int v);
+/* C90's, known to the C front end as built-ins and now declared (C++'s <cstdlib> names them) */
+int atexit(void (*fn)(void));
+int rand(void);
+void srand(unsigned seed);
+int mblen(const char *s, size_t n);
+int mbtowc(wchar_t *pwc, const char *s, size_t n);
+int wctomb(char *s, wchar_t wc);
 long labs(long v);
 #define MB_CUR_MAX ((size_t)1)
 #define EXIT_SUCCESS 0
@@ -335,6 +349,13 @@ char *strdup(const char *s);
 /* POSIX.1-2008: at most n bytes, always terminated. */
 char *strndup(const char *s, size_t n);
 char *strtok(char *s, const char *delim);
+/* C90's, known to the C front end as built-ins and now declared (C++'s <cstring> names them) */
+void *memchr(const void *s, int c, size_t n);
+size_t strcspn(const char *s, const char *reject);
+size_t strspn(const char *s, const char *accept);
+char *strstr(const char *haystack, const char *needle);
+char *strerror(int errnum);
+size_t strxfrm(char *d, const char *s, size_t n);
 void *memcpy(void *d, const void *s, size_t n);
 void *memmove(void *d, const void *s, size_t n);
 void *memset(void *d, int v, size_t n);
@@ -2189,8 +2210,28 @@ const KEYSYMDEF = `
 #endif
 `;
 
-/** A C++ name for a C header: the header, and namespace std declared for `using namespace std;`. */
-const CXX_C = (h) => `#include <${h}>\n#ifdef __cplusplus\nnamespace std {}\n#endif\n`;
+/*
+ * A C++ name for a C header: the header, and its names in namespace std as C++98 places them
+ * ([lib.c.*], the tables of 18.1, 20.4.6, 21.4, 26.5, 27.8.2): `std::ptrdiff_t`, `std::printf`. They stay
+ * global too, as glibc's headers leave them. STLport is what needed them -- its <cstddef> says
+ * `using std::ptrdiff_t;` of the compiler's own, as g++ 3's libstdc++ provides it. A name that is a
+ * macro in the C header (getc, putc, the <ctype.h> tests where it defines them so) is left out: a
+ * using-declaration of a macro is not one.
+ */
+const CXX_C = (h, names = []) => `#include <${h}>\n#ifdef __cplusplus\nnamespace std {\n${names.map((n) => `#ifndef ${n}\nusing ::${n};\n#endif\n`).join('')}}\n#endif\n`;
+const CXX_NAMES = {
+  'stddef.h': 'ptrdiff_t size_t',
+  'stdio.h': 'FILE fpos_t size_t clearerr fclose feof ferror fflush fgetc fgetpos fgets fopen fprintf fputc fputs fread freopen fscanf fseek fsetpos ftell fwrite getc getchar gets perror printf putc putchar puts remove rename rewind scanf setbuf setvbuf sprintf sscanf tmpfile tmpnam ungetc vfprintf vprintf vsprintf',
+  'stdlib.h': 'div_t ldiv_t size_t abort abs atexit atof atoi atol bsearch calloc div exit free getenv labs ldiv malloc mblen mbstowcs mbtowc qsort rand realloc srand strtod strtol strtoul system wcstombs wctomb',
+  'string.h': 'size_t memchr memcmp memcpy memmove memset strcat strchr strcmp strcoll strcpy strcspn strerror strlen strncat strncmp strncpy strpbrk strrchr strspn strstr strtok strxfrm',
+  'math.h': 'acos asin atan atan2 ceil cos cosh exp fabs floor fmod frexp ldexp log log10 modf pow sin sinh sqrt tan tanh',
+  'time.h': 'clock_t size_t time_t tm asctime clock ctime difftime gmtime localtime mktime strftime time',
+  'ctype.h': 'isalnum isalpha iscntrl isdigit isgraph islower isprint ispunct isspace isupper isxdigit tolower toupper',
+  'signal.h': 'sig_atomic_t raise signal',
+  'setjmp.h': 'jmp_buf longjmp',
+  'stdarg.h': 'va_list',
+};
+const cxxC = (h) => CXX_C(h, (CXX_NAMES[h] ?? '').split(' ').filter(Boolean));
 /*
  * The part of std::string the corpus uses -- Chromium B.S.U.'s Audio.cpp builds an amixer command
  * with it: construction from a C string, copy, +=, c_str() and size(). Written in C++ for src/cxx,
@@ -2872,20 +2913,20 @@ char *if_indextoname(unsigned int index, char *name);
   // C++'s names for the C library (<cstdio> for <stdio.h>, ...). The names stay global, as glibc's
   // headers leave them; std is declared so that `using namespace std;` compiles. A program that
   // writes std::printf would need the using-declarations, and none in the corpus does yet.
-  'cstdio': CXX_C('stdio.h'),
-  'cstdlib': CXX_C('stdlib.h'),
-  'cstring': CXX_C('string.h'),
-  'cmath': CXX_C('math.h'),
-  'ctime': CXX_C('time.h'),
-  'cerrno': CXX_C('errno.h'),
-  'cstdarg': CXX_C('stdarg.h'),
-  'cassert': CXX_C('assert.h'),
-  'climits': CXX_C('limits.h'),
-  'cctype': CXX_C('ctype.h'),
-  'cstddef': CXX_C('stddef.h'),
-  'cfloat': CXX_C('float.h'),
-  'csignal': CXX_C('signal.h'),
-  'csetjmp': CXX_C('setjmp.h'),
+  'cstdio': cxxC('stdio.h'),
+  'cstdlib': cxxC('stdlib.h'),
+  'cstring': cxxC('string.h'),
+  'cmath': cxxC('math.h'),
+  'ctime': cxxC('time.h'),
+  'cerrno': cxxC('errno.h'),
+  'cstdarg': cxxC('stdarg.h'),
+  'cassert': cxxC('assert.h'),
+  'climits': cxxC('limits.h'),
+  'cctype': cxxC('ctype.h'),
+  'cstddef': cxxC('stddef.h'),
+  'cfloat': cxxC('float.h'),
+  'csignal': cxxC('signal.h'),
+  'csetjmp': cxxC('setjmp.h'),
   'string': CXX_STRING,
   'sstream': CXX_SSTREAM,
 };
