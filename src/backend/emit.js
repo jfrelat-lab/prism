@@ -2944,6 +2944,12 @@ export class FunctionEmitter {
         if (this.ty.x87pc && impl === 'sqrt') return { js: `M.pcSqrt(${args.join(',')})`, type: ret };
         if (Object.hasOwn(MATH_DIRECT, impl)) return { js: `Math.${MATH_DIRECT[impl]}(${args.join(',')})`, type: ret };
         if (Object.hasOwn(MATH_DIRECT_F, impl)) return { js: `Math.fround(Math.${MATH_DIRECT_F[impl]}(${args.join(',')}))`, type: ret };
+        // JavaScript's % on numbers IS C's fmod (truncated, the dividend's sign, NaN and infinity
+        // alike), which is all the runtime's fmod does.
+        if ((impl === 'fmod' || impl === 'fmodf') && args.length === 2) {
+          const r = `((${args[0]})%(${args[1]}))`;
+          return { js: impl === 'fmodf' ? `Math.fround(${r})` : r, type: ret };
+        }
         return { js: `M.rt.${impl}(${args.join(',')})`, type: ret };
       }
       if (f) {
