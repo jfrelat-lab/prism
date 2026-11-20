@@ -117,6 +117,17 @@ int wcscmp(const wchar_t *a, const wchar_t *b);
 int wcsncmp(const wchar_t *a, const wchar_t *b, size_t n);
 size_t mbrtowc(wchar_t *pwc, const char *s, size_t n, mbstate_t *ps);
 size_t wcrtomb(char *s, wchar_t wc, mbstate_t *ps);
+size_t mbrlen(const char *s, size_t n, mbstate_t *ps);
+int mbsinit(const mbstate_t *ps);
+wint_t btowc(int c);
+int wctob(wint_t c);
+size_t wcsxfrm(wchar_t *d, const wchar_t *s, size_t n);
+wchar_t *wcschr(const wchar_t *s, wchar_t c);
+wchar_t *wmemcpy(wchar_t *d, const wchar_t *s, size_t n);
+wchar_t *wmemmove(wchar_t *d, const wchar_t *s, size_t n);
+wchar_t *wmemset(wchar_t *d, wchar_t c, size_t n);
+int wmemcmp(const wchar_t *a, const wchar_t *b, size_t n);
+wchar_t *wmemchr(const wchar_t *s, wchar_t c, size_t n);
 #endif
 `;
 
@@ -147,10 +158,26 @@ typedef struct _PRISM_FILE FILE;
  * A FILE * here is a token the runtime hands out, never a pointer to the structure -- but a Linux
  * program may ask its SIZE: Abuse's mdlread.c reserves sizeof(FILE) before an fopen. glibc's i386
  * struct _IO_FILE is 148 bytes; elsewhere (DJGPP, Watcom, Borland) it stays incomplete.
+ *
+ * Its first fields carry glibc's names at glibc's offsets (0, 4 ... 52, 56, 60): STLport 4.6.2
+ * keeps a streambuf's get and put areas in FILE objects of ITS OWN through them
+ * (stl/_stdio_file.h, _STLP_USE_GLIBC). Read through a FILE * the runtime handed out they mean
+ * nothing -- STLport does that only for _fileno, and only when cout is not synchronised with stdio.
  */
 #if defined(__linux__) && !defined(_PRISM_FILE_DEFINED)
 #define _PRISM_FILE_DEFINED
-struct _PRISM_FILE { char __opaque[148]; };
+struct _PRISM_FILE {
+  int _flags;
+  char *_IO_read_ptr, *_IO_read_end, *_IO_read_base;
+  char *_IO_write_base, *_IO_write_ptr, *_IO_write_end;
+  char *_IO_buf_base, *_IO_buf_end;
+  char *_IO_save_base, *_IO_backup_base, *_IO_save_end;
+  void *_markers;
+  struct _PRISM_FILE *_chain;
+  int _fileno;
+  int _flags2;
+  char __opaque[148 - 64];
+};
 #endif
 /* Watcom's struct __iobuf: _ptr, _cnt, _link, _flag, _handle, _bufsize, _ungotten under its pack(1) -- 26 bytes. */
 #if defined(__WATCOMC__) && !defined(_PRISM_FILE_DEFINED)
@@ -244,6 +271,16 @@ namespace std {}
 char *getenv(const char *name);
 
 double atof(const char *s);
+#ifdef __linux__
+/* glibc's (__USE_MISC): digits of a double into a caller's buffer, as ecvt and fcvt without their static one */
+#include <stddef.h>
+int ecvt_r(double value, int ndigit, int *decpt, int *sign, char *buf, size_t len);
+int fcvt_r(double value, int ndigit, int *decpt, int *sign, char *buf, size_t len);
+#if __SIZEOF_LONG_DOUBLE__ == 8
+int qecvt_r(long double value, int ndigit, int *decpt, int *sign, char *buf, size_t len);
+int qfcvt_r(long double value, int ndigit, int *decpt, int *sign, char *buf, size_t len);
+#endif
+#endif
 long atol(const char *s);
 
 #ifndef _PRISM_STDLIB_H
@@ -742,6 +779,35 @@ const FLOATH = `
 #define DBL_MAX 1.7976931348623157e+308
 #define FLT_MIN 1.17549435e-38F
 #define DBL_MIN 2.2250738585072014e-308
+#define FLT_MAX_10_EXP 38
+#define FLT_MIN_10_EXP (-37)
+#define FLT_ROUNDS 1
+/*
+ * long double: i386's x87 extended type as glibc's float.h gives it, or an IEEE double when the
+ * program is built as with -mlong-double-64 (compile.longDouble 64). STLport's numeric_limits<long
+ * double> names all of them; a program that computes in the x87 type is refused where it does.
+ */
+#if __SIZEOF_LONG_DOUBLE__ == 8
+#define LDBL_MANT_DIG 53
+#define LDBL_DIG 15
+#define LDBL_MIN_EXP (-1021)
+#define LDBL_MAX_EXP 1024
+#define LDBL_MIN_10_EXP (-307)
+#define LDBL_MAX_10_EXP 308
+#define LDBL_EPSILON 2.2204460492503131e-16L
+#define LDBL_MAX 1.7976931348623157e+308L
+#define LDBL_MIN 2.2250738585072014e-308L
+#else
+#define LDBL_MANT_DIG 64
+#define LDBL_DIG 18
+#define LDBL_MIN_EXP (-16381)
+#define LDBL_MAX_EXP 16384
+#define LDBL_MIN_10_EXP (-4931)
+#define LDBL_MAX_10_EXP 4932
+#define LDBL_EPSILON 1.08420217248550443401e-19L
+#define LDBL_MAX 1.18973149535723176502e+4932L
+#define LDBL_MIN 3.36210314311209350626e-4932L
+#endif
 #endif
 `;
 
@@ -778,9 +844,13 @@ const TIMEH = `#ifndef _PRISM_TIME_H_ALL
 #include <stddef.h>
 struct tm {
     int tm_sec, tm_min, tm_hour, tm_mday, tm_mon, tm_year, tm_wday, tm_yday, tm_isdst;
-    /* glibc's two BSD members (__USE_MISC, on by default): i386 layout, 44 bytes. */
-    long tm_gmtoff;
-    const char *tm_zone;
+    /*
+     * glibc's two BSD members (__USE_MISC, on by default): i386 layout, 44 bytes. glibc spells them
+     * __tm_gmtoff and __tm_zone when the BSD names are off, and STLport 4.6.2 (time_facets.cpp,
+     * which tests the __USE_BSD of the glibc of its day) reads that spelling: both names here.
+     */
+    union { long tm_gmtoff; long __tm_gmtoff; };
+    union { const char *tm_zone; const char *__tm_zone; };
 };
 #ifndef _PRISM_STRUCT_TIMESPEC
 #define _PRISM_STRUCT_TIMESPEC
@@ -1174,6 +1244,16 @@ const CTYPE = `
  * real libc uses -- a table would have to live in guest memory for a program that takes their
  * address, and nothing does.
  */
+#ifdef __linux__
+/*
+ * glibc's class bits, with its values on i386 (_ISbit, little-endian): STLport's ctype_base::mask
+ * is made of them (stl/c_locale.h, _STLP_USE_GLIBC) and its own table classifies with them.
+ */
+enum {
+  _ISupper = 256, _ISlower = 512, _ISalpha = 1024, _ISdigit = 2048, _ISxdigit = 4096, _ISspace = 8192,
+  _ISprint = 16384, _ISgraph = 32768, _ISblank = 1, _IScntrl = 2, _ISpunct = 4, _ISalnum = 8
+};
+#endif
 int isalnum(int c);
 int isalpha(int c);
 int iscntrl(int c);
@@ -2230,8 +2310,133 @@ const CXX_NAMES = {
   'signal.h': 'sig_atomic_t raise signal',
   'setjmp.h': 'jmp_buf longjmp',
   'stdarg.h': 'va_list',
+  // what PRISM's wchar.h, wctype.h and locale.h declare of C95's and C90's lists, no more
+  'wchar.h': 'mbstate_t wint_t size_t wcslen wcscpy wcsncpy wcscmp wcsncmp mbrtowc wcrtomb mbrlen mbsinit btowc wctob wcsxfrm wcschr wmemcpy wmemmove wmemset wmemcmp wmemchr',
+  'wctype.h': 'wint_t iswprint iswspace',
+  'locale.h': 'lconv setlocale localeconv',
+  // errno is a variable here, not glibc's macro: STLport's <cerrno> then says using ::errno in std
+  'errno.h': 'errno',
 };
 const cxxC = (h) => CXX_C(h, (CXX_NAMES[h] ?? '').split(' ').filter(Boolean));
+/*
+ * <cmath> adds abs for the floating types (26.5/6), which STLport's own <cmath> imports
+ * (_STLP_HAS_NATIVE_FLOAT_ABS). The float and long double overloads of the other functions are not
+ * here yet: they would change which function a C++ program's sqrt(1.0f) calls.
+ */
+const CXX_CMATH = cxxC('math.h') + `#if defined(__cplusplus) && !defined(_PRISM_CXX_CMATH_ABS)
+#define _PRISM_CXX_CMATH_ABS
+#include <stdlib.h>
+namespace std {
+  using ::abs;
+  inline double abs(double x) { return fabs(x); }
+  inline float abs(float x) { return (float)fabs(x); }
+#if __SIZEOF_LONG_DOUBLE__ == 8
+  inline long double abs(long double x) { return fabs(x); }
+#endif
+}
+#endif
+`;
+/*
+ * The C++ runtime's own headers, <exception>, <new> and <typeinfo> (18.4-18.6): what libsupc++
+ * supplies to every C++ library, STLport 4.6.2 included, which reaches them as <../include/new>.
+ *
+ * The handlers are kept per unit -- an inline function's static is the unit's own here -- and
+ * nothing calls them: new is malloc and never throws, an exception with no handler stops the run
+ * in the runtime, and uncaught_exception() is false because no destructor runs while one is in
+ * flight (sema-stmt.js 'try'). type_info is a name, not polymorphic: typeid (sema-expr.js) makes
+ * one per type and unit, so == compares the names.
+ */
+const CXX_EXCEPTION = `#ifndef _PRISM_CXX_EXCEPTION
+#define _PRISM_CXX_EXCEPTION
+#include <stdlib.h>
+namespace std {
+  class exception {
+  public:
+    exception() throw() {}
+    virtual ~exception() throw() {}
+    virtual const char *what() const throw() { return "std::exception"; }
+  };
+  class bad_exception : public exception {
+  public:
+    bad_exception() throw() {}
+    virtual ~bad_exception() throw() {}
+    virtual const char *what() const throw() { return "std::bad_exception"; }
+  };
+  typedef void (*terminate_handler)();
+  typedef void (*unexpected_handler)();
+  inline terminate_handler *__prism_terminate_slot() { static terminate_handler h = 0; return &h; }
+  inline unexpected_handler *__prism_unexpected_slot() { static unexpected_handler h = 0; return &h; }
+  inline terminate_handler set_terminate(terminate_handler f) throw() { terminate_handler o = *__prism_terminate_slot(); *__prism_terminate_slot() = f; return o; }
+  inline unexpected_handler set_unexpected(unexpected_handler f) throw() { unexpected_handler o = *__prism_unexpected_slot(); *__prism_unexpected_slot() = f; return o; }
+  inline void terminate() { if (*__prism_terminate_slot()) (*__prism_terminate_slot())(); abort(); }
+  inline void unexpected() { if (*__prism_unexpected_slot()) (*__prism_unexpected_slot())(); terminate(); }
+  inline bool uncaught_exception() throw() { return false; }
+}
+#endif
+`;
+const CXX_NEW = `#ifndef _PRISM_CXX_NEW
+#define _PRISM_CXX_NEW
+#include <stddef.h>
+#include <exception>
+namespace std {
+  class bad_alloc : public exception {
+  public:
+    bad_alloc() throw() {}
+    virtual ~bad_alloc() throw() {}
+    virtual const char *what() const throw() { return "std::bad_alloc"; }
+  };
+  struct nothrow_t {};
+  static const nothrow_t nothrow = nothrow_t();
+  typedef void (*new_handler)();
+  inline new_handler *__prism_new_slot() { static new_handler h = 0; return &h; }
+  inline new_handler set_new_handler(new_handler f) throw() { new_handler o = *__prism_new_slot(); *__prism_new_slot() = f; return o; }
+}
+void *operator new(size_t) throw(std::bad_alloc);
+void *operator new[](size_t) throw(std::bad_alloc);
+void operator delete(void *) throw();
+void operator delete[](void *) throw();
+void *operator new(size_t, const std::nothrow_t &) throw();
+void *operator new[](size_t, const std::nothrow_t &) throw();
+void operator delete(void *, const std::nothrow_t &) throw();
+void operator delete[](void *, const std::nothrow_t &) throw();
+inline void *operator new(size_t, void *p) throw() { return p; }
+inline void *operator new[](size_t, void *p) throw() { return p; }
+inline void operator delete(void *, void *) throw() {}
+inline void operator delete[](void *, void *) throw() {}
+#endif
+`;
+const CXX_TYPEINFO = `#ifndef _PRISM_CXX_TYPEINFO
+#define _PRISM_CXX_TYPEINFO
+#include <exception>
+namespace std {
+  class type_info {
+  public:
+    const char *__name;
+    const char *name() const { return __name; }
+    bool operator==(const type_info &o) const { return __cmp(o) == 0; }
+    bool operator!=(const type_info &o) const { return __cmp(o) != 0; }
+    bool before(const type_info &o) const { return __cmp(o) < 0; }
+    int __cmp(const type_info &o) const {
+      const unsigned char *a = (const unsigned char *)__name, *b = (const unsigned char *)o.__name;
+      while (*a && *a == *b) { a++; b++; }
+      return *a - *b;
+    }
+  };
+  class bad_cast : public exception {
+  public:
+    bad_cast() throw() {}
+    virtual ~bad_cast() throw() {}
+    virtual const char *what() const throw() { return "std::bad_cast"; }
+  };
+  class bad_typeid : public exception {
+  public:
+    bad_typeid() throw() {}
+    virtual ~bad_typeid() throw() {}
+    virtual const char *what() const throw() { return "std::bad_typeid"; }
+  };
+}
+#endif
+`;
 /*
  * The part of std::string the corpus uses -- Chromium B.S.U.'s Audio.cpp builds an amixer command
  * with it: construction from a C string, copy, +=, c_str() and size(). Written in C++ for src/cxx,
@@ -2906,17 +3111,19 @@ char *if_indextoname(unsigned int index, char *name);
   'math.h': MATH,
   'limits.h': LIMITS,
   'assert.h': ASSERT,
-  // C++'s <new> (and the pre-standard <new.h>): placement new, `new (where) T`, is built into
-  // src/cxx, so all the header owes a program is size_t.
-  'new': STDDEF,
-  'new.h': STDDEF,
+  // The C++ runtime (CXX_EXCEPTION above); <new.h> is the pre-standard name, its names global as
+  // libstdc++'s new.h leaves them.
+  'exception': CXX_EXCEPTION,
+  'new': CXX_NEW,
+  'typeinfo': CXX_TYPEINFO,
+  'new.h': '#include <new>\nusing std::bad_alloc;\nusing std::nothrow_t;\nusing std::nothrow;\nusing std::new_handler;\nusing std::set_new_handler;\n',
   // C++'s names for the C library (<cstdio> for <stdio.h>, ...). The names stay global, as glibc's
   // headers leave them; std is declared so that `using namespace std;` compiles. A program that
   // writes std::printf would need the using-declarations, and none in the corpus does yet.
   'cstdio': cxxC('stdio.h'),
   'cstdlib': cxxC('stdlib.h'),
   'cstring': cxxC('string.h'),
-  'cmath': cxxC('math.h'),
+  'cmath': CXX_CMATH,
   'ctime': cxxC('time.h'),
   'cerrno': cxxC('errno.h'),
   'cstdarg': cxxC('stdarg.h'),
@@ -2926,6 +3133,9 @@ char *if_indextoname(unsigned int index, char *name);
   'cstddef': cxxC('stddef.h'),
   'cfloat': cxxC('float.h'),
   'csignal': cxxC('signal.h'),
+  'cwchar': cxxC('wchar.h'),
+  'cwctype': cxxC('wctype.h'),
+  'clocale': cxxC('locale.h'),
   'csetjmp': cxxC('setjmp.h'),
   'string': CXX_STRING,
   'sstream': CXX_SSTREAM,

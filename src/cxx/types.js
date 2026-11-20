@@ -17,6 +17,10 @@ export const VOID = { k: 'void' };
 const prims = new Map();
 export const prim = (name) => { let t = prims.get(name); if (!t) prims.set(name, t = { k: 'prim', name }); return t; };
 export const INT = prim('int'), UINT = prim('unsigned int'), CHAR = prim('char'), BOOL = prim('bool');
+// wchar_t is a type of its own in C++ (3.9.1/5) -- char_traits<wchar_t> is not char_traits<int> -- and
+// i386 SysV's signed 32-bit int underneath, which is how C spells it (the MSVC dialect makes it
+// unsigned short before the parser sees it).
+export const WCHAR = prim('wchar_t');
 export const LONG = prim('long'), ULONG = prim('unsigned long'), FLOAT = prim('float'), DOUBLE = prim('double');
 export const ptr = (to) => ({ k: 'ptr', to });
 export const ref = (to) => ({ k: 'ref', to });
@@ -26,7 +30,7 @@ export const cst = (t) => (t.c || t.k === 'ref' ? t : { ...t, c: true });
 export const uncst = (t) => (t.c ? (({ c, ...rest }) => rest)(t) : t);
 
 const RANK = { bool: 0, char: 1, 'signed char': 1, 'unsigned char': 1, short: 2, 'unsigned short': 2, int: 3,
-  'unsigned int': 3, long: 4, 'unsigned long': 4, 'long long': 5, 'unsigned long long': 5 };
+  'unsigned int': 3, wchar_t: 3, long: 4, 'unsigned long': 4, 'long long': 5, 'unsigned long long': 5 };
 const FLOATS = new Set(['float', 'double', 'long double']);
 export const isFloat = (t) => t.k === 'prim' && FLOATS.has(t.name);
 export const isInteger = (t) => (t.k === 'prim' && !FLOATS.has(t.name)) || t.k === 'enum';
@@ -64,7 +68,7 @@ export function promote(t) {
   // type gcc lays it out in: registerDefault(key, Logic::DEFAULT_TALK_SPEED) is the int overload.
   if (t.k === 'enum') return t.en.fitsInt === false ? UINT : INT;
   if (isFloat(t)) return uncst(t);
-  return intRank(t) < 3 ? INT : uncst(t);
+  return intRank(t) < 3 || t.name === 'wchar_t' ? INT : uncst(t);
 }
 export function usual(a, b) {
   a = promote(a); b = promote(b);
@@ -95,7 +99,7 @@ export function show(t) {
 
 const PRIM_CODE = { bool: 'b', char: 'c', 'signed char': 'a', 'unsigned char': 'h', short: 's', 'unsigned short': 't',
   int: 'i', 'unsigned int': 'j', long: 'l', 'unsigned long': 'm', 'long long': 'x', 'unsigned long long': 'y',
-  float: 'f', double: 'd', 'long double': 'e' };
+  float: 'f', double: 'd', 'long double': 'e', wchar_t: 'w' };
 /** A type as part of a C identifier (the Itanium letters, which need no escaping). */
 export function mangle(t) {
   const c = t.c ? 'K' : '';
@@ -119,7 +123,7 @@ export function mangle(t) {
   }
 }
 
-const C_PRIM = { bool: '_Bool' };
+const C_PRIM = { bool: '_Bool', wchar_t: 'int' };
 /**
  * A C declaration of `name` with this type: `int *a[3]`, `void (*f)(int)`. A reference is a pointer;
  * a class is `struct <cname>`; an enum is the integer type gcc gives it.

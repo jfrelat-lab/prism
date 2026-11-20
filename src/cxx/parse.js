@@ -16,7 +16,7 @@
 //   namespaces (nested, reopened, anonymous) with using-directives and using-declarations; function
 //   templates; template parameters that are values, with defaults; explicit specialisations of class
 //   templates; pointers to member functions and .* / ->*; dynamic_cast; declarations as conditions.
-//   Not parsed: exceptions, typeid.
+//   try/catch/throw and exception specifications (the latter read and dropped); typeid.
 
 import { ID, NUM, STR, CHR, PUNCT, EOF } from '../cpp/token.js';
 
@@ -48,7 +48,7 @@ export const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'cl
   'break', 'continue', 'goto', 'namespace', 'using', 'try', 'catch', 'throw', 'static_cast',
   'dynamic_cast', 'const_cast', 'reinterpret_cast', 'typeid', '__attribute__', '__extension__',
   '__asm__', 'asm', '__typeof__', 'typeof']);
-const REFUSED = new Set(['typeid']);
+const REFUSED = new Set();
 const NAMED_CASTS = new Set(['static_cast', 'const_cast', 'reinterpret_cast', 'dynamic_cast']);
 
 // Binary operators by precedence, loosest first (assignment, ?: and comma are handled apart).
@@ -70,7 +70,9 @@ class PScope {
   set(name, kind) { this.names.set(name, kind); }
   /** This scope's own entry for name (its using-directives included), or null. */
   own(name, field = 'names', seen = new Set()) {
-    const k = this[field].get(name);
+    let k = this[field].get(name);
+    // A typedef's scope found when it is asked for: the class it names may be defined after it.
+    if (k?.lazy) { k = k.lazy(); if (k) this[field].set(name, k); else return null; }
     if (k) return k;
     seen.add(this);
     for (const u of this.usings) {
@@ -151,18 +153,28 @@ class CxxParser {
       if (t.k !== ID || KEYWORDS.has(t.v)) return names.length ? null : null;
       names.push(t.v);
       const kind = sc ? sc.own(t.v) : this.scope.find(t.v);
-      const inner = sc ? sc.own(t.v, 'inner') : this.scope.find(t.v, 'inner');
+      let inner = sc ? sc.own(t.v, 'inner') : this.scope.find(t.v, 'inner');
       j++;
-      if ((kind === 'template' || kind === 'ftemplate') && this.isP('<', j)) j = this.skipAngles(j);
+      if ((kind === 'template' || kind === 'ftemplate') && this.isP('<', j)) {
+        const from = j;
+        j = this.skipAngles(j);
+        // `collate_byname<char>::string_type`: the explicit specialisation's own scope, when there is one.
+        inner = this.specScope([t.v, ...this.ts.slice(this.i + from, this.i + j).map((x) => x.v)].join(' ')) ?? inner;
+      }
       if (inner && this.isP('::', j) && this.peek(j + 1).k === ID && !KEYWORDS.has(this.peek(j + 1).v)) { sc = inner; j++; continue; }
       return { kind, scope: inner, end: j, names };
     }
+  }
+  /** The scope of the explicit specialisation spelt `key` (its tokens, space-separated), or null. */
+  specScope(key) {
+    for (let s = this.scope; s; s = s.parent) { const sc = s.specScopes?.get(key); if (sc) return sc; }
+    return null;
   }
   /** The scope a qualifier (all parts of a qualName but the last) names, or null. */
   scopeOfParts(parts, global = false) {
     let sc = global ? this.root : null;
     for (const p of parts) {
-      const inner = sc ? sc.own(p.name, 'inner') : this.scope.find(p.name, 'inner');
+      const inner = (p.specKey && this.specScope(p.specKey)) || (sc ? sc.own(p.name, 'inner') : this.scope.find(p.name, 'inner'));
       if (!inner) return null;
       sc = inner;
     }
@@ -221,6 +233,7 @@ class CxxParser {
         return this.topItem();
       } finally { this.linkage = saved; }
     }
+    if (this.isKw('template') && !this.isP('<', 1)) return this.explicitInstantiation();
     if (this.isKw('template')) return this.templateDecl();
     if (this.isKw('namespace')) return this.namespaceDecl();
     if (this.isKw('using')) return this.usingDecl();
@@ -322,6 +335,25 @@ class CxxParser {
    * `typename T = X`) or a value of an integer type (`int bitFormat`); `template<>` (no parameters)
    * opens an explicit specialisation.
    */
+  /**
+   * An explicit instantiation (14.7.2): `template class __node_alloc<true,0>;` -- the class's
+   * members all made in this unit -- or `template void f<int>(int);`, one function.
+   */
+  explicitInstantiation() {
+    const loc = this.loc();
+    this.next();
+    if (this.isKw('class') || this.isKw('struct') || this.isKw('union')) {
+      this.next();
+      while (this.isKw('__attribute__')) this.skipAttribute();
+      const qname = this.qualName({ allowOperator: false });
+      this.expectP(';');
+      return { k: 'instantiate', qname, loc };
+    }
+    const specs = this.declSpecifiers({ allowNone: true });
+    const decl = this.declarator({});
+    this.expectP(';');
+    return { k: 'instantiate', specs, decl, loc };
+  }
   templateDecl(ctx = { top: true }) {
     this.next();
     this.expectP('<');
@@ -364,7 +396,10 @@ class CxxParser {
     for (const d of [].concat(decl)) {
       if (d.k === 'class' && d.name && !d.specArgs) this.scope.set(d.name, 'template');
       const isFunc = d.decl && d.decl.derivs.length && d.decl.derivs[d.decl.derivs.length - 1].k === 'func';
-      if (params.length && isFunc && d.decl.name?.parts.length === 1 && this.scope.names.get(d.decl.name.parts[0].name) !== 'template') this.scope.set(d.decl.name.parts[0].name, 'ftemplate');
+      // Not a constructor template's: `template <class _Facet> locale(const locale&, _Facet*)` leaves
+      // locale the class it is, which the declarations after it still name.
+      const ctor = ctx.member && d.decl?.name?.parts[0]?.name === ctx.cls;
+      if (params.length && isFunc && !ctor && d.decl.name?.parts.length === 1 && this.scope.names.get(d.decl.name.parts[0].name) !== 'template') this.scope.set(d.decl.name.parts[0].name, 'ftemplate');
       if (ctx.member && isFunc && d.decl.name?.parts.length === 1) (this.memberTemplates ??= new Set()).add(d.decl.name.parts[0].name);
     }
     return [].concat(decl).map((d) => ({ ...d, template: params }));
@@ -421,12 +456,17 @@ class CxxParser {
         part.name = this.ident();
         // After `.` or `->` the object's class is not known here: a member function template seen in
         // some class, then `<...>(`, is read as its arguments (`sc.pixel<2>(6)`).
-        if (this.isP('<') && (forced || guessed || kindOf(part.name) === 'template' || (member && this.memberTemplates?.has(part.name) && this.isP('(', this.skipAngles(0))))) part.targs = this.templateArgs();
+        if (this.isP('<') && (forced || guessed || kindOf(part.name) === 'template' || (member && this.memberTemplates?.has(part.name) && this.isP('(', this.skipAngles(0))))) {
+          const at = this.i;
+          part.targs = this.templateArgs();
+          // Its spelling, the key an explicit specialisation's scope is kept under (specScope).
+          part.specKey = [part.name, ...this.ts.slice(at, this.i).map((t) => t.v)].join(' ');
+        }
       }
       parts.push(part);
       if (this.isP('::') && (this.peek(1).k === ID || this.isP('~', 1))) {
         this.next();
-        const inner = sc ? sc.own(part.name, 'inner') : this.scope.find(part.name, 'inner');
+        const inner = (part.specKey && this.specScope(part.specKey)) || (sc ? sc.own(part.name, 'inner') : this.scope.find(part.name, 'inner'));
         opaque = !inner;
         sc = inner ?? sc;
         continue;
@@ -448,8 +488,9 @@ class CxxParser {
       if (op === '[]') { if (this.isP('[') && this.isP(']', 1)) { this.i += 2; return op; } continue; }
       if (this.isP(op)) { this.next(); return op; }
     }
-    // A conversion function: operator <type-specifiers> <ptr-operators>
-    const specs = this.declSpecifiers({ allowNone: false });
+    // A conversion function: operator <type-specifiers> <ptr-operators>. Its type is never a
+    // constructor's declarator, though `operator auto_ptr<_Tp1>()` in auto_ptr has that shape.
+    const specs = this.declSpecifiers({ allowNone: false, inExpr: true });
     const derivs = [];
     for (;;) {
       if (this.eatP('*')) { derivs.push({ k: 'ptr', cv: this.cvList() }); continue; }
@@ -578,7 +619,9 @@ class CxxParser {
       at.set(name, 'type');
     }
     // An explicit specialisation names its arguments: `template<> struct ColorMasks<565> { ... }`.
+    const specAt = this.i;
     const specArgs = name && this.isP('<') && this.isTemplate(name) ? this.templateArgs() : null;
+    const specKey = specArgs ? [name, ...this.ts.slice(specAt, this.i).map((t) => t.v)].join(' ') : null;
     if (!this.isP('{') && !this.isP(':')) {
       return { k: 'named', qname: { parts: [{ name }], global: false }, elaborated: key };
     }
@@ -598,7 +641,9 @@ class CxxParser {
         const r = this.resolvePath(0);
         bases.push({ qname: this.qualName({ allowOperator: false }), access, virt });
         // What the base declares is in scope in the derived class: its typedefs name types here too.
-        if (r?.scope && this.i - at === r.end) (baseScopes ??= []).push(r.scope);
+        // An explicit specialisation's own scope when the base names one by its arguments: ctype_byname<char>
+        // derives from ctype<char>, whose members (ctype_base's mask) the primary template does not have.
+        if (r?.scope && this.i - at === r.end) (baseScopes ??= []).push(this.specScope(this.ts.slice(at, this.i).map((t) => t.v).join(' ')) ?? r.scope);
         if (!this.eatP(',')) break;
       }
     }
@@ -613,6 +658,7 @@ class CxxParser {
       let home = this.scope;
       while (home.tparams && home.parent) home = home.parent;
       if (!specArgs || !home.inner.has(name)) home.inner.set(name, scope);
+      if (specKey) (home.specScopes ??= new Map()).set(specKey, scope);
     }
     this.declareMemberTypesAhead(scope);
     const saved = this.scope;
@@ -747,8 +793,24 @@ class CxxParser {
         this.scope.set(tname, 'type');
         // A typedef of a class opens its scope too: `typedef List<Plugin *> PluginList;` and then
         // `PluginList::iterator`.
-        const named = specs.type?.k === 'named' && !d.derivs.length ? this.scopeOfParts(specs.type.qname.parts, specs.type.qname.global) : null;
-        if (named) this.scope.inner.set(tname, named);
+        // STLport's `typedef basic_string<char, ...> string;` comes before basic_string is defined: the
+        // scope is then looked for from here when string:: is first read.
+        if (specs.type?.k === 'named' && !d.derivs.length) {
+          const { parts, global } = specs.type.qname;
+          const named = this.scopeOfParts(parts, global);
+          if (named) this.scope.inner.set(tname, named);
+          else {
+            const at = this.scope;
+            // (busy: `typedef X X;` finds itself while it resolves -- no scope from there)
+            let busy = false;
+            this.scope.inner.set(tname, { lazy: () => {
+              if (busy) return null;
+              busy = true;
+              const saved = this.scope; this.scope = at;
+              try { return this.scopeOfParts(parts, global); } finally { this.scope = saved; busy = false; }
+            } });
+          }
+        }
       }
       if (isFunc && this.eatP('=')) {
         // `= 0`: a pure virtual function.
@@ -1302,6 +1364,13 @@ class CxxParser {
         this.next(); this.expectP('<'); const type = this.typeId(); this.expectP('>');
         this.expectP('('); const e = this.expression(); this.expectP(')');
         return { k: 'cast', type, e, named: t.v, loc };
+      }
+      // typeid(type-id) or typeid(expression), told apart as sizeof's operand is.
+      if (t.v === 'typeid') {
+        this.next(); this.expectP('(');
+        if (this.startsType()) { const type = this.typeId(); this.expectP(')'); return { k: 'typeid', type, loc }; }
+        const e = this.expression(); this.expectP(')');
+        return { k: 'typeid', e, loc };
       }
       if (REFUSED.has(t.v)) this.fail(`C++ '${t.v}' is not supported`);
       // A functional cast or a temporary: `int(x)`, `T(a, b)`, `T()`.

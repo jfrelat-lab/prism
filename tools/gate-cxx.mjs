@@ -2034,6 +2034,125 @@ C('c-names-in-std', `#include <cstdio>
 #include <cstdlib>
 int main() { char b[8]; std::strcpy(b, "hi"); std::printf("%s %d\\n", b, std::abs(-3)); std::size_t n = std::strlen(b); return (int)n - 2; }
 `);
+// The C++ runtime's headers: std::exception's hierarchy thrown and caught through a base, the
+// allocation functions called by name (nothrow too), placement new, typeid of types and of
+// non-polymorphic objects, name() as g++ spells it for the built-in types
+C('cxx-runtime-headers', `#include <new>
+#include <typeinfo>
+#include <exception>
+#include <stdio.h>
+struct P { int a; P(int x) : a(x) {} };
+struct Q { int b; };
+template <class T> const char *nameOf(const T &x) { return typeid(x).name(); }
+int main() {
+  try { throw std::bad_alloc(); }
+  catch (std::exception &e) { printf("caught %s\\n", e.what()); }
+  char buf[16];
+  P *p = new (buf) P(7);
+  int *q = new int(3);
+  void *r = ::operator new(8);
+  ::operator delete(r);
+  void *s = ::operator new(4, std::nothrow);
+  ::operator delete(s);
+  printf("%d %d\\n", p->a, *q);
+  delete q;
+  const std::type_info &ti = typeid(int), &tq = typeid(Q);
+  Q qq;
+  printf("%d %d %d %d\\n", ti == typeid(int), ti == tq, typeid(qq) == tq, &typeid(int) == &ti);
+  printf("%s %s %s %s\\n", typeid(int).name(), nameOf(3.0), typeid(const char *).name(), typeid(unsigned).name());
+  std::set_new_handler(0);
+  return 0;
+}
+`);
+// a conversion function template: its argument deduced from the type converted to (14.8.2.3)
+C('conversion-template', `#include <stdio.h>
+template <class T> struct ref { T *p; ref(T *q) : p(q) {} };
+template <class T> class box {
+public:
+  T *p;
+  explicit box(T *q) : p(q) {}
+  box(ref<T> r) : p(r.p) {}
+  template <class U> operator ref<U>() { return ref<U>(p); }
+  template <class U> operator box<U>() { return box<U>(p); }
+};
+int main() {
+  int x = 4;
+  box<int> b(&x);
+  ref<int> r = b;
+  box<int> c = box<int>(b);
+  printf("%d %d\\n", *r.p, *c.p);
+  return 0;
+}
+`);
+// operator templates found by lookup and deduced; a converting constructor template (reverse_iterator<const T*> from <T*>)
+C('operator-and-ctor-templates', `#include <stdio.h>
+template <class I> struct traits { typedef int diff; };
+template <class I> struct traits<I *> { typedef long diff; };
+template <class I> class rit {
+protected:
+  I cur;
+  typedef rit<I> _Self;
+public:
+  typedef typename traits<I>::diff difference_type;
+  rit() {}
+  explicit rit(I x) : cur(x) {}
+  rit(const _Self &x) : cur(x.cur) {}
+  template <class J> rit(const rit<J> &x) : cur(x.base()) {}
+  I base() const { return cur; }
+};
+template <class I> inline bool operator==(const rit<I> &a, const rit<I> &b) { return a.base() == b.base(); }
+template <class I> inline bool operator!=(const rit<I> &a, const rit<I> &b) { return !(a == b); }
+int main() {
+  char s[4] = "abc";
+  rit<char *> m(s + 1);
+  rit<const char *> c = m;
+  rit<const char *> d(s + 1);
+  printf("%d %d\\n", c != d, c == d);
+  return 0;
+}
+`);
+// an explicit specialisation named (typedef) before it is declared, its members defined out of the class
+C('specialisation-named-early', `#include <stdio.h>
+namespace N {
+template <class C> struct tr {};
+template <class C, class T = tr<C> > class sb;
+typedef sb<char, tr<char> > csb;
+template <class C, class T> class sb { public: C x; };
+template <> class sb<char, tr<char> > {
+public:
+  int g;
+  sb(int a);
+  ~sb();
+  int get() const;
+};
+sb<char, tr<char> >::sb(int a) : g(a) { if (g == 3) g = 4; if (this->g == 4) g = 5; }
+sb<char, tr<char> >::~sb() {}
+int sb<char, tr<char> >::get() const { return g + 1; }
+}
+using namespace N;
+int main() { sb<char, tr<char> > s(3); printf("%d\\n", s.get()); return 0; }
+`);
+// wchar_t is its own type: overloads, specialisations, L literals, typeid name
+C('wchar-distinct', `#include <stdio.h>
+#include <wchar.h>
+#include <typeinfo>
+template <class C> struct tr { static int id() { return 1; } };
+template <> struct tr<wchar_t> { static int id() { return 2; } };
+template <> struct tr<int> { static int id() { return 3; } };
+int f(int) { return 10; }
+int f(wchar_t) { return 20; }
+int g(long) { return 1; }
+int g(double) { return 2; }
+int main() {
+  const wchar_t *s = L"h\\xe9llo";
+  wchar_t c = L'x';
+  wchar_t d = c + 1;
+  printf("%d %d %d %d %d\\n", tr<wchar_t>::id(), tr<int>::id(), f(c), f(3), (int)wcslen(s));
+  printf("%d %d %d %s %d\\n", (int)sizeof(wchar_t), (int)d, (int)sizeof(L"abc"), typeid(wchar_t).name(), (int)s[1]);
+  printf("%d %d\\n", (int)sizeof(c + c), f(c + c));
+  return 0;
+}
+`);
 
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());

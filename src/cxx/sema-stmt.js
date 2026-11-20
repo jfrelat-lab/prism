@@ -18,6 +18,9 @@ export const stmtMethods = {
     if (f.written) return;
     f.written = true;
     if (!f.body && !f.implicit) this.findTemplateBody(f);
+    // A member's body reaches into its object -- an empty destructor still destroys its bases through
+    // this->__b0 (STLport's dll_main.cpp: logic_error::~logic_error() {}): the struct is defined in C.
+    if (f.cls) this.needStruct(f.cls);
     const fn = { f, temps: [], ntemp: 0, cleanups: [], usesEnd: false };
     const base = f.cls ? f.cls.scope : (f.bodyEnv?.scope ?? this.global);
     const scope = new Scope(base);
@@ -996,6 +999,17 @@ export const stmtMethods = {
   /** A global this unit only refers to: declared extern the first time it is used. */
   useGlobal(ent) {
     if (ent.declared || ent.definedHere) return;
+    /*
+     * A class template's `static const` integer initialised in the class, wanted in memory (bound to a
+     * const& -- std::min(npos, n)): the value the class gave it, in a constant this unit keeps. Its
+     * definition out of the class has no initialiser (_string.c's `const size_t basic_string<...>::npos;`)
+     * and would otherwise be a zero; a unit that cannot see that definition would have nothing at all.
+     */
+    if (ent.staticMember && ent.constValue !== undefined && ent.ownerCls?.template) {
+      ent.definedHere = true;
+      this.out.vars.push(`static ${this.ct(ent.type, ent.cname)} = (${this.ct(T.uncst(ent.type))})(${ent.constValue});`);
+      return;
+    }
     // A class template's static member: its definition, made for this instance.
     const tdef = ent.staticMember && ent.ownerCls?.template?.staticDefs?.find((d) => this.lastName(d.decl.name) === ent.name);
     if (tdef) { this.defineTemplateStatic(ent, tdef); return; }
@@ -1014,13 +1028,30 @@ export const stmtMethods = {
     ent.definedHere = true;
     const zero = !it.init || (it.init.k === 'num' && /^0+[uUlL]*$/.test(it.init.v));
     const constant = (t) => !!t.c || (t.k === 'array' && constant(t.of));
+    // The unit that instantiates the class explicitly gives the one external definition the others
+    // may refer to (STLport's dll_main.cpp: basic_string<char>::npos, __stl_debug_engine's tables).
+    if (!zero && this.instantiating) { this.defineGlobal(ent, it, ent.ownerCls.env); return; }
     if (!zero && constant(ent.type) && ent.type.k !== 'class') {
       const cx = { ...this.initContext(ent.ownerCls.env), node: it };
       const init = it.init.k === 'braces' ? this.bracesInit(it.init, ent.type, cx) : this.initElem(it.init, ent.type, cx);
       this.out.vars.push(`static ${this.ct(ent.type, ent.cname)} = ${init};`);
       return;
     }
-    if (!zero) this.fail(`${ent.ownerCls.name}::${ent.name}: a class template's static member initialised to something other than 0`, it);
+    /*
+     * Any other value: g++ makes a COMDAT definition in every unit that instantiates it, and so does
+     * this -- the link merges same-named definitions, and each writes the same bytes (STLport's
+     * _Node_Alloc_Lock<...>::_S_lock, a PTHREAD_MUTEX_INITIALIZER). Not an object with a constructor:
+     * that would be constructed once per unit, so it is left to an explicit instantiation, the others
+     * referring to it, and without one the link reports the symbol undefined.
+     */
+    if (!zero) {
+      const cls = ent.type.k === 'class' ? this.complete(ent.type.cls, it) : null;
+      if (!cls || !this.needsCtor(cls)) { this.defineGlobal(ent, it, ent.ownerCls.env); return; }
+      ent.definedHere = false;
+      ent.declared = true;
+      this.out.protos.push(`extern ${this.ct(ent.type.k === 'ref' ? T.ptr(ent.type.to) : ent.type, ent.cname)};`);
+      return;
+    }
     this.out.vars.push(`${this.ct(ent.type.k === 'ref' ? T.ptr(ent.type.to) : ent.type, ent.cname)};`);
   },
   initContext(env) {

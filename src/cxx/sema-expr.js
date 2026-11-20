@@ -25,6 +25,12 @@ const throwName = (t) => {
 };
 
 const EXACT = 0, QUAL = 0.01, PROMO = 1, CONV = 2, USER = 3, ELLIPSIS = 4;
+/*
+ * Within derived-to-base conversions, the nearer base wins (13.3.3.2/4): random_access_iterator_tag
+ * goes to a forward_iterator_tag parameter before an input_iterator_tag one, which is how the STL
+ * dispatches on iterator categories. Each base crossed costs HOP, below QUAL.
+ */
+const HOP = 0.001;
 const CMP = new Set(['==', '!=', '<', '>', '<=', '>=']);
 
 export const exprMethods = {
@@ -222,7 +228,7 @@ export const exprMethods = {
   findTemplateBody(f) {
     if (f.body) return true;
     const cls = f.cls;
-    if (!cls?.template) return false;
+    if (!cls?.template || cls.specialised) return false;
     for (const it of cls.template.outOfLine) {
       const before = f.body;
       const g = this.outOfLine(it, cls);
@@ -380,7 +386,7 @@ export const exprMethods = {
       if (V.to.k === 'void' && F.to.k === 'func' && (this.msvc || this.gcc2)) return { rank: CONV, gen: () => `((${this.ct(T.uncst(V))})${from.c})` };
       if (V.to.k === 'class' && F.to.k === 'class') {
         const path = this.derivedPath(F.to.cls, V.to.cls);
-        if (path) return { rank: CONV, gen: () => this.upcastPtr(from.c, path, V.to.cls) };
+        if (path) return { rank: CONV + path.length * HOP, gen: () => this.upcastPtr(from.c, path, V.to.cls) };
       }
       return null;
     }
@@ -476,7 +482,7 @@ export const exprMethods = {
           if (path && !(e.t.c && !U.c)) {
             // A temporary binds to a reference to const only.
             if ((e.lv || e.addr) || U.c) {
-              return { rank: (path.length ? CONV : EXACT) + (U.c && !e.t.c ? QUAL : 0), gen: () => this.upcastPtr(this.addrOf(e, cx), path, U.cls) };
+              return { rank: (path.length ? CONV + path.length * HOP : EXACT) + (U.c && !e.t.c ? QUAL : 0), gen: () => this.upcastPtr(this.addrOf(e, cx), path, U.cls) };
             }
           }
         } else if ((e.lv || e.addr) && T.same(e.t, U, { top: false }) && !(e.t.c && !U.c) && e.t.k !== 'array') {
@@ -504,7 +510,7 @@ export const exprMethods = {
       this.complete(V.cls);
       if (e.t.k === 'class') {
         const path = this.derivedPath(e.t.cls, V.cls);
-        if (path) return { rank: path.length ? CONV : EXACT, gen: () => this.copyOf(e, V.cls, cx) };
+        if (path) return { rank: path.length ? CONV + path.length * HOP : EXACT, gen: () => this.copyOf(e, V.cls, cx) };
       }
       if (!user) return null;
       return this.userConv(e, V, cx, explicit);
@@ -517,7 +523,12 @@ export const exprMethods = {
   userConv(e, V, cx, explicit) {
     const found = [];
     if (V.k === 'class') {
-      for (const f of V.cls.ctors) {
+      // A converting constructor template too, through the instance e deduces: reverse_iterator<const
+      // char *> from a reverse_iterator<char *> by `template <class _Iter> reverse_iterator(const
+      // reverse_iterator<_Iter>&)`.
+      const insts = (V.cls.ctorTemplates ?? []).filter((ft) => !ft.ast.specs?.explicit)
+        .map((ft) => this.deduce(ft, [], [e], cx.env, cx.node)).filter(Boolean);
+      for (const f of [...V.cls.ctors, ...insts]) {
         if (f.explicit && !explicit) continue;
         if (f.type.params.length < 1 || !f.params.slice(1).every((p) => p.def)) continue;
         // Not the copy constructor: that is not a conversion.
@@ -529,7 +540,7 @@ export const exprMethods = {
     }
     if (e.t.k === 'class' && (e.t.cls.complete || e.t.cls.pending)) {
       this.complete(e.t.cls);
-      for (const f of this.allConversions(e.t.cls)) {
+      for (const f of [...this.allConversions(e.t.cls), ...this.deducedConversions(e.t.cls, V, cx)]) {
         if (e.t.c && !f.type.thisConst) continue;
         const res = f.conv.k === 'ref' ? { t: f.conv.to, lv: true } : { t: f.conv, lv: false };
         const call = () => this.callMember(f, e, [], cx);
@@ -565,6 +576,25 @@ export const exprMethods = {
    * A class's conversion functions and its bases' -- less those a derived class's hides: one converting to the
    * same type, as any member hides a base's of its name (idWinBackground's operator const char * over idWinStr's).
    */
+  /**
+   * The instances of a class's conversion function templates (and its bases') that convert to V:
+   * the template's arguments deduced by matching its result type against V, as P against A in
+   * 14.8.2.3 -- `operator auto_ptr<_Tp1>()` to auto_ptr<int> makes _Tp1 int. A template whose
+   * result does not deduce to V offers nothing.
+   */
+  deducedConversions(cls, V, cx) {
+    const out = [];
+    for (let c of [cls, ...this.allBases(cls)]) {
+      for (const ft of c.convTemplates ?? []) {
+        const names = ft.params.map((p) => p.name), bind = new Map();
+        if (!this.matchType(ft.conv.specs, ft.conv.derivs, V, bind, names) || !names.every((n) => bind.has(n))) continue;
+        const f = this.instantiateFunction(ft, names.map((n) => bind.get(n)), cx.node);
+        if (T.same(T.uncst(f.conv.k === 'ref' ? f.conv.to : f.conv), V)) out.push(f);
+      }
+    }
+    return out;
+  },
+  allBases(cls) { return cls.bases.flatMap((b) => [b, ...this.allBases(b)]); },
   allConversions(cls) {
     const own = cls.convs, key = (f) => T.mangle(f.conv) + (f.type.thisConst ? 'K' : '');
     const mine = new Set(own.map(key));
@@ -822,11 +852,24 @@ export const exprMethods = {
       this.complete(first.t.cls);
       const m = this.memberEntity(first.t.cls, name);
       if (m?.ent.k === 'funcs') for (const f of m.ent.list) cands.push({ f, member: true });
+      // An operator template competes through the instance the operands deduce (14.8.2.1).
+      if (m?.ent.k === 'funcs') for (const ft of m.ent.templates ?? []) { const f = this.deduce(ft, [], [...operands.slice(1), ...extra], cx.env, node); if (f) cands.push({ f, member: true }); }
     }
     // Non-members: by ordinary lookup from here, and in the namespace of each class operand (the
-    // argument-dependent lookup that finds Common::operator+ from inside Sky).
+    // argument-dependent lookup that finds Common::operator+ from inside Sky) -- templates as well:
+    // STLport's operator!= of two reverse_iterator<_Iterator>.
     const seen = new Set(cands.map((c) => c.f));
-    const add = (e) => { if (e?.k === 'funcs') for (const f of e.list) if (!seen.has(f)) { seen.add(f); cands.push({ f, member: false }); } };
+    const seenT = new Set();
+    const add = (e) => {
+      if (e?.k !== 'funcs') return;
+      for (const f of e.list) if (!seen.has(f)) { seen.add(f); cands.push({ f, member: false }); }
+      for (const ft of e.templates ?? []) {
+        if (seenT.has(ft)) continue;
+        seenT.add(ft);
+        const f = this.deduce(ft, [], [...operands, ...extra], cx.env, node);
+        if (f && !seen.has(f)) { seen.add(f); cands.push({ f, member: false }); }
+      }
+    };
     for (let s = cx.env.scope; s; s = s.parent) if (!s.cls) { const e = s.find(name); if (e) { add(e); break; } }
     for (const o of operands) if (o.t.k === 'class') add(this.homeScope(o.t.cls).find(name));
     add(this.global.find(name));
@@ -842,7 +885,18 @@ export const exprMethods = {
     // Compare on the operands in order: a member's object rank stands for its first operand.
     const key = (v) => (v.member ? v.full : v.full.slice(1));
     const better = (a, b) => key(a).every((r, i) => r <= (key(b)[i] ?? 0)) && key(a).some((r, i) => r < (key(b)[i] ?? 0));
-    const winners = viable.filter((a) => !viable.some((b) => b !== a && better(b, a)));
+    let winners = viable.filter((a) => !viable.some((b) => b !== a && better(b, a)));
+    // As in resolve: between a plain function and a template's instance as good, the plain one
+    // (reverse_iterator's operator=(const _Self&) over its operator=<_Iter> of the same type).
+    if (winners.length > 1 && winners.some((w) => !w.f.fromTemplate)) winners = winners.filter((w) => !w.f.fromTemplate);
+    // One template reached by two lookups is one candidate; of two templates, the more specialised
+    // (14.5.5.2): STLport's operator<<(basic_ostream<char, _Traits>&, char) over its <_CharT, _Traits> one.
+    if (winners.length > 1) winners = winners.filter((w, i) => winners.findIndex((o) => o.f.cname === w.f.cname) === i);
+    if (winners.length > 1 && winners.every((w) => w.f.ft)) {
+      const less = (w) => winners.some((o) => o !== w && this.atLeastAsSpecialised(o.f.ft, w.f.ft) && !this.atLeastAsSpecialised(w.f.ft, o.f.ft));
+      const kept = winners.filter((w) => !less(w));
+      if (kept.length) winners = kept;
+    }
     if (winners.length !== 1 && new Set(winners.map((w) => w.f)).size !== 1) {
       this.fail(`ambiguous ${name}: ${winners.map((w) => `${w.f.display}(${w.f.type.params.map(T.show).join(', ')})`).join(' or ')}`, node);
     }
@@ -877,10 +931,10 @@ export const exprMethods = {
         return { c: n.v, t: v.type, lv: false, zero: !T.isFloat(v.type) && v.value === 0 };
       }
       // '\0' is an integral constant of value 0, so a null pointer constant (C++03 4.10): Doom 3's classname != '\0'
-      case 'chr': return { c: n.v, t: /^L/.test(n.v) ? T.INT : T.CHAR, lv: false, zero: this.charValue(n.v) === 0 };
+      case 'chr': return { c: n.v, t: /^L/.test(n.v) ? T.WCHAR : T.CHAR, lv: false, zero: this.charValue(n.v) === 0 };
       // `false` is an integral constant 0, so a null pointer constant in C++98: `if (_fd == false)` (animation_he.cpp).
       case 'bool': return { c: n.v ? '1' : '0', t: T.BOOL, lv: false, zero: !n.v };
-      case 'str': return { c: n.parts.join(' '), t: T.array(T.cst(T.CHAR), this.stringLength(n) + 1), lv: true, str: true };
+      case 'str': return { c: n.parts.join(' '), t: T.array(T.cst(/^L/.test(n.parts[0]) ? T.WCHAR : T.CHAR), this.stringLength(n) + 1), lv: true, str: true };
       /*
        * throw: the exception object's type is the operand's, decayed and without its top-level const
        * (15.1/3): a string literal is thrown as const char *. Copied by the runtime, which longjmps
@@ -964,6 +1018,7 @@ export const exprMethods = {
         const e = this.expr(n.e, sub);
         return { c: `sizeof(${this.ct(e.t)})`, t: T.UINT, lv: false };
       }
+      case 'typeid': return this.typeidExpr(n, cx);
       case 'cast':
         if (n.named === 'dynamic_cast') return this.dynamicCast(this.declType(n.type.specs, n.type.derivs, cx.env, n), this.expr(n.e, cx), cx, n);
         return this.castExpr(this.declType(n.type.specs, n.type.derivs, cx.env, n), this.expr(n.e, cx), cx, n);
@@ -1194,9 +1249,13 @@ export const exprMethods = {
     // The global allocation functions are declared in every unit without a header, and called by name
     // too: .kkrieger's geneffect.cpp frees raw storage with `::operator delete(EffectData)`. They are
     // the malloc and free that new and delete use here.
+    // <new> declares them and the nothrow forms (`::operator new(n, std::nothrow)`, STLport) without
+    // defining them, so a global declaration found is still this malloc; a class's own one is not.
     const alloc = n.fn.k === 'id' && n.fn.name.parts.length === 1 && /^operator(new|delete)(\[\])?$/.exec(this.lastName(n.fn.name));
-    if (alloc && !this.lookupName(n.fn.name, cx.env)) {
-      if (args.length !== 1) this.fail(`${this.lastName(n.fn.name)} with ${args.length} arguments`, n);
+    const allocFound = alloc ? this.lookupName(n.fn.name, cx.env) : null;
+    const nothrow = args.length === 2 && T.uncst(args[1].t.k === 'ref' ? args[1].t.to : args[1].t).cls?.name === 'nothrow_t';
+    if (alloc && (!allocFound || (!allocFound.owner && (args.length === 1 || nothrow)))) {
+      if (args.length !== 1 && !nothrow) this.fail(`${this.lastName(n.fn.name)} with ${args.length} arguments`, n);
       this.needMalloc();
       if (cx.constOnly) cx.dynamic = true;
       if (alloc[1] === 'new') return { c: `malloc(${this.coerce(args[0], T.UINT, cx, n)})`, t: T.ptr(T.VOID), lv: false };
@@ -1517,6 +1576,38 @@ export const exprMethods = {
     const tmp = this.temp(cx, T.ptr({ k: 'class', cls: from }));
     const vptr = `${tmp}->${[...this.vptrPath(from), '__vptr'].join('.')}`;
     return { c: `((${this.ct(V)})__prism_dyncast((void *)(${tmp} = ${p.c}), ${tmp} ? ${vptr} : (void **)0, "${want.cname}"))`, t: V, lv: false };
+  },
+  /**
+   * typeid (5.2.8): the std::type_info of a type -- the operand's static type, without reference
+   * and top-level const. One object per type and unit, named by the type's mangled letters, which
+   * is also its name(); <typeinfo>'s == compares names, so two units' objects for a type are equal.
+   * An object of a polymorphic class is asked for its DYNAMIC type, which needs the type_info its
+   * vtable points at to be a std::type_info: refused until something needs it.
+   */
+  typeidExpr(n, cx) {
+    let t;
+    if (n.type) t = this.declType(n.type.specs, n.type.derivs, cx.env, n);
+    else {
+      const sub = { ...cx, fn: cx.fn ? { ...cx.fn, temps: [], ntemp: cx.fn.ntemp } : null, pending: [], sizeofOnly: true };
+      const e = this.expr(n.e, sub);
+      t = e.t;
+      const s = T.uncst(this.stripRef(t));
+      if (s.k === 'class' && this.complete(s.cls, n).hasVptr && e.lv !== false) this.fail(`typeid of an object of ${s.cls.name}, a polymorphic class (its dynamic type), is not supported yet`, n);
+    }
+    t = T.uncst(this.stripRef(t));
+    if (t.k === 'class') this.complete(t.cls, n);
+    let ti;
+    try { ti = this.namedType({ parts: [{ name: 'std' }, { name: 'type_info' }], global: true }, cx.env); } catch { ti = null; }
+    if (ti?.k !== 'class') this.fail('typeid needs <typeinfo>', n);
+    const cls = this.complete(ti.cls, n);
+    this.needStruct(cls);
+    const key = T.mangle(t), name = `__prism_typeid_${key}`;
+    this.typeidDone ??= new Set();
+    if (!this.typeidDone.has(key)) {
+      this.typeidDone.add(key);
+      this.out.protos.push(`static const struct ${cls.cname} ${name} = { "${key}" };`);
+    }
+    return { c: name, t: T.cst({ k: 'class', cls }), lv: true };
   },
   needDyncast() {
     if (this.dyncastDone) return;

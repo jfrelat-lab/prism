@@ -912,6 +912,122 @@ function makeLibc(M) {
       }
     },
 
+    /*
+     * <wchar.h>, for i386 SysV's 4-byte wchar_t (Linux, DJGPP), in glibc's C locale: its charset is
+     * ASCII, so a byte from 0x80 up is no character (btowc WEOF, mbrtowc -1 with EILSEQ) and the
+     * conversion state never holds anything. Measured against glibc in the i386 oracle.
+     */
+    /*
+     * glibc's reentrant ecvt/fcvt (STLport's num_put_float.cpp formats every float through them).
+     * fcvt_r is %.*f -- at most 17 places -- with the point taken out and, below 1, the leading
+     * zeros, which *decpt counts instead; ecvt_r first brings the value into [1, 10) by multiplying
+     * or dividing by powers of ten IN DOUBLE, which is why ecvt_r(1/3, 17) gives ...330 and not the
+     * exact ...331. Both measured against glibc in the i386 oracle (0, -0, ties, tiny, inf): equal,
+     * except from about 1e23 up, where i386 glibc's scaling loop runs in x87 extended precision and
+     * stops one power of ten apart (1e300: decpt 301 there, digits 99999999999999982 here at 17).
+     */
+    fcvt_r: (v, nd, decpt, sign, buf, len) => {
+      const dv = M.mod.dv;
+      nd |= 0; len >>>= 0;
+      if (!buf) { lib.__setErrno(22); return -1; }
+      let left = 0;
+      if (Number.isFinite(v)) {
+        dv.setInt32(sign, (v < 0 || Object.is(v, -0)) ? 1 : 0, true);
+        v = Math.abs(v);
+        while (nd < 0) { const nv = v * 0.1; if (nv < 1) { nd = 0; break; } v = nv; left++; nd++; }
+      } else dv.setInt32(sign, 0, true);
+      const s = fixed(v, Math.min(nd, 17));
+      const put = (t) => { for (let k = 0; k < t.length; k++) u8()[buf + k] = t.charCodeAt(k); u8()[buf + t.length] = 0; };
+      if (s.length >= len) { if (len) put(s.slice(0, len - 1)); return -1; }
+      let i = 0;
+      while (i < s.length && s[i] >= '0' && s[i] <= '9') i++;
+      let pt = i, out = s;
+      if (i > 0 && i < s.length) {
+        let j = i + 1;
+        while (j < s.length && !(s[j] >= '0' && s[j] <= '9')) j++;
+        if (pt === 1 && s[0] === '0' && v !== 0) { pt--; while (j < s.length && s[j] === '0') { pt--; j++; } }
+        out = s.slice(0, Math.max(pt, 0)) + s.slice(j);
+      }
+      if (i > 0 && left) { pt += left; while (left-- > 0 && out.length < len - 1) out += '0'; }
+      dv.setInt32(decpt, pt, true);
+      put(out);
+      return 0;
+    },
+    ecvt_r: (v, nd, decpt, sign, buf, len) => {
+      nd |= 0;
+      let exponent = 0;
+      if (Number.isFinite(v) && v !== 0) {
+        let d = Math.abs(v), f = 1;
+        if (d < 1e-307) { v /= 1e-307; d = Math.abs(v); exponent = -307; }
+        if (d < 1) { do { f *= 10; exponent--; } while (d * f < 1); v *= f; }
+        else if (d >= 10) { do { f *= 10; exponent++; } while (d >= f * 10); v /= f; }
+      }
+      if (nd <= 0 && (len >>> 0) > 0) {
+        u8()[buf] = 0;
+        M.mod.dv.setInt32(decpt, 1, true);
+        M.mod.dv.setInt32(sign, Number.isFinite(v) && (v < 0 || Object.is(v, -0)) ? 1 : 0, true);
+      } else if (lib.fcvt_r(v, Math.min(nd, 17) - 1, decpt, sign, buf, len)) return -1;
+      M.mod.dv.setInt32(decpt, M.mod.dv.getInt32(decpt, true) + exponent, true);
+      return 0;
+    },
+    // long double is a double wherever PRISM compiles one (compile.longDouble 64).
+    qfcvt_r: (v, nd, decpt, sign, buf, len) => lib.fcvt_r(v, nd, decpt, sign, buf, len),
+    qecvt_r: (v, nd, decpt, sign, buf, len) => lib.ecvt_r(v, nd, decpt, sign, buf, len),
+    wcslen: (p) => { let n = 0; while (M.mod.dv.getInt32(p + 4 * n, true) !== 0) n++; return n; },
+    wcscmp: (a, b) => lib.wcsncmp(a, b, 0x7fffffff),
+    wcsncmp: (a, b, n) => {
+      const dv = M.mod.dv;
+      for (let i = 0; i < n; i++) {
+        const x = dv.getInt32(a + 4 * i, true), y = dv.getInt32(b + 4 * i, true);
+        if (x !== y) return x < y ? -1 : 1;
+        if (x === 0) return 0;
+      }
+      return 0;
+    },
+    wcscpy: (d, s) => { const n = lib.wcslen(s); M.blockCopy(d, s, 4 * (n + 1)); return d; },
+    wcsncpy: (d, s, n) => {
+      const dv = M.mod.dv;
+      let i = 0;
+      for (; i < n; i++) { const c = dv.getInt32(s + 4 * i, true); dv.setInt32(d + 4 * i, c, true); if (c === 0) break; }
+      for (; i < n; i++) dv.setInt32(d + 4 * i, 0, true);
+      return d;
+    },
+    // The C locale collates by code: the transformed string is the string.
+    wcsxfrm: (d, s, n) => { const len = lib.wcslen(s); if (len < n) M.blockCopy(d, s, 4 * (len + 1)); return len; },
+    wmemcpy: (d, s, n) => { M.blockCopy(d, s, 4 * n); return d; },
+    wmemmove: (d, s, n) => { M.blockCopy(d, s, 4 * n); return d; },
+    wmemset: (d, c, n) => { for (let i = 0; i < n; i++) M.mod.dv.setInt32(d + 4 * i, c, true); return d; },
+    wmemcmp: (a, b, n) => {
+      const dv = M.mod.dv;
+      for (let i = 0; i < n; i++) { const x = dv.getInt32(a + 4 * i, true), y = dv.getInt32(b + 4 * i, true); if (x !== y) return x < y ? -1 : 1; }
+      return 0;
+    },
+    wmemchr: (p, c, n) => { for (let i = 0; i < n; i++) if (M.mod.dv.getInt32(p + 4 * i, true) === (c | 0)) return p + 4 * i; return 0; },
+    wcschr: (p, c) => {
+      for (let i = 0; ; i++) { const x = M.mod.dv.getInt32(p + 4 * i, true); if (x === (c | 0)) return p + 4 * i; if (x === 0) return 0; }
+    },
+    btowc: (c) => ((c | 0) >= 0 && (c | 0) < 0x80 ? c | 0 : -1),
+    wctob: (c) => ((c | 0) >= 0 && (c | 0) < 0x80 ? c | 0 : -1),
+    mbsinit: () => 1,
+    mbrtowc: (pwc, s, n) => {
+      if (!s) return 0;
+      if ((n >>> 0) === 0) return -2 >>> 0;
+      const b = u8()[s];
+      if (b >= 0x80) { lib.__setErrno(84); return -1 >>> 0; }
+      if (pwc) M.mod.dv.setInt32(pwc, b, true);
+      return b === 0 ? 0 : 1;
+    },
+    mbrlen: (s, n, ps) => lib.mbrtowc(0, s, n, ps),
+    wcrtomb: (s, wc) => {
+      if (!s) return 1;
+      if ((wc | 0) < 0 || (wc | 0) >= 0x80) { lib.__setErrno(84); return -1 >>> 0; }
+      u8()[s] = wc;
+      return 1;
+    },
+
+    // The single-threaded program's mutexes (see compile.js): glibc's libc stubs, which succeed and do nothing.
+    pthread_mutex_init: () => 0, pthread_mutex_destroy: () => 0, pthread_mutex_lock: () => 0,
+    pthread_mutex_trylock: () => 0, pthread_mutex_unlock: () => 0,
     strcoll: (a, b) => lib.strcmp(a, b),
     strncat: (d, s, n) => {
       const e = d + strlenAt(d);

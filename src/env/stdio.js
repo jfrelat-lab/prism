@@ -443,6 +443,9 @@ export function installStdio(M, {
       return 0;
     },
     ftell: (fp) => { const h = fileOf(fp); return h ? h.pos : -1; },
+    // fpos_t is a long here (stdio.h): the position, as ftell and fseek keep it.
+    fgetpos: (fp, pos) => { const h = fileOf(fp); if (!h) return -1; M.mod.dv.setInt32(pos, h.pos, true); return 0; },
+    fsetpos: (fp, pos) => api.fseek(fp, M.mod.dv.getInt32(pos, true), 0),
     rewind: (fp) => { const h = fileOf(fp); if (h) { flush(h); h.pos = 0; h.eof = false; } },
 
     fgetc: (fp) => readByte(fp),

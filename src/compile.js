@@ -133,6 +133,7 @@ export const BUILTINS = new Map(Object.entries({
   fwrite: { ret: U, params: [P, U, U, P] },
   fseek: { ret: I, params: [P, I, I] },
   ftell: { ret: I, params: [P] },
+  fgetpos: { ret: I, params: [P, P] }, fsetpos: { ret: I, params: [P, P] },
   rewind: { ret: V, params: [P] },
   fgetc: { ret: I, params: [P] },
   getc: { ret: I, params: [P] },
@@ -448,6 +449,9 @@ export const BUILTINS = new Map(Object.entries({
   localtime: { ret: P, params: [P] },
   gettimeofday: { ret: I, params: [P, P] },
   atof: { ret: D, params: [P] },
+  // glibc's reentrant float-to-digits conversions (runtime.js): STLport's num_put_float.cpp
+  ecvt_r: { ret: I, params: [D, I, P, P, P, U] }, fcvt_r: { ret: I, params: [D, I, P, P, P, U] },
+  qecvt_r: { ret: I, params: [D, I, P, P, P, U] }, qfcvt_r: { ret: I, params: [D, I, P, P, P, U] },
   atol: { ret: I, params: [P] },
   open: { ret: I, params: [P, I], variadic: true },
   close: { ret: I, params: [I] },
@@ -515,6 +519,18 @@ export const BUILTINS = new Map(Object.entries({
   srand48: { ret: V, params: [T.LONG] },
   labs: { ret: T.LONG, params: [T.LONG] },
   strlen: { ret: U, params: [P] }, strnlen: { ret: U, params: [P, U] },
+  // A program with no threads (no pthread environment, src/runtime/threads.js) still locks: STLport
+  // does on Linux unless told _NOTHREADS. glibc's libc answers with stubs then, and so does the runtime.
+  pthread_mutex_init: { ret: I, params: [P, P] }, pthread_mutex_destroy: { ret: I, params: [P] },
+  pthread_mutex_lock: { ret: I, params: [P] }, pthread_mutex_trylock: { ret: I, params: [P] },
+  pthread_mutex_unlock: { ret: I, params: [P] },
+  // <wchar.h>, over 4-byte wide units as the C front end types L"..." (runtime.js, glibc's C locale)
+  wcslen: { ret: U, params: [P] }, wcscmp: { ret: I, params: [P, P] }, wcsncmp: { ret: I, params: [P, P, U] },
+  wcscpy: { ret: P, params: [P, P] }, wcsncpy: { ret: P, params: [P, P, U] }, wcsxfrm: { ret: U, params: [P, P, U] },
+  wmemcpy: { ret: P, params: [P, P, U] }, wmemmove: { ret: P, params: [P, P, U] }, wmemset: { ret: P, params: [P, I, U] },
+  wmemcmp: { ret: I, params: [P, P, U] }, wmemchr: { ret: P, params: [P, I, U] }, wcschr: { ret: P, params: [P, I] },
+  btowc: { ret: U, params: [I] }, wctob: { ret: I, params: [U] }, mbsinit: { ret: I, params: [P] },
+  mbrtowc: { ret: U, params: [P, P, U, P] }, mbrlen: { ret: U, params: [P, U, P] }, wcrtomb: { ret: U, params: [P, I, P] },
   strcpy: { ret: P, params: [P, P] },
   strncpy: { ret: P, params: [P, P, U] },
   strcat: { ret: P, params: [P, P] },

@@ -173,6 +173,36 @@ export class Sema {
         return null;
       }
       case 'usingns': case 'usingdecl': return this.using(it, env.scope, env);
+      /*
+       * An explicit instantiation of a class: every member it can define is made here, functions and
+       * static data alike -- the reason for writing one. STLport's dll_main.cpp instantiates
+       * __node_alloc<true,0>, whose _M_allocate is defined only where _alloc.c is included; a user's
+       * unit calls it and this unit's definition answers.
+       */
+      case 'instantiate': {
+        // A function: the template whose arguments its declared parameter types deduce (14.7.2/6), made here.
+        if (!it.qname) {
+          const fd = it.decl.derivs[it.decl.derivs.length - 1];
+          if (fd?.k !== 'func') this.fail('an explicit instantiation of something other than a class or a function', it);
+          const found = this.lookupName(it.decl.name, env);
+          const set = found?.ent;
+          if (set?.k !== 'funcs' || !set.templates?.length) this.fail(`explicit instantiation of '${this.qualText(it.decl.name)}', which is not a function template`, it);
+          const want = this.declType(it.specs, it.decl.derivs, env, it);
+          const pseudo = want.params.map((t) => ({ c: '', t: this.stripRef(t), lv: true }));
+          const targs = it.decl.name.parts[it.decl.name.parts.length - 1].targs ?? [];
+          const insts = set.templates.map((ft) => this.deduce(ft, targs, pseudo, env, it)).filter((f) => f && this.sameSignature(f.type, want));
+          if (!insts.length) this.fail(`no template of '${this.qualText(it.decl.name)}' is instantiated by this declaration`, it);
+          for (const f of insts) this.use(f);
+          return null;
+        }
+        const t = this.namedType(it.qname, env);
+        if (t?.k !== 'class') this.fail(`explicit instantiation of '${this.qualText(it.qname)}', which is not a class`, it);
+        const cls = this.complete(t.cls, it);
+        for (const f of cls.methods) if (!f.pure && (f.body || this.findTemplateBody(f))) this.use(f);
+        this.instantiating = true;
+        try { for (const ent of cls.scope.map.values()) if (ent?.staticMember && !ent.definedHere) { ent.declared = false; this.useGlobal(ent); } } finally { this.instantiating = false; }
+        return null;
+      }
       default: this.fail(`unexpected ${it.k} at file scope`, it);
     }
   }
@@ -263,7 +293,7 @@ export class Sema {
     if (n('float')) return T.FLOAT;
     if (n('double')) return n('long') ? T.prim('long double') : T.DOUBLE;
     if (n('char')) return T.prim(uns ? 'unsigned char' : sig ? 'signed char' : 'char');
-    if (n('wchar_t')) return T.INT;
+    if (n('wchar_t')) return T.WCHAR;
     if (n('short')) return T.prim(uns ? 'unsigned short' : 'short');
     if (n('long') >= 2) return T.prim(uns ? 'unsigned long long' : 'long long');
     if (n('long') === 1) return T.prim(uns ? 'unsigned long' : 'long');
@@ -729,7 +759,12 @@ export class Sema {
   declareTemplate(it, env) {
     // The definition of a template declared earlier: the same template, its specialisations kept.
     const prior = env.scope.get(it.name);
-    if (prior?.k === 'template' && prior.tmpl.ast.k === 'fwdclass') return Object.assign(prior.tmpl, { ast: it, params: it.template, env });
+    // Its parameters are the definition's names with the declaration's defaults: STLport's <iosfwd> declares
+    // basic_stringbuf<_CharT, _Traits = ..., _Allocator = ...> and _sstream.h defines it over _Alloc.
+    if (prior?.k === 'template' && prior.tmpl.ast.k === 'fwdclass') {
+      const params = it.template.map((p, i) => (p.def || !prior.tmpl.params[i]?.def ? p : { ...p, def: prior.tmpl.params[i].def, defEnv: prior.tmpl.env }));
+      return Object.assign(prior.tmpl, { ast: it, params, env });
+    }
     const tmpl = { name: it.name, ast: it, params: it.template, env, outOfLine: [], specs: new Map() };
     this.templates.set(it.name, tmpl);
     env.scope.set(it.name, { k: 'template', tmpl });
@@ -787,9 +822,9 @@ export class Sema {
     const key = `${tmpl.name}<${args.map(T.mangle).join(',')}>`;
     let cls = this.instances.get(key);
     if (cls) return { k: 'class', cls };
-    const exact = tmpl.specs?.get(args.map(T.mangle).join(','));
-    const partial = exact ? null : this.partialFor(tmpl, args, node);
-    const spec = exact ?? partial;
+    let exact = tmpl.specs?.get(args.map(T.mangle).join(','));
+    let partial = exact ? null : this.partialFor(tmpl, args, node);
+    let spec = exact ?? partial;
     const bind = new Map([...(tmpl.env.bind ?? []), ...(partial ? partial.bind : spec ? [] : tmpl.params.map((p, i) => [p.name, args[i]]))]);
     cls = this.newClass(tmpl.name, tmpl.ast.key, tmpl.ast, tmpl.env);
     cls.name = `${tmpl.name}<${args.map(T.show).join(', ')}>`;
@@ -800,9 +835,24 @@ export class Sema {
     this.instances.set(key, cls);
     // Made complete when first needed so: `idList<idCameraEvent*>` may be named before its argument is.
     cls.pending = () => {
+      /*
+       * Which class it is, decided now: naming an instance does not instantiate it (14.7.1), so a
+       * specialisation declared since still applies -- STLport's <iosfwd> typedefs streambuf as
+       * basic_streambuf<char, char_traits<char> > before _streambuf.h specialises exactly that.
+       */
+      if (!spec) {
+        exact = tmpl.specs?.get(args.map(T.mangle).join(','));
+        partial = exact ? null : this.partialFor(tmpl, args, node);
+        spec = exact ?? partial;
+        if (spec) { bind.clear(); for (const [k, v] of [...(tmpl.env.bind ?? []), ...(partial ? partial.bind : [])]) bind.set(k, v); }
+      }
+      // A specialisation's members are its own: the primary template's out-of-line definitions are not theirs.
+      cls.specialised = !!spec;
       const ast = spec ? spec.ast : tmpl.ast;
       if (ast.k === 'fwdclass') this.fail(`${cls.name}: the template is declared and never defined`, node);
       const info = ast.info;
+      // An instance named before the definition was seen binds the definition's parameter names too.
+      if (!spec && !partial) tmpl.params.forEach((p, i) => { if (!bind.has(p.name)) bind.set(p.name, args[i]); });
       this.declareClass(ast, spec ? spec.env : tmpl.env, { cls, bind });
       ast.info = info;
       // The template's own name inside an instance is that instance.
@@ -837,6 +887,14 @@ export class Sema {
     }
     const isFunc = m.decl?.derivs.length && m.decl.derivs[m.decl.derivs.length - 1].k === 'func';
     if (!isFunc) this.fail(`${cls.name}: a member template that is neither a class nor a function`, m);
+    // A conversion function template, `template <class _Tp1> operator auto_ptr<_Tp1>()`: its
+    // arguments are deduced from the type converted to (14.8.2.3), in sema-expr.js userConv.
+    const last = m.decl.name.parts[m.decl.name.parts.length - 1];
+    if (last.conv) {
+      const list = (cls.convTemplates ??= []);
+      if (!list.some((t) => t.ast === m)) list.push({ name: '<conv>', params: m.template, conv: last.conv, ast: m, env: cenv, instances: new Map(), member: { cls, isStatic: false, isCtor: false } });
+      return;
+    }
     const raw = this.lastName(m.decl.name);
     const isCtor = raw === cls.node.name || raw === cls.template?.name;
     const name = isCtor ? '<ctor>' : raw;
@@ -926,6 +984,18 @@ export class Sema {
       a = a.to;
     }
     const st = specs.type;
+    /*
+     * A template-id, `const reverse_iterator<_Iter>&`: the argument is an instance of that template
+     * -- or derived from one (14.8.2.1/3) -- and its arguments are matched against the pattern's.
+     */
+    const lastPart = st?.k === 'named' ? st.qname.parts[st.qname.parts.length - 1] : null;
+    if (lastPart?.targs && st.qname.parts.slice(0, -1).every((p) => !p.targs)) {
+      const u = T.uncst(a);
+      if (u.k !== 'class') return true;
+      const inst = [u.cls, ...this.allBases(u.cls)].find((c) => c.targs && c.template?.name === lastPart.name);
+      if (!inst || lastPart.targs.length > inst.targs.length) return true;
+      return lastPart.targs.every((q, i) => this.matchArg(q, inst.targs[i], bind, names));
+    }
     if (st?.k !== 'named' || st.qname.parts.length !== 1 || st.qname.parts[0].targs) return true;
     const n = st.qname.parts[0].name;
     if (!names.includes(n)) return true;
@@ -1024,14 +1094,16 @@ export class Sema {
       // A method, a static function or a constructor of the class, one per set of arguments; static
       // in C as every instance is (each unit makes the ones it uses).
       const { cls, isStatic, isCtor } = ft.member;
-      const type = isCtor ? this.derive(T.VOID, fd, env, it) : this.declType(it.specs, it.decl.derivs, env, it);
+      const conv = ft.conv ? this.declType(ft.conv.specs, ft.conv.derivs, env, it) : null;
+      const type = isCtor ? this.derive(T.VOID, fd, env, it) : conv ? T.func(conv, [], false, !!fd.cv?.const) : this.declType(it.specs, it.decl.derivs, env, it);
       // Default arguments are the declaration's, which an out-of-line definition does not repeat.
       const dd = (ft.declAst ?? it).decl.derivs;
+      const shown = conv ? `operator ${T.show(conv)}` : isCtor ? cls.name : ft.name;
       f = {
-        k: 'func', name: ft.name, display: `${cls.name}::${isCtor ? cls.name : ft.name}<${args.map(T.show).join(', ')}>`, cls, type, isStatic,
-        isCtor, isDtor: false, conv: null, node: it, params: this.paramInfo(dd[dd.length - 1], env), inline: true, fileStatic: false, fromTemplate: true, targs: args, ft,
+        k: 'func', name: ft.name, display: `${cls.name}::${shown}<${args.map(T.show).join(', ')}>`, cls, type, isStatic,
+        isCtor, isDtor: false, conv, node: it, params: this.paramInfo(dd[dd.length - 1], env), inline: true, fileStatic: false, fromTemplate: true, targs: args, ft,
       };
-      f.cname = `${this.mangleName(ft.name, cls, type, null)}_I${args.map(T.mangle).join('')}E`;
+      f.cname = `${this.mangleName(ft.name, cls, type, conv)}_I${args.map(T.mangle).join('')}E`;
       ft.instances.set(key, f);
       if (it.k === 'func') this.attachBody(f, it, env);
       return f;
@@ -1167,7 +1239,7 @@ export class Sema {
         return this.functionDefinition({ ...it, decl: { ...it.decl, name: { parts: [q[q.length - 1]], global: false } } }, nenv);
       }
       const tmpl = owner?.k === 'template' ? owner.tmpl : null;
-      if (it.template && tmpl) { tmpl.outOfLine.push(it); for (const cls of this.instances.values()) if (cls.template === tmpl && cls.complete) this.outOfLine(it, cls); return null; }
+      if (it.template && tmpl) { tmpl.outOfLine.push(it); for (const cls of this.instances.values()) if (cls.template === tmpl && cls.complete && !cls.specialised) this.outOfLine(it, cls); return null; }
       const ot = this.namedType({ parts: q.slice(0, -1), global: it.decl.name.global }, env, it);
       if (ot.k !== 'class') this.fail(`'${ownerName}' is not a class`, it);
       this.complete(ot.cls, it);
