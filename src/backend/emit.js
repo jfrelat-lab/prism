@@ -330,6 +330,21 @@ function coerce(ty, js, from, to) {
  */
 // compile.x87Precision: a double operation as the x87 does it (runtime.js M.pcAdd and the rest).
 const X87_OP = { '+': 'Add', '-': 'Sub', '*': 'Mul', '/': 'Div' };
+/*
+ * The libm functions whose runtime entry IS the Math function (runtime.js, "math"): called as
+ * `Math.x(...)` V8 inlines the intrinsic, called as `M.rt.x(...)` it cannot. The float form is the
+ * runtime's own Math.fround around it. pow is not here: cPow answers C's corner cases, not Math.pow's.
+ */
+const MATH_DIRECT = {
+  sqrt: 'sqrt', sin: 'sin', cos: 'cos', tan: 'tan', atan: 'atan', asin: 'asin', acos: 'acos',
+  atan2: 'atan2', exp: 'exp', log: 'log', log10: 'log10', log2: 'log2', floor: 'floor', ceil: 'ceil',
+  fabs: 'abs', trunc: 'trunc', cbrt: 'cbrt',
+};
+const MATH_DIRECT_F = {
+  sqrtf: 'sqrt', sinf: 'sin', cosf: 'cos', tanf: 'tan', atanf: 'atan', asinf: 'asin', acosf: 'acos',
+  atan2f: 'atan2', expf: 'exp', logf: 'log', log10f: 'log10', log2f: 'log2', floorf: 'floor',
+  ceilf: 'ceil', fabsf: 'abs', truncf: 'trunc', cbrtf: 'cbrt',
+};
 const fitInt = (ty, js, t) => (T.isInteger(t) && !is64(t) && t.size === 2 ? coerce(ty, js, t, t) : js);
 
 // ---------------------------------------------------------------- the function emitter
@@ -2927,6 +2942,8 @@ export class FunctionEmitter {
         const ret = (declared && declared.k === 'ptr' && rt.ret?.k === 'ptr') ? declared : rt.ret;
         // fsqrt is rounded by the precision control as fadd is (SDM 8.1.5.2); fsin and the rest are not.
         if (this.ty.x87pc && impl === 'sqrt') return { js: `M.pcSqrt(${args.join(',')})`, type: ret };
+        if (Object.hasOwn(MATH_DIRECT, impl)) return { js: `Math.${MATH_DIRECT[impl]}(${args.join(',')})`, type: ret };
+        if (Object.hasOwn(MATH_DIRECT_F, impl)) return { js: `Math.fround(Math.${MATH_DIRECT_F[impl]}(${args.join(',')}))`, type: ret };
         return { js: `M.rt.${impl}(${args.join(',')})`, type: ret };
       }
       if (f) {
