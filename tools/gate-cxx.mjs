@@ -2153,6 +2153,37 @@ int main() {
   return 0;
 }
 `);
+// a function template named without arguments: the pointer type it converts to deduces them (14.8.2.2) -- cout << endl
+C('template-to-pointer', `#include <stdio.h>
+struct os;
+template <class C> os &nl(os &o);
+struct os {
+  int n;
+  os &operator<<(int v) { printf("%d", v); n++; return *this; }
+  os &operator<<(os &(*f)(os &)) { return f(*this); }
+};
+template <class C> os &nl(os &o) { printf("\\n"); o.n += 10; return o; }
+template <class T> T twice(T x) { return x + x; }
+int apply(int (*f)(int), int v) { return f(v); }
+int main() {
+  os o; o.n = 0;
+  o << 3 << nl<char>;
+  os &(*p)(os &) = nl<char>;
+  p(o);
+  printf("%d %d\\n", o.n, apply(twice, 21));
+  return 0;
+}
+`);
+// and, or, not, bitand, bitor, xor, compl and the assignment forms are tokens (2.5)
+C('alternative-tokens', `#include <stdio.h>
+int main() {
+  int a = 6, b = 3, c = 0;
+  if (a > 1 and b < 5 or not c) c = a bitand b;
+  c or_eq 8; c xor_eq 1; c and_eq 0xff;
+  printf("%d %d %d %d\\n", c, compl a, a bitor b, (a xor b) not_eq 0);
+  return 0;
+}
+`);
 
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());

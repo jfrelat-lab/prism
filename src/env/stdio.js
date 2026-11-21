@@ -193,7 +193,18 @@ export function installStdio(M, {
   const interned = new Map();
 
   const small = (M.abi?.ptr ?? 4) === 2;
-  const { STDIN, STDOUT, STDERR, FIRST } = small ? STD16 : STD32;
+  let { STDIN, STDOUT, STDERR, FIRST } = small ? STD16 : STD32;
+  /*
+   * Under i386 the three standard streams point at FILE objects in the program's memory, as glibc's
+   * do, with their descriptor where glibc keeps it (_fileno, offset 56 of the 148 bytes): STLport's
+   * iostreams open wcin, wcout and wcerr on _fileno(stdin) and the others at start-up. The tokens
+   * stay tokens to the rest of this file -- every comparison is with these three names.
+   */
+  if (!small && M.rt?.malloc) {
+    const fileAt = (fd) => { const p = M.rt.malloc(148); if (!p) return 0; M.mod.u8.fill(0, p, p + 148); M.mod.dv.setInt32(p + 56, fd, true); return p; };
+    const [i, o, e] = [fileAt(0), fileAt(1), fileAt(2)];
+    if (i && o && e) { STDIN = i; STDOUT = o; STDERR = e; }
+  }
   const handles = new Map();
   let next = FIRST;
   // The next descriptor: DOS hands out the lowest free one; i386 keeps counting up, as before.
@@ -979,7 +990,19 @@ export function installStdio(M, {
      * succeeds — which is the truth here, not a shortcut: SQLite's locking exists to keep processes
      * apart, and there are none to keep apart.
      */
-    fcntl: () => 0,
+    /*
+     * ...and F_GETFL (3) says how a descriptor was opened: STLport's filebuf asks it of fd 1 before it
+     * will write cout there (sync_with_stdio(false)); 0 -- O_RDONLY -- left cout writing nothing.
+     */
+    fcntl: (fd, cmd) => {
+      if ((cmd | 0) !== 3) return 0;
+      fd |= 0;
+      if (fd === 0) return 0;
+      if (fd === 1 || fd === 2) return 1;
+      const h = fileOf(fd);
+      if (!h) { setErrno(9); return -1; }
+      return h.read && h.write ? 2 : h.write ? 1 : 0;
+    },
     fchmod: () => 0,
     fchown: () => 0,
     fallocate: () => 0,

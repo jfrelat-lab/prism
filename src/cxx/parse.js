@@ -50,6 +50,8 @@ export const KEYWORDS = new Set([...BUILTIN, ...CV, ...STORAGE, ...FUNCSPEC, 'cl
   '__asm__', 'asm', '__typeof__', 'typeof']);
 const REFUSED = new Set();
 const NAMED_CASTS = new Set(['static_cast', 'const_cast', 'reinterpret_cast', 'dynamic_cast']);
+const ALT_TOKENS = { and: '&&', or: '||', not: '!', bitand: '&', bitor: '|', xor: '^', compl: '~',
+  and_eq: '&=', or_eq: '|=', xor_eq: '^=', not_eq: '!=' };
 
 // Binary operators by precedence, loosest first (assignment, ?: and comma are handled apart).
 const BINARY = [['||'], ['&&'], ['|'], ['^'], ['&'], ['==', '!='], ['<', '>', '<=', '>='], ['<<', '>>'],
@@ -89,14 +91,14 @@ class PScope {
  * Parse a preprocessed token stream. `cLinkage(tok)` says whether a token comes from a header PRISM
  * supplies -- C headers, whose declarations have C linkage as if wrapped in extern "C".
  */
-export function parseCxx(tokens, { cLinkage = () => false, gcc3 = false } = {}) {
-  const p = new CxxParser(tokens, cLinkage);
+export function parseCxx(tokens, { cLinkage = () => false, gcc3 = false, altTokens = true } = {}) {
+  const p = new CxxParser(tokens, cLinkage, altTokens);
   p.gcc3 = gcc3;
   return p.unit();
 }
 
 class CxxParser {
-  constructor(tokens, cLinkage) {
+  constructor(tokens, cLinkage, altTokens = true) {
     // `::` is not a C punctuator; two adjacent colons with nothing between are one here.
     const ts = [];
     for (const t of tokens) {
@@ -106,6 +108,10 @@ class CxxParser {
         ts[ts.length - 1] = { ...last, v: '::', merged: true };
         continue;
       }
+      // C++'s alternative tokens (2.5) are tokens, not <iso646.h>'s macros: `i<iter and z <= lim`
+      // (the Benchmarks Game's mandelbrot.gpp-3).
+      // Visual C++ reads them so only under /Za, which the programs it built did not use.
+      if (altTokens && t.k === ID && Object.hasOwn(ALT_TOKENS, t.v)) { ts.push({ ...t, k: PUNCT, v: ALT_TOKENS[t.v] }); continue; }
       ts.push(t);
     }
     this.ts = ts;

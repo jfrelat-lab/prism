@@ -356,6 +356,23 @@ export const exprMethods = {
       const f = e.funcs.find((g) => (!g.cls || g.isStatic) && T.same(g.type, V.to, { top: false }));
       if (f) return { rank: EXACT, gen: () => { this.use(f); return f.cname; } };
     }
+    /*
+     * A function template named without arguments to call it with: the pointer type it is converted to
+     * deduces them (14.8.2.2) -- `cout << endl`, where basic_ostream's operator<< takes a
+     * basic_ostream& (*)(basic_ostream&) -- a plain function of that type first.
+     */
+    if (e.templates && !e.c && V.k === 'ptr' && V.to.k === 'func') {
+      const plain = e.funcs?.find((g) => (!g.cls || g.isStatic) && T.same(g.type, V.to, { top: false }));
+      if (plain) return { rank: EXACT, gen: () => { this.use(plain); return plain.cname; } };
+      const want = V.to;
+      for (const ft of e.templates) {
+        const pseudo = want.params.map((t) => ({ c: '', t: this.stripRef(t), lv: true }));
+        let f = null;
+        try { f = this.deduce(ft, e.targs ?? [], pseudo, e.env ?? ft.env, e.node); } catch { f = null; }
+        if (f && (!f.cls || f.isStatic) && T.same(f.type, want, { top: false })) return { rank: EXACT, gen: () => { this.use(f); return f.cname; } };
+      }
+      return null;
+    }
     const from = this.decay(e), F = from.t;
     if (T.same(F, V, { top: false })) return { rank: EXACT, gen: () => from.c };
     if (T.isArith(V) && T.isArith(F)) {
@@ -1170,7 +1187,7 @@ export const exprMethods = {
           const f = this.instantiateFunction(ft, targs.map((a) => this.templateArg(a, cx.env, n)), n);
           if (!(f.cls && !f.isStatic)) { this.use(f); return { c: f.cname, t: f.type, lv: true, funcs: [f], owner: r.owner, qualified: r.qualified }; }
         }
-        if (ent.templates?.length) return { funcs: ent.list, templates: ent.templates, targs, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };
+        if (ent.templates?.length) return { funcs: ent.list, templates: ent.templates, targs, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false, env: cx.env, node: n };
         // A function named without being called: its address, when it is not overloaded.
         if (ent.list.length !== 1) return { funcs: ent.list, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };
         const f = ent.list[0];
