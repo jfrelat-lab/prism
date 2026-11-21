@@ -6,15 +6,17 @@ on:
   workflow_dispatch:
 jobs:
   gates:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: on the Ubuntu 26 images (from 2026-11-17) a docker build resolves no name, and
+    # the oracle image could not apt-get a package.
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       # The i386 gcc container: native on an x86-64 runner, so the gates that compare with gcc run.
-      - run: npm run oracle:build
+      - run: npm run oracle:build -- --network=host
       # Every gate, on a fresh clone: no corpus and no game data. The gates that need either say SKIP
       # (exit 77, tools/gate-preload.mjs) and do not fail the run; the others run or replay goldens.
       - run: node tools/gates.mjs --jobs=2

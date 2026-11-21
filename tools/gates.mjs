@@ -95,6 +95,9 @@ await new Promise((resolve) => {
         rows.push({ g, verdict, secs, line });
         if (verdict !== 'SKIP') times[g] = Math.round(secs);
         console.log(`${verdict} ${g.padEnd(30)} ${secs.toFixed(0).padStart(4)}s  ${line.length > 96 ? `${line.slice(0, 95)}…` : line}`);
+        // A failure shows its end: where nothing else keeps the output (a CI log), the last line alone
+        // was Node's version under a stack trace.
+        if (verdict === 'FAIL') for (const l of lines.slice(-25)) console.log(`    | ${l.slice(0, 200)}`);
         next();
       });
     }
