@@ -2265,6 +2265,131 @@ int main(void) {
 }
 `);
 
+// gotos emitted as labelled blocks and loops (src/backend/structure.js): forward out of nested loops,
+// backward, one label both ways, into a switch's default and middle case, a C continue and break
+// across the loops that adds, chained labels, a declaration before a switch's first case. gate-structure holds the shape; this, the answers.
+C('gotos-structured', `#include <stdio.h>
+
+/* forward out of nested loops */
+static int fwd(int n) {
+  int i, j, s = 0;
+  for (i = 0; i < n; i++)
+    for (j = 0; j < n; j++) {
+      s += i * j;
+      if (s > 50) goto done;
+    }
+  s = -1;
+done:
+  return s;
+}
+
+/* backward: a retry loop made of goto */
+static int back(int x) {
+  int tries = 0;
+again:
+  tries++;
+  x = x * 3 + 1;
+  if (x % 7) goto again;
+  return tries * 1000 + x;
+}
+
+/* the same label reached forward and backward */
+static int both(int n) {
+  int s = 0;
+  if (n < 0) goto mid;
+  s += 100;
+mid:
+  s += n;
+  n--;
+  if (n > 0) goto mid;
+  return s;
+}
+
+/* a core-like loop: prefix bytes restart the decode, unknown opcodes jump to default */
+static int core(const unsigned char *code, int len) {
+  int pc = 0, acc = 0, prefix = 0, steps = 0;
+  while (pc < len) {
+    prefix = 0;
+restart:
+    steps++;
+    switch (code[pc++]) {
+    case 0x66: prefix++; goto restart;
+    case 0x01: acc += 1 + prefix; break;
+    case 0x02:
+      if (prefix > 1) goto illegal;
+      acc *= 2;
+      break;
+    case 0x03: continue;          /* the while's continue, through the added loops */
+    case 0x04: goto out;
+    case 0x05:
+      { int k; for (k = 0; k < 3; k++) { if (k == 1) continue; acc += k; } }
+      break;
+    default:
+    illegal:
+      acc -= 100;
+      break;
+    }
+    acc += 10;
+  }
+  return acc * 1000 + steps;
+out:
+  return -acc;
+}
+
+/* into a middle case, with fallthrough from it */
+static int midcase(int v) {
+  int r = 0;
+  switch (v) {
+  case 1: r += 1; if (r) goto two;
+  case 5: r += 50;
+  two:
+  case 2: r += 2;
+  case 3: r += 3; break;
+  }
+  return r;
+}
+
+/* chained labels, and a do loop whose break must leave the do, not an added loop */
+static int chain(int n) {
+  int s = 0;
+  do {
+  a: b:
+    s++;
+    if (s < n) goto a;
+    if (s == n) { s += 10; break; }
+    goto b;
+  } while (0);
+  return s;
+}
+
+/* a declaration before the first case, in a function with a goto (ScummVM's format parser) */
+static int predecl(const char *p) {
+  int n = 0;
+  while (*p) {
+    switch (*p++) {
+      int i;
+    case 'd': i = *p++ - '0'; n += i; break;
+    case '\\\\': goto literal;
+    default:
+    literal:
+      n += 100;
+    }
+  }
+  return n;
+}
+
+int main(void) {
+  static const unsigned char prog[] = { 0x01, 0x66, 0x01, 0x66, 0x66, 0x02, 0x03, 0x02, 0x07, 0x05, 0x01, 0x04, 0x01 };
+  printf("%d %d %d %d\\n", fwd(10), fwd(2), back(1), back(5));
+  printf("%d %d\\n", both(4), both(-3));
+  printf("%d %d\\n", core(prog, sizeof prog), core(prog, 11));
+  printf("%d %d %d %d\\n", midcase(1), midcase(2), midcase(5), midcase(9));
+  printf("%d %d\\n", chain(3), chain(1));
+  printf("%d %d\\n", predecl("d3xd4"), predecl("\\\\\\\\d1"));
+  return 0;
+}
+`);
+
 const active = cases.filter(c => !FILTER || c.name.includes(FILTER));
 console.log(version());
 console.log(`gate-run: ${active.length} cases\n`);

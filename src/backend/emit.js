@@ -22,6 +22,7 @@ import { findField, constEval } from '../parse/parser.js';
 import { FUNC_TAG } from '../link/module.js';
 import { isWideLiteral, literalBytes, literalUnits } from '../util/charset.js';
 import { needsFlattening, flattenGotos } from './flatten.js';
+import { structureGotos } from './structure.js';
 import { lowerBorlandAsm, emitInstruction, REGISTER_DECLS, BorlandAsmError, PSEUDO, PSEUDO_REFUSED,
   firstUndefinedRead, interruptJs } from '../asm/borland.js';
 import { lowerMsvcAsm, emitInstruction as emitMsvcInstruction, MSVC_REGISTER_DECLS, MsvcAsmError } from '../asm/msvc.js';
@@ -490,6 +491,16 @@ export class FunctionEmitter {
      * the longjmp came back to the `if`, found first_start clear, and took the longjmp again, for
      * ever. Flattened, the call is a top-level statement and the resume point is just after it.
      */
+    /*
+     * First, gotos as labelled blocks and loops (structure.js) -- forward, backward and into a switch,
+     * the shapes structured code has -- so a function keeps its loops and V8 can optimise it. Only
+     * where that does not apply is the body flattened into the state machine below, or its top-level
+     * labels made the arms of one (planLabels). Not with setjmp: its resume points need the machine.
+     */
+    if (findGoto(d.body) && findSetjmpCall(d.body, this.ctx.builtins) === null) {
+      const st = structureGotos(d.body);
+      if (st && !needsFlattening(st) && !findGoto(st)) { d = { ...d, body: st }; this.decl = d; }
+    }
     if (needsFlattening(d.body) || nestedSetjmp(d.body, this.ctx.builtins)) {
       let sw = 0;
       const newTemp = (disc) => {
@@ -1580,15 +1591,31 @@ export class FunctionEmitter {
         this.out.push('}');
         return;
       }
+      case 'lwrap': {
+        // structure.js: a labelled block a forward goto breaks out of, or a loop that runs once and that
+        // a backward goto continues.
+        this.out.push(s.kind === 'loop' ? `${s.label}:for(;;){` : `${s.label}:{`);
+        for (const it of s.items) this.#item(it, escaped);
+        this.out.push(s.kind === 'loop' ? 'break;}' : '}');
+        return;
+      }
+      case 'jump': {
+        // A backward jump is a loop's back edge, and carries the safepoint a loop does.
+        const sp = s.back && this.ctx.safepoints ? this.#safepoint() : '';
+        if (s.kind === 'break') this.out.push(`break ${s.label};`);
+        else if (s.kind === 'continue') this.out.push(`{${sp}continue ${s.label};}`);
+        else this.out.push(`{${sp}${s.rdVar}=${JSON.stringify(s.value)};continue ${s.label};}`);
+        return;
+      }
       case 'while': {
-        this.out.push(`while(${this.#truth(s.cond)}){`);
+        this.out.push(`${s.jsLabel ? `${s.jsLabel}:` : ''}while(${this.#truth(s.cond)}){`);
         this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
         if (this.ctx.safepoints) this.out.push(this.#safepoint());
         this.out.push('}');
         return;
       }
       case 'do': {
-        this.out.push('do{');
+        this.out.push(`${s.jsLabel ? `${s.jsLabel}:` : ''}do{`);
         this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
         if (this.ctx.safepoints) this.out.push(this.#safepoint());
         this.out.push(`}while(${this.#truth(s.cond)});`);
@@ -1602,7 +1629,7 @@ export class FunctionEmitter {
           if (s.init) this.#item(s.init.n === 'decls' ? s.init : s.init, escaped);
           const cond = s.cond ? this.#truth(s.cond) : 'true';
           const step = s.step ? this.#rval(s.step).js : '';
-          this.out.push(`for(;${cond};${step}){`);
+          this.out.push(`${s.jsLabel ? `${s.jsLabel}:` : ''}for(;${cond};${step}){`);
           this.loopDepth++; this.#stmt(s.body, escaped); this.loopDepth--;
           if (this.ctx.safepoints) this.out.push(this.#safepoint());
           this.out.push('}');
@@ -1611,15 +1638,49 @@ export class FunctionEmitter {
       }
       case 'switch': {
         const d = this.#rval(s.disc);
-        this.out.push(`switch(${d.js}|0){`);
+        const lab = s.jsLabel ? `${s.jsLabel}:` : '';
+        /*
+         * Re-enterable (structure.js): a goto to a label among the cases sets the sentinel the
+         * label's own case matches and continues the loop round the switch; the discriminant is
+         * evaluated only on the way in, as C evaluates it once.
+         */
+        const rd = s.redispatch;
+        const head = () => {
+          if (rd) {
+            if (!this._tmps) this._tmps = new Set();
+            if (!this._tmps.has(rd.var)) { this._tmps.add(rd.var); this.out.unshift(`var ${rd.var}=null;`); }
+            const t = this.newTmp(); this.#declareTmp(t);
+            this.out.push(`${rd.loop}:for(;;){${lab}switch(${rd.var}!==null?(${t}=${rd.var},${rd.var}=null,${t}):(${d.js}|0)){`);
+          } else this.out.push(`${lab}switch(${d.js}|0){`);
+        };
         // The braces of the body are dropped on purpose: `switch(x){{case 0:...}}` is a syntax
         // error in JavaScript, where a switch's cases must be direct children.
-        if (s.body.n === 'block') this.#scoped(() => this.#block(s.body, escaped));
-        else this.#stmt(s.body, escaped);
-        this.out.push('}');
+        if (s.body.n === 'block') {
+          this.#scoped(() => {
+            /*
+             * What comes before the first case is never executed -- the switch jumps over it -- but a
+             * declaration there is in scope for every case (ScummVM's `switch (*s++) { int i; case 'v':`).
+             * JavaScript allows nothing before the first case, so the declarations go in front of the
+             * switch, without the initialiser C never runs, and the rest is dropped as unreachable.
+             */
+            const items = s.body.items;
+            let first = items.findIndex((it) => it.n === 'case' || it.n === 'default');
+            if (first < 0) first = items.length;
+            const strip = (v) => ({ ...v, init: null });
+            for (const it of items.slice(0, first)) {
+              if (it.n === 'vardecl') this.#item(strip(it), escaped);
+              else if (it.n === 'decls') this.#item({ ...it, decls: it.decls.map((v) => (v.n === 'vardecl' ? strip(v) : v)) }, escaped);
+              else if (it.n === 'typedef' || it.n === 'tagdecl') this.#item(it, escaped);
+            }
+            head();
+            for (const it of items.slice(first)) this.#item(it, escaped);
+          });
+        } else { head(); this.#stmt(s.body, escaped); }
+        this.out.push(rd ? '}break;}' : '}');
         return;
       }
       case 'case': {
+        if (s.sentinel) { this.out.push(`case ${JSON.stringify(s.sentinel)}:`); this.#stmt(s.body, escaped); return; }
         if (s.hi !== null && s.hi !== undefined) {
           // GNU case ranges: expand, which is what gcc does too.
           for (let v = s.lo; v <= s.hi; v++) this.out.push(`case ${Number(v)}:`);
@@ -1628,8 +1689,8 @@ export class FunctionEmitter {
         return;
       }
       case 'default': this.out.push('default:'); this.#stmt(s.body, escaped); return;
-      case 'break': this.out.push('break;'); return;
-      case 'continue': this.out.push('continue;'); return;
+      case 'break': this.out.push(s.label ? `break ${s.label};` : 'break;'); return;
+      case 'continue': this.out.push(s.label ? `continue ${s.label};` : 'continue;'); return;
       case 'return': {
         const ret = this.decl.type.ret;
         if (!s.expr || ret.k === 'void') {
