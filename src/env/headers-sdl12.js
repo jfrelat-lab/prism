@@ -40,6 +40,13 @@
 const SDL_STDINC_12 = `
 #ifndef _SDL_stdinc_h
 #define _SDL_stdinc_h
+/* begin_code.h's calling convention and export markers: nothing on Linux (DOSBox's SDLCALL callbacks) */
+#ifndef SDLCALL
+#define SDLCALL
+#endif
+#ifndef DECLSPEC
+#define DECLSPEC
+#endif
 /* SDL 1.2.15's SDL_stdinc.h, as its Linux SDL_config.h has it, brings in the C library: a program may
    use stderr or memcpy with nothing but SDL.h (Chromium B.S.U.'s Image.cpp does). iconv.h is left out. */
 #include <sys/types.h>
@@ -93,6 +100,15 @@ int SDL_SemWait(SDL_sem *sem);
 int SDL_SemPost(SDL_sem *sem);
 Uint32 SDL_SemValue(SDL_sem *sem);
 int SDL_SemTryWait(SDL_sem *sem);
+/* condition variables: a type and its calls (DOSBox keeps one in its sdl state) */
+struct SDL_cond;
+typedef struct SDL_cond SDL_cond;
+SDL_cond *SDL_CreateCond(void);
+void SDL_DestroyCond(SDL_cond *cond);
+int SDL_CondSignal(SDL_cond *cond);
+int SDL_CondBroadcast(SDL_cond *cond);
+int SDL_CondWait(SDL_cond *cond, SDL_mutex *mut);
+int SDL_CondWaitTimeout(SDL_cond *cond, SDL_mutex *mutex, Uint32 ms);
 #define SDL_MUTEX_TIMEDOUT 1
 #define SDL_MUTEX_MAXWAIT (~(Uint32)0)
 #endif
@@ -238,6 +254,9 @@ typedef struct SDL_CD {
     SDL_CDtrack track[SDL_MAX_TRACKS + 1];
 } SDL_CD;
 #define CD_FPS 75
+/* minutes:seconds:frames and a frame count, both ways (DOSBox's MSCDEX and its CD images) */
+#define MSF_TO_FRAMES(M, S, F) ((M) * 60 * CD_FPS + (S) * CD_FPS + (F))
+#define FRAMES_TO_MSF(f, M, S, F) { int __v = (f); *(F) = __v % CD_FPS; __v /= CD_FPS; *(S) = __v % 60; __v /= 60; *(M) = __v; }
 int SDL_CDNumDrives(void);
 const char *SDL_CDName(int drive);
 SDL_CD *SDL_CDOpen(int drive);
@@ -253,6 +272,8 @@ void SDL_CDClose(SDL_CD *cdrom);
 int SDL_Init(Uint32 flags);
 int SDL_InitSubSystem(Uint32 flags);
 void SDL_Quit(void);
+void SDL_QuitSubSystem(Uint32 flags);
+Uint32 SDL_WasInit(Uint32 flags);
 char *SDL_GetError(void);
 void SDL_SetError(const char *fmt, ...);
 void SDL_ClearError(void);
@@ -357,11 +378,64 @@ int SDL_WM_ToggleFullScreen(SDL_Surface *surface);
 /* There is no window manager to iconify to: 0, as SDL answers where it cannot. */
 int SDL_WM_IconifyWindow(void);
 
+#define SDL_ASYNCBLIT   0x00000004
+#define SDL_HWACCEL     0x00000100
+#define SDL_PREALLOC    0x01000000
+#define SDL_MUSTLOCK(surface) (surface->offset || ((surface->flags & (SDL_HWSURFACE | SDL_ASYNCBLIT | SDL_RLEACCEL)) != 0))
+/* SDL_SetPalette's flags: the logical palette (what pixels mean), the physical one (what is shown), or both */
+#define SDL_LOGPAL 0x01
+#define SDL_PHYSPAL 0x02
+int SDL_SetPalette(SDL_Surface *surface, int flags, SDL_Color *colors, int firstcolor, int ncolors);
+typedef struct SDL_VideoInfo {
+    Uint32 hw_available :1;
+    Uint32 wm_available :1;
+    Uint32 UnusedBits1  :6;
+    Uint32 UnusedBits2  :1;
+    Uint32 blit_hw      :1;
+    Uint32 blit_hw_CC   :1;
+    Uint32 blit_hw_A    :1;
+    Uint32 blit_sw      :1;
+    Uint32 blit_sw_CC   :1;
+    Uint32 blit_sw_A    :1;
+    Uint32 blit_fill    :1;
+    Uint32 UnusedBits3  :16;
+    Uint32 video_mem;
+    SDL_PixelFormat *vfmt;
+    int current_w;
+    int current_h;
+} SDL_VideoInfo;
+const SDL_VideoInfo *SDL_GetVideoInfo(void);
+char *SDL_VideoDriverName(char *namebuf, int maxlen);
+/* YUV overlays: there is no overlay hardware here, so SDL_CreateYUVOverlay answers NULL. */
+#define SDL_YV12_OVERLAY 0x32315659
+#define SDL_IYUV_OVERLAY 0x56555949
+#define SDL_YUY2_OVERLAY 0x32595559
+#define SDL_UYVY_OVERLAY 0x59565955
+#define SDL_YVYU_OVERLAY 0x55595659
+typedef struct SDL_Overlay {
+    Uint32 format;
+    int w, h;
+    int planes;
+    Uint16 *pitches;
+    Uint8 **pixels;
+    struct private_yuvhwfuncs *hwfuncs;
+    struct private_yuvhwdata *hwdata;
+    Uint32 hw_overlay :1;
+    Uint32 UnusedBits :31;
+} SDL_Overlay;
+SDL_Overlay *SDL_CreateYUVOverlay(int width, int height, Uint32 format, SDL_Surface *display);
+int SDL_LockYUVOverlay(SDL_Overlay *overlay);
+void SDL_UnlockYUVOverlay(SDL_Overlay *overlay);
+int SDL_DisplayYUVOverlay(SDL_Overlay *overlay, SDL_Rect *dstrect);
+void SDL_FreeYUVOverlay(SDL_Overlay *overlay);
+
 /* An OpenGL display: SDL_SetVideoMode with SDL_OPENGL makes the context, and this pair is all a
    program then asks of SDL about it. */
 typedef enum {
     SDL_GL_RED_SIZE, SDL_GL_GREEN_SIZE, SDL_GL_BLUE_SIZE, SDL_GL_ALPHA_SIZE, SDL_GL_BUFFER_SIZE,
-    SDL_GL_DOUBLEBUFFER, SDL_GL_DEPTH_SIZE, SDL_GL_STENCIL_SIZE
+    SDL_GL_DOUBLEBUFFER, SDL_GL_DEPTH_SIZE, SDL_GL_STENCIL_SIZE, SDL_GL_ACCUM_RED_SIZE, SDL_GL_ACCUM_GREEN_SIZE,
+    SDL_GL_ACCUM_BLUE_SIZE, SDL_GL_ACCUM_ALPHA_SIZE, SDL_GL_STEREO, SDL_GL_MULTISAMPLEBUFFERS, SDL_GL_MULTISAMPLESAMPLES,
+    SDL_GL_ACCELERATED_VISUAL, SDL_GL_SWAP_CONTROL
 } SDL_GLattr;
 int SDL_GL_SetAttribute(SDL_GLattr attr, int value);
 int SDL_GL_GetAttribute(SDL_GLattr attr, int *value);
@@ -508,6 +582,13 @@ typedef struct SDL_JoyButtonEvent {
     Uint8 state;
 } SDL_JoyButtonEvent;
 
+typedef struct SDL_JoyHatEvent {
+    Uint8 type;
+    Uint8 which;
+    Uint8 hat;
+    Uint8 value;
+} SDL_JoyHatEvent;
+
 typedef struct SDL_ExposeEvent {
     Uint8 type;
 } SDL_ExposeEvent;
@@ -531,12 +612,26 @@ typedef union SDL_Event {
     SDL_MouseButtonEvent button;
     SDL_JoyAxisEvent jaxis;
     SDL_JoyButtonEvent jbutton;
+    SDL_JoyHatEvent jhat;
     SDL_ResizeEvent resize;
     SDL_ExposeEvent expose;
     SDL_QuitEvent quit;
 } SDL_Event;
 
 int SDL_PollEvent(SDL_Event *event);
+#define SDL_EVENTMASK(X) (1 << (X))
+#define SDL_ACTIVEEVENTMASK SDL_EVENTMASK(SDL_ACTIVEEVENT)
+#define SDL_KEYDOWNMASK SDL_EVENTMASK(SDL_KEYDOWN)
+#define SDL_KEYUPMASK SDL_EVENTMASK(SDL_KEYUP)
+#define SDL_KEYEVENTMASK (SDL_EVENTMASK(SDL_KEYDOWN) | SDL_EVENTMASK(SDL_KEYUP))
+#define SDL_MOUSEMOTIONMASK SDL_EVENTMASK(SDL_MOUSEMOTION)
+#define SDL_MOUSEBUTTONDOWNMASK SDL_EVENTMASK(SDL_MOUSEBUTTONDOWN)
+#define SDL_MOUSEBUTTONUPMASK SDL_EVENTMASK(SDL_MOUSEBUTTONUP)
+#define SDL_MOUSEEVENTMASK (SDL_EVENTMASK(SDL_MOUSEMOTION) | SDL_EVENTMASK(SDL_MOUSEBUTTONDOWN) | SDL_EVENTMASK(SDL_MOUSEBUTTONUP))
+#define SDL_QUITMASK SDL_EVENTMASK(SDL_QUIT)
+#define SDL_ALLEVENTS 0xFFFFFFFF
+typedef enum { SDL_ADDEVENT, SDL_PEEKEVENT, SDL_GETEVENT } SDL_eventaction;
+int SDL_PeepEvents(SDL_Event *events, int numevents, SDL_eventaction action, Uint32 mask);
 int SDL_WaitEvent(SDL_Event *event);
 int SDL_EnableUNICODE(int enable);
 int SDL_EnableKeyRepeat(int delay, int interval);
@@ -560,6 +655,22 @@ void SDL_JoystickClose(SDL_Joystick *joystick);
 Sint16 SDL_JoystickGetAxis(SDL_Joystick *joystick, int axis);
 Uint8 SDL_JoystickGetButton(SDL_Joystick *joystick, int button);
 const char *SDL_JoystickName(int device_index);
+int SDL_JoystickNumAxes(SDL_Joystick *joystick);
+int SDL_JoystickNumBalls(SDL_Joystick *joystick);
+int SDL_JoystickNumHats(SDL_Joystick *joystick);
+int SDL_JoystickNumButtons(SDL_Joystick *joystick);
+Uint8 SDL_JoystickGetHat(SDL_Joystick *joystick, int hat);
+void SDL_JoystickUpdate(void);
+int SDL_JoystickEventState(int state);
+#define SDL_HAT_CENTERED  0x00
+#define SDL_HAT_UP        0x01
+#define SDL_HAT_RIGHT     0x02
+#define SDL_HAT_DOWN      0x04
+#define SDL_HAT_LEFT      0x08
+#define SDL_HAT_RIGHTUP   (SDL_HAT_RIGHT | SDL_HAT_UP)
+#define SDL_HAT_RIGHTDOWN (SDL_HAT_RIGHT | SDL_HAT_DOWN)
+#define SDL_HAT_LEFTUP    (SDL_HAT_LEFT | SDL_HAT_UP)
+#define SDL_HAT_LEFTDOWN  (SDL_HAT_LEFT | SDL_HAT_DOWN)
 
 void SDL_LockAudio(void);
 void SDL_UnlockAudio(void);
@@ -584,4 +695,8 @@ export const SDL12_HEADERS = {
   'SDL/SDL_syswm.h': SDL_SYSWM_12,
   'SDL_image.h': SDL_IMAGE_12,
   'SDL/SDL_image.h': SDL_IMAGE_12,
+  // SDL 1.2's is GL/gl.h and GL/glu.h, then its own copy of glext.h unless NO_SDL_GLEXT: PRISM's
+  // glext.h is that copy (DOSBox's sdlmain.cpp names the ARB buffer objects through it).
+  'SDL_opengl.h': '#include <GL/gl.h>\n#include <GL/glu.h>\n#ifndef NO_SDL_GLEXT\n#include <GL/glext.h>\n#endif\n',
+  'SDL/SDL_opengl.h': '#include <GL/gl.h>\n#include <GL/glu.h>\n#ifndef NO_SDL_GLEXT\n#include <GL/glext.h>\n#endif\n',
 };

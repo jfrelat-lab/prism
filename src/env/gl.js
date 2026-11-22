@@ -2567,6 +2567,8 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glNewList: (n, mode) => { s.recording = []; s.recordMode = mode; s.recordingId = n; },
     glEndList: () => { s.lists.set(s.recordingId, s.recording); s.recording = null; },
     glDeleteLists: (n, range) => { for (let k = 0; k < range; k++) s.lists.delete(n + k); },
+    // A name is a list once glEndList has stored it (GL 1.1: a name glGenLists returned is not yet one).
+    glIsList: (n) => (s.lists.has(n >>> 0) ? 1 : 0),
     glGetString: (name) => {
       // GL_PROGRAM_ERROR_STRING_ARB changes with every program loaded: interned anew
       if (name === 0x8874) return M.mod.intern([...new TextEncoder().encode(arb.errorString()), 0]);
@@ -3818,7 +3820,7 @@ export function glBuiltins(T) {
     glDeleteTextures: f(V, I, P), glGenTextures: f(V, I, P), glGetError: f(U),
     glRenderMode: f(I, U), glSelectBuffer: f(V, I, P), glFeedbackBuffer: f(V, I, U, P),
     glInitNames: f(V), glLoadName: f(V, U), glPushName: f(V, U), glPopName: f(V), glPassThrough: f(V, F),
-    glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I),
+    glGenLists: f(U, I), glNewList: f(V, U, U), glEndList: f(V), glCallList: f(V, U), glDeleteLists: f(V, U, I), glIsList: f(T.UCHAR, U),
     glGetString: f(P, U), glFinish: f(V), glFlush: f(V),
   };
 }

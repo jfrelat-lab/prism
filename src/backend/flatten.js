@@ -166,7 +166,18 @@ function uniquifyLocals(body) {
 
   const clone = (node) => {
     if (Array.isArray(node)) return node.map(clone);
-    if (!node || typeof node !== 'object' || typeof node.n !== 'string') return node;
+    if (!node || typeof node !== 'object') return node;
+    /*
+     * An initialiser list's items are plain { value, designators } objects, not nodes: their names are
+     * renamed too -- DOSBox's core_full has `static Bit32u *SIBIndex[8] = { ..., &SIBZero, ... }` in a
+     * block, and &SIBZero kept the old name of the renamed SIBZero. Only those: any other plain object (a type, a symbol) is kept as it is.
+     */
+    if (typeof node.n !== 'string') {
+      if (!('value' in node) || node.k !== undefined) return node;
+      const out = {};
+      for (const k of Object.keys(node)) out[k] = clone(node[k]);
+      return out;
+    }
 
     if (node.n === 'block') {
       stack.push(new Map());

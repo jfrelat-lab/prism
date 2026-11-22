@@ -1359,6 +1359,26 @@ typedef void (*PFNGLGENBUFFERSARBPROC)(GLsizei n, GLuint *buffers);
 typedef GLboolean (*PFNGLISBUFFERARBPROC)(GLuint buffer);
 typedef void (*PFNGLBUFFERDATAARBPROC)(GLenum target, GLsizeiptrARB size, const void *data, GLenum usage);
 typedef void (*PFNGLBUFFERSUBDATAARBPROC)(GLenum target, GLintptrARB offset, GLsizeiptrARB size, const void *data);
+/* the rest of the extension: mapping (DOSBox's sdlmain.cpp names glMapBufferARB for its pixel buffer), queries */
+#define GL_STREAM_READ_ARB 0x88E1
+#define GL_STREAM_COPY_ARB 0x88E2
+#define GL_STATIC_READ_ARB 0x88E5
+#define GL_STATIC_COPY_ARB 0x88E6
+#define GL_DYNAMIC_READ_ARB 0x88E9
+#define GL_DYNAMIC_COPY_ARB 0x88EA
+#define GL_READ_ONLY_ARB 0x88B8
+#define GL_WRITE_ONLY_ARB 0x88B9
+#define GL_READ_WRITE_ARB 0x88BA
+#define GL_BUFFER_SIZE_ARB 0x8764
+#define GL_BUFFER_USAGE_ARB 0x8765
+#define GL_BUFFER_ACCESS_ARB 0x88BB
+#define GL_BUFFER_MAPPED_ARB 0x88BC
+#define GL_BUFFER_MAP_POINTER_ARB 0x88BD
+typedef void (*PFNGLGETBUFFERSUBDATAARBPROC)(GLenum target, GLintptrARB offset, GLsizeiptrARB size, void *data);
+typedef void *(*PFNGLMAPBUFFERARBPROC)(GLenum target, GLenum access);
+typedef GLboolean (*PFNGLUNMAPBUFFERARBPROC)(GLenum target);
+typedef void (*PFNGLGETBUFFERPARAMETERIVARBPROC)(GLenum target, GLenum pname, GLint *params);
+typedef void (*PFNGLGETBUFFERPOINTERVARBPROC)(GLenum target, GLenum pname, void **params);
 #ifdef GL_GLEXT_PROTOTYPES
 void glBindBufferARB(GLenum target, GLuint buffer);
 void glDeleteBuffersARB(GLsizei n, const GLuint *buffers);
@@ -1476,6 +1496,32 @@ void glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GLboolean n
 void glEnableVertexAttribArrayARB(GLuint index);
 void glDisableVertexAttribArrayARB(GLuint index);
 void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+#endif
+/* DOSBox's output=opengl: a BGRA texture of 8_8_8_8_REV texels, a pixel unpack buffer mapped write-only */
+#ifndef GL_EXT_bgra
+#define GL_EXT_bgra 1
+#define GL_BGR_EXT 0x80E0
+#define GL_BGRA_EXT 0x80E1
+#endif
+#ifndef GL_UNSIGNED_INT_8_8_8_8_REV
+#define GL_UNSIGNED_BYTE_3_3_2 0x8032
+#define GL_UNSIGNED_SHORT_4_4_4_4 0x8033
+#define GL_UNSIGNED_SHORT_5_5_5_1 0x8034
+#define GL_UNSIGNED_INT_8_8_8_8 0x8035
+#define GL_UNSIGNED_INT_10_10_10_2 0x8036
+#define GL_UNSIGNED_INT_8_8_8_8_REV 0x8367
+#endif
+#ifndef GL_READ_ONLY
+#define GL_READ_ONLY 0x88B8
+#define GL_WRITE_ONLY 0x88B9
+#define GL_READ_WRITE 0x88BA
+#endif
+#ifndef GL_EXT_pixel_buffer_object
+#define GL_EXT_pixel_buffer_object 1
+#define GL_PIXEL_PACK_BUFFER_EXT 0x88EB
+#define GL_PIXEL_UNPACK_BUFFER_EXT 0x88EC
+#define GL_PIXEL_PACK_BUFFER_BINDING_EXT 0x88ED
+#define GL_PIXEL_UNPACK_BUFFER_BINDING_EXT 0x88EF
 #endif
 #endif
 `;

@@ -649,7 +649,11 @@ export const exprMethods = {
       let ok = true;
       if (obj && f.cls && !f.isStatic && !f.isCtor) {
         if (obj.t.c && !f.type.thisConst) continue;
-        ranks.push(f.type.thisConst && !obj.t.c ? QUAL : EXACT);
+        // The implicit object is converted as an argument is (13.3.1/4): from a derived class, a
+        // derived-to-base conversion -- t << "A" on an ostringstream takes the free operator<<(ostream&,
+        // const char*), not basic_ostream's member operator<<(const void *).
+        const hops = obj.t.k === 'class' && obj.t.cls !== f.cls ? (this.derivedPath(obj.t.cls, f.cls)?.length ?? 0) : 0;
+        ranks.push((hops ? CONV + hops * HOP : EXACT) + (f.type.thisConst && !obj.t.c ? QUAL : 0));
       } else ranks.push(EXACT);
       for (let i = 0; i < args.length; i++) {
         if (i >= P.length) { ranks.push(ELLIPSIS); convs.push({ gen: () => this.variadicArg(args[i], cx) }); continue; }
@@ -1186,6 +1190,9 @@ export const exprMethods = {
           const ft = ent.templates[0];
           const f = this.instantiateFunction(ft, targs.map((a) => this.templateArg(a, cx.env, n)), n);
           if (!(f.cls && !f.isStatic)) { this.use(f); return { c: f.cname, t: f.type, lv: true, funcs: [f], owner: r.owner, qualified: r.qualified }; }
+          // A non-static member's instance: one function, which & makes a pointer to member
+          // (DOSBox's dbopl.cpp: &Operator::TemplateVolume< Operator::OFF >) and a call reaches through this.
+          return { funcs: [f], owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false };
         }
         if (ent.templates?.length) return { funcs: ent.list, templates: ent.templates, targs, owner: r.owner, qualified: r.qualified, t: T.VOID, c: '', lv: false, env: cx.env, node: n };
         // A function named without being called: its address, when it is not overloaded.
@@ -1762,24 +1769,26 @@ export const exprMethods = {
       if (ctor) this.use(ctor);
       if (dtor) this.use(dtor);
       const st = this.ct({ k: 'class', cls });
-      const cx = { env: cls.env, fn: null, pending: [] };
-      const extra = ctor ? this.defaultArgsStatic(ctor) : [];
-      void cx;
+      /*
+       * The default constructor's default arguments, evaluated for each element in a function context
+       * of the helper's own: std::list's is `const allocator_type& = allocator_type()`, a temporary that
+       * needs a place (DOSBox's sdl_mapper.cpp: new CBindList[_keys]) and is destroyed after its call.
+       */
+      const fn = { f: { name: '<new[]>', type: T.func(T.VOID, []), display: `new ${cls.name}[]` }, temps: [], ntemp: 0, cleanups: [{ vars: [], kind: 'fn' }] };
+      const cx = { env: cls.env ?? { scope: this.global, cls: null, bind: null }, fn, pending: [], node: cls.node };
+      const made = ctor ? this.full(null, cx, (_m, c) => this.defaultArgs(ctor, 0, c)) : { e: [], after: [] };
+      const extra = made.e;
+      const after = [].concat(made.after ?? []).filter(Boolean).join(' ');
+      const temps = fn.temps.length ? `  ${fn.temps.join(' ')}\n` : '';
       this.out.protos.push(`static ${st} *${nw}(unsigned int n);`, `static void ${dl}(${st} *p);`);
       this.out.bodies.push(
-        `static ${st} *${nw}(unsigned int n) {\n  unsigned int *h = (unsigned int *)malloc(8 + n * sizeof(${st}));\n  ${st} *p = (${st} *)(h + 2);\n  unsigned int i;\n  h[0] = n;\n`
-        + `${ctor ? `  for (i = 0; i < n; i++) ${ctor.cname}(${['&p[i]', ...extra].join(', ')});\n` : ''}  return p;\n}`,
+        `static ${st} *${nw}(unsigned int n) {\n  unsigned int *h = (unsigned int *)malloc(8 + n * sizeof(${st}));\n  ${st} *p = (${st} *)(h + 2);\n  unsigned int i;\n${temps}  h[0] = n;\n`
+        + `${ctor ? `  for (i = 0; i < n; i++) { ${ctor.cname}(${['&p[i]', ...extra].join(', ')}); ${after} }\n` : ''}  return p;\n}`,
         `static void ${dl}(${st} *p) {\n  unsigned int *h, i;\n  if (!p) return;\n  h = (unsigned int *)p - 2;\n`
         + `${dtor ? `  for (i = h[0]; i > 0; i--) ${dtor.cname}(&p[i - 1]);\n` : ''}  free((void *)h);\n}`,
       );
     }
     return which === 'new' ? nw : dl;
   },
-  /** A default constructor's own default arguments, where they are constants (no function context). */
-  defaultArgsStatic(f) {
-    return f.params.map((p, i) => {
-      const cx = { env: p.env ?? { scope: this.global, cls: f.cls, bind: f.cls?.bind ?? null }, fn: null, pending: [], constOnly: true };
-      return this.coerce(this.expr(p.def, cx), f.type.params[i], cx, f.node, 'default argument');
-    });
-  },
+
 };

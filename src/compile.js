@@ -134,6 +134,9 @@ export const BUILTINS = new Map(Object.entries({
   fseek: { ret: I, params: [P, I, I] },
   ftell: { ret: I, params: [P] },
   fgetpos: { ret: I, params: [P, P] }, fsetpos: { ret: I, params: [P, P] },
+  // <sys/resource.h> (runtime.js): one process, so a priority is granted and a limit is none
+  getpriority: { ret: I, params: [I, U] }, setpriority: { ret: I, params: [I, U, I] },
+  getrlimit: { ret: I, params: [I, P] }, setrlimit: { ret: I, params: [I, P] },
   rewind: { ret: V, params: [P] },
   fgetc: { ret: I, params: [P] },
   getc: { ret: I, params: [P] },

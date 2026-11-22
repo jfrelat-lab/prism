@@ -700,6 +700,71 @@ export function installSDL12(M, { onPresent = null, onPalette = null, keyboard =
     SDL_JoystickGetAxis: () => 0,
     SDL_JoystickGetButton: () => 0,
     SDL_JoystickName: () => noError,
+    SDL_JoystickNumAxes: () => 0, SDL_JoystickNumBalls: () => 0, SDL_JoystickNumHats: () => 0, SDL_JoystickNumButtons: () => 0,
+    SDL_JoystickGetHat: () => 0,
+    SDL_JoystickUpdate: () => {},
+    // SDL_QUERY (-1) asks; anything else is the new state, which SDL answers back.
+    SDL_JoystickEventState: (st) => ((st | 0) === -1 ? (state.joyEvents ?? 0) : (state.joyEvents = st | 0)),
+
+    /*
+     * SDL_PeepEvents over the one queue that can be looked into without being consumed, the mouse's.
+     * The keyboard arrives one event at a time (state.keyboard.next) and there are no window events
+     * (SDL_ACTIVEEVENT, which DOSBox peeks for): those never match. SDL_ADDEVENT is refused.
+     */
+    SDL_PeepEvents: (evs, n, action, mask) => {
+      gatherMouse();
+      if ((action | 0) === 0) { state.setError('SDL_PeepEvents: adding events is not supported'); return -1; }
+      const d = dv();
+      let got = 0;
+      for (let i = 0; i < queue.length && got < (n | 0);) {
+        const m = queue[i];
+        if (!(((1 << m.type) >>> 0) & (mask >>> 0))) { i++; continue; }
+        const ev = evs + got * E_SIZE;
+        M.u8.fill(0, ev, ev + E_SIZE);
+        d.setUint8(ev + E_TYPE, m.type);
+        if (m.type === SDL_MOUSEMOTION) {
+          d.setUint8(ev + E_MOTION_STATE, m.held);
+          d.setUint16(ev + E_MOTION_X, m.x, true); d.setUint16(ev + E_MOTION_Y, m.y, true);
+          d.setInt16(ev + E_MOTION_XREL, m.xrel, true); d.setInt16(ev + E_MOTION_YREL, m.yrel, true);
+        } else {
+          d.setUint8(ev + E_BTN_BUTTON, m.button);
+          d.setUint8(ev + E_BTN_STATE, m.type === SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED);
+          d.setUint16(ev + E_BTN_X, m.x, true); d.setUint16(ev + E_BTN_Y, m.y, true);
+        }
+        got++;
+        if ((action | 0) === 2) queue.splice(i, 1); else i++;
+      }
+      return got;
+    },
+
+    // SDL_SetPalette: the logical and the physical palette are one here, as on a display without a
+    // separate hardware one, so both flags do what SDL_SetColors does.
+    SDL_SetPalette: (s, _flags, colors, first, n) => api.SDL_SetColors(s, colors, first, n),
+
+    /*
+     * SDL_GetVideoInfo: no hardware surfaces or blits, the desktop's size (the display's, or the
+     * window's once a mode is set; 640 x 480 before either), a 32-bit format.
+     */
+    SDL_GetVideoInfo: () => {
+      const d = dv();
+      if (!state.videoInfo) {
+        state.videoInfo = M.rt.malloc(20);
+        M.u8.fill(0, state.videoInfo, state.videoInfo + 20);
+        state.videoInfoFormat = surfaceFormat(makeSurface(1, 1, 32));
+      }
+      const vi = state.videoInfo;
+      d.setUint32(vi + 4, 0, true);
+      d.setUint32(vi + 8, state.videoInfoFormat, true);
+      d.setInt32(vi + 12, state.desktop?.w ?? (state.surface ? d.getInt32(state.surface + S_W, true) : 640), true);
+      d.setInt32(vi + 16, state.desktop?.h ?? (state.surface ? d.getInt32(state.surface + S_H, true) : 480), true);
+      return vi;
+    },
+    SDL_VideoDriverName: (buf, max) => { const t = 'prism'; if (!buf || (max | 0) <= 0) return 0; const k = Math.min(t.length, (max | 0) - 1); for (let i = 0; i < k; i++) M.u8[buf + i] = t.charCodeAt(i); M.u8[buf + k] = 0; return buf; },
+
+    // YUV overlays: none here. DOSBox's output=overlay then falls back to a surface, as on a display without them.
+    SDL_CreateYUVOverlay: () => { state.setError('SDL_CreateYUVOverlay: no YUV overlays'); return 0; },
+    SDL_LockYUVOverlay: () => -1, SDL_UnlockYUVOverlay: () => {}, SDL_DisplayYUVOverlay: () => -1, SDL_FreeYUVOverlay: () => {},
+    SDL_QuitSubSystem: () => {},
 
     /*
      * ---- audio ----------------------------------------------------------------------------
@@ -901,6 +966,12 @@ export function sdl12Builtins(T) {
     SDL_JoystickClose: f(V, P),
     SDL_JoystickGetAxis: f(S, P, I),
     SDL_JoystickGetButton: f(B, P, I),
+    SDL_JoystickNumAxes: f(I, P), SDL_JoystickNumBalls: f(I, P), SDL_JoystickNumHats: f(I, P), SDL_JoystickNumButtons: f(I, P),
+    SDL_JoystickGetHat: f(B, P, I), SDL_JoystickUpdate: f(V), SDL_JoystickEventState: f(I, I),
+    SDL_PeepEvents: f(I, P, I, I, U), SDL_SetPalette: f(I, P, I, P, I, I),
+    SDL_GetVideoInfo: f(P), SDL_VideoDriverName: f(P, P, I),
+    SDL_CreateYUVOverlay: f(P, I, I, U, P), SDL_LockYUVOverlay: f(I, P), SDL_UnlockYUVOverlay: f(V, P),
+    SDL_DisplayYUVOverlay: f(I, P, P), SDL_FreeYUVOverlay: f(V, P), SDL_QuitSubSystem: f(V, U),
 
     SDL_LockAudio: f(V),
     SDL_UnlockAudio: f(V),

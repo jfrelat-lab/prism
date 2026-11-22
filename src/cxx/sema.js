@@ -1126,7 +1126,8 @@ export class Sema {
   mangleName(name, cls, type, conv, ns = null) {
     let n;
     if (conv) n = `cv${T.mangle(conv)}`;
-    else if (name.startsWith('operator')) n = OP_CODE[name.slice(8)] ?? this.fail(`operator ${name.slice(8)}`);
+    // An operator's name is `operator` and a symbol, or new/delete -- not DOSBox's operator_advance.
+    else if (name.startsWith('operator') && (Object.hasOwn(OP_CODE, name.slice(8)) || !/^[A-Za-z0-9_]/.test(name.slice(8)))) n = OP_CODE[name.slice(8)] ?? this.fail(`operator ${name.slice(8)}`);
     else if (cls && name === '<ctor>') n = 'C1';
     else if (cls && name === '<dtor>') n = 'D1';
     else n = `${name.length}${name}`;

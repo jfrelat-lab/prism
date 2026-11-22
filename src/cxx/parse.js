@@ -698,12 +698,27 @@ class CxxParser {
   declareMemberTypesAhead(scope) {
     const ts = this.ts;
     let depth = 0, i = this.i, stmt = [];
+    // The class a member declaration defines, when its declarator then takes the same name -- `struct
+    // ansi { ... } ansi;` in DOSBox's device_CON: in the class the name is the member, in bodies above it too.
+    let defined = null;
     for (; i < ts.length; i++) {
       const t = ts[i];
-      if (t.k === PUNCT && t.v === '{') { if (depth === 0 && stmt.length) this.typeNameIn(stmt, scope, true); depth++; continue; }
+      if (t.k === PUNCT && t.v === '{') {
+        if (depth === 0 && stmt.length) {
+          this.typeNameIn(stmt, scope, true);
+          const k = stmt.findIndex((x) => x.k === ID && ['struct', 'class', 'union'].includes(x.v));
+          defined = k >= 0 && stmt[k + 1]?.k === ID ? stmt[k + 1].v : null;
+        }
+        depth++;
+        continue;
+      }
       if (t.k === PUNCT && t.v === '}') { if (depth === 0) break; depth--; if (depth === 0) stmt = []; continue; }
       if (depth > 0) continue;
-      if (t.k === PUNCT && t.v === ';') { this.typeNameIn(stmt, scope, false); stmt = []; continue; }
+      if (t.k === PUNCT && t.v === ';') {
+        if (defined && stmt.some((x) => x.k === ID && x.v === defined)) scope.set(defined, 'var');
+        defined = null;
+        this.typeNameIn(stmt, scope, false); stmt = []; continue;
+      }
       stmt.push(t);
     }
   }
@@ -792,7 +807,10 @@ class CxxParser {
         // A data member is a name of its class's scope whatever the name means NOW: Abuse's dev.c
         // includes dev.hpp, whose dev_controll has a member `pmenu`, before pmenu.hpp declares class
         // pmenu -- and `if (pmenu)` in a member function defined after both is the member.
-        if (member ? !this.scope.names.has(d.name.parts[0].name) : (k === 'type' || k === 'template')) this.scope.set(d.name.parts[0].name, 'var');
+        // ...and over the class its own declaration defines: DOSBox's device_CON has `struct ansi { ... } ansi;`.
+        const ownName = specs.type?.k === 'class' ? specs.type.name : specs.type?.k === 'named' && specs.type.qname.parts.length === 1 ? specs.type.qname.parts[0].name : null;
+        const ownClass = ownName === d.name.parts[0].name;
+        if (member ? (ownClass || !this.scope.names.has(d.name.parts[0].name)) : (k === 'type' || k === 'template')) this.scope.set(d.name.parts[0].name, 'var');
       }
       if (specs.storage === 'typedef' && d.name) {
         const tname = d.name.parts[d.name.parts.length - 1].name;

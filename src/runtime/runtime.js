@@ -1028,6 +1028,11 @@ function makeLibc(M) {
     // The single-threaded program's mutexes (see compile.js): glibc's libc stubs, which succeed and do nothing.
     pthread_mutex_init: () => 0, pthread_mutex_destroy: () => 0, pthread_mutex_lock: () => 0,
     pthread_mutex_trylock: () => 0, pthread_mutex_unlock: () => 0,
+    // One process: its priority is whatever it asks (0 to start), and no limit applies (RLIM_INFINITY).
+    getpriority: () => (M.__nice ?? 0),
+    setpriority: (_w, _who, p) => { M.__nice = p | 0; return 0; },
+    getrlimit: (_r, p) => { M.mod.dv.setUint32(p, 0xffffffff, true); M.mod.dv.setUint32(p + 4, 0xffffffff, true); return 0; },
+    setrlimit: () => 0,
     strcoll: (a, b) => lib.strcmp(a, b),
     strncat: (d, s, n) => {
       const e = d + strlenAt(d);
