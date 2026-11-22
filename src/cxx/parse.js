@@ -567,11 +567,19 @@ class CxxParser {
     return r.names[r.names.length - 1] === r.names[r.names.length - 2];
   }
 
+  /** Past `__attribute__((...))`; the names written in it (`packed`, `__packed__` as `packed`). */
   skipAttribute() {
     this.next();
     this.expectP('(');
     let depth = 1;
-    while (depth && !this.done) { const t = this.next(); if (t.k === PUNCT && t.v === '(') depth++; if (t.k === PUNCT && t.v === ')') depth--; }
+    const names = [];
+    while (depth && !this.done) {
+      const t = this.next();
+      if (t.k === PUNCT && t.v === '(') depth++;
+      if (t.k === PUNCT && t.v === ')') depth--;
+      if (t.k === ID && depth === 2) names.push(t.v.replace(/^__(.*)__$/, '$1'));
+    }
+    return names;
   }
 
   enumSpecifier() {
@@ -599,7 +607,10 @@ class CxxParser {
   classSpecifier() {
     const key = this.next().v;
     const loc = this.loc();
-    while (this.isKw('__attribute__')) this.skipAttribute();
+    // gcc's packed, before the name or after the body (`struct sPSP { ... } GCC_ATTRIBUTE(packed);`, all
+    // of DOSBox's DOS structures): laid out as #pragma pack(1) lays it out.
+    let packed = false;
+    while (this.isKw('__attribute__')) packed = this.skipAttribute().includes('packed') || packed;
     let name = null, owner = null, ownerScope = null;
     // An elaborated name may be qualified: `friend class Common::Singleton<NewGui>;` -- and so may a
     // nested class defined outside its class: `struct ScummNESFile::Resource { ... };`.
@@ -685,7 +696,9 @@ class CxxParser {
       }
     } finally { this.scope = saved; }
     this.expectP('}');
-    return { k: 'class', key, name, bases, members, loc, cLinkage: this.cLinkage(this.ts[this.i - 1]), pack: this.pack ?? null, ...(owner ? { owner } : {}), ...(specArgs ? { specArgs } : {}) };
+    const cLinkage = this.cLinkage(this.ts[this.i - 1]);
+    while (this.isKw('__attribute__')) packed = this.skipAttribute().includes('packed') || packed;
+    return { k: 'class', key, name, bases, members, loc, cLinkage, pack: packed ? 1 : this.pack ?? null, ...(owner ? { owner } : {}), ...(specArgs ? { specArgs } : {}) };
   }
 
   /**

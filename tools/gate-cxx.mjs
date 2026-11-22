@@ -2184,6 +2184,14 @@ int main() {
   return 0;
 }
 `);
+// __attribute__((packed)) before a class name and after its body: no padding (DOSBox's DOS structures)
+C('packed-attribute', `#include <stdio.h>
+#include <stddef.h>
+struct A { unsigned char a; unsigned short b; unsigned int c; } __attribute__((packed));
+struct B { unsigned char a; unsigned short b; unsigned int c; };
+struct __attribute__((packed)) C2 { unsigned char a; unsigned int c; };
+int main() { printf("%d %d %d %d %d\\n", (int)sizeof(A), (int)offsetof(A, c), (int)sizeof(B), (int)sizeof(C2), (int)offsetof(C2, c)); return 0; }
+`);
 
 const active = cases.filter((c) => !FILTER || c.name.includes(FILTER));
 console.log(version());
