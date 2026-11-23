@@ -109,7 +109,9 @@
  *                 and a glBitmap read from a bit offset, then the store reset as a mipmap chain does
  *   list-arrays   glDrawElements, glDrawArrays and glArrayElement compiled into display lists, with
  *                 glScaled; the arrays rewritten and scaled before the lists are called, which must
- *                 draw what the arrays held when they were compiled (GL 1.1 5.4)
+ *                 draw what the arrays held when they were compiled (GL 1.1 5.4); and one list that
+ *                 sets its own pointers and client state while it is compiled, as PLIB does: those
+ *                 are never compiled, they run at once
  *   client-state  glIsEnabled on the client arrays: one square an answer, white for 1 -- the texture
  *                 coordinate array as the client unit's, through a client attribute push and pop
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
@@ -889,7 +891,7 @@ static void display(void) {
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "list-arrays")) {
-    static GLfloat v[8][2], c[8][3];
+    static GLfloat v[8][2], c[8][3], w[3][2] = { { 120, 200 }, { 180, 200 }, { 150, 235 } }, wc[3][4] = { { 1, 1, 0, 1 }, { 0, 1, 1, 1 }, { 1, 0.5f, 0, 1 } };
     static const GLubyte idx[6] = { 0, 1, 2, 2, 3, 0 };
     GLuint base;
     for (int i = 0; i < 4; i++) {
@@ -903,7 +905,7 @@ static void display(void) {
     glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D);
     glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
     glVertexPointer(2, GL_FLOAT, 0, v); glColorPointer(3, GL_FLOAT, 0, c);
-    base = glGenLists(3);
+    base = glGenLists(4);
     glNewList(base, GL_COMPILE); glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, idx); glEndList();
     /* a fan, not GL_QUADS: which diagonal a quad is cut along is the implementation's (Mesa cuts a
        quad compiled into a list along 1-3 and one drawn at once along 0-2), and this scene is about
@@ -914,12 +916,22 @@ static void display(void) {
     glBegin(GL_TRIANGLES); glArrayElement(0); glArrayElement(1); glArrayElement(2); glEnd();
     glPopMatrix();
     glEndList();
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    glNewList(base + 3, GL_COMPILE);
+    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, w); glColorPointer(4, GL_FLOAT, 0, wc);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glPopClientAttrib();
+    glEndList();
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, v); glColorPointer(3, GL_FLOAT, 0, c);
     /* what the lists must not see: new positions and colours, a scale */
     for (int i = 0; i < 8; i++) { v[i][0] = 300; v[i][1] = 5; c[i][0] = c[i][1] = c[i][2] = 0; }
     glScaled(1.0, 1.0, 1.0);
-    glCallList(base); glCallList(base + 1); glCallList(base + 2);
+    glCallList(base); glCallList(base + 1); glCallList(base + 2); glCallList(base + 3);
     glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
-    glDeleteLists(base, 3);
+    glDeleteLists(base, 4);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "unpack-rows")) {

@@ -2561,11 +2561,21 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glDrawArrays: ([mode, first, count]) => [['glBegin', [mode]], ...Array.from({ length: count }, (_, i) => snapElement(first + i)), ['__listEndArrays', []]],
     glDrawElements: ([mode, count, type, ptr]) => [['glBegin', [mode]], ...indicesOf(count, type, ptr).map(snapElement), ['__listEndArrays', []]],
   };
+  /*
+   * What is never compiled into a list (GL 1.1, 5.4, and the extensions' own lists): it runs at once,
+   * inside glNewList(GL_COMPILE) too -- the client's array state and pointers, the client attribute
+   * stack, pixel storage, reading back (Get, Is, ReadPixels), names (GenLists, GenTextures), feedback
+   * and selection, Flush and Finish, buffer objects. Recorded instead, a model PLIB compiles into a
+   * list after setting its pointers there was read from the previous ones (SuperTuxKart's white
+   * world), and a glGenTextures or glGetFloatv inside a list answered nothing.
+   */
+  const NOT_COMPILED = /^gl(\w*Pointer(ARB|EXT)?|EnableClientState|DisableClientState|PushClientAttrib|PopClientAttrib|ClientActiveTexture(ARB)?|PixelStore[if]|ReadPixels|Get\w*|Is\w*|GenLists|DeleteLists|FeedbackBuffer|SelectBuffer|RenderMode|GenTextures|DeleteTextures|AreTexturesResident|Flush|Finish|(Bind|Gen|Delete)Buffers?(ARB)?|Buffer(Sub)?Data(ARB)?|(Map|Unmap)Buffer(ARB)?|LockArraysEXT|UnlockArraysEXT|InterleavedArrays)$/;
   const api = {};
   for (const name of Object.keys(exec)) {
+    const compiled = !NOT_COMPILED.test(name);
     api[name] = (...a) => {
       if (ARRAYS[name]) a = ARRAYS[name](a);
-      if (s.recording) {
+      if (s.recording && compiled) {
         const deref = LIST_DEREF[name];
         if (deref) s.recording.push(...deref(a)); else s.recording.push([name, a]);
         if (s.recordMode !== COMPILE_AND_EXECUTE) return;
