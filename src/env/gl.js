@@ -2763,7 +2763,10 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     // glDrawElements: the enabled arrays, element by element, as if each index were glArrayElement.
     // The arrays' elements first..first+count-1, between a Begin and an End of the mode.
+    // Inside a list being compiled, recorded as what they draw (LIST_DEREF): these two are api's own,
+    // outside the wrapper that records exec's calls.
     glDrawArrays: (mode, first, count) => {
+      if (s.recording) { s.recording.push(...LIST_DEREF.glDrawArrays([mode, first, count])); if (s.recordMode !== COMPILE_AND_EXECUTE) return; }
       if (arb.active()) { arb.draw(mode, count, (i) => first + i); return; }
       if (gpuArrays(mode, count, (i) => first + i)) return;
       exec.glBegin(mode);
@@ -2771,6 +2774,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
       s.fromArrays = true; exec.glEnd(); s.fromArrays = false;
     },
     glDrawElements: (mode, count, type, ptr) => {
+      if (s.recording) { s.recording.push(...LIST_DEREF.glDrawElements([mode, count, type, ptr])); if (s.recordMode !== COMPILE_AND_EXECUTE) return; }
       if (s.elementBuffer) ptr += s.buffers.get(s.elementBuffer).ptr;
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
       if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);

@@ -112,6 +112,9 @@
  *                 draw what the arrays held when they were compiled (GL 1.1 5.4); and one list that
  *                 sets its own pointers and client state while it is compiled, as PLIB does: those
  *                 are never compiled, they run at once
+ *   plib-track    SuperTuxKart's race state, as MIRAGE captured it: COLOR_MATERIAL on both faces for
+ *                 ambient and diffuse, a white specular at shininess 0 then a black one, LIGHT0
+ *                 directional, alpha test, culling, a textured list made as PLIB makes it
  *   client-state  glIsEnabled on the client arrays: one square an answer, white for 1 -- the texture
  *                 coordinate array as the client unit's, through a client attribute push and pop
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
@@ -929,9 +932,54 @@ static void display(void) {
     /* what the lists must not see: new positions and colours, a scale */
     for (int i = 0; i < 8; i++) { v[i][0] = 300; v[i][1] = 5; c[i][0] = c[i][1] = c[i][2] = 0; }
     glScaled(1.0, 1.0, 1.0);
+    /* nothing a list drew while it was compiled may stand in for what it draws when called */
+    glClear(GL_COLOR_BUFFER_BIT);
     glCallList(base); glCallList(base + 1); glCallList(base + 2); glCallList(base + 3);
     glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
     glDeleteLists(base, 4);
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "plib-track")) {
+    static GLfloat v[4][3] = { { -1, 0, -2 }, { 1, 0, -2 }, { 1, 0, -6 }, { -1, 0, -6 } };
+    static GLfloat n[4][3] = { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 } };
+    static GLfloat t[4][2] = { { 0, 0 }, { 4, 0 }, { 4, 8 }, { 0, 8 } };
+    static const GLushort idx[6] = { 0, 1, 2, 0, 2, 3 };
+    static const GLfloat white[4] = { 1, 1, 1, 1 }, black[4] = { 0, 0, 0, 1 }, half[4] = { 0.5f, 0.5f, 0.5f, 1 };
+    static const GLfloat pos[4] = { 0.4f, 0.4f, 0.4f, 0 };
+    static GLubyte tex[8][8][3];
+    GLuint list, name;
+    for (int j = 0; j < 8; j++) for (int i = 0; i < 8; i++) { int on = (i + j) & 1; tex[j][i][0] = on ? 200 : 40; tex[j][i][1] = on ? 120 : 60; tex[j][i][2] = on ? 30 : 90; }
+    glGenTextures(1, &name); glBindTexture(GL_TEXTURE_2D, name);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 8, 8, 0, GL_RGB, GL_UNSIGNED_BYTE, tex);
+    glNewList(list = glGenLists(1), GL_COMPILE);
+    glColor4fv(white);
+    glPushClientAttrib(GL_CLIENT_VERTEX_ARRAY_BIT);
+    glEnableClientState(GL_NORMAL_ARRAY); glNormalPointer(GL_FLOAT, 0, n);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY); glTexCoordPointer(2, GL_FLOAT, 0, t);
+    glEnableClientState(GL_VERTEX_ARRAY); glVertexPointer(3, GL_FLOAT, 0, v);
+    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, idx);
+    glPopClientAttrib();
+    glEndList();
+    glEnable(GL_CULL_FACE); glDisable(GL_TEXTURE_2D); glDisable(GL_BLEND);
+    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 0);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, white); glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, black);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, white); glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, white);
+    glShadeModel(GL_SMOOTH); glAlphaFunc(GL_GREATER, 0.01f);
+    glEnable(GL_COLOR_MATERIAL); glEnable(GL_ALPHA_TEST); glEnable(GL_LIGHTING);
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glFrustum(-0.0384, 0.0384, -0.0267, 0.0267, 0.05, 1000);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity(); glTranslatef(0, -0.6f, 0);
+    glEnable(GL_LIGHT0);
+    glLightfv(GL_LIGHT0, GL_AMBIENT, half); glLightfv(GL_LIGHT0, GL_DIFFUSE, white); glLightfv(GL_LIGHT0, GL_SPECULAR, white);
+    glLightfv(GL_LIGHT0, GL_POSITION, pos);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, black);
+    glEnable(GL_TEXTURE_2D);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glCallList(list);
+    glDisable(GL_TEXTURE_2D); glDisable(GL_ALPHA_TEST); glDisable(GL_LIGHTING); glDisable(GL_COLOR_MATERIAL); glDisable(GL_CULL_FACE); glDisable(GL_LIGHT0);
+    glDeleteLists(list, 1); glDeleteTextures(1, &name);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "unpack-rows")) {
