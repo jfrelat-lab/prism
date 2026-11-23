@@ -2021,6 +2021,7 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     glVertex2d: (x, y) => vertex(Math.fround(x), Math.fround(y), 0),
     glVertex3d: (x, y, z) => vertex(Math.fround(x), Math.fround(y), Math.fround(z)),
     glTranslated: (x, y, z) => exec.glTranslatef(Math.fround(x), Math.fround(y), Math.fround(z)),
+    glScaled: (x, y, z) => exec.glScalef(Math.fround(x), Math.fround(y), Math.fround(z)),
     glRotated: (a, x, y, z) => exec.glRotatef(Math.fround(a), Math.fround(x), Math.fround(y), Math.fround(z)),
     glColor4dv: (v) => { s.colour = [v[0], v[1], v[2], v[3]]; },
     glVertex2dv: (v) => vertex(v[0], v[1], 0),
@@ -2520,11 +2521,55 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     const run = exec[name];
     exec[name] = (...a) => { gpuCache = null; return run(...a); };
   }
+  /*
+   * A display list keeps the ARRAYS' CONTENTS, not their pointers (GL 1.1, 5.4: glArrayElement,
+   * glDrawArrays and glDrawElements are dereferenced when the list is compiled). So a draw recorded
+   * into a list is recorded as what it draws: a Begin, each element as it reads now -- normal, colour,
+   * every unit's coordinates, the vertex -- and an End. SuperTuxKart's PLIB compiles its models so.
+   */
+  const snapElement = (i) => {
+    const { vertex: va, color: ca, tex: ta, normal: na } = s.arrays;
+    const e = {};
+    if (na.on) e.n = [arrayAt(na, i, 0, true), arrayAt(na, i, 1, true), arrayAt(na, i, 2, true)];
+    if (ca.on) e.c = [arrayAt(ca, i, 0, true), arrayAt(ca, i, 1, true), arrayAt(ca, i, 2, true), ca.size > 3 ? arrayAt(ca, i, 3, true) : 1];
+    if (ta.on) e.t = ta.size > 2 ? [arrayAt(ta, i, 0, false), arrayAt(ta, i, 1, false), arrayAt(ta, i, 2, false)] : [arrayAt(ta, i, 0, false), ta.size > 1 ? arrayAt(ta, i, 1, false) : 0];
+    for (let k = 1; k < UNITS; k++) {
+      const a = s.units[k].array;
+      if (a.on) (e.u ??= [])[k] = [arrayAt(a, i, 0, false), a.size > 1 ? arrayAt(a, i, 1, false) : 0, a.size > 2 ? arrayAt(a, i, 2, false) : 0, a.size > 3 ? arrayAt(a, i, 3, false) : 1];
+    }
+    if (va.on) e.v = [arrayAt(va, i, 0, false), arrayAt(va, i, 1, false), va.size > 2 ? arrayAt(va, i, 2, false) : 0];
+    return ['__listElement', [e]];
+  };
+  // ...replayed as glArrayElement would have done it then.
+  exec.__listElement = (e) => {
+    if (e.n) s.normal = e.n;
+    if (e.c) s.colour = e.c;
+    if (e.t) s.tex = e.t;
+    if (e.u) e.u.forEach((c, k) => { if (c) { const d = s.units[k].coord; d[0] = c[0]; d[1] = c[1]; d[2] = c[2]; d[3] = c[3]; } });
+    if (e.v) vertex(e.v[0], e.v[1], e.v[2]);
+  };
+  // The End of a recorded glDrawArrays or glDrawElements is one from arrays, as the draw's own is.
+  exec.__listEndArrays = () => { s.fromArrays = true; exec.glEnd(); s.fromArrays = false; };
+  const indicesOf = (count, type, ptr) => {
+    if (s.elementBuffer) ptr += s.buffers.get(s.elementBuffer).ptr;
+    const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
+    if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
+    return Array.from({ length: count }, (_, i) => (size === 4 ? dv().getUint32(ptr + 4 * i, true) : size === 2 ? dv().getUint16(ptr + 2 * i, true) : M.u8[ptr + i]));
+  };
+  const LIST_DEREF = {
+    glArrayElement: ([i]) => [snapElement(i)],
+    glDrawArrays: ([mode, first, count]) => [['glBegin', [mode]], ...Array.from({ length: count }, (_, i) => snapElement(first + i)), ['__listEndArrays', []]],
+    glDrawElements: ([mode, count, type, ptr]) => [['glBegin', [mode]], ...indicesOf(count, type, ptr).map(snapElement), ['__listEndArrays', []]],
+  };
   const api = {};
   for (const name of Object.keys(exec)) {
     api[name] = (...a) => {
       if (ARRAYS[name]) a = ARRAYS[name](a);
-      if (s.recording) { s.recording.push([name, a]); if (s.recordMode !== COMPILE_AND_EXECUTE) return; }
+      if (s.recording) {
+        const deref = LIST_DEREF[name];
+        if (deref) s.recording.push(...deref(a)); else s.recording.push([name, a]);
+        if (s.recordMode !== COMPILE_AND_EXECUTE) return;
+      }
       exec[name](...a);
     };
   }
@@ -2709,7 +2754,6 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     // glDrawElements: the enabled arrays, element by element, as if each index were glArrayElement.
     // The arrays' elements first..first+count-1, between a Begin and an End of the mode.
     glDrawArrays: (mode, first, count) => {
-      if (s.recording) throw new Error('gl: glDrawArrays inside a display list is not implemented');
       if (arb.active()) { arb.draw(mode, count, (i) => first + i); return; }
       if (gpuArrays(mode, count, (i) => first + i)) return;
       exec.glBegin(mode);
@@ -2718,7 +2762,6 @@ export function installGL(M, { onFrame = null, backend = 'soft', version = '1.1 
     },
     glDrawElements: (mode, count, type, ptr) => {
       if (s.elementBuffer) ptr += s.buffers.get(s.elementBuffer).ptr;
-      if (s.recording) throw new Error('gl: glDrawElements inside a display list is not implemented');
       const size = type === 0x1405 ? 4 : type === 0x1403 ? 2 : type === 0x1401 ? 1 : 0;
       if (!size) throw new Error(`gl: glDrawElements index type 0x${type.toString(16)}`);
       const indexAt = size === 4 ? (i) => dv().getUint32(ptr + 4 * i, true) : size === 2 ? (i) => dv().getUint16(ptr + 2 * i, true) : (i) => M.u8[ptr + i];
@@ -3772,7 +3815,7 @@ export function glBuiltins(T) {
     glMultMatrixf: f(V, P), glMultMatrixd: f(V, P), glLoadMatrixd: f(V, P), glTexCoord2d: f(V, D, D), glTexCoord2dv: f(V, P),
     glColor3dv: f(V, P), glColor4dv: f(V, P), glVertex2dv: f(V, P), glVertex3dv: f(V, P), glNormal3fv: f(V, P),
     glColor3d: f(V, D, D, D), glColor3ub: f(V, T.UCHAR, T.UCHAR, T.UCHAR), glVertex2i: f(V, I, I), glVertex2d: f(V, D, D), glVertex3d: f(V, D, D, D),
-    glTranslated: f(V, D, D, D), glRotated: f(V, D, D, D, D), glGetDoublev: f(V, U, P), glDrawArrays: f(V, U, I, I),
+    glTranslated: f(V, D, D, D), glScaled: f(V, D, D, D), glRotated: f(V, D, D, D, D), glGetDoublev: f(V, U, P), glDrawArrays: f(V, U, I, I),
     glBitmap: f(V, I, I, F, F, F, F, P), glRectf: f(V, F, F, F, F),
     glAccum: f(V, U, F), glClearAccum: f(V, F, F, F, F), glListBase: f(V, U), glCallLists: f(V, I, U, P), glLineStipple: f(V, I, T.USHORT), glPolygonStipple: f(V, P),
     glDrawPixels: f(V, I, I, U, U, P), glCopyPixels: f(V, I, I, I, I, U), glPixelZoom: f(V, F, F), glTexImage1D: f(V, U, I, I, I, I, U, U, P),

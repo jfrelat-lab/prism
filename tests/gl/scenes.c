@@ -107,6 +107,9 @@
  *   unpack-rows   GL_UNPACK_ROW_LENGTH, _SKIP_ROWS and _SKIP_PIXELS: textures cut out of one larger
  *                 client image (RGB bytes at alignment 1, floats, a glTexSubImage2D into the middle),
  *                 and a glBitmap read from a bit offset, then the store reset as a mipmap chain does
+ *   list-arrays   glDrawElements, glDrawArrays and glArrayElement compiled into display lists, with
+ *                 glScaled; the arrays rewritten and scaled before the lists are called, which must
+ *                 draw what the arrays held when they were compiled (GL 1.1 5.4)
  *   client-state  glIsEnabled on the client arrays: one square an answer, white for 1 -- the texture
  *                 coordinate array as the client unit's, through a client attribute push and pop
  *   rect-forms    glRect in all eight forms (f, i, s, d and their vectors), each its own rectangle
@@ -883,6 +886,40 @@ static void display(void) {
       if (q[k]) glColor3f(1, 1, 1); else glColor3f(0.2f, 0.1f, 0.1f);
       glRectf(x, y, x + 32, y + 40);
     }
+    glMatrixMode(GL_PROJECTION); glPopMatrix();
+    glMatrixMode(GL_MODELVIEW); glPopMatrix();
+  } else if (!strcmp(scene, "list-arrays")) {
+    static GLfloat v[8][2], c[8][3];
+    static const GLubyte idx[6] = { 0, 1, 2, 2, 3, 0 };
+    GLuint base;
+    for (int i = 0; i < 4; i++) {
+      v[i][0] = 20 + (i == 1 || i == 2) * 80; v[i][1] = 30 + (i >= 2) * 70;
+      v[4 + i][0] = v[i][0] + 150; v[4 + i][1] = v[i][1] + 90;
+      c[i][0] = i * 0.3f; c[i][1] = 1 - i * 0.25f; c[i][2] = 0.5f;
+      c[4 + i][0] = 1; c[4 + i][1] = i * 0.3f; c[4 + i][2] = 1 - i * 0.2f;
+    }
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, 320, 0, 240, -1, 1);
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+    glDisable(GL_DEPTH_TEST); glDisable(GL_TEXTURE_2D);
+    glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+    glVertexPointer(2, GL_FLOAT, 0, v); glColorPointer(3, GL_FLOAT, 0, c);
+    base = glGenLists(3);
+    glNewList(base, GL_COMPILE); glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_BYTE, idx); glEndList();
+    /* a fan, not GL_QUADS: which diagonal a quad is cut along is the implementation's (Mesa cuts a
+       quad compiled into a list along 1-3 and one drawn at once along 0-2), and this scene is about
+       what the list holds */
+    glNewList(base + 1, GL_COMPILE); glDrawArrays(GL_TRIANGLE_FAN, 4, 4); glEndList();
+    glNewList(base + 2, GL_COMPILE);
+    glPushMatrix(); glTranslatef(200, 10, 0); glScaled(0.5, 0.5, 1.0);
+    glBegin(GL_TRIANGLES); glArrayElement(0); glArrayElement(1); glArrayElement(2); glEnd();
+    glPopMatrix();
+    glEndList();
+    /* what the lists must not see: new positions and colours, a scale */
+    for (int i = 0; i < 8; i++) { v[i][0] = 300; v[i][1] = 5; c[i][0] = c[i][1] = c[i][2] = 0; }
+    glScaled(1.0, 1.0, 1.0);
+    glCallList(base); glCallList(base + 1); glCallList(base + 2);
+    glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+    glDeleteLists(base, 3);
     glMatrixMode(GL_PROJECTION); glPopMatrix();
     glMatrixMode(GL_MODELVIEW); glPopMatrix();
   } else if (!strcmp(scene, "unpack-rows")) {
