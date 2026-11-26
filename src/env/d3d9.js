@@ -61,7 +61,7 @@ const TARGET = { '2D': 'TEXTURE_2D', Cube: 'TEXTURE_CUBE_MAP', '3D': 'TEXTURE_3D
 
 // Render states (D3DRENDERSTATETYPE) and their defaults; the device's auto depth buffer sets ZENABLE.
 const RS = { ZENABLE: 7, FILLMODE: 8, SHADEMODE: 9, ZWRITEENABLE: 14, ALPHATESTENABLE: 15, SRCBLEND: 19, DESTBLEND: 20, CULLMODE: 22, ZFUNC: 23,
-  ALPHAREF: 24, ALPHAFUNC: 25, DITHERENABLE: 26, ALPHABLENDENABLE: 27, FOGENABLE: 28, SPECULARENABLE: 29, STENCILENABLE: 52, STENCILFAIL: 53, STENCILZFAIL: 54,
+  ALPHAREF: 24, ALPHAFUNC: 25, DITHERENABLE: 26, ALPHABLENDENABLE: 27, FOGENABLE: 28, SPECULARENABLE: 29, FOGCOLOR: 34, FOGTABLEMODE: 35, FOGSTART: 36, FOGEND: 37, FOGDENSITY: 38, RANGEFOGENABLE: 48, FOGVERTEXMODE: 140, STENCILENABLE: 52, STENCILFAIL: 53, STENCILZFAIL: 54,
   STENCILPASS: 55, STENCILFUNC: 56, STENCILREF: 57, STENCILMASK: 58, STENCILWRITEMASK: 59, TEXTUREFACTOR: 60, LIGHTING: 137, COLORWRITEENABLE: 168,
   BLENDOP: 171, SCISSORTESTENABLE: 174, SLOPESCALEDEPTHBIAS: 175, SRGBWRITEENABLE: 194, DEPTHBIAS: 195, SEPARATEALPHABLENDENABLE: 206,
   SRCBLENDALPHA: 207, DESTBLENDALPHA: 208, BLENDOPALPHA: 209, BLENDFACTOR: 193, POINTSIZE: 154, AMBIENT: 139, COLORVERTEX: 141, LOCALVIEWER: 142,
@@ -71,7 +71,7 @@ const RS_DEFAULT = { [RS.FILLMODE]: 3, [RS.SHADEMODE]: 2, [RS.ZWRITEENABLE]: 1, 
   [RS.ALPHAFUNC]: 8, [RS.DITHERENABLE]: 0, [RS.STENCILFAIL]: 1, [RS.STENCILZFAIL]: 1, [RS.STENCILPASS]: 1, [RS.STENCILFUNC]: 8, [RS.STENCILMASK]: 0xffffffff,
   [RS.STENCILWRITEMASK]: 0xffffffff, [RS.TEXTUREFACTOR]: 0xffffffff, [RS.LIGHTING]: 1, [RS.COLORWRITEENABLE]: 0xf, [RS.BLENDOP]: 1, [RS.SRCBLENDALPHA]: 2,
   [RS.DESTBLENDALPHA]: 1, [RS.BLENDOPALPHA]: 1, [RS.BLENDFACTOR]: 0xffffffff, [RS.COLORVERTEX]: 1, [RS.LOCALVIEWER]: 1, [RS.DIFFUSEMATERIALSOURCE]: 1,
-  [RS.SPECULARMATERIALSOURCE]: 2, [RS.CCW_STENCILFAIL]: 1, [RS.CCW_STENCILZFAIL]: 1, [RS.CCW_STENCILPASS]: 1, [RS.CCW_STENCILFUNC]: 8 };
+  [RS.SPECULARMATERIALSOURCE]: 2, [RS.FOGEND]: 0x3f800000, [RS.FOGDENSITY]: 0x3f800000, [RS.CCW_STENCILFAIL]: 1, [RS.CCW_STENCILZFAIL]: 1, [RS.CCW_STENCILPASS]: 1, [RS.CCW_STENCILFUNC]: 8 };
 // Texture stage states (D3DTEXTURESTAGESTATETYPE) the fixed function's pixel stage reads, and their defaults: stage 0
 // modulates its texture by the diffuse colour and takes the texture's alpha, the others are disabled.
 const TSS = { COLOROP: 1, COLORARG1: 2, COLORARG2: 3, ALPHAOP: 4, ALPHAARG1: 5, ALPHAARG2: 6, TEXCOORDINDEX: 11, TEXTURETRANSFORMFLAGS: 24 };
@@ -372,8 +372,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
     } else {
       if (!L.E.some((e) => e.usage === 'positiont')) fail(`FVF 0x${fvf.toString(16)} without a vertex shader: the fixed function's transform is not supported yet`);
       const reads = psObj.inputs;
-      const attr = (r) => `prism_a_${r.semantic === 'COLOR' ? 'color' : 'texcoord'}${r.index}`;
-      vsrc = ['#version 300 es', 'precision highp float;', 'in vec4 prism_a_positiont0;', ...reads.map((r) => `in vec4 ${attr(r)};`),
+      const attr = (r) => (r.semantic === 'FOG' ? 'prism_a_color1' : `prism_a_${r.semantic === 'COLOR' ? 'color' : 'texcoord'}${r.index}`);
+      vsrc = ['#version 300 es', 'precision highp float;', 'in vec4 prism_a_positiont0;', ...[...new Set(reads.map(attr))].map((a) => `in vec4 ${a};`),
         'uniform vec4 u_vp;', 'uniform vec2 u_zr;', ...reads.map((r) => `out vec4 ${r.name};`),
         'void main() {',
         // a render-target pixel position (centre at +0.5), into the viewport's normalised coordinates; w = 1/RHW for perspective
@@ -382,7 +382,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
         '  vec2 ndc = (p.xy + 0.5 - u_vp.xy) / u_vp.zw * 2.0 - 1.0;',
         '  float z = (p.z - u_zr.x) / max(u_zr.y - u_zr.x, 1e-9) * 2.0 - 1.0;',
         '  gl_Position = vec4(ndc * w, z * w, w);',
-        ...reads.map((r) => `  ${r.name} = ${attr(r)};`),
+        // the fog factor of a pretransformed vertex is its specular colour's alpha
+        ...reads.map((r) => `  ${r.name} = ${r.semantic === 'FOG' ? `vec4(${attr(r)}.a)` : attr(r)};`),
         '}', ''].join('\n');
     }
     const prog = g.createProgram();
@@ -396,7 +397,7 @@ function createDevice(g, params, { floatRT, onPresent }) {
     g.linkProgram(prog);
     if (!g.getProgramParameter(prog, g.LINK_STATUS)) fail(`link: ${g.getProgramInfoLog(prog)}`);
     const u = (n) => g.getUniformLocation(prog, n);
-    p = { prog, attrs, aref: at ? u('prism_aref') : null, tf: psObj.ffp ? u('prism_ff_tfactor') : null, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'),
+    p = { prog, attrs, aref: at ? u('prism_aref') : null, tf: psObj.ffp ? u('prism_ff_tfactor') : null, c: u('prism_c'), vc: u('prism_vc'), i: u('prism_i'), vi: u('prism_vi'), b: u('prism_b'), vb: u('prism_vb'), posFix: u('prism_posFix'), vp: u('u_vp'), zr: u('u_zr'), fogP: u('prism_fog_p'), fogC: u('prism_fog_c'),
       ff: vsObj?.ffp ? { world: u('prism_ff_world'), view: u('prism_ff_view'), proj: u('prism_ff_proj'), mat: u('prism_ff_mat'), ambient: u('prism_ff_ambient'), light: u('prism_ff_light') } : null,
       s: [...psObj.samplers.map((sm) => [sm.index, u(`prism_s${sm.index}`)]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, u(`prism_vs${sm.index}`)]) : [])],
       dims: new Map([...psObj.samplers.map((sm) => [sm.index, sm.dim]), ...(vsObj ? vsObj.samplers.map((sm) => [16 + sm.index, sm.dim]) : [])]), bc: [...psA.map((x) => [x.slot, u(`prism_bcs${x.index}`)]), ...vsA.map((x) => [x.slot, u(`prism_bcvs${x.index}`)])].filter(([, l]) => l) };
@@ -408,10 +409,31 @@ function createDevice(g, params, { floatRT, onPresent }) {
   // the vertex's elements, lighting on or off, which lights of which types, the material's sources. Lighting is
   // done in camera space, as D3D9 does it: D3D's row vectors, so v * World * View * Projection.
   const ffCache = new Map();
+  /*
+   * Fog, as D3D9's fixed function has it. FOGTABLEMODE (EXP, EXP2, LINEAR) is PIXEL fog, from the pixel's depth: the
+   * eye-space w under a perspective projection (_34 non-zero), the device z otherwise and for pretransformed
+   * vertices. Else FOGVERTEXMODE is VERTEX fog, its factor made per vertex from the camera-space z -- or the
+   * distance, with RANGEFOGENABLE -- and interpolated. Else, and for pretransformed vertices, the factor is the
+   * specular colour's alpha the application wrote. The colour then goes towards FOGCOLOR by 1 - factor, after the
+   * specular is added. FOGSTART, FOGEND and FOGDENSITY are floats in the DWORD's bits.
+   */
+  const fbits = (v) => new Float32Array(new Uint32Array([v >>> 0]).buffer)[0];
+  function fogInfo(pre) {
+    if (!rs.get(RS.FOGENABLE)) return null;
+    const table = rs.get(RS.FOGTABLEMODE) ?? 0, vtx = rs.get(RS.FOGVERTEXMODE) ?? 0;
+    if (table) return { kind: 'table', mode: table, w: !pre && transform(3)[11] !== 0 };
+    if (vtx && !pre) return { kind: 'vertex', mode: vtx, range: !!rs.get(RS.RANGEFOGENABLE) };
+    return { kind: 'specular' };
+  }
+  const fogSig = (fi) => (fi ? `${fi.kind}${fi.mode ?? ''}${fi.w ? 'w' : ''}${fi.range ? 'r' : ''}` : '');
+  // the factor for a depth d, by the mode: LINEAR (end - d) / (end - start), EXP e^(-density d), EXP2 e^(-(density d)^2)
+  const fogFormula = (mode, d) => (mode === 3 ? `clamp((prism_fog_p.y - ${d}) / (prism_fog_p.y - prism_fog_p.x), 0.0, 1.0)`
+    : mode === 1 ? `clamp(exp(-prism_fog_p.z * ${d}), 0.0, 1.0)` : mode === 2 ? `clamp(exp(-(prism_fog_p.z * ${d}) * (prism_fog_p.z * ${d})), 0.0, 1.0)`
+    : fail(`D3DFOGMODE ${mode}`));
   function ffVertex(L) {
     const has = (u, i = 0) => L.E.some((e) => e.usage === u && e.index === i);
     if (has('psize')) fail('the fixed function with a point size in the vertex is not supported yet');
-    if (rs.get(RS.FOGENABLE)) fail('fog in the fixed function (D3DRS_FOGENABLE) is not supported yet');
+    const fog = fogInfo(false);
     const lit = !!rs.get(RS.LIGHTING);
     const on = lit ? [...lightOn].sort((a, b) => a - b).slice(0, 8).map((i) => lights.get(i)) : [];
     const cv = rs.get(RS.COLORVERTEX);
@@ -419,11 +441,12 @@ function createDevice(g, params, { floatRT, onPresent }) {
     const src = (r, fallback) => { const m = rs.get(r); return cv && m === 1 && has('color', 0) ? 'prism_a_color0' : cv && m === 2 && has('color', 1) ? 'prism_a_color1' : fallback; };
     const tcs = [...Array(8).keys()].filter((k) => has('texcoord', k));
     for (let k = 0; k < 8; k++) if (tss[k].get(TSS.TEXCOORDINDEX) !== k || tss[k].get(TSS.TEXTURETRANSFORMFLAGS)) fail(`texture stage ${k}: generated or transformed texture coordinates (D3DTSS_TEXCOORDINDEX, TEXTURETRANSFORMFLAGS) are not supported yet`);
-    const sig = `${L.E.map((e) => e.usage + e.index).join(',')}|${lit ? on.map((l) => l.type).join('') : 'unlit'}|${[RS.SPECULARENABLE, RS.LOCALVIEWER, RS.NORMALIZENORMALS].map((r) => rs.get(r) ? 1 : 0).join('')}|${lit ? [RS.DIFFUSEMATERIALSOURCE, RS.SPECULARMATERIALSOURCE, RS.AMBIENTMATERIALSOURCE, RS.EMISSIVEMATERIALSOURCE].map((r) => src(r, '-')).join(',') : ''}`;
+    const sig = `${L.E.map((e) => e.usage + e.index).join(',')}|${lit ? on.map((l) => l.type).join('') : 'unlit'}|${[RS.SPECULARENABLE, RS.LOCALVIEWER, RS.NORMALIZENORMALS].map((r) => rs.get(r) ? 1 : 0).join('')}|${lit ? [RS.DIFFUSEMATERIALSOURCE, RS.SPECULARMATERIALSOURCE, RS.AMBIENTMATERIALSOURCE, RS.EMISSIVEMATERIALSOURCE].map((r) => src(r, '-')).join(',') : ''}|f${fogSig(fog)}`;
     let o = ffCache.get(`v${sig}`);
     if (o) return o;
     const ins = ['position0', ...(has('normal') ? ['normal0'] : []), 'color0', 'color1', ...tcs.map((k) => `texcoord${k}`)];
-    const outs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, { semantic: 'COLOR', index: 1, name: 'prism_col1' }, ...tcs.map((k) => ({ semantic: 'TEXCOORD', index: k, name: `prism_t${k}` }))];
+    const outs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, { semantic: 'COLOR', index: 1, name: 'prism_col1' }, ...tcs.map((k) => ({ semantic: 'TEXCOORD', index: k, name: `prism_t${k}` })),
+      ...(fog && !(fog.kind === 'table' && !fog.w) ? [{ semantic: 'FOG', index: 0, name: 'prism_fog' }] : [])];
     const body = [];
     if (lit) {
       const Md = src(RS.DIFFUSEMATERIALSOURCE, 'prism_ff_mat[0]'), Ma = src(RS.AMBIENTMATERIALSOURCE, 'prism_ff_mat[1]'),
@@ -454,8 +477,13 @@ function createDevice(g, params, { floatRT, onPresent }) {
       body.push(`  prism_col0 = vec4(clamp(${Me}.rgb + ${Ma}.rgb * amb + ${Md}.rgb * dif, 0.0, 1.0), ${Md}.a);`,
         `  prism_col1 = vec4(clamp(${Ms}.rgb * spe, 0.0, 1.0), 0.0);`);
     } else body.push('  prism_col0 = prism_a_color0;', '  prism_col1 = prism_a_color1;');
+    if (fog?.kind === 'vertex') {
+      body.push('  vec3 E = (prism_ff_view * (prism_ff_world * vec4(prism_a_position0.xyz, 1.0))).xyz;',
+        `  prism_fog = vec4(${fogFormula(fog.mode, fog.range ? 'length(E)' : 'E.z')});`);
+    } else if (fog?.kind === 'table' && fog.w) body.push('  prism_fog = vec4(p.w);');
+    else if (fog?.kind === 'specular') body.push('  prism_fog = vec4(prism_col1.a);');
     const glsl = ['#version 300 es', 'precision highp float;', ...ins.map((n) => `in vec4 prism_a_${n};`),
-      'uniform mat4 prism_ff_world, prism_ff_view, prism_ff_proj;', 'uniform vec4 prism_posFix;', 'uniform vec4 prism_ff_mat[5];', 'uniform vec4 prism_ff_ambient;',
+      'uniform mat4 prism_ff_world, prism_ff_view, prism_ff_proj;', 'uniform vec4 prism_posFix;', 'uniform vec4 prism_ff_mat[5];', ...(fog?.kind === 'vertex' ? ['uniform vec4 prism_fog_p;'] : []), 'uniform vec4 prism_ff_ambient;',
       ...(on.length ? [`uniform vec4 prism_ff_light[${on.length * 8}];`] : []), ...outs.map((x) => `out vec4 ${x.name};`),
       'void main() {', '  vec4 p = prism_ff_proj * (prism_ff_view * (prism_ff_world * vec4(prism_a_position0.xyz, 1.0)));',
       '  gl_Position = vec4(p.xy * prism_posFix.xy + prism_posFix.zw * p.w, p.z * 2.0 - p.w, p.w);',
@@ -478,8 +506,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
   // BLENDDIFFUSEALPHA, BLENDTEXTUREALPHA, BLENDFACTORALPHA, BLENDCURRENTALPHA: arg1 * alpha + arg2 * (1 - alpha)
   const FF_BLEND = { 12: 'prism_col0.a', 13: 'tex.a', 14: 'prism_ff_tfactor.a', 16: 'cur.a' };
   const FF_SAMPLER = { '2D': ['sampler2D', 'xy'], Cube: ['samplerCube', 'xyz'], '3D': ['sampler3D', 'xyz'] };
-  function ffPixel() {
-    const spec = !!rs.get(RS.SPECULARENABLE), stages = [];
+  function ffPixel(pre) {
+    const spec = !!rs.get(RS.SPECULARENABLE), stages = [], fog = fogInfo(pre);
     for (let k = 0; k < 8; k++) {
       const t = tss[k], cop = t.get(TSS.COLOROP);
       if (cop === 1) break;
@@ -495,12 +523,13 @@ function createDevice(g, params, { floatRT, onPresent }) {
       const reads = co === 13 || ao === 13 || [c1, c2, a1, a2].some(isTex);
       stages.push({ k, cop: co, aop: ao, args: [c1, c2, a1, a2], tex: reads && h ? objects.get(h).dim : null });
     }
-    const sig = `p${spec ? 's' : ''}|${stages.map((s) => `${s.cop},${s.aop},${s.args.join(',')},${s.tex ?? '-'}`).join('|')}`;
+    const sig = `p${spec ? 's' : ''}|f${fogSig(fog)}|${stages.map((s) => `${s.cop},${s.aop},${s.args.join(',')},${s.tex ?? '-'}`).join('|')}`;
     let o = ffCache.get(sig);
     if (o) return o;
     const texd = stages.filter((s) => s.tex), col1 = spec || stages.some((s) => s.args.some((a) => (a & 15) === 4));
     const inputs = [{ semantic: 'COLOR', index: 0, name: 'prism_col0' }, ...(col1 ? [{ semantic: 'COLOR', index: 1, name: 'prism_col1' }] : []),
-      ...texd.map((s) => ({ semantic: 'TEXCOORD', index: s.k, name: `prism_t${s.k}` }))];
+      ...texd.map((s) => ({ semantic: 'TEXCOORD', index: s.k, name: `prism_t${s.k}` })),
+      ...(fog && !(fog.kind === 'table' && !fog.w) ? [{ semantic: 'FOG', index: 0, name: 'prism_fog' }] : [])];
     // an argument: its source, then COMPLEMENT (1 - x), then ALPHAREPLICATE (its alpha in every channel)
     const arg = (a, ch) => {
       let x = ['prism_col0', 'cur', 'tex', 'prism_ff_tfactor', 'prism_col1'][a & 15];
@@ -514,9 +543,12 @@ function createDevice(g, params, { floatRT, onPresent }) {
         `  cur = vec4(${combine(s.cop, arg(s.args[0], 'rgb'), arg(s.args[1], 'rgb'))}, ${s.aop === 1 ? 'cur.a' : combine(s.aop, arg(s.args[2], 'a'), arg(s.args[3], 'a'))});`);
     }
     const glsl = ['#version 300 es', 'precision highp float;', ...inputs.map((i) => `in vec4 ${i.name};`),
-      ...texd.map((s) => `uniform highp ${FF_SAMPLER[s.tex][0]} prism_s${s.k};`), 'uniform vec4 prism_ff_tfactor;',
+      ...texd.map((s) => `uniform highp ${FF_SAMPLER[s.tex][0]} prism_s${s.k};`), 'uniform vec4 prism_ff_tfactor;', ...(fog ? ['uniform vec4 prism_fog_p, prism_fog_c;'] : []),
       'layout(location = 0) out vec4 prism_o0;', 'void main() {', ...body,
-      ...(spec ? ['  cur.rgb = min(cur.rgb + prism_col1.rgb, 1.0);'] : []), '  prism_o0 = cur;', '}', ''].join('\n');
+      ...(spec ? ['  cur.rgb = min(cur.rgb + prism_col1.rgb, 1.0);'] : []),
+      ...(fog ? [`  float f = ${fog.kind === 'table' ? fogFormula(fog.mode, fog.w ? 'prism_fog.x' : 'gl_FragCoord.z') : 'clamp(prism_fog.x, 0.0, 1.0)'};`,
+        '  cur.rgb = mix(prism_fog_c.rgb, cur.rgb, f);'] : []),
+      '  prism_o0 = cur;', '}', ''].join('\n');
     o = { kind: 'pixel', ffp: true, sh: compile(g.FRAGMENT_SHADER, glsl, 'the fixed function\'s pixel stage'), glsl, inputs,
       samplers: texd.map((s) => ({ name: `texture${s.k}`, index: s.k, dim: s.tex })), outputs: [{ semantic: 'COLOR', index: 0 }] };
     ffCache.set(sig, o);
@@ -670,7 +702,9 @@ function createDevice(g, params, { floatRT, onPresent }) {
     // pretransformed vertices (XYZRHW) skip vertex processing, a vertex shader that is set included (elevated draws
     // its full-screen passes with its terrain's vertex shader still set)
     const pre = L.E.some((e) => e.usage === 'positiont');
-    const psObj = ps ? (((o) => (o.ps1 ? ps1Variant(o) : o))(get(ps, 'pixel'))) : ffPixel(), vsObj = pre ? null : vs ? get(vs, 'vertex') : ffVertex(L);
+    // Fog is the fixed function's (fogInfo): with a pixel shader set it is not applied yet -- that needs the vertex
+    // shader's oFog after a ps_1_x/2_x one -- as before, since .kkrieger's fogged materials draw with shaders.
+    const psObj = ps ? (((o) => (o.ps1 ? ps1Variant(o) : o))(get(ps, 'pixel'))) : ffPixel(pre), vsObj = pre ? null : vs ? get(vs, 'vertex') : ffVertex(L);
     applyState();
     // WebGL refuses a draw with a bound target the pixel shader writes nothing to; D3D leaves that target as it was
     g.drawBuffers(fbBufs.get(framebuffer()).map((b, k) => (b !== g.NONE && psObj?.outputs.some((o) => o.semantic === 'COLOR' && o.index === k) ? b : g.NONE)));
@@ -689,6 +723,8 @@ function createDevice(g, params, { floatRT, onPresent }) {
     if (p.aref) g.uniform1f(p.aref, (rs.get(RS.ALPHAREF) & 255) / 255);
     if (p.tf) { const f = rs.get(RS.TEXTUREFACTOR) >>> 0; g.uniform4f(p.tf, ((f >> 16) & 255) / 255, ((f >> 8) & 255) / 255, (f & 255) / 255, (f >>> 24) / 255); }
     if (p.ff) ffUniforms(p, vsObj);
+    if (p.fogP) g.uniform4f(p.fogP, fbits(rs.get(RS.FOGSTART) ?? 0), fbits(rs.get(RS.FOGEND)), fbits(rs.get(RS.FOGDENSITY)), 0);
+    if (p.fogC) { const c = rs.get(RS.FOGCOLOR) >>> 0; g.uniform4f(p.fogC, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }
     bindSamplers(p);
     for (const [unit, loc] of p.bc) { const c = samp[unit][4]; g.uniform4f(loc, ((c >> 16) & 255) / 255, ((c >> 8) & 255) / 255, (c & 255) / 255, (c >>> 24) / 255); }
     g.bindVertexArray(vao);

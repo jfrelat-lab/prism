@@ -6,7 +6,9 @@
  *
  * The scene is a grid of n x n quads over [-1,1]^2 at z = 0, each vertex's normal normalize(0.6x, 0.6y, -1)
  * (towards a viewer looking down +z) and, with D3DFVF_DIFFUSE, the colour (x+1)/2, (y+1)/2, 0.5 -- the same
- * grid the gate builds. scene.txt sets everything else, one statement a line:
+ * grid the gate builds. With D3DFVF_XYZRHW the grid is pretransformed instead: (x, y) across the w x h target,
+ * z 0.5, rhw 1; with D3DFVF_SPECULAR, a specular colour 0x203040 whose alpha rises with x (the fog factor of a
+ * pretransformed vertex). scene.txt sets everything else, one statement a line:
  *   fvf <hex>  n <quads>  rs <state> <value>  world|view|proj <16 floats, row-major>
  *   light <i> <type> <diffuse 4> <specular 4> <ambient 4> <position 3> <direction 3> <range> <falloff> <att 3> <theta> <phi>
  *   enable <i>  material <diffuse 4> <ambient 4> <specular 4> <emissive 4> <power>  tex (a 2x2 texture on stage 0)
@@ -93,14 +95,16 @@ int main(int argc, char **argv) {
   fclose(in);
 
   /* the grid: position, [normal], [diffuse], [texcoord] per vertex */
-  stride = 3 + (fvf & D3DFVF_NORMAL ? 3 : 0) + (fvf & D3DFVF_DIFFUSE ? 1 : 0) + (fvf & D3DFVF_TEX1 ? 2 : 0);
+  stride = ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW ? 4 : 3) + (fvf & D3DFVF_NORMAL ? 3 : 0) + (fvf & D3DFVF_DIFFUSE ? 1 : 0) + (fvf & D3DFVF_SPECULAR ? 1 : 0) + (fvf & D3DFVF_TEX1 ? 2 : 0);
   nv = (n + 1) * (n + 1); ni = n * n * 6;
   vb = malloc(nv * stride * 4); ib = malloc(ni * 2);
   for (y = 0, k = 0; y <= n; y++) for (x = 0; x <= n; x++) {
     float px = -1 + 2.0f * x / n, py = -1 + 2.0f * y / n, *v = vb + (y * (n + 1) + x) * stride;
-    *v++ = px; *v++ = py; *v++ = 0;
+    if ((fvf & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) { *v++ = (float)x / n * w; *v++ = (float)y / n * h; *v++ = .5f; *v++ = 1; }
+    else { *v++ = px; *v++ = py; *v++ = 0; }
     if (fvf & D3DFVF_NORMAL) { float nx = .6f * px, ny = .6f * py, l = sqrtf(nx * nx + ny * ny + 1); *v++ = nx / l; *v++ = ny / l; *v++ = -1 / l; }
     if (fvf & D3DFVF_DIFFUSE) { DWORD c = 0xff000000 | ((DWORD)((px + 1) / 2 * 255 + .5f) << 16) | ((DWORD)((py + 1) / 2 * 255 + .5f) << 8) | 128; memcpy(v++, &c, 4); }
+    if (fvf & D3DFVF_SPECULAR) { DWORD c = ((DWORD)((float)x / n * 255 + .5f) << 24) | 0x203040; memcpy(v++, &c, 4); }
     if (fvf & D3DFVF_TEX1) { *v++ = (float)x / n; *v++ = (float)y / n; }
   }
   for (y = 0; y < n; y++) for (x = 0; x < n; x++) {

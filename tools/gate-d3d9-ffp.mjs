@@ -36,6 +36,15 @@ const light = (i, o) => ({ i, type: 3, diffuse: [0, 0, 0, 0], specular: [0, 0, 0
 const MATERIAL = { diffuse: [0.8, 0.6, 0.4, 1], ambient: [0.5, 0.5, 0.5, 1], specular: [0.7, 0.7, 0.7, 1], emissive: [0.05, 0, 0.05, 0], power: 12 };
 const SUN = light(0, { diffuse: [0.9, 0.8, 0.7, 1], ambient: [0.1, 0.1, 0.1, 0], specular: [1, 1, 1, 1], direction: [0.3, -0.4, 1] });
 const base = { fvf: 0x12, world: WORLD, proj: PROJ, lights: [SUN], material: MATERIAL, rs: [[139, 0x00202020]] };
+// a float render state (D3DRS_FOGSTART, END, DENSITY) is its bits in the DWORD
+const fb = (x) => new Uint32Array(new Float32Array([x]).buffer)[0];
+const FOG = [[28, 1], [34, 0xffc08040]];
+/*
+ * Fog is held to Wine alone. DXVK 1.10.3 here takes the fog factor as Wine does and fogs towards BLACK, whatever
+ * D3DRS_FOGCOLOR says (0x00c08040 and 0xffc08040 alike): where Wine and PRISM give the fog colour, 192,128,64,
+ * DXVK gives 0,0,0, and every pixel in between is DXVK's colour times the factor. Its unfogged pixels are Wine's.
+ */
+const NOT_DXVK = 'DXVK 1.10.3 fogs towards black, ignoring D3DRS_FOGCOLOR';
 const cases = [
   { name: 'a directional light: diffuse, the lights\' and the render state\'s ambient, emissive', ...base },
   { name: 'specular with the local viewer (the default)', ...base, rs: [...base.rs, [29, 1]] },
@@ -49,6 +58,13 @@ const cases = [
   { name: 'a texture modulated by the lit colour (texture stage 0 as D3D9 sets it)', ...base, fvf: 0x112, tex: true },
   { name: 'specular with a power of 0 (a material left at its zeros, as Stiletto\'s may be)', ...base, material: { ...MATERIAL, power: 0 }, rs: [...base.rs, [29, 1]] },
   { name: 'a view matrix: the camera moved and turned, the lights in world space', ...base, view: mul(move(0.4, -0.2, 0.5), rotY(-0.2)), rs: [...base.rs, [29, 1]] },
+  { name: 'vertex fog, LINEAR, from the camera-space z (D3DRS_FOGVERTEXMODE)', ...base, rs: [...base.rs, ...FOG, [140, 3], [36, fb(2.4)], [37, fb(3.6)]], notDxvk: NOT_DXVK },
+  { name: 'vertex fog, EXP', ...base, rs: [...base.rs, ...FOG, [140, 1], [38, fb(0.3)]], notDxvk: NOT_DXVK },
+  { name: 'vertex fog by distance (D3DRS_RANGEFOGENABLE)', ...base, rs: [...base.rs, ...FOG, [140, 3], [48, 1], [36, fb(2.4)], [37, fb(3.8)]], notDxvk: NOT_DXVK },
+  { name: 'pixel fog, LINEAR, from the eye depth w (D3DRS_FOGTABLEMODE, a perspective projection)', ...base, rs: [...base.rs, ...FOG, [35, 3], [36, fb(2.5)], [37, fb(3.5)]], notDxvk: NOT_DXVK },
+  { name: 'pixel fog, EXP2', ...base, rs: [...base.rs, ...FOG, [35, 2], [38, fb(0.35)]], notDxvk: NOT_DXVK },
+  { name: 'pretransformed vertices: fog by the specular alpha (both modes NONE)', ...base, fvf: 0xc4, rs: [...FOG], notDxvk: NOT_DXVK },
+  { name: 'pretransformed vertices: pixel fog, LINEAR, from z', ...base, fvf: 0xc4, rs: [...FOG, [35, 3], [36, fb(0.2)], [37, fb(0.8)]], notDxvk: NOT_DXVK },
 ];
 const scene = (k) => [`fvf ${k.fvf.toString(16)}`, ...(k.tex ? ['tex'] : []), ...(k.rs ?? []).map(([s, v]) => `rs ${s} ${v}`),
   `world ${k.world.join(' ')}`, ...(k.view ? [`view ${k.view.join(' ')}`] : []), `proj ${k.proj.join(' ')}`,
@@ -91,15 +107,17 @@ const gl = document.getElementById('c').getContext('webgl2', { antialias: false 
 const d3d = createD3D9({ gl });
 // the grid ffpref.c builds
 function grid(fvf, n = 8) {
-  const stride = 3 + (fvf & 0x10 ? 3 : 0) + (fvf & 0x40 ? 1 : 0) + (fvf & 0x100 ? 2 : 0);
+  const rhw = (fvf & 0xe) === 4;
+  const stride = (rhw ? 4 : 3) + (fvf & 0x10 ? 3 : 0) + (fvf & 0x40 ? 1 : 0) + (fvf & 0x80 ? 1 : 0) + (fvf & 0x100 ? 2 : 0);
   const vb = new DataView(new ArrayBuffer((n + 1) * (n + 1) * stride * 4)), ib = new Uint16Array(n * n * 6);
   for (let y = 0; y <= n; y++) for (let x = 0; x <= n; x++) {
     const px = Math.fround(-1 + 2 * x / n), py = Math.fround(-1 + 2 * y / n);
     let o = (y * (n + 1) + x) * stride * 4;
     const put = (v) => { vb.setFloat32(o, v, true); o += 4; };
-    put(px); put(py); put(0);
+    if (rhw) { put(Math.fround(x / n * ${N})); put(Math.fround(y / n * ${N})); put(0.5); put(1); } else { put(px); put(py); put(0); }
     if (fvf & 0x10) { const nx = Math.fround(0.6 * px), ny = Math.fround(0.6 * py), l = Math.fround(Math.sqrt(nx * nx + ny * ny + 1)); put(nx / l); put(ny / l); put(-1 / l); }
     if (fvf & 0x40) { vb.setUint32(o, (0xff000000 | (Math.floor((px + 1) / 2 * 255 + 0.5) << 16) | (Math.floor((py + 1) / 2 * 255 + 0.5) << 8) | 128) >>> 0, true); o += 4; }
+    if (fvf & 0x80) { vb.setUint32(o, ((Math.floor(x / n * 255 + 0.5) << 24) | 0x203040) >>> 0, true); o += 4; }
     if (fvf & 0x100) { put(x / n); put(y / n); }
   }
   let k = 0;
@@ -155,11 +173,12 @@ const off = (a, b) => { let worst = 0, at = 0; for (let i = 0; i < a.length; i++
 for (const k of cases) {
   const r = res[k.name], gd = golden[k.name];
   if (!r || r.error) { check(false, k.name, r ? r.error : 'not run'); continue; }
-  for (const [who, ref] of [['Wine', gd.wine], ['DXVK', gd.dxvk]]) {
+  if (k.notDxvk) console.log(`  --   ${k.name}, not against DXVK: ${k.notDxvk}`);
+  for (const [who, ref] of [['Wine', gd.wine], ['DXVK', k.notDxvk ? null : gd.dxvk]]) {
     if (!ref) continue;
     const { worst, at } = off(r, ref), px = (at / 3) | 0;
     check(worst <= 3, `${k.name}, against ${who} (worst ${worst})`, `at (${px % N},${(px / N) | 0}): PRISM ${r.slice(px * 3, px * 3 + 3)}, ${who} ${ref.slice(px * 3, px * 3 + 3)}`);
   }
 }
 if (bad) { console.log(`\n${bad} failed`); process.exit(1); }
-console.log('\nevery scene agrees with Wine and DXVK');
+console.log('\nevery scene agrees with Wine and DXVK (fog: with Wine)');
