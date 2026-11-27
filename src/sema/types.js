@@ -64,6 +64,9 @@ export function makeTypes(model = 'i386', { signedChar, enums, longDouble } = {}
       : table.pointer;
     const p = { k: 'ptr', to, ...entry, signed: false };
     if (qual && table.farPointer) p.qual = qual;
+    // A far data pointer in a model whose default data pointer is near holds segment:offset, as
+    // Borland's does (backend/emit.js isSegOff); the large model (dos16l) keeps its linear address.
+    if ((qual === 'far' || qual === 'huge') && table.farPointer && table.pointer.size === 2 && to?.k !== 'func') p.segoff = true;
     return p;
   };
   const T = {
@@ -74,11 +77,9 @@ export function makeTypes(model = 'i386', { signedChar, enums, longDouble } = {}
      * `real` says so: segModel() no longer reports it, so nothing refuses it for being one. Under i386
      * it still has no meaning and keeps the flat placeholder, refused as before.
      *
-     * `huge` needs nothing new in a 16-bit model: a PRISM far pointer is already a LINEAR address
-     * whose arithmetic never wraps at 64K, which is exactly what Borland's huge pointer is for --
-     * normalised arithmetic across segments, full 32-bit comparison. So it is a far pointer, marked.
-     * (The converse is the known limit: a Borland FAR pointer's arithmetic wraps its offset at 64K,
-     * and PRISM's does not.)
+     * `huge` is a far pointer, marked: segment:offset kept NORMALISED, its arithmetic moving the
+     * address across segments and its comparisons whole (backend/emit.js), where a far pointer's
+     * arithmetic wraps its offset at 64K, as Borland's does.
      */
     segPtr: (to, m) => (m === 'seg' && table.nearPointer
       ? { k: 'ptr', to, size: 2, align: 2, signed: false, model: 'seg', real: true }

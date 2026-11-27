@@ -35,9 +35,16 @@ export const BORLAND_DOS_H = `
 #ifndef __PRISM_BORLAND_DOS_H
 #define __PRISM_BORLAND_DOS_H
 
+#ifdef __PRISM_FARSEGOFF__
+/* A far pointer IS segment:offset here, as Borland's is: these are Borland's own definitions. */
+#define FP_SEG(p)    ((unsigned)((unsigned long)(void far *)(p) >> 16))
+#define FP_OFF(p)    ((unsigned)(unsigned long)(void far *)(p))
+#define MK_FP(s, o)  ((void far *)(((unsigned long)(unsigned)(s) << 16) | (unsigned)(o)))
+#else
 #define FP_SEG(p)    ((unsigned)((unsigned long)(void far *)(p) >> 4))
 #define FP_OFF(p)    ((unsigned)((unsigned long)(void far *)(p) & 15))
 #define MK_FP(s, o)  ((void far *)(((unsigned long)(unsigned)(s) << 4) + (unsigned)(o)))
+#endif
 
 /* Borland's own definitions: plain memory at seg:off. */
 #define peek(a, b)      (*((int far *)MK_FP((a), (b))))

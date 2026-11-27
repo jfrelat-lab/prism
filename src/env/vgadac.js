@@ -17,6 +17,14 @@
 // a register in a documented order. There is nothing to interpret.
 
 /**
+ * The palette the VGA BIOS loads with mode 13h, as six-bit components: read back through 3C7h/3C9h
+ * by a Borland C++ program that set the mode under DOSBox-X (the reference Wolf3D's pictures are held
+ * to). The sixteen CGA colours, sixteen greys, then the hue table. A program that draws before it
+ * loads a palette of its own -- Wolf3D's signon screen -- is coloured by these.
+ */
+export const BIOS_MODE13_DAC = Uint8Array.from(atob('AAAAAAAqACoAACoqKgAAKgAqKhUAKioqFRUVFRU/FT8VFT8/PxUVPxU/Pz8VPz8/AAAABQUFCAgICwsLDg4OERERFBQUGBgYHBwcICAgJCQkKCgoLS0tMjIyODg4Pz8/AAA/EAA/HwA/LwA/PwA/PwAvPwAfPwAQPwAAPxAAPx8APy8APz8ALz8AHz8AED8AAD8AAD8QAD8fAD8vAD8/AC8/AB8/ABA/Hx8/Jx8/Lx8/Nx8/Px8/Px83Px8vPx8nPx8fPycfPy8fPzcfPz8fNz8fLz8fJz8fHz8fHz8nHz8vHz83Hz8/Hzc/Hy8/Hyc/LS0/MS0/Ni0/Oi0/Py0/Py06Py02Py0xPy0tPzEtPzYtPzotPz8tOj8tNj8tMT8tLT8tLT8xLT82LT86LT8/LTo/LTY/LTE/AAAcBwAcDgAcFQAcHAAcHAAVHAAOHAAHHAAAHAcAHA4AHBUAHBwAFRwADhwABxwAABwAABwHABwOABwVABwcABUcAA4cAAccDg4cEQ4cFQ4cGA4cHA4cHA4YHA4VHA4RHA4OHBEOHBUOHBgOHBwOGBwOFRwOERwODhwODhwRDhwVDhwYDhwcDhgcDhUcDhEcFBQcFhQcGBQcGhQcHBQcHBQaHBQYHBQWHBQUHBYUHBgUHBoUHBwUGhwUGBwUFhwUFBwUFBwWFBwYFBwaFBwcFBocFBgcFBYcAAAQBAAQCAAQDAAQEAAQEAAMEAAIEAAEEAAAEAQAEAgAEAwAEBAADBAACBAABBAAABAAABAEABAIABAMABAQAAwQAAgQAAQQCAgQCggQDAgQDggQEAgQEAgOEAgMEAgKEAgIEAoIEAwIEA4IEBAIDhAIDBAIChAICBAICBAKCBAMCBAOCBAQCA4QCAwQCAoQCwsQDAsQDQsQDwsQEAsQEAsPEAsNEAsMEAsLEAwLEA0LEA8LEBALDxALDRALDBALCxALCxAMCxANCxAPCxAQCw8QCw0QCwwQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'), (c) => c.charCodeAt(0));
+
+/**
  * Install the DAC.
  *
  * `onChange` fires when a write completes an entry, so a host can publish the palette without
@@ -48,5 +56,7 @@ export function installVgaDac(machine, { onChange = null } = {}) {
   });
   machine.onPortRead(0x3c6, () => mask);
 
-  return { palette };
+  // What int 10h does to the DAC when it sets mode 13h (src/env/dos.js).
+  const loadBios = () => { for (let i = 0; i < 768; i++) palette[i] = BIOS_MODE13_DAC[i] << 2; if (onChange) onChange(palette); };
+  return { palette, loadBios };
 }

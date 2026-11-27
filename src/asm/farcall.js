@@ -47,7 +47,7 @@ export function installFarCall(M, { funcType = () => null } = {}) {
       if (t.size === 4) {
         const w1 = dv.getUint16((at + 2) & 0xffff, true);
         at = (at + 4) & 0xffff;
-        if (t.k === 'ptr' && !t.to?.k?.startsWith?.('func')) return ((w1 << 4) + w0) >>> 0;
+        if (t.k === 'ptr' && !(t.segoff && t.to?.k !== 'func') && !t.to?.k?.startsWith?.('func')) return ((w1 << 4) + w0) >>> 0;
         return t.signed === false || t.k === 'ptr' ? ((w1 << 16) | w0) >>> 0 : (w1 << 16) | w0;
       }
       at = (at + 2) & 0xffff;
@@ -58,7 +58,7 @@ export function installFarCall(M, { funcType = () => null } = {}) {
   const toRegs = (t, v, R) => {
     if (!t || t.k === 'void' || t.name === 'void' || v === undefined) return;
     const n = Number(v);
-    if (t.k === 'ptr' && t.size === 4 && !t.to?.k?.startsWith?.('func')) { R.ax = n & 15; R.dx = (n >>> 4) & 0xffff; return; }
+    if (t.k === 'ptr' && t.size === 4 && !(t.segoff && t.to?.k !== 'func') && !t.to?.k?.startsWith?.('func')) { R.ax = n & 15; R.dx = (n >>> 4) & 0xffff; return; }
     R.ax = n & 0xffff;
     if (t.size === 4) R.dx = (n >>> 16) & 0xffff;
   };
@@ -87,6 +87,8 @@ export function installFarCall(M, { funcType = () => null } = {}) {
   /** Run from R.cs:R.ip until control comes back to FROM_C. */
   M.farRoute = (R) => {
     for (;;) {
+      // A harness may keep the last transfers (M.farTrace = []): where a run went wrong is where it went.
+      if (M.farTrace) { M.farTrace.push(`${R.cs.toString(16)}:${R.ip.toString(16)} sp=${R.sp.toString(16)}`); if (M.farTrace.length > 40) M.farTrace.shift(); }
       if (R.cs === FROM_C) return R;
       const run = owners.get(R.cs);
       if (run) { run(R); continue; }
@@ -114,7 +116,9 @@ export function installFarCall(M, { funcType = () => null } = {}) {
     const flags = 2 | ((regs.cf & 1)) | ((regs.zf & 1) << 6) | ((regs.sf & 1) << 7) | (M.cpu.if << 9) | ((regs.of & 1) << 11);
     const R = { ax: regs.ax, bx: regs.bx, cx: regs.cx, dx: regs.dx, si: regs.si, di: regs.di, bp: regs.bp,
       sp, ds: regs.ds, es: regs.es, ss: 0, cs: seg & 0xffff, ip: off & 0xffff, flags };
-    M.farRoute(R);
+    const outerSp = M.sp;
+    M.sp = sp;                           // below the frame, for an interrupt delivered meanwhile
+    try { M.farRoute(R); } finally { M.sp = outerSp; }
     for (const r of ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'ds', 'es']) regs[r] = R[r] & 0xffff;
     regs.cf = R.flags & 1; regs.zf = (R.flags >> 6) & 1; regs.sf = (R.flags >> 7) & 1; regs.of = (R.flags >> 11) & 1;
     const was = M.cpu.if;

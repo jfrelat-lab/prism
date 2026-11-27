@@ -254,8 +254,30 @@ const checkWide = (t) => { if (t && t.k === 'scalar' && WIDE.has(t.name) && t.si
 /** Truncate/extend a 32-bit value to a narrower type, as an assignment or cast must. */
 /** A `_seg` pointer with a real meaning: its value is a paragraph, and seg*16 is the address. */
 const isSeg = (t) => t?.k === 'ptr' && t.model === 'seg' && t.real === true;
-/** The byte address a pointer VALUE names: itself, or seg*16 for a _seg pointer. */
-const addrOfPtr = (js, t) => (isSeg(t) ? `((${js})<<4)` : `(${js})`);
+/**
+ * A FAR pointer of a 16-bit model whose data pointers are near: Borland's segment:offset, segment
+ * in the high word (src/sema/types.js). Its arithmetic moves the offset alone, wrapping at 64K, and
+ * a huge pointer's moves the address and normalises; FP_SEG and FP_OFF are its two words. It became
+ * this when Wolf3D's BuildCompScale wrote FP_OFF(code) -- the offset in the segment `work` came from
+ * -- into each compiled scaler, and a linear far pointer could only answer (address & 15).
+ */
+// The pointee is checked HERE, not only where the type was made: a declarator such as
+// `void interrupt (far *v)(void)` builds its pointer before it knows the pointee is a function.
+const isSegOff = (t) => t?.k === 'ptr' && t.segoff === true && t.to?.k !== 'func';
+/** The byte address a pointer VALUE names: itself, seg*16 for a _seg pointer, seg*16+off for a far one. */
+const addrOfPtr = (js, t) => (isSeg(t) ? `((${js})<<4)` : isSegOff(t) ? `M.lin(${js})` : `(${js})`);
+/** A _seg pointer as the far pointer seg:0 -- the address seg*16 for a linear far pointer. */
+const segAsFar = (js, far) => (isSegOff(far) ? `((${js})<<16)` : `((${js})<<4)`);
+/**
+ * A pointer value as a segment:offset far pointer, when the model has them and the value carries a
+ * segment of its own: a far pointer is one, a _seg pointer is seg:0. Null otherwise -- a near
+ * pointer's segment is DGROUP's, which far() supplies when one is converted.
+ */
+const farOf = (js, t, segoffModel) => (!segoffModel ? null : isSegOff(t) ? `(${js})` : isSeg(t) ? `((${js})<<16)` : null);
+/** p + delta bytes, for a pointer of type t. */
+const ptrAdd = (js, delta, t) => (isSegOff(t)
+  ? `M.${t.qual === 'huge' ? 'hugeAdd' : 'farAdd'}(${js},${delta})`
+  : `((${js})+${delta}|0)`);
 
 function coerce(ty, js, from, to) {
   checkWide(from); checkWide(to);
@@ -291,8 +313,16 @@ function coerce(ty, js, from, to) {
    * changes -- `(memptr)segstart` stores a paragraph number and `(unsigned)grsegs[i]` reads one.
    */
   const fromPtr = from.k === 'ptr' || from.k === 'array' || from.k === 'func';
-  if (isSeg(to) && fromPtr && !isSeg(from)) return `((${js})>>>4)`;
-  if (isSeg(from) && (to.k === 'ptr' || to.k === 'func') && !isSeg(to)) return `((${js})<<4)`;
+  if (isSeg(to) && fromPtr && !isSeg(from)) return isSegOff(from) ? `(M.lin(${js})>>>4)` : `((${js})>>>4)`;
+  if (isSeg(from) && (to.k === 'ptr' || to.k === 'func') && !isSeg(to)) return segAsFar(js, to);
+  /*
+   * Into a segment:offset far pointer from any other pointer -- a near one, an array, an object's
+   * address -- the number is an ADDRESS: below 64K it is DGROUP's offset with segment 0, the same
+   * number; a far object's is its normalised paragraph. Out of one into a near pointer, Borland keeps
+   * the offset. Between two far pointers, and to and from an integer, the bits stay.
+   */
+  if (isSegOff(to) && fromPtr && !isSegOff(from) && from.k !== 'func' && !(from.k === 'ptr' && from.to?.k === 'func')) return `M.far(${js})`;
+  if (isSegOff(from) && to.k === 'ptr' && !isSegOff(to) && to.to?.k !== 'func' && to.size === 2) return `((${js})&65535)`;
   if (to.k === 'ptr' || to.k === 'func') return `(${js}|0)`;
   /*
    * A TWO-BYTE integer is truncated to two bytes whatever it is called. The cases below used to be
@@ -365,6 +395,8 @@ export class FunctionEmitter {
     this.ty = T.makeTypes(ctx.model ?? 'i386', { signedChar: ctx.signedChar });
     if (ctx.floatToInt === 'fist') this.ty = { ...this.ty, fist: true };
     if (ctx.x87Precision) this.ty = { ...this.ty, x87pc: true };
+    // Far data pointers are segment:offset in this model (src/sema/types.js segoff).
+    this.segoffModel = this.ty.ptr(this.ty.CHAR, 'far').segoff === true;
     /*
      * Which model each emitted function was actually emitted for. A set that holds anything but the
      * one the program was compiled for means some path built an emitter without the model -- which
@@ -1192,7 +1224,7 @@ export class FunctionEmitter {
     // `int *p = &x;`, `.p = &x`, `&arr[2]`, `&s.field`, `name + 1`. It is constant because every
     // global already has its address by the time any initialiser is written.
     const a = this.#addrConst(expr);
-    if (a !== null) { writeConst(this.mod, addr, type, a); return true; }
+    if (a !== null) { writeConst(this.mod, addr, type, isSegOff(type) && a >= 0x10000 ? (((a >>> 4) << 16) | (a & 15)) >>> 0 : a); return true; }
 
     try {
       writeConst(this.mod, addr, type, evalConstNumber(this.ty, expr));
@@ -2017,8 +2049,7 @@ export class FunctionEmitter {
           throw new BorlandAsmError(`the local '${name}', which has no stack slot`);
         }
         const g = this.ctx.globals.get(name);
-        // A raw far pointer (compile.rawFarPointers) is seen by asm as the words C stored, with no view.
-        if (g) return { addr: String(g.addr), type: g.type, local: false, near: nearOf(g.addr), raw: !!this.ctx.rawFar?.has(name) };
+        if (g) return { addr: String(g.addr), type: g.type, local: false, near: nearOf(g.addr) };
         if (this.ctx.funcs.get(name)) return { isFunc: true };
         throw new BorlandAsmError(`'${name}', which is not a variable in scope`);
       },
@@ -2162,7 +2193,7 @@ export class FunctionEmitter {
           const p = this.#rval(e.expr);
           const to = p.type.k === 'ptr' ? p.type.to : (p.type.k === 'array' ? p.type.of : null);
           if (!to) throw new EmitError('dereferencing a non-pointer');
-          return { addr: `(${addrOfPtr(p.js, p.type)}|0)`, type: to };
+          return { addr: `(${addrOfPtr(p.js, p.type)}|0)`, type: to, farJs: farOf(p.js, p.type, this.segoffModel) };
         }
         break;
       case 'index': {
@@ -2171,19 +2202,23 @@ export class FunctionEmitter {
         const bt = this.ty.decay(b.type);
         if (bt.k !== 'ptr') throw new EmitError('subscripting a non-pointer');
         const es = stride(bt.to);
-        return { addr: `(${addrOfPtr(b.js, bt)}+Math.imul(${indexJs(this.ty, i)},${es})|0)`, type: bt.to };
+        const bf = b.farJs ?? farOf(b.js, bt, this.segoffModel);
+        return { addr: `(${addrOfPtr(b.js, bt)}+Math.imul(${indexJs(this.ty, i)},${es})|0)`, type: bt.to,
+          farJs: bf && `M.farAdd(${bf},Math.imul(${indexJs(this.ty, i)},${es}))` };
       }
       case 'member': {
-        let recAddr, rec;
+        let recAddr, rec, recFar = null;
         if (e.arrow) {
           const p = this.#rval(e.base);
           rec = p.type.k === 'ptr' ? p.type.to : p.type;
           recAddr = `(${addrOfPtr(p.js, p.type)}|0)`;
+          recFar = farOf(p.js, p.type, this.segoffModel);
         } else {
           const l = this.#lval(e.base);
           if (l.varJs) throw new EmitError('member access on a value with no address');
           rec = l.type;
           recAddr = l.addr;
+          recFar = l.farJs ?? null;
         }
         const f = findField(rec, e.field);
         if (!f) {
@@ -2197,7 +2232,7 @@ export class FunctionEmitter {
           throw new EmitError(`'${T.typeName(rec)}' has no member '${e.field}' -- it has: ${have}`);
         }
         if (f.bits !== undefined) return { addr: recAddr, type: f.type, bitfield: f };
-        return { addr: `(${recAddr}+${f.offset}|0)`, type: f.type };
+        return { addr: `(${recAddr}+${f.offset}|0)`, type: f.type, farJs: recFar && `M.farAdd(${recFar},${f.offset})` };
       }
       case 'str': {
         const addr = this.#stringAddr(e);
@@ -2302,10 +2337,9 @@ export class FunctionEmitter {
       // machine: `(unsigned)postsource = texture` with `long postsource` (WL_DRAW.C), whose two words
       // the program writes one by one and its asm loads with LDS. Not over a pointer: a PRISM far
       // pointer is linear, and its low word is not the offset Borland's would hold.
-      // ...and over a far pointer the target declares RAW, whose bytes are the segment:offset its C
-      // writes word by word (Wolf3D's linecmds: `(unsigned)linecmds = *cmdptr--`, its asm reads both).
-      const rawFar = e.expr.n === 'ident' && this.ctx.rawFar?.has(e.expr.name) && !this.locals.has(e.expr.name) && from.k === 'ptr';
-      const narrower = to.size < from.size && (T.isInteger(to) || to.k === 'enum') && (T.isInteger(from) || from.k === 'enum' || rawFar);
+      // ...and over a segment:offset far pointer, whose low word IS its offset: Wolf3D's ScaleShape
+      // sets linecmds' offset with `(unsigned)linecmds = *cmdptr--`, as Borland's word store does.
+      const narrower = to.size < from.size && (T.isInteger(to) || to.k === 'enum') && (T.isInteger(from) || from.k === 'enum' || isSegOff(from));
       if (to.size !== from.size && !narrower) {
         unsup(`a cast as an lvalue from ${T.typeName(from)} to ${T.typeName(to)}, which differ in size`);
       }
@@ -2406,7 +2440,7 @@ export class FunctionEmitter {
         // 7-bit unsigned field can hold. Returning the declared type made `bit.u % 61` unsigned and
         // gcc's bitfld-1.c exists precisely to catch that.
         if (l.bitfield) return { js: this.#loadBitfield(l), type: bitfieldPromoted(this.ty, l.bitfield) };
-        if (l.type.k === 'array') return { js: l.addr, type: this.ty.ptr(l.type.of) };
+        if (l.type.k === 'array') return l.farJs ? { js: l.farJs, type: this.ty.ptr(l.type.of, 'far') } : { js: l.addr, type: this.ty.ptr(l.type.of) };
         if (T.isRecord(l.type)) return { js: l.addr, type: l.type };
         return { js: loadExpr(l.addr, l.type), type: l.type };
       }
@@ -2492,6 +2526,7 @@ export class FunctionEmitter {
     if (e.op === '&') {
       const l = this.#lval(e.expr);
       if (l.varJs) throw new EmitError(`internal: '&' on a variable that was not given a slot`);
+      if (l.farJs) return { js: l.farJs, type: this.ty.ptr(l.type, 'far') };
       return { js: l.addr, type: this.ty.ptr(l.type) };
     }
     if (e.op === '*') {
@@ -2565,34 +2600,46 @@ export class FunctionEmitter {
      */
     if (isSeg(at) && isSeg(bt) && op === '-') unsup('arithmetic on a _seg pointer');
     if (isSeg(at) && T.isInteger(bt) && (op === '+' || op === '-')) {
-      a = { js: addrOfPtr(a.js, at), type: at = this.ty.ptr(at.to, 'far') };
+      const far = this.ty.ptr(at.to, 'far');
+      a = { js: segAsFar(a.js, far), type: at = far };
     } else if (isSeg(bt) && T.isInteger(at) && op === '+') {
-      b = { js: addrOfPtr(b.js, bt), type: bt = this.ty.ptr(bt.to, 'far') };
+      const far = this.ty.ptr(bt.to, 'far');
+      b = { js: segAsFar(b.js, far), type: bt = far };
     }
     // Pointer arithmetic scales by the pointee, and p - q divides by it.
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = stride(at.to);
-      return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };
+      return { js: ptrAdd(a.js, `${op === '-' ? '-' : ''}Math.imul(${indexJs(this.ty, b)},${s})`, at), type: at };
     }
     if (bt.k === 'ptr' && T.isInteger(at) && op === '+') {
       const s = stride(bt.to);
-      return { js: `((${b.js})+Math.imul(${indexJs(this.ty, a)},${s})|0)`, type: bt };
+      return { js: ptrAdd(b.js, `Math.imul(${indexJs(this.ty, a)},${s})`, bt), type: bt };
     }
     if (at.k === 'ptr' && bt.k === 'ptr' && op === '-') {
       const s = stride(at.to);
       // ptrdiff_t: a LONG between huge pointers, whose distance can pass 64K; an int otherwise --
       // two bytes under a 16-bit model (Watcom -mm: sizeof(hp - hp) 4, fp - fp and np - np 2).
       const d = (at.qual === 'huge' || bt.qual === 'huge') ? this.ty.LONG : this.ty.INT;
-      return { js: fitInt(this.ty, `((((${a.js})-(${b.js}))|0)/${s}|0)`, d), type: d };
+      // Two far pointers differ by their offsets (Borland's far subtraction); huge ones by address.
+      const side = (p, t) => (!isSegOff(t) ? `(${p})` : t.qual === 'huge' ? `M.lin(${p})` : `((${p})&65535)`);
+      return { js: fitInt(this.ty, `(((${side(a.js, at)}-${side(b.js, bt)})|0)/${s}|0)`, d), type: d };
     }
 
     const CMP = { '==': '===', '!=': '!==', '<': '<', '>': '>', '<=': '<=', '>=': '>=' };
     if (op in CMP) {
       // A _seg pointer against another KIND of pointer compares addresses, so the paragraph is scaled;
       // against a _seg pointer or against 0 both sides are already paragraphs.
-      if (isSeg(at) && bt.k === 'ptr' && !isSeg(bt)) a = { js: addrOfPtr(a.js, at), type: at };
-      if (isSeg(bt) && at.k === 'ptr' && !isSeg(at)) b = { js: addrOfPtr(b.js, bt), type: bt };
+      // Against a segment:offset far pointer a _seg pointer is seg:0, the same representation.
+      if (isSeg(at) && bt.k === 'ptr' && !isSeg(bt)) a = { js: isSegOff(bt) ? segAsFar(a.js, bt) : addrOfPtr(a.js, at), type: at };
+      if (isSeg(bt) && at.k === 'ptr' && !isSeg(at)) b = { js: isSegOff(at) ? segAsFar(b.js, at) : addrOfPtr(b.js, bt), type: bt };
       if (at.k === 'ptr' || bt.k === 'ptr') {
+        // Far pointers are ORDERED by their offsets (Borland compares only those for < > <= >=) and
+        // equal when both words are; huge ones are ordered by address.
+        if ((isSegOff(at) || isSegOff(bt)) && op !== '==' && op !== '!=') {
+          const huge = at.qual === 'huge' || bt.qual === 'huge';
+          const side = (p, t) => (!isSegOff(t) ? `((${p})>>>0)` : huge ? `M.lin(${p})` : `((${p})&65535)`);
+          return { js: `(${side(a.js, at)}${CMP[op]}${side(b.js, bt)}?1:0)`, type: this.ty.INT };
+        }
         return { js: `(((${a.js})>>>0)${CMP[op]}((${b.js})>>>0)?1:0)`, type: this.ty.INT };
       }
       const c = this.ty.usualArith(at, bt);
@@ -2731,7 +2778,7 @@ export class FunctionEmitter {
     if (isSeg(at) && (op === '+' || op === '-')) unsup('arithmetic on a _seg pointer');
     if (at.k === 'ptr' && T.isInteger(bt) && (op === '+' || op === '-')) {
       const s = stride(at.to);
-      return { js: `((${a.js})${op}Math.imul(${indexJs(this.ty, b)},${s})|0)`, type: at };
+      return { js: ptrAdd(a.js, `${op === '-' ? '-' : ''}Math.imul(${indexJs(this.ty, b)},${s})`, at), type: at };
     }
     if (op === '<<' || op === '>>') {
       const t = this.ty.promote(at);
@@ -2976,10 +3023,16 @@ export class FunctionEmitter {
          * functions in its own header and lets the model the program was compiled for type them.
          */
         if (!f?.type?.params) unsup(`calling ${name} with no prototype in scope`);
-        const args = e.args.map((a, i) => this.#rvalForCall(a, f.type.params[i]?.type));
+        // A far pointer crosses into the environment as the ADDRESS it names, and a far pointer the
+        // environment returns (farmalloc's block) comes back as segment:offset.
+        const args = e.args.map((a, i) => {
+          const t = f.type.params[i]?.type, v = this.#rvalForCall(a, t);
+          return isSegOff(t) ? `M.lin(${v})` : v;
+        });
+        const call = `M.rt.${rt.impl ?? name}(${args.join(',')})`;
         // The runtime returns a plain number, fitted here to the prototype's width: the 16-bit
         // conversions are not yet truncated anywhere else, and an int that reads 0xBEEF must be -16657.
-        return { js: fitToWidth(f.type.ret, `M.rt.${rt.impl ?? name}(${args.join(',')})`), type: f.type.ret };
+        return { js: isSegOff(f.type.ret) ? `M.far(${call})` : fitToWidth(f.type.ret, call), type: f.type.ret };
       }
       if (rt) {
         const args = e.args.map((a, i) => this.#rvalForCall(a, rt.params?.[i]));

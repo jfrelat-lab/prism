@@ -159,6 +159,10 @@ export class Module {
    */
   allocFar(size, align = 4) {
     if (this.farBrk === null) return this.alloc(size, align);
+    // On a paragraph, so the object's segment names it at offset 0: Borland gives a module's far data a
+    // segment of its own, and Wolf3D's WL_DR_A.ASM reads finetangent as [es:bx] with ES = SEG
+    // finetangent ("far array, starts at offset 0").
+    align = Math.max(align, 16);
     const a = Math.ceil(this.farBrk / align) * align;
     this.farBrk = a + Math.max(size, 0);
     if (this.farBrk > this.layout.farEnd) {

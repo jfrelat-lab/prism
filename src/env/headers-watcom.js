@@ -68,16 +68,23 @@ void delay(unsigned msec);
  */
 #ifdef __PRISM_REALMODE__
 /*
- * REAL MODE: a far pointer is its linear address, seg*16+off, and these decompose it NORMALISED --
+ * REAL MODE, LARGE (dos16l): a far pointer is its linear address, seg*16+off, and these decompose it NORMALISED --
  * the segment carries every whole paragraph and the offset is below 16. Chosen by what Keen Dreams
  * does with them rather than by preference: of 60 uses, every FP_OFF either feeds paragraph
  * arithmetic (FP_OFF(p)&15, FP_SEG+(FP_OFF+15)/16) or is recombined with its FP_SEG as seg*16+off --
  * movedata, _fmemcpy, a segment register -- and both survive normalisation exactly. What would NOT
  * is building MK_FP(s, o) with o >= 16 and reading FP_OFF back expecting o; nothing there does.
  */
+#ifdef __PRISM_FARSEGOFF__
+/* Near data (small, medium): a far pointer is segment:offset (src/sema/types.js segoff), as Watcom's. */
+#define FP_SEG(p)   ((unsigned)((unsigned long)(void far *)(p) >> 16))
+#define FP_OFF(p)   ((unsigned)(unsigned long)(void far *)(p))
+#define MK_FP(s, o) ((void far *)(((unsigned long)(unsigned)(s) << 16) | (unsigned)(o)))
+#else
 #define FP_SEG(p)   ((unsigned)((unsigned long)(void *)(p) >> 4))
 #define FP_OFF(p)   ((unsigned)((unsigned long)(void *)(p) & 15))
 #define MK_FP(s, o) ((void *)(((unsigned long)(unsigned)(s) << 4) + (unsigned)(o)))
+#endif
 #else
 #define FP_OFF(p)   ((unsigned)(p))
 #define FP_SEG(p)   ((unsigned)0)

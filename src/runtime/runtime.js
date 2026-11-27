@@ -174,6 +174,17 @@ export function makeMachine(mod = new Module()) {
 
     zero(addr, n) { M.u8.fill(0, addr, addr + n); },
     copy(dst, src, n) { M.u8.copyWithin(dst, src, src + n); return dst; },
+    /*
+     * A 16-bit model's FAR pointer is Borland's: segment in the high word, offset in the low
+     * (src/sema/types.js `segoff`). lin() is the address it names; far() makes one from an address,
+     * with segment 0 below 64K (DGROUP is at linear 0, so a near pointer converts to the same number)
+     * and the normalised paragraph above. farAdd moves the offset alone and wraps it at 64K, as
+     * Borland's far arithmetic does; hugeAdd moves the address and normalises, as its huge does.
+     */
+    lin(p) { return ((p >>> 16) << 4) + (p & 65535); },
+    far(a) { return a < 65536 ? a : (((a >>> 4) << 16) | (a & 15)); },
+    farAdd(p, d) { return (p & -65536) | ((p + d) & 65535); },
+    hugeAdd(p, d) { const a = ((p >>> 16) << 4) + (p & 65535) + d; return ((a >>> 4) << 16) | (a & 15); },
 
     /**
      * A copy that respects a platform's memory map, for the same reason memset does: the emitted

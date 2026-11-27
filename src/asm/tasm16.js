@@ -447,7 +447,9 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol,
     // Every jump taken and every entry spends the clock's budget -- the machine's own when the host
     // gives one (io.clock, src/env/pcirq.js: an interrupt may be delivered there, with this code's
     // registers and IF), else a step budget of its own.
-    const tick = 'if(--CLK.spBudget<0)CLK.sp_(-1,regsNow,(_fl>>>9)&1);';
+    // ...and before the host runs, it learns where this code's stack is NOW (io.atTick): an interrupt
+    // delivered there builds its frame below it, not over the words this code has pushed since entry.
+    const tick = 'if(--CLK.spBudget<0){if(io.atTick)io.atTick(sp,ss);CLK.sp_(-1,regsNow,(_fl>>>9)&1);}';
     fns.push(`function g${gi}(_pc){${tick}for(;;){${tick}switch(_pc){\n${out.join('\n')}\ndefault: return nowhere(_pc);}}}`);
   }
 
@@ -510,11 +512,13 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol,
       case 'add': case 'adc': case 'sub': case 'sbb': case 'cmp': case 'and': case 'or': case 'xor': case 'test': {
         const w = widthOf(x);
         const M = MASK[w];
-        let s = `_a=${rd(a, w, x, ea)};_b=${rd(b, w, x, ea)};_w=${w};`;
+        // The carry IN is read before _a, _b and _w change: cf() of a NEG or a shift reads the operands
+        // that instruction left there (WL_DR_A.ASM's `neg ax / sbb dx,0` lost its borrow).
+        let s = (op === 'adc' || op === 'sbb' ? '_c=cf();' : '') + `_a=${rd(a, w, x, ea)};_b=${rd(b, w, x, ea)};_w=${w};`;
         if (op === 'add') s += `_u=_a+_b;_c=0;_k=${K.ADD};`;
-        else if (op === 'adc') s += `_c=cf();_u=_a+_b+_c;_k=${K.ADD};`;
+        else if (op === 'adc') s += `_u=_a+_b+_c;_k=${K.ADD};`;
         else if (op === 'sub' || op === 'cmp') s += `_u=_a-_b;_c=0;_k=${K.SUB};`;
-        else if (op === 'sbb') s += `_c=cf();_u=_a-_b-_c;_k=${K.SUB};`;
+        else if (op === 'sbb') s += `_u=_a-_b-_c;_k=${K.SUB};`;
         else s += `_u=_a${{ and: '&', test: '&', or: '|', xor: '^' }[op]}_b;_k=${K.LOGIC};`;
         s += `_r=_u&${M};`;
         if (op !== 'cmp' && op !== 'test') s += wr(a, '_r', w, x, ea);

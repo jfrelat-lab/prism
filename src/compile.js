@@ -1097,7 +1097,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, asmEntry = null, rawFarPointers = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx, stack = null } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, asmEntry = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx, stack = null } = {}) {
   checkCxxOption(cxx);
   checkFloatToInt(floatToInt);
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
@@ -1468,7 +1468,6 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       x87Precision,
       argOrder,
       asmEntry,
-      rawFar: new Set(rawFarPointers ?? []),
       c89,
       builtinRefs,
       undefinedCalls,
@@ -1886,6 +1885,8 @@ export function modelDefines(model = 'i386', signedChar) {
     // Data pointers are four bytes: the large model. A header that declares a width by model reads it
     // (Borland's coreleft returns an unsigned long there, an unsigned in small and medium).
     ...(model === 'dos16l' ? { __PRISM_FARDATA__: '1' } : {}),
+    // Far data pointers are segment:offset (src/sema/types.js segoff): the models with near data.
+    ...(model === 'dos16' || model === 'dos16m' ? { __PRISM_FARSEGOFF__: '1' } : {}),
   };
 }
 

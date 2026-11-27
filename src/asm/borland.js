@@ -25,9 +25,11 @@
 //   * A function that falls off its end right after an asm statement returns what is in AX (DX:AX
 //     for a long), which is how Borland returns a value computed in assembly.
 //
-// FAR POINTERS ARE LINEAR IN PRISM, and asm sees their halves. `mov es,[WORD PTR dest+2]` reads the
-// segment of `byte far *dest`. Wherever an operand's C type says it covers a far pointer, the two
-// words are VIEWS of the linear address. The FIRST view an invocation takes of a pointer is
+// FAR POINTERS. In the models with near data (dos16, dos16m) a far pointer IS segment:offset, as
+// Borland's is (src/sema/types.js segoff), so asm reads and writes its two words as they are.
+// In the large model (dos16l) it is a linear address, and asm sees its halves through VIEWS:
+// `mov es,[WORD PTR dest+2]` reads the segment of `byte far *dest`. Wherever an operand's C type
+// says it covers such a pointer, the two words are views of the linear address. The FIRST view an invocation takes of a pointer is
 // decomposed normalised, as FP_OFF/FP_SEG are (headers-watcom.js): offset = L & 15, segment = L >> 4.
 // From then on that invocation keeps the SEGMENT it saw, because a Borland far pointer is a
 // segment:offset pair and asm relies on it: Keen Dreams' MemDrawChar loads ES from dest+2 once,
@@ -339,7 +341,7 @@ export function lowerBorlandAsm(body, { INT }) {
     return out;
   };
   const items = body?.items ?? [];
-  last = items.length > 0 && endsInAsm(items.at(-1));
+  last = endsInAsm({ n: 'block', items });
   return { body: walk(body), names, endsInAsm: last };
 }
 
@@ -347,10 +349,21 @@ export function lowerBorlandAsm(body, { INT }) {
 function endsInAsm(s) {
   if (!s) return false;
   if (s.n === 'asmborland') return true;
-  if (s.n === 'label') return endsInAsm(s.body);
-  if (s.n === 'block') return endsInAsm(s.items?.at(-1));
+  // A label on an empty statement (`ansok:;`, FixedByFrac's last line) does nothing: what runs last is
+  // the statement before it -- Wolf3D's FixedByFrac returned 0 for every product.
+  if (s.n === 'label') return isEmpty(s.body) ? null : endsInAsm(s.body);
+  if (s.n === 'block') {
+    for (let k = (s.items?.length ?? 0) - 1; k >= 0; k--) {
+      const it = s.items[k];
+      if (isEmpty(it)) continue;
+      const r = endsInAsm(it);
+      if (r !== null) return r;
+    }
+    return false;
+  }
   return false;
 }
+const isEmpty = (s) => !s || s.n === 'empty' || (s.n === 'block' && !(s.items ?? []).some((x) => !isEmpty(x)));
 
 // --------------------------------------------------------------------------------------------------
 // Emission. `env` is the emitter's side of the contract:
@@ -394,7 +407,8 @@ function scalarsAt(type, off, size, base = 0, out = []) {
 function holdsFarPointer(type, seen = new Set()) {
   if (!type || seen.has(type)) return false;
   seen.add(type);
-  if (type.k === 'ptr') return type.size === 4;
+  // A linear far pointer needs a view; a segment:offset one (types.js segoff) and a code pointer do not.
+  if (type.k === 'ptr') return type.size === 4 && !type.segoff && type.to?.k !== 'func';
   if (type.k === 'array') return holdsFarPointer(type.of, seen);
   if (type.k === 'struct' || type.k === 'union') return (type.fields ?? []).some((f) => holdsFarPointer(f.type, seen));
   return false;
@@ -444,7 +458,8 @@ class Translator {
          * writes the XMS driver's ES:BX into XMSaddr and enters it with `call [DWORD PTR XMSaddr]`,
          * which the far-call router reads back as stored. C calling such a pointer then traps by name.
          */
-        if (far.length && far[0].type.to?.k !== 'func' && !s.raw) {
+        // ...and neither is a segment:offset far pointer (types.js segoff): its words are the ones asm reads.
+        if (far.length && far[0].type.to?.k !== 'func' && !far[0].type.segoff) {
           if (cover.length !== 1) fail(`an access that straddles the far pointer '${o.sym}'`);
           return this.farView(`((${near})+${far[0].start}|0)`, o.c - far[0].start, size, o.sym);
         }

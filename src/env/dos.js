@@ -89,7 +89,7 @@ export function installDos(M, { keys = [] } = {}) {
   const int10 = (r) => {
     const ah = r.ax >>> 8, al = r.ax & 255;
     switch (ah) {
-      case 0x00: video.mode = al & 0x7f; M.ega?.setMode(al & 0x7f, !(al & 0x80)); return;
+      case 0x00: video.mode = al & 0x7f; M.ega?.setMode(al & 0x7f, !(al & 0x80)); if ((al & 0x7f) === 0x13) M.dac?.loadBios?.(); return;
       case 0x02: video.cursor = { page: r.bx >>> 8, row: r.dx >>> 8, col: r.dx & 255 }; return;
       case 0x03: { const c = video.cursor ?? { row: 0, col: 0 }; r.dx = (c.row << 8) | c.col; r.cx = 0x0607; return; }
       case 0x0f: r.ax = ((video.mode === 0x0d || video.mode === 0x04 || video.mode === 0x05 || video.mode === 0x01 || video.mode === 0x00 ? 40 : 80) << 8) | video.mode;

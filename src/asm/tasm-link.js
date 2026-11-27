@@ -92,8 +92,9 @@ export function dataObjectBlocks(entries, bytesOf) {
 function argWords(t, v, name) {
   if (!t) throw new Error(`tasm-link: ${name} takes an argument with no prototype in scope`);
   const n = Number(v);
-  if (t.k === 'ptr' && t.size === 4 && !t.to?.k?.startsWith?.('func')) {
-    // PRISM's far pointer is linear; the assembly reads OFFSET then SEGMENT.
+  // A segment:offset far pointer (src/sema/types.js segoff) is already the two words the assembly
+  // reads, OFFSET then SEGMENT; a linear one (dos16l) is decomposed normalised.
+  if (t.k === 'ptr' && t.size === 4 && !(t.segoff && t.to?.k !== 'func') && !t.to?.k?.startsWith?.('func')) {
     return [n & 15, (n >>> 4) & 0xffff];
   }
   if (t.size === 4) return [n & 0xffff, (n >>> 16) & 0xffff];
@@ -104,7 +105,7 @@ function argWords(t, v, name) {
 /** The C value of AX / DX:AX for a return type. */
 function result(t, R) {
   if (!t || t.k === 'void' || t.name === 'void') return undefined;
-  if (t.k === 'ptr' && t.size === 4) return ((R.dx << 4) + R.ax) >>> 0;
+  if (t.k === 'ptr' && t.size === 4) return t.segoff && t.to?.k !== 'func' ? ((R.dx << 16) | R.ax) >>> 0 : ((R.dx << 4) + R.ax) >>> 0;
   if (t.size === 4) return t.signed === false ? (((R.dx << 16) | R.ax) >>> 0) : ((R.dx << 16) | R.ax);
   if (t.size === 1) return t.signed ? ((R.ax << 24) >> 24) : (R.ax & 0xff);
   return t.signed === false || t.k === 'ptr' ? R.ax & 0xffff : ((R.ax << 16) >> 16);
@@ -128,6 +129,9 @@ export function installTasm(program, modules) {
     win: M.win ?? undefined,
     in: (port, w) => (machine ? machine.read(port, w) : 0xff),
     out: (port, w, v) => { if (machine) machine.write(port, w, v); },
+    // The machine's stack at a safepoint, which is where an interrupt is delivered: C's stack pointer
+    // follows it down (SS is DGROUP's, 0), so an ISR's frame lands below what the assembly pushed.
+    atTick: (sp, ss) => { if (!ss) M.sp = sp & ~1; },
     // M.interrupt speaks Borland's register file (cf/zf/sf flags); the machine a flags word.
     interrupt: (n, R) => {
       if (!M.interrupt) throw new Error(`int ${n.toString(16)}h from assembly, and no interrupt dispatcher is installed`);
@@ -192,7 +196,11 @@ export function installTasm(program, modules) {
         if (isr) D.setUint16(sp + 4, flags, true);         // FLAGS, as INT pushes them
         words.forEach((w, k) => D.setUint16(sp + 4 + 2 * k, w, true));
         const R = { ax: 0, bx: 0, cx: 0, dx: 0, si: 0, di: 0, bp: 0, sp, ds: 0, es: 0, ss: 0, cs: text >>> 4, ip: entry, flags };
-        runFar(R);
+        // The assembly's stack is below C's: M.sp comes down to it while it runs, or an interrupt
+        // delivered meanwhile (pcirq) builds its frame from M.sp, over this one's return address.
+        const outerSp = M.sp;
+        M.sp = sp;
+        try { runFar(R); } finally { M.sp = outerSp; }
         const was = M.cpu.if;
         M.cpu.if = (R.flags >>> 9) & 1;          // a routine may leave interrupts as it found them, or not
         if (!was && M.cpu.if) M.irqPoll?.();

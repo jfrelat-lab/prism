@@ -17,8 +17,6 @@
 
   "_compile": "The options PRJCFG reads out of WOLF3D.PRJ (goldens/borland-prj.json): -mm -3 -a, no -K (plain char SIGNED), no -b- (enums int).",
   "compile": { "memory": 16, "c89": true, "model": "dos16m", "signedChar": true, "enums": "int", "collect": true, "safepoints": true,
-    "rawFarPointers": ["linecmds"],
-    "_rawFarPointers": "WL_SCALE.C declares unsigned far *linecmds and never dereferences it in C: ScaleShape stores the shape's segment as its high word (*(((unsigned *)&linecmds)+1)=(unsigned)shape) and each command's offset as its low word ((unsigned)linecmds = *cmdptr--), and its inline asm reads the two words back (mov bp,[linecmds]; mov ds,[linecmds+2]). So its bytes are a real segment:offset, and both sides see them as stored.",
     "asmEntry": {
       "VGAClearScreen": { "cx": 0, "_why": "Its asm does mov cl,bl / rep stosw and never writes CH, and Borland compiles nothing before it that writes CX (WOLF3D.EXE 0EBC:0A0B). Its one caller, ThreeDRefresh, runs its own mov cx,0x800 / rep stosw just before the call (0EBC:0F28), which leaves CX = 0." }
     }

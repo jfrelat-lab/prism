@@ -20,8 +20,8 @@
 //
 // B. THE C-FACING HALF, which no emulator can speak to because it is about C: names resolved to a
 //    static (DS-relative), a local and a parameter (SS-relative); jumps to C labels, one of them
-//    named like an enum constant; the far-pointer views; a flag computed on a view refusing to be
-//    read; the return in AX and DX:AX; OFFSET; ports through the machine seam; a pushf word popped
+//    named like an enum constant; a far pointer's two words (segment:offset, as stored); a flag
+//    computed on its offset; the return in AX and DX:AX; OFFSET; ports through the machine seam; a pushf word popped
 //    as data; and every refusal by name -- int, call, bp, std, jp, an unknown label, a model whose
 //    DGROUP is not at 0. Executed, each probe a function called directly (run() refuses 16-bit).
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs';
@@ -429,7 +429,7 @@ int b_view_write(void) {
   char far *p = 0;
   asm mov [WORD PTR p+2],0x1000
   asm mov [WORD PTR p],0x25
-  return p == (char far *)MK_FP(0x1000, 0x25) && FP_SEG(p) == 0x1002 && FP_OFF(p) == 5;
+  return p == (char far *)MK_FP(0x1000, 0x25) && FP_SEG(p) == 0x1000 && FP_OFF(p) == 0x25;
 }
 
 int b_les(void) {
@@ -438,7 +438,7 @@ int b_les(void) {
   asm les bx,p
   asm mov [o],bx
   asm mov [s],es
-  return (unsigned long)s * 16 + o == 0x21234UL && o < 16;
+  return s == 0x2000 && o == 0x1234;
 }
 
 int b_poison(void) {
@@ -568,9 +568,11 @@ function partB() {
   eq('b_enum_label', 0, [], 'jz to a label named like an enum constant');
   eq('b_view', 1, [], 'far pointer halves read, offset written');
   eq('b_view_write', 1, [], 'far pointer halves written');
-  eq('b_les', 1, [], 'les of a far pointer, normalised');
+  eq('b_les', 1, [], 'les of a far pointer: its segment and offset as stored');
   const pz = call('b_poison');
-  report(typeof pz === 'string' && pz.includes('value is undefined'), 'B. a flag from far-pointer arithmetic is not read', String(pz).slice(0, 60));
+  // A far pointer is segment:offset (src/sema/types.js segoff): adding to its offset is word
+  // arithmetic like any other, its flags defined -- 2000:0010 + 1 is not zero.
+  report(pz === 1, 'B. a flag from far-pointer offset arithmetic is the word\'s', String(pz).slice(0, 60));
   eq('b_ds_local', 0x4321, [], 'a local is SS-relative while DS is elsewhere');
   eq('b_bp', 13, [], 'memory through a loaded bp is SS-relative, even with DS moved');
   const sw = call('b_shift_wide');

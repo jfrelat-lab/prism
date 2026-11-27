@@ -56,6 +56,13 @@ const FLAG_FORMS = [
   // A code-segment variable named without an override, under ASSUME DS:DGROUP: TASM reaches it
   // through the CS: prefix it adds itself. Keen's own modules never do this with DS not CS.
   'mov dx,[cvar]', 'add [cvar],bx',
+  // A carry IN produced by an instruction other than ADD or SUB: Wolf3D's `neg ax / sbb dx,0`
+  // (WL_DR_A.ASM) read a stale one in tasm16 until the carry was taken before the operands changed.
+  ...['neg ax\r\n\tsbb bx,0', 'neg al\r\n\tadc bl,0', 'shl ax,1\r\n\tadc bx,0', 'sar ax,cl\r\n\tsbb dx,dx', 'shr al,cl\r\n\tadc ah,0', 'rcl ax,1\r\n\tsbb bx,cx'],
+  // MUL and IMUL, which Keen's modules never use and Wolf3D's do. Only CF and OF are defined after
+  // them (SF, ZF, AF, PF are not, and Unicorn and tasm16 differ there), so CF goes to CX and OF to SI
+  // and CMP AX,AX defines every flag before the epilogue's PUSHF.
+  ...['mul bx', 'mul bl', 'imul bx', 'imul bl'].map((m) => `${m}\r\n\tsbb cx,cx\r\n\tmov si,0\r\n\tjno @@n\r\n\tinc si\r\n@@n:\r\n\tcmp ax,ax`),
 ];
 const FLAGS_SOURCE = ['IDEAL', 'MODEL MEDIUM,C', 'DATASEG', 'CODESEG', 'cvar dw 1234h',
   ...FLAG_FORMS.flatMap((f, k) => [`PROC F${k}`, `PUBLIC F${k}`, `\t${f}`, '\tpushf', '\tpop di', '\tret', 'ENDP']), 'END', ''].join('\r\n');
