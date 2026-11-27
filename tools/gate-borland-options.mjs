@@ -31,6 +31,7 @@ const PROJECTS = {
   keendreams: 'corpus/KeenDreams/kdreams.prj',
   catacomb3d: 'corpus/Catacomb3D/CAT3D.PRJ',
   hovertank3d: 'corpus/Hovertank3D/HOVER.PRJ',
+  wolf3d: 'corpus/Wolf3D/WOLFSRC/WOLF3D.PRJ',
 };
 
 let bad = 0;

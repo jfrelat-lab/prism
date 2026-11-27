@@ -1,0 +1,34 @@
+{
+  "name": "wolf3d",
+  "title": "Wolfenstein 3D (id Software, Borland C++ 3.0 / DOS)",
+  "dir": "corpus/Wolf3D/WOLFSRC",
+
+  "_doc": "THE THIRD 16-BIT TARGET, on Keen Dreams' and Catacomb 3-D's recipe: the same id engine generation, Borland C++ 3.0, MODEL MEDIUM. VERSION.H selects the six-episode build (GOODTIMES, no UPLOAD, no SPEAR), which is the id/Activision 1.4 data the source's GFXV_WL6.H numbers (P11.7). What it adds: VGA mode 13h unchained (ID_VL), and wall and sprite scalers the program compiles at run time (WL_SCALE.C BuildCompScale), the boundary of P11.4.",
+
+  "_units": "The project's own item list, read out of WOLF3D.PRJ in order. 22 C units.",
+  "units": {
+    "list": [
+      "WOLFHACK.C", "WL_MAIN.C", "WL_TEXT.C", "WL_MENU.C", "WL_INTER.C", "WL_GAME.C", "WL_PLAY.C",
+      "WL_DEBUG.C", "WL_DRAW.C", "WL_SCALE.C", "WL_STATE.C", "WL_AGENT.C", "WL_ACT1.C", "WL_ACT2.C",
+      "ID_CA.C", "ID_IN.C", "ID_MM.C", "ID_PM.C", "ID_SD.C", "ID_US_1.C", "ID_VL.C", "ID_VH.C"
+    ]
+  },
+  "caseInsensitive": true,
+
+  "_compile": "The options PRJCFG reads out of WOLF3D.PRJ (goldens/borland-prj.json): -mm -3 -a, no -K (plain char SIGNED), no -b- (enums int).",
+  "compile": { "memory": 16, "c89": true, "model": "dos16m", "signedChar": true, "enums": "int", "collect": true, "safepoints": true,
+    "rawFarPointers": ["linecmds"],
+    "_rawFarPointers": "WL_SCALE.C declares unsigned far *linecmds and never dereferences it in C: ScaleShape stores the shape's segment as its high word (*(((unsigned *)&linecmds)+1)=(unsigned)shape) and each command's offset as its low word ((unsigned)linecmds = *cmdptr--), and its inline asm reads the two words back (mov bp,[linecmds]; mov ds,[linecmds+2]). So its bytes are a real segment:offset, and both sides see them as stored.",
+    "asmEntry": {
+      "VGAClearScreen": { "cx": 0, "_why": "Its asm does mov cl,bl / rep stosw and never writes CH, and Borland compiles nothing before it that writes CX (WOLF3D.EXE 0EBC:0A0B). Its one caller, ThreeDRefresh, runs its own mov cx,0x800 / rep stosw just before the call (0EBC:0F28), which leaves CX = 0." }
+    }
+  },
+
+  "env": ["stdio", "borland", "dos", "pcirq", "ega", "vgadac"],
+  "tasm": ["WHACK_A.ASM", "WL_ASM.ASM", "WL_DR_A.ASM", "ID_SD_A.ASM", "ID_US_A.ASM", "ID_VL_A.ASM", "ID_VH_A.ASM"],
+
+  "dataObjects": [
+    { "object": "OBJ/SIGNON.OBJ" },
+    { "object": "OBJ/GAMEPAL.OBJ" }
+  ]
+}
