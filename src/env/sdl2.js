@@ -129,6 +129,23 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     }
   };
   const pump = () => { pumpTimers(); pumpAudioDue(); };
+  /*
+   * SDL_render.c's UpdateLogicalSize, without integer scaling: the aspect ratios equal (within 1e-4)
+   * scale by width; a wider logical size letterboxes, a narrower one gets side bars, the bars centred
+   * by integer division. Float arithmetic where SDL's is float.
+   */
+  const logicalGeometry = () => {
+    const w = state.winW | 0, h = state.winH | 0, lw = state.logicalW | 0, lh = state.logicalH | 0;
+    if (!lw || !lh) return { scale: 1, x: 0, y: 0, w, h };
+    const f = Math.fround, want = f(lw / lh), real = f(w / h);
+    if (Math.abs(want - real) < 0.0001) return { scale: f(w / lw), x: 0, y: 0, w, h };
+    if (want > real) {
+      const scale = f(w / lw), vh = Math.floor(f(lh * scale));
+      return { scale, x: 0, y: ((h - vh) / 2) | 0, w, h: vh };
+    }
+    const scale = f(h / lh), vw = Math.floor(f(lw * scale));
+    return { scale, x: ((w - vw) / 2) | 0, y: 0, w: vw, h };
+  };
   state.pump = pump;
 
   const api = {
@@ -157,6 +174,18 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       d.setInt32(mode + 12, 60, true); d.setUint32(mode + 16, 0, true);
       return 0;
     },
+    /*
+     * The mode a window would go fullscreen in: SDL takes the closest display mode at least the
+     * window's size -- here the one mode, the desktop's -- and with none, zeroes the mode and fails
+     * (gate-sdl2-render).
+     */
+    SDL_GetWindowDisplayMode: (_w, mode) => {
+      if (!mode) return setErr('Parameter \'mode\' is invalid');
+      if ((state.winW | 0) > 1024 || (state.winH | 0) > 768) { M.u8.fill(0, mode, mode + 20); return setErr("Couldn't find display mode match"); }
+      return api.SDL_GetDesktopDisplayMode(0, mode);
+    },
+    // No image file is written here, as in the SDL 1.2 shim: a failure SDL can give, the stream closed if asked.
+    SDL_SaveBMP_RW: (_s, rw, freedst) => { if (rw && freedst) api.SDL_RWclose(rw); return setErr('SDL_SaveBMP: no files are written here'); },
     SDL_GetDisplayName: () => (state.displayName ??= intern('PRISM')),
     SDL_GetWindowID: (w) => (w ? 1 : 0),
     // The pointer belongs to the page, which captures it on a click; nothing to grab or move here.
@@ -262,15 +291,18 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
       if (wp) dv().setInt32(wp, state.logicalW | 0, true);
       if (hp) dv().setInt32(hp, state.logicalH | 0, true);
     },
+    // What SDL's UpdateLogicalSize makes of a logical size (gate-sdl2-render): a float scale, and a
+    // viewport kept in output pixels and given back divided by that scale, truncated -- 1024 over
+    // 3.2f is 319. Abuse scales its mouse by both.
     SDL_RenderGetScale: (_r, xp, yp) => {
-      if (xp) dv().setFloat32(xp, 1, true);
-      if (yp) dv().setFloat32(yp, 1, true);
+      const g = logicalGeometry();
+      if (xp) dv().setFloat32(xp, g.scale, true);
+      if (yp) dv().setFloat32(yp, g.scale, true);
     },
     SDL_RenderGetViewport: (_r, rect) => {
       if (!rect) return;
-      dv().setInt32(rect, 0, true); dv().setInt32(rect + 4, 0, true);
-      dv().setInt32(rect + 8, state.logicalW || state.winW | 0, true);
-      dv().setInt32(rect + 12, state.logicalH || state.winH | 0, true);
+      const g = logicalGeometry();
+      [g.x, g.y, g.w, g.h].forEach((v, k) => dv().setInt32(rect + 4 * k, Math.floor(v / g.scale), true));
     },
     SDL_RenderSetIntegerScale: () => 0,
     /*
@@ -413,10 +445,19 @@ export function installSDL2(M, { width = 0, height = 0, onPresent = null, keyboa
     // ---------------------------------------------------------------- events
     SDL_PollEvent: (evt) => {
       pump();
+      // With NULL it only asks whether one is waiting, and leaves it there (SDL_PeepEvents with
+      // SDL_PEEKEVENT): Abuse's IsPending asks so before each event it reads.
+      if (!evt) return state.events.length ? 1 : 0;
       const e = state.events.shift();
       if (!e) return 0;
       if (evt) { M.u8.fill(0, evt, evt + 56); M.u8.set(e, evt); }
       return 1;
+    },
+    SDL_PumpEvents: () => { pump(); },
+    // Every queued event whose type is in [min, max] goes.
+    SDL_FlushEvents: (min, max) => {
+      const keep = state.events.filter((e) => { const t = (e[0] | (e[1] << 8) | (e[2] << 16) | (e[3] << 24)) >>> 0; return t < (min >>> 0) || t > (max >>> 0); });
+      state.events.splice(0, state.events.length, ...keep);
     },
     SDL_PushEvent: (evt) => {
       if (evt) state.events.push(M.u8.slice(evt, evt + 56));
@@ -761,7 +802,7 @@ export function sdl2Builtins(T) {
     SDL_SetWindowTitle: f(V, P, P), SDL_SetWindowIcon: f(V, P, P),
     SDL_GetMouseState: f(U, P, P), SDL_GetRelativeMouseState: f(U, P, P),
     SDL_LockAudio: f(V), SDL_UnlockAudio: f(V),
-    SDL_PollEvent: f(I, P), SDL_PushEvent: f(I, P),
+    SDL_PollEvent: f(I, P), SDL_PushEvent: f(I, P), SDL_PumpEvents: f(V), SDL_FlushEvents: f(V, U, U),
     SDL_StartTextInput: f(V), SDL_StopTextInput: f(V), SDL_IsTextInputActive: f(I),
     SDL_GetScancodeName: f(P, I), SDL_GetScancodeFromName: f(I, P),
     SDL_NumJoysticks: f(I), SDL_JoystickOpen: f(P, I), SDL_JoystickClose: f(V, P),
@@ -774,7 +815,7 @@ export function sdl2Builtins(T) {
     SDL_BuildAudioCVT: f(I, P, I, I, I, I, I, I), SDL_ConvertAudio: f(I, P),
     /* What SDLPoP adds; prototypes read from the real SDL 2 headers in the oracle container. */
     SDL_GetPerformanceCounter: f(T.ULLONG), SDL_GetPerformanceFrequency: f(T.ULLONG),
-    SDL_WasInit: f(U, U), prism_SDL_SetErrorText: f(V, P), SDL_GetDesktopDisplayMode: f(I, I, P), SDL_GetDisplayName: f(P, I),
+    SDL_WasInit: f(U, U), prism_SDL_SetErrorText: f(V, P), SDL_GetDesktopDisplayMode: f(I, I, P), SDL_GetWindowDisplayMode: f(I, P, P), SDL_SaveBMP_RW: f(I, P, P, I), SDL_GetDisplayName: f(P, I),
     SDL_GetWindowID: f(U, P), SDL_SetWindowGrab: f(V, P, I), SDL_WarpMouseInWindow: f(V, P, I, I), SDL_EventState: f(U, U, I),
     SDL_GetKeyName: f(P, I), SDL_GetKeyFromName: f(I, P),
     SDL_RWseek: f(T.LLONG, P, T.LLONG, I), SDL_RWsize: f(T.LLONG, P),

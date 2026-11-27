@@ -316,6 +316,8 @@ size_t SDL_RWread(SDL_RWops *context, void *ptr, size_t size, size_t maxnum);
 size_t SDL_RWwrite(SDL_RWops *context, const void *ptr, size_t size, size_t num);
 Sint64 SDL_RWtell(SDL_RWops *context);
 SDL_Surface *SDL_ConvertSurface(SDL_Surface *src, const SDL_PixelFormat *fmt, Uint32 flags);
+int SDL_SaveBMP_RW(SDL_Surface *surface, SDL_RWops *dst, int freedst);
+#define SDL_SaveBMP(surface, file) SDL_SaveBMP_RW(surface, SDL_RWFromFile(file, "wb"), 1)
 SDL_bool SDL_SetClipRect(SDL_Surface *surface, const SDL_Rect *rect);
 int SDL_SetSurfaceAlphaMod(SDL_Surface *surface, Uint8 alpha);
 int SDL_SetSurfaceBlendMode(SDL_Surface *surface, SDL_BlendMode blendMode);
@@ -350,6 +352,7 @@ typedef struct SDL_Keysym {
 } SDL_Keysym;
 #define SDL_RELEASED 0
 #define SDL_PRESSED  1
+#define SDL_FIRSTEVENT        0
 #define SDL_QUIT              0x100
 #define SDL_WINDOWEVENT       0x200
 #define SDL_KEYDOWN           0x300
@@ -369,6 +372,7 @@ typedef struct SDL_Keysym {
 #define SDL_CONTROLLERDEVICEADDED   0x653
 #define SDL_CONTROLLERDEVICEREMOVED 0x654
 #define SDL_USEREVENT         0x8000
+#define SDL_LASTEVENT         0xFFFF
 #define SDL_WINDOWEVENT_EXPOSED       3
 #define SDL_WINDOWEVENT_MOVED         4
 #define SDL_WINDOWEVENT_SIZE_CHANGED  6
@@ -428,6 +432,8 @@ typedef union SDL_Event {
 const Uint8 *SDL_GetKeyboardState(int *numkeys);
 void SDL_SetTextInputRect(const SDL_Rect *rect);
 int SDL_PollEvent(SDL_Event *event);
+void SDL_PumpEvents(void);
+void SDL_FlushEvents(Uint32 minType, Uint32 maxType);
 int SDL_PushEvent(SDL_Event *event);
 void SDL_StartTextInput(void);
 SDL_bool SDL_IsTextInputActive(void);
@@ -511,6 +517,7 @@ typedef struct {
     void *driverdata;
 } SDL_DisplayMode;
 int SDL_GetDesktopDisplayMode(int displayIndex, SDL_DisplayMode *mode);
+int SDL_GetWindowDisplayMode(SDL_Window *window, SDL_DisplayMode *mode);
 const char *SDL_GetDisplayName(int displayIndex);
 Uint32 SDL_GetWindowID(SDL_Window *window);
 SDL_bool SDL_GetRelativeMouseMode(void);

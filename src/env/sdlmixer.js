@@ -58,6 +58,8 @@ int Mix_ReserveChannels(int num);
 int Mix_SetPanning(int channel, Uint8 left, Uint8 right);
 int Mix_Playing(int channel);
 Mix_Music *Mix_LoadMUS(const char *file);
+Mix_Music *Mix_LoadMUS_RW(struct SDL_RWops *src, int freesrc);
+int Mix_FadeOutGroup(int tag, int ms);
 void Mix_FreeMusic(Mix_Music *music);
 int Mix_PlayMusic(Mix_Music *music, int loops);
 int Mix_VolumeMusic(int volume);
@@ -334,7 +336,7 @@ export function mixerApi(M, state, { readRW = null } = {}) {
   const newChannel = () => ({ chunk: 0, samples: 0, playing: 0, looping: 0, volume: MIX_MAX_VOLUME, paused: false, pan: null });
   const active = (ch) => ch.playing > 0 || ch.looping > 0;
 
-  return {
+  const api = {
     /*
      * The device is opened as asked: SDL's own drivers take any of these rates and both of these
      * formats without correcting them.
@@ -470,6 +472,19 @@ export function mixerApi(M, state, { readRW = null } = {}) {
       ch.pan = { left: Math.fround(left / 255), right: Math.fround(right / 255), distance: ch.pan?.distance ?? 1, distanceU8: ch.pan?.distanceU8 ?? 255 };
       return 1;
     },
+    // The function a binary links by name; C reaches the same call through the header's macro.
+    Mix_PlayChannel: (which, chunk, loops) => api.Mix_PlayChannelTimed(which, chunk, loops, -1),
+    /*
+     * Every channel's tag is -1 here (there is no Mix_GroupChannel), so tag -1 names them all and any
+     * other tag none. The fade itself is not modelled: the channels stop at once, as Mix_FadeOutMusic
+     * stops the music. The count is of the channels that were playing, which SDL_mixer returns.
+     */
+    Mix_FadeOutGroup: (tag) => {
+      if ((tag | 0) !== -1) return 0;
+      const all = channels(), n = all.filter(active).length;
+      all.forEach(done);
+      return n;
+    },
     Mix_Playing: (which) => {
       const all = channels();
       if ((which | 0) === -1) return all.filter(active).length;
@@ -479,6 +494,8 @@ export function mixerApi(M, state, { readRW = null } = {}) {
     // ---- music: none. Mix_LoadMUS fails, which is the library's own answer to a format it was
     //      built without, and a program copes with it as it would there. ------------------------
     Mix_LoadMUS: () => { setError('Unrecognized music format'); return 0; },
+    // The same answer from a stream, which SDL_mixer closes on failure when asked to free it.
+    Mix_LoadMUS_RW: (rw, freesrc) => { if (rw && freesrc) M.rt.SDL_RWclose?.(rw); setError('Unrecognized music format'); return 0; },
     Mix_FreeMusic: () => 0,
     Mix_PlayMusic: () => { state.musicPlaying = true; return 0; },
     Mix_PlayingMusic: () => (state.musicPlaying ? 1 : 0),
@@ -493,6 +510,7 @@ export function mixerApi(M, state, { readRW = null } = {}) {
     },
     Mix_SetMusicCMD: () => 0,
   };
+  return api;
 }
 
 /** Pull the recorded mixing callback, the way a host with no audio thread has to. */
@@ -525,7 +543,7 @@ export function mixerBuiltins(T) {
     Mix_PlayChannelTimed: f(I, I, P, I, I),
     Mix_HaltChannel: f(I, I), Mix_AllocateChannels: f(I, I), Mix_ReserveChannels: f(I, I), Mix_SetPanning: f(I, I, B, B),
     Mix_Playing: f(I, I),
-    Mix_LoadMUS: f(P, P),
+    Mix_LoadMUS: f(P, P), Mix_LoadMUS_RW: f(P, P, I), Mix_FadeOutGroup: f(I, I, I),
     Mix_FreeMusic: f(V, P),
     Mix_PlayMusic: f(I, P, I),
     Mix_PlayingMusic: f(I),
