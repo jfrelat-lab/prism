@@ -96,6 +96,12 @@ export function layoutTasm(mod) {
     if (x.kind === 'sreg') return { k: 'sreg', r: x.reg, w: 2 };
     if (x.kind === 'imm') return { k: 'imm', v: x.value, w: x.size };
     if (x.kind === 'offset') return { k: 'addr', sym: symbol(x.sym, where), add: x.c };
+    // A 386 address register (`[eax]`): 67h, then a 32-bit ModR/M. Laid out so the module's offsets
+    // stay TASM's; translated to a refusal, since this machine is a 286.
+    if (x.sym && REG32.includes(x.sym.toLowerCase()) && !x.regs.length) {
+      if (mod.cpu < 386) fail(where, `the register ${x.sym}, which needs .386`);
+      return { k: 'mem', w: x.size ?? null, seg: x.seg, regs: [], reg32: x.sym.toLowerCase(), disp: x.c, sym: null };
+    }
     let sym = x.sym ? symbol(x.sym, where) : null;
     // A FARDATA variable's offset is final in its own segment: TASM writes it with no fixup, and a
     // small one as a byte displacement (`mov al,[es:rndtable+bx]` is 26 8A 47 02).
@@ -108,7 +114,8 @@ export function layoutTasm(mod) {
     }
     const bracket = toks.some((t) => t.k === 'punct' && t.v === '[');
     // A bare code label with no register is a jump target, not a memory operand.
-    if (sym && sym.space === 'code' && !bracket && !x.regs.length && !x.size && !x.seg && (sym.type === 'near' || sym.type === 'far')) {
+    // ...and so is an EXTRN procedure (`EXTRN HitHorizWall:FAR`): C, or another module.
+    if (sym && (sym.space === 'code' || sym.space === 'extern') && !bracket && !x.regs.length && !x.size && !x.seg && (sym.type === 'near' || sym.type === 'far')) {
       return { k: 'label', sym, add: x.c };
     }
     // A structure field gives the operand its type, as a variable's declaration does.
@@ -128,6 +135,7 @@ export function layoutTasm(mod) {
   };
   /** ModR/M displacement bytes. */
   const dispBytes = (m) => {
+    if (m.reg32) { const d = s16(m.disp); return 1 + (d === 0 && m.reg32 !== 'ebp' ? 0 : d >= -128 && d <= 127 ? 1 : 4) + (m.reg32 === 'esp' ? 1 : 0); }
     if (!m.regs.length) return 2;
     if (m.sym) return 2;
     const d = s16(m.disp);
@@ -199,14 +207,17 @@ export function layoutTasm(mod) {
       } else len = 2 + mb;
     } else if (op === 'inc' || op === 'dec') len = a.k === 'reg' && a.w === 2 ? 1 : 2 + mb;
     else if (op === 'push' || op === 'pop') {
-      if (a.k === 'imm' || a.k === 'addr') fail(where, `${op} of an immediate, which the 8086 has not`);
-      len = a.k === 'mem' ? 2 + mb : 1;
+      if (op === 'push' && (a.k === 'imm' || a.k === 'addr') && mod.cpu >= 186) len = a.k === 'imm' && s16(a.v) >= -128 && s16(a.v) <= 127 ? 2 : 3;   // 6A ib / 68 iw
+      else if (a.k === 'imm' || a.k === 'addr') fail(where, `${op} of an immediate, which the 8086 has not`);
+      else len = a.k === 'mem' ? 2 + mb : 1;
     } else if (SHIFTS.has(op)) {
       if (b.k === 'imm' && b.v !== 1 && mod.cpu >= 186) len = 3 + mb;               // C0/C1 ib
       else if (!(b.k === 'imm' && b.v === 1) && !(b.k === 'reg' && b.r === 'cl')) fail(where, `${op} by something other than 1 or CL`);
       else len = 2 + mb;
     } else if (GROUP3.has(op)) len = 2 + mb;
     else if (op === 'cdq' && mod.cpu >= 386) len = 1;
+    // SHLD/SHRD r/m, reg, imm8: 0F A4/AC /r ib (always 32-bit here, so the 66h prefix follows).
+    else if ((op === 'shld' || op === 'shrd') && mod.cpu >= 386 && ops[2]?.k === 'imm') len = 4 + mb;
     else if (op === 'xchg') len = (a.k === 'reg' && b.k === 'reg' && a.w === 2 && (a.r === 'ax' || b.r === 'ax')) ? 1 : 2 + mb;
     else if (op === 'lea') len = m.regs.length ? 2 + mb : 3;                         // TASM: MOV r,OFFSET
     else if (op === 'les' || op === 'lds') len = 2 + mb;
@@ -214,6 +225,7 @@ export function layoutTasm(mod) {
     else if (op === 'in' || op === 'out') len = ops.some((o) => o.k === 'imm') ? 2 : 1;
     else if (op === 'int') len = a.v === 3 ? 1 : 2;
     else if (ONE_BYTE.has(op)) len = 1;
+    else if ((op === 'pusha' || op === 'popa') && mod.cpu >= 186) len = 1;
     else if (op === 'ret' || op === 'retn' || op === 'retf') len = ops.length ? 3 : 1;
     else if (op === 'jmp' || op === 'call') {
       if (a.k === 'label') {
@@ -232,6 +244,12 @@ export function layoutTasm(mod) {
     } else if (JCC.has(op)) {
       if (a.k !== 'label') fail(where, `${op} to something other than a label`);
       len = 2;
+      // Under JUMPS on a 286, a jump TASM cannot prove short is the inverted short jump over a near JMP:
+      // 5 bytes, and one pass means every forward one is reserved at 5 (TASM pads the short ones with NOPs).
+      if (mod.jumps && mod.cpu < 386 && !short && !/^(loop|jcxz)/.test(op)) {
+        const t = labels.get(a.sym.name);
+        if (!t || s16(t.addr - (pc + prefix + 2)) < -128 || s16(t.addr - (pc + prefix + 2)) > 127) len = 5;
+      }
       // The 386 has a near conditional jump (0F 8x), and TASM reserves it for a forward one: the
       // listing shows `jz not386` as 74 15 90 90. LOOP and JCXZ have no near form.
       if (mod.cpu >= 386 && !short && !/^(loop|jcxz)/.test(op)) {
@@ -310,7 +328,7 @@ const COND = {
  *   - an external with no address: Borland's run-time helpers (LDIV@), which PRISM's C does not use;
  *   - a read or write of the module's own instruction bytes, which are not encoded here.
  */
-export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol }) {
+export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol, func }) {
   const fail = (x, what) => { throw new Tasm16Error(`${x.where}: ${what}`); };
   const refuse = (what) => { throw new Tasm16Refusal(what); };
   const CS = cs & 0xffff;
@@ -325,17 +343,32 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
     if (sym.space === 'fardata') return mod.fardata.labels.get(sym.name).offset & 0xffff;
     const v = symbol(sym.name);
     if (v === undefined) refuse(`the external '${sym.name}', which nothing linked defines`);
-    return v & 0xffff;
+    // A FAR external -- C's `long far finetangent[]` -- is a linear address past DGROUP: its offset is
+    // the normalised one, paired with SEG below, so SEG x : x names the object wherever it is aligned.
+    return v >= 0x10000 ? v & 15 : v & 0xffff;
   };
   const segOf = (o, x) => {
     if (o.group === 'code') return CS;
     if (o.group === 'data') return dgroup & 0xffff;
     if (o.group === 'fardata') return fardata === undefined ? fail(x, 'SEG of FARDATA, which was not placed') : fardata & 0xffff;
+    // SEG of an external: DGROUP for a near one, the normalised paragraph for a far one (symOff above).
+    if (o.sym?.space === 'extern') {
+      const v = symbol(o.sym.name);
+      if (v === undefined) return refuse(`SEG ${o.sym.name}: an external nothing linked defines`);
+      return v >= 0x10000 ? (v >>> 4) & 0xffff : dgroup & 0xffff;
+    }
     return refuse(`SEG ${o.sym.name}: the segment of an external`);
   };
   // The instructions' own bytes: an operand addressing them without a register reads what is not there.
   const insAt = (addr) => lay.ins.find((y) => addr >= y.off && addr < y.off + y.len);
   const segJs = (s) => (s === 'cs' ? String(CS) : s);
+  // Leaving for an external procedure's far address -- a C function's code pointer read as seg:off,
+  // or another module's entry: the caller (tasm-link's router) runs whatever owns that segment.
+  const farTo = (sym, x) => {
+    const v = func?.(sym.name);
+    if (v === undefined) return `refused(${JSON.stringify(`the external procedure '${sym.name}', which nothing linked defines`)});`;
+    return `_xcs=${(v >>> 16) & 0xffff};_xip=${v & 0xffff};return -1;`;
+  };
   const eaJs = (m) => {
     const c = ((m.sym ? symOff(m.sym) : 0) + m.disp) & 0xffff;
     return m.regs.length ? `((${m.regs.join('+')}+${c})&65535)` : String(c);
@@ -353,6 +386,24 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
     const next = lay.ins[k + 1];
     if (next && (next.off !== after(x) || groupOf(next) !== groupOf(x))) targets.add(after(x));
   });
+
+  /*
+   * SELF-MODIFYING CODE, one shape of it: a byte stored into the OPCODE of a short conditional jump.
+   * WL_DR_A.ASM's raycaster turns `horizop: jle vertentry` into jge and back (mov [BYTE cs:horizop],
+   * OP_JGE) for each quadrant. The store goes to memory, where the module's image is; the jump reads
+   * its opcode there each time and takes the condition it names (70h-7Fh). Any other store into the
+   * code is still refused.
+   */
+  const patched = new Set(), patchStores = new Set();
+  for (const x of lay.ins) {
+    const m = x.ops.find((o) => o.k === 'mem');
+    if (!m || m.sym?.space !== 'code' || m.regs.length) continue;
+    const addr = (symOff(m.sym) + m.disp) & 0xffff;
+    const y = insAt(addr);
+    if (y && y.off === addr && y.len === 2 && y.op in COND && x.op === 'mov' && x.ops[0] === m && m.w === 1) {
+      patched.add(y.off); patchStores.add(x);
+    }
+  }
 
   const groups = new Map();
   for (const x of lay.ins) {
@@ -440,12 +491,13 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
     const { op, ops } = x;
     const [a, b] = ops;
     const m = ops.find((o) => o.k === 'mem');
+    if (m?.reg32) refuse(`[${m.reg32}]: a 32-bit address, a 386 instruction, and this machine is a 286`);
     if (is32(op, ops)) {
       refuse(`${op} on 32 bits: a 386 instruction, and this machine is a 286`);
     }
     if (m?.sym?.space === 'code' && !m.regs.length) {
       const y = insAt((symOff(m.sym) + m.disp) & 0xffff);
-      if (y) refuse(`the bytes of the instruction at ${y.where}, which are not encoded`);
+      if (y && !patchStores.has(x)) refuse(`the bytes of the instruction at ${y.where}, which are not encoded`);
     }
     // The effective address is computed once, before any register the instruction writes changes.
     const pre = m ? `const _e=${eaJs(m)};` : '';
@@ -474,6 +526,33 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
       }
       case 'neg': { const w = widthOf(x); return block(`_a=${rd(a, w, x, ea)};_b=_a;_w=${w};_u=-_a;_r=_u&${MASK[w]};_k=${K.NEG};${wr(a, '_r', w, x, ea)}`); }
       case 'not': { const w = widthOf(x); return block(wr(a, `(~${rd(a, w, x, ea)})&${MASK[w]}`, w, x, ea)); }
+      // One-operand MUL/IMUL: CF and OF say whether the high half carries anything; SF, ZF, AF, PF
+      // are undefined and left as they were. DIV/IDIV: a zero divisor or a quotient out of range is
+      // the CPU's divide error (INT 0), refused by name -- no program here installs a handler.
+      case 'mul': case 'imul': {
+        if (ops.length !== 1) return fail(x, `${op} with ${ops.length} operands`);
+        const w = widthOf(x);
+        const v = rd(a, w, x, ea);
+        const s = op === 'imul';
+        const prod = w === 1
+          ? (s ? `_t=((ax<<24)>>24)*((${v}<<24)>>24);_c=_t<-128||_t>127;` : `_t=(ax&255)*${v};_c=_t>255;`) + 'ax=_t&65535;'
+          : (s ? `_t=((ax<<16)>>16)*((${v}<<16)>>16);_c=_t<-32768||_t>32767;dx=(_t>>16)&65535;`
+            : `_t=ax*${v};_c=_t>65535;dx=Math.floor(_t/65536);`) + 'ax=_t&65535;';
+        return block(`mat();{let _c;${prod}_fl=(_fl&~0x801)|(_c?0x801:0);}`);
+      }
+      case 'div': case 'idiv': {
+        const w = widthOf(x);
+        const v = rd(a, w, x, ea);
+        const de = `refused(${JSON.stringify(`the divide error of ${x.where}: ${op} by zero or a quotient out of range`)})`;
+        if (op === 'div') {
+          return block(w === 1
+            ? `{const _d=${v};if(!_d)${de};const _q=Math.floor(ax/_d);if(_q>255)${de};ax=((ax%_d)<<8)|_q;}`
+            : `{const _d=${v};if(!_d)${de};const _n=dx*65536+ax,_q=Math.floor(_n/_d);if(_q>65535)${de};ax=_q;dx=_n%_d;}`);
+        }
+        return block(w === 1
+          ? `{const _d=(${v}<<24)>>24;if(!_d)${de};const _n=(ax<<16)>>16,_q=Math.trunc(_n/_d);if(_q<-128||_q>127)${de};ax=(((_n-_q*_d)&255)<<8)|(_q&255);}`
+          : `{const _d=(${v}<<16)>>16;if(!_d)${de};const _n=(dx<<16)|ax,_q=Math.trunc(_n/_d);if(_q<-32768||_q>32767)${de};ax=_q&65535;dx=(_n-_q*_d)&65535;}`);
+      }
       case 'shl': case 'sal': case 'shr': case 'sar': {
         const w = widthOf(x);
         const c = b.k === 'imm' ? String(b.v & 31) : '(cx&31)';
@@ -509,6 +588,9 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
       case 'pop':
         if (a.k === 'mem') return block(`_t=rw(ss,sp);sp=(sp+2)&65535;${wr(a, '_t', 2, x, ea)}`);
         return pop(a.k === 'sreg' ? `${a.r}=` : `${a.r}=`);
+      // PUSHA pushes SP as it was before the first push; POPA reads past it.
+      case 'pusha': return `_t=sp;${['ax', 'cx', 'dx', 'bx', '_t', 'bp', 'si', 'di'].map(push).join('')}`;
+      case 'popa': return `${pop('di=')}${pop('si=')}${pop('bp=')}sp=(sp+2)&65535;${pop('bx=')}${pop('dx=')}${pop('cx=')}${pop('ax=')}`;
       case 'pushf': return `mat();${push('(_fl&0x0fd5)|2')}`;
       case 'popf': return `_fl=rw(ss,sp);sp=(sp+2)&65535;_k=${K.CONST};`;
       case 'cli': return '_fl&=~0x200;';
@@ -534,11 +616,21 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
       case 'movsb': case 'movsw': case 'stosb': case 'stosw': case 'lodsb': case 'lodsw': case 'scasb': case 'scasw':
         return string(x);
       case 'jmp': {
+        if (a.k === 'label' && a.sym.space === 'extern') return farTo(a.sym, x);
+        if (a.k === 'mem' && a.w === 4) return block(`_t=rw(${segJs(x.seg)},${ea});_s=rw(${segJs(x.seg)},(${ea}+2)&65535);if(_s!==${CS}){_xcs=_s;_xip=_t;return -1;}return _t;`);
         if (a.k === 'label') return go(lay.labels.get(a.sym.name).addr);
         return block(`return ${rd(a, 2, x, ea)};`);
       }
       case 'call': {
         const ret = x.off + x.len;
+        if (a.k === 'label' && a.sym.space === 'extern') {
+          if (a.sym.type !== 'far') return fail(x, `a near call to the external '${a.sym.name}'`);
+          return `${push(CS)}${push(ret)}${farTo(a.sym, x)}`;
+        }
+        // A DWORD operand is a far pointer: CALL [t0OldService].
+        if (a.k === 'mem' && a.w === 4) {
+          return block(`_t=rw(${segJs(x.seg)},${ea});_s=rw(${segJs(x.seg)},(${ea}+2)&65535);${push(CS)}${push(ret)}if(_s!==${CS}){_xcs=_s;_xip=_t;return -1;}return _t;`);
+        }
         if (a.k === 'label') {
           const t = lay.labels.get(a.sym.name);
           if (t.type === 'far') return `${push(CS)}${push(ret)}return ${t.addr};`;
@@ -550,11 +642,17 @@ export function translateTasm(mod, lay, { cs, dgroup, dataBase, fardata, symbol 
         const n = a ? a.v & 0xffff : 0;
         return `_t=rw(ss,sp);sp=(sp+${2 + n})&65535;return _t;`;
       }
+      case 'iret': return `_t=rw(ss,sp);_s=rw(ss,(sp+2)&65535);_fl=rw(ss,(sp+4)&65535);_k=${K.CONST};sp=(sp+6)&65535;if(_s!==${CS}){_xcs=_s;_xip=_t;return -1;}return _t;`;
       case 'retf': {
         const n = a ? a.v & 0xffff : 0;
         return `_t=rw(ss,sp);_s=rw(ss,(sp+2)&65535);sp=(sp+${4 + n})&65535;if(_s!==${CS}){_xcs=_s;_xip=_t;return -1;}return _t;`;
       }
       default:
+        if (x.op in COND && patched.has(x.off)) {
+          const conds = ['jo', 'jno', 'jb', 'jnb', 'jz', 'jnz', 'jbe', 'ja', 'js', 'jns', 'jp', 'jnp', 'jl', 'jge', 'jle', 'jg'];
+          const bad = JSON.stringify(`${x.where}: a patched jump whose opcode is not a short Jcc`);
+          return `{const _op=rb(${CS},${x.off});if((_op&240)!==112)refused(${bad});let _c;switch(_op&15){${conds.map((c, i) => `case ${i}:_c=${COND[c]};break;`).join('')}}if(_c)${go(lay.labels.get(a.sym.name).addr)}}`;
+        }
         if (x.op in COND) return `if(${COND[x.op]})${go(lay.labels.get(a.sym.name).addr)}`;
         if (x.op === 'loop') return `cx=(cx-1)&65535;if(cx)${go(lay.labels.get(a.sym.name).addr)}`;
         if (x.op === 'loope' || x.op === 'loopz') return `cx=(cx-1)&65535;if(cx&&zf())${go(lay.labels.get(a.sym.name).addr)}`;

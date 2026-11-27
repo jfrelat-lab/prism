@@ -79,15 +79,15 @@ const W16 = ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'bp', 'ds', 'es'];
 const H8 = [['al', 'ax', 0], ['ah', 'ax', 8], ['bl', 'bx', 0], ['bh', 'bx', 8],
   ['cl', 'cx', 0], ['ch', 'cx', 8], ['dl', 'dx', 0], ['dh', 'dx', 8]];
 export const REGISTER_FILE = '{' + [
-  ...W16.map((r) => `${r}:0`), 'cf:0', 'zf:0', 'sf:0', 'df:0',
+  ...W16.map((r) => `${r}:0`), 'cf:0', 'zf:0', 'sf:0', 'of:0', 'df:0',
   // IF is the machine's (M.cpu), not the invocation's: CLI here masks the timer everywhere.
   'get if(){return M.cpu.if},set if(v){const was=M.cpu.if;M.cpu.if=v&1;if(!was&&(v&1))M.irqPoll?.(this)}',
   ...W16.map((r) => `get ${r.toUpperCase()}(){return this.${r}},set ${r.toUpperCase()}(v){this.${r}=v&65535}`),
   // The flags word Borland's _FLAGS reads (PUSHF): CF, ZF, SF, IF and DF, with bit 1 set. A flag
   // this machine could not know holds 2, and reading it through the word is refused like any other.
-  'get FLAGS(){if(this.cf>1||this.zf>1||this.sf>1)throw new Error("Borland _FLAGS: a flag whose value is undefined here");'
-    + 'return 2|this.cf|(this.zf<<6)|(this.sf<<7)|(this.if<<9)|(this.df<<10)}',
-  'set FLAGS(v){this.cf=v&1;this.zf=(v>>6)&1;this.sf=(v>>7)&1;this.if=(v>>9)&1;this.df=(v>>10)&1}',
+  'get FLAGS(){if(this.cf>1||this.zf>1||this.sf>1||this.of>1)throw new Error("Borland _FLAGS: a flag whose value is undefined here");'
+    + 'return 2|this.cf|(this.zf<<6)|(this.sf<<7)|(this.if<<9)|(this.df<<10)|(this.of<<11)}',
+  'set FLAGS(v){this.cf=v&1;this.zf=(v>>6)&1;this.sf=(v>>7)&1;this.if=(v>>9)&1;this.df=(v>>10)&1;this.of=(v>>11)&1}',
   ...H8.map(([h, r, sh]) => (sh
     ? `get ${h.toUpperCase()}(){return this.${r}>>>8},set ${h.toUpperCase()}(v){this.${r}=(this.${r}&255)|((v&255)<<8)}`
     : `get ${h.toUpperCase()}(){return this.${r}&255},set ${h.toUpperCase()}(v){this.${r}=(this.${r}&65280)|(v&255)}`)),
@@ -108,23 +108,26 @@ const CC = {
   jz: '$r.zf', je: '$r.zf', jnz: '!$r.zf', jne: '!$r.zf',
   jc: '$r.cf', jb: '$r.cf', jnae: '$r.cf', jnc: '!$r.cf', jnb: '!$r.cf', jae: '!$r.cf',
   js: '$r.sf', jns: '!$r.sf',
+  jo: '$r.of', jno: '!$r.of',
+  jl: '($r.sf!==$r.of)', jnge: '($r.sf!==$r.of)', jge: '($r.sf===$r.of)', jnl: '($r.sf===$r.of)',
+  jle: '($r.zf||$r.sf!==$r.of)', jng: '($r.zf||$r.sf!==$r.of)', jg: '(!$r.zf&&$r.sf===$r.of)', jnle: '(!$r.zf&&$r.sf===$r.of)',
   jbe: '($r.cf||$r.zf)', jna: '($r.cf||$r.zf)', ja: '(!$r.cf&&!$r.zf)', jnbe: '(!$r.cf&&!$r.zf)',
   jcxz: '($r.cx===0)',
 };
-const FLAGS_OF = (js) => ['$r.cf', '$r.zf', '$r.sf'].filter((f) => js.includes(f));
+const FLAGS_OF = (js) => ['$r.cf', '$r.zf', '$r.sf', '$r.of'].filter((f) => js.includes(f));
 export function conditionJs(op) {
   const js = op === 'loop' ? '($r.cx!==0)' : CC[op];
   const fl = FLAGS_OF(js);
   if (!fl.length) return js;
   return `(${fl.map((f) => `${f}>1`).join('||')}?${THROW('a flag whose value is undefined here (arithmetic on half of a far pointer, or a shift by the full width)')}:${js})`;
 }
-const NEEDS_OF_PF = new Set(['jl', 'jnge', 'jge', 'jnl', 'jle', 'jng', 'jg', 'jnle', 'jo', 'jno',
-  'jp', 'jpe', 'jnp', 'jpo']);
+const NEEDS_OF_PF = new Set(['jp', 'jpe', 'jnp', 'jpo']);
 
 const ALU = new Set(['add', 'sub', 'and', 'or', 'xor', 'cmp', 'test']);
-const STRING = { stosb: 1, stosw: 2, lodsb: 1, lodsw: 2, movsb: 1, movsw: 2 };
+const STRING = { stosb: 1, stosw: 2, lodsb: 1, lodsw: 2, movsb: 1, movsw: 2, outsb: 1, outsw: 2 };
 const NOARG = new Set(['cli', 'sti', 'cld', 'clc', 'stc', 'cmc', 'nop', 'pushf', 'popf', 'std']);
 const KNOWN = new Set([...ALU, ...Object.keys(STRING), ...NOARG, 'mov', 'xchg', 'inc', 'dec', 'not',
+  'adc', 'sbb', 'rcl', 'rcr', 'mul', 'imul', 'div', 'idiv', 'call',
   'neg', 'shl', 'sal', 'shr', 'sar', 'push', 'pop', 'in', 'out', 'les', 'lds', 'jmp', 'loop', 'int',
   ...Object.keys(CC)]);
 
@@ -187,6 +190,11 @@ function expression(toks) {
     return v;
   };
   const v = sum();
+  // An '&' touching the operand ENDS it: Borland C++ assembles `mov ah,l1&l2` as `mov ah,l1` and
+  // `mov ah,l1&7` as `mov ah,l1` (oracle-borland, BC 3.1), and refuses `l1 & l2` with spaces as an
+  // expression syntax error. Wolf3D's VL_Hlin writes VGAMAPMASK(leftmask&rightmask) and WOLF3D.EXE
+  // has `mov ah,[bp-7]` there: leftmask alone.
+  if (isP(toks[i], '&') && !toks[i].ws) return v;
   if (i !== toks.length) fail(`'${toks[i].v}' in an operand`);
   return v;
 }
@@ -257,8 +265,7 @@ export function parseInstruction(toks) {
     if (['rep', 'repe', 'repz', 'repne', 'repnz'].includes(op)) { rep = op; op = lc(toks[i++]); }
     if (!op) fail('rep with no instruction');
     if (isP(toks[i], ':')) fail('a label inside asm (Borland labels are C labels)');
-    if (op === 'call') fail('call');
-    if (NEEDS_OF_PF.has(op)) fail(`${op}, which reads OF or PF`);
+    if (NEEDS_OF_PF.has(op)) fail(`${op}, which reads PF`);
     if (!KNOWN.has(op)) fail(`the instruction '${op}'`);
     if (rep && !(op in STRING)) fail(`${rep} ${op}`);
     if (rep && rep !== 'rep') fail(`${rep}, which compares`);
@@ -266,7 +273,7 @@ export function parseInstruction(toks) {
     if (op in CC || op === 'jmp' || op === 'loop') {
       // A jump's operand is a LABEL, which C keeps in a namespace of its own: Keen Dreams jumps to
       // `nothing:` in a file where `nothing` is also an enum constant the parser has already folded.
-      const rest = toks.slice(i);
+      const rest = isP(toks.at(-1), ':') && toks.length - i === 2 ? toks.slice(i, -1) : toks.slice(i);
       const name = rest.length === 1 ? (rest[0].k === ID ? rest[0].v : rest[0].enumOf) : undefined;
       if (name === undefined) fail(`${op} to something other than a label`);
       return { op, rep, ops: [], label: name, text };
@@ -352,7 +359,7 @@ function endsInAsm(s) {
 //   env.store(addr, size, v) -> js statement
 // --------------------------------------------------------------------------------------------------
 
-const POISON = '$r.cf=2;$r.zf=2;$r.sf=2;';
+const POISON = '$r.cf=2;$r.zf=2;$r.sf=2;$r.of=2;';
 
 /**
  * `int n` -- from asm or from geninterrupt -- as one call into the environment: M.interrupt(n, $r)
@@ -431,9 +438,14 @@ class Translator {
       } else if (size <= 4) {
         const cover = scalarsAt(s.type, o.c, size);
         const far = cover.filter((x) => x.type.k === 'ptr' && x.type.size === 4);
-        if (far.length) {
+        /*
+         * A FAR FUNCTION POINTER is plain memory to asm: no view. Its PRISM value (a code pointer) has no
+         * segment:offset to show, and what asm stores in it is a real one -- Wolf3D's MML_SetupXMS
+         * writes the XMS driver's ES:BX into XMSaddr and enters it with `call [DWORD PTR XMSaddr]`,
+         * which the far-call router reads back as stored. C calling such a pointer then traps by name.
+         */
+        if (far.length && far[0].type.to?.k !== 'func' && !s.raw) {
           if (cover.length !== 1) fail(`an access that straddles the far pointer '${o.sym}'`);
-          if (far[0].type.to?.k === 'func') fail(`the halves of the function pointer '${o.sym}'`);
           return this.farView(`((${near})+${far[0].start}|0)`, o.c - far[0].start, size, o.sym);
         }
       }
@@ -558,15 +570,17 @@ class Translator {
         const [m, r] = ops[0].kind === 'mem' ? [a, b] : [b, a];
         return `$t=${m.get};$u=${r.get};${m.set('$u')}${r.set('$t')}`;
       }
-      case 'add': case 'sub': case 'cmp': case 'and': case 'or': case 'xor': case 'test': {
+      case 'add': case 'sub': case 'cmp': case 'and': case 'or': case 'xor': case 'test': case 'adc': case 'sbb': {
         need(2);
         const w = this.width(ops);
         const d = this.acc(ops[0], w), s = this.acc(ops[1], w);
-        const M = MASK[w];
+        const M = MASK[w], S = SIGN[w];
         let code = `$t=${d.get};$u=${s.get};`;
-        if (op === 'add') code += `$v=$t+$u;$r.cf=$v>${M}?1:0;$v&=${M};`;
-        else if (op === 'sub' || op === 'cmp') code += `$r.cf=$t<$u?1:0;$v=($t-$u)&${M};`;
-        else code += `$r.cf=0;$v=$t${op === 'or' ? '|' : op === 'xor' ? '^' : '&'}$u;`;
+        // ADC and SBB take the carry in; a carry this machine could not know is refused.
+        const cin = op === 'adc' || op === 'sbb' ? `+(${conditionJs('jc')}?1:0)` : '';
+        if (op === 'add' || op === 'adc') code += `$v=$t+$u${cin};$r.cf=$v>${M}?1:0;$v&=${M};$r.of=(~($t^$u)&($t^$v)&${S})?1:0;`;
+        else if (op === 'sub' || op === 'cmp' || op === 'sbb') code += `$v=$t-$u-(0${cin});$r.cf=$v<0?1:0;$v&=${M};$r.of=(($t^$u)&($t^$v)&${S})?1:0;`;
+        else code += `$r.cf=0;$r.of=0;$v=$t${op === 'or' ? '|' : op === 'xor' ? '^' : '&'}$u;`;
         code += this.flagsZS('$v', w);
         if (d.view || s.view) code += POISON;
         if (op !== 'cmp' && op !== 'test') code += d.set('$v');
@@ -579,8 +593,9 @@ class Translator {
         const M = MASK[w];
         if (op === 'not') return d.set(`(~${d.get})&${M}`);
         const p = d.view ? POISON : '';
-        if (op === 'neg') return `$t=${d.get};$r.cf=$t!==0?1:0;$v=(-$t)&${M};${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
-        return `$v=(${d.get}${op === 'inc' ? '+' : '-'}1)&${M};${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
+        if (op === 'neg') return `$t=${d.get};$r.cf=$t!==0?1:0;$r.of=$t===${SIGN[w]}?1:0;$v=(-$t)&${M};${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
+        const ofv = op === 'inc' ? SIGN[w] : SIGN[w] - 1;   // the result that crossed the sign
+        return `$v=(${d.get}${op === 'inc' ? '+' : '-'}1)&${M};$r.of=$v===${ofv}?1:0;${this.flagsZS('$v', w)}${p}${d.set('$v')}`;
       }
       case 'shl': case 'sal': case 'shr': case 'sar': {
         need(2);
@@ -602,8 +617,63 @@ class Translator {
           body = `$t=($t<<${32 - bits})>>${32 - bits};$r.cf=($t>>(Math.min($u,${bits})-1))&1;$v=($t>>Math.min($u,${bits}-1))&${M};`;
         }
         // CF is undefined once the count reaches the operand's width (Intel SDM, SHL/SHR/SAR).
+        const of1 = op === 'shr' ? `($t>>>${bits - 1})&1` : op === 'sar' ? '0' : `(($v>>>${bits - 1})&1)^$r.cf`;
+        body += `$r.of=$u===1?${of1}:2;`;
         return `$u=${n};if($u){$t=${d.get};${body}${this.flagsZS('$v', w)}if($u>=${bits})$r.cf=2;`
           + `${d.view ? POISON : ''}${d.set('$v')}}`;
+      }
+      case 'rcl': case 'rcr': {
+        need(2);
+        const w = this.width([ops[0]]);
+        const d = this.acc(ops[0], w);
+        const c = ops[1];
+        let n;
+        if (c.kind === 'imm') n = String(c.value & 31);
+        else if (c.kind === 'reg8' && c.reg === 'cl') n = '($r.cx&31)';
+        else fail(`${op} by something other than a constant or cl`);
+        const bits = w * 8, M = MASK[w];
+        const step = op === 'rcl'
+          ? `$u=($t>>>${bits - 1})&1;$t=(($t<<1)|$v)&${M};$v=$u;`
+          : `$u=$t&1;$t=($t>>>1)|($v<<${bits - 1});$v=$u;`;
+        const of1 = op === 'rcl' ? `(($t>>>${bits - 1})&1)^$v` : `(($t>>>${bits - 1})^($t>>>${bits - 2}))&1`;
+        // Through CF: $v carries it; ZF and SF are left alone, OF is defined for a count of 1.
+        return `{let $n=${n};if($n){$t=${d.get};$v=${conditionJs('jc')}?1:0;for(let $k=0;$k<$n;$k++){${step}}$r.cf=$v;$r.of=$n===1?${of1}:2;${d.set('$t')}}}`;
+      }
+      case 'mul': case 'imul': case 'div': case 'idiv': {
+        need(1);
+        const w = this.width([ops[0]]);
+        const s = this.acc(ops[0], w);
+        const und = '$r.zf=2;$r.sf=2;';
+        if (op === 'mul' || op === 'imul') {
+          const body = w === 1
+            ? (op === 'mul' ? `$v=($r.ax&255)*$t;$u=$v>255;` : `$v=((($r.ax&255)<<24)>>24)*(($t<<24)>>24);$u=$v<-128||$v>127;`) + '$r.ax=$v&65535;'
+            : (op === 'mul' ? '$v=$r.ax*$t;$u=$v>65535;$r.dx=Math.floor($v/65536);' : '$v=(($r.ax<<16)>>16)*(($t<<16)>>16);$u=$v<-32768||$v>32767;$r.dx=($v>>16)&65535;') + '$r.ax=$v&65535;';
+          return `$t=${s.get};${body}$r.cf=$r.of=$u?1:0;${und}`;
+        }
+        const de = THROW(`${op}: a divide error (a zero divisor or a quotient out of range)`);
+        const body = op === 'div'
+          ? (w === 1 ? `if(!$t)${de};$v=Math.floor($r.ax/$t);if($v>255)${de};$r.ax=(($r.ax%$t)<<8)|$v;`
+            : `if(!$t)${de};$u=$r.dx*65536+$r.ax;$v=Math.floor($u/$t);if($v>65535)${de};$r.ax=$v;$r.dx=$u%$t;`)
+          : (w === 1 ? `$t=($t<<24)>>24;if(!$t)${de};$u=($r.ax<<16)>>16;$v=Math.trunc($u/$t);if($v<-128||$v>127)${de};$r.ax=((($u-$v*$t)&255)<<8)|($v&255);`
+            : `$t=($t<<16)>>16;if(!$t)${de};$u=($r.dx<<16)|$r.ax;$v=Math.trunc($u/$t);if($v<-32768||$v>32767)${de};$r.ax=$v&65535;$r.dx=($u-$v*$t)&65535;`);
+        return `$t=${s.get};${body}$r.cf=2;$r.of=2;${und}`;
+      }
+      case 'call': {
+        // A FAR call through a doubleword in memory (`call DWORD PTR [bp]`, `call ss:[linescale]`):
+        // its target is whatever owns that CS:IP -- C, a TASM module, or bytes the program wrote
+        // (src/asm/farcall.js). The registers go and come back in this invocation's file.
+        need(1);
+        const m = ops[0];
+        if (m.kind !== 'mem') fail('call to something other than a doubleword in memory');
+        if (m.size !== null && m.size !== 4) fail(`a call through a ${m.size}-byte operand (only far calls)`);
+        const a = this.mem(m, 4);
+        let seg, off;
+        if (a.far) { seg = `(${a.L}>>>4)`; off = `(${a.L}&15)`; }
+        else {
+          off = this.env.load(a.addr, 2);
+          seg = this.env.load(`((${a.segJs}<<4)+((${a.off}+2)&65535))`, 2);
+        }
+        return `(M.farCall??${THROW('a far call with no far-call router installed (src/asm/farcall.js)')})(${seg},${off},$r);`;
       }
       case 'push': {
         need(1);
@@ -615,11 +685,11 @@ class Translator {
         const d = this.acc(ops[0], 2);
         return `$t=$stk.pop();if(typeof $t!=="number")${THROW('pop of a pushf word, or of nothing pushed in this function')};${d.set('$t')}`;
       }
-      case 'pushf': return '$stk.push({cf:$r.cf,zf:$r.zf,sf:$r.sf,if:$r.if,df:$r.df});';
+      case 'pushf': return '$stk.push({cf:$r.cf,zf:$r.zf,sf:$r.sf,of:$r.of,if:$r.if,df:$r.df});';
       case 'popf':
         return `$t=$stk.pop();if($t===undefined)${THROW('popf with nothing pushed in this function')};`
-          + 'if(typeof $t==="number"){$t={cf:$t&1,zf:($t>>6)&1,sf:($t>>7)&1,if:($t>>9)&1,df:($t>>10)&1};}'
-          + `if($t.df)${THROW('popf setting DF')};$r.cf=$t.cf;$r.zf=$t.zf;$r.sf=$t.sf;$r.if=$t.if;$r.df=$t.df;`;
+          + 'if(typeof $t==="number"){$t={cf:$t&1,zf:($t>>6)&1,sf:($t>>7)&1,of:($t>>11)&1,if:($t>>9)&1,df:($t>>10)&1};}'
+          + `if($t.df)${THROW('popf setting DF')};$r.cf=$t.cf;$r.zf=$t.zf;$r.sf=$t.sf;$r.of=$t.of;$r.if=$t.if;$r.df=$t.df;`;
       case 'in': {
         need(2);
         const d = ops[0];
@@ -681,6 +751,9 @@ class Translator {
     if (op.startsWith('stos')) one = `${e.store(di, w, acc)};$r.di=($r.di+${w})&65535;`;
     else if (op.startsWith('lods')) {
       one = (w === 1 ? `$r.ax=($r.ax&65280)|${e.load(si, 1)};` : `$r.ax=${e.load(si, 2)};`) + `$r.si=($r.si+${w})&65535;`;
+    } else if (op.startsWith('outs')) {
+      // OUTSB/OUTSW (186+): DS:SI to the port in DX -- VL_SetPalette's `rep outsb` to the DAC.
+      one = `${this.io()}.write($r.dx,${w},${e.load(si, w)});$r.si=($r.si+${w})&65535;`;
     } else one = `${e.store(di, w, e.load(si, w))};$r.di=($r.di+${w})&65535;$r.si=($r.si+${w})&65535;`;
     // DF is clear by construction: cld is the only direction write accepted.
     return rep ? `while($r.cx!==0){${one}$r.cx=($r.cx-1)&65535;}` : one;
@@ -732,7 +805,12 @@ function insEffect(ins) {
     case 'xor': case 'sub':
       if (same) { write(a); break; }            // the zeroing idiom reads nothing
       read(a); read(b); write(a); break;
-    case 'add': case 'and': case 'or': read(a); read(b); write(a); break;
+    case 'add': case 'and': case 'or': case 'adc': case 'sbb': read(a); read(b); write(a); break;
+    case 'rcl': case 'rcr': read(a); read(b); write(a); break;
+    case 'mul': case 'imul': read(a); r.push(a?.size === 1 ? 'al' : 'ax'); w.push('ax'); if (a?.size !== 1) w.push('dx'); break;
+    case 'div': case 'idiv': read(a); r.push('ax'); if (a?.size !== 1) r.push('dx'); w.push('ax'); if (a?.size !== 1) w.push('dx'); break;
+    // The callee reads what it reads (nothing checkable here) and leaves every register defined.
+    case 'call': addr(a); w.push(...GENERAL); break;
     case 'cmp': case 'test': read(a); read(b); break;
     case 'inc': case 'dec': case 'not': case 'neg': read(a); write(a); break;
     case 'shl': case 'sal': case 'shr': case 'sar': read(a); read(b); write(a); break;
@@ -748,6 +826,7 @@ function insEffect(ins) {
         const acc = STRING[ins.op] === 1 ? 'al' : 'ax';
         if (ins.op.startsWith('stos')) { r.push(acc, 'di', 'es'); w.push('di'); }
         else if (ins.op.startsWith('lods')) { r.push('si'); w.push(acc, 'si'); }
+        else if (ins.op.startsWith('outs')) { r.push('si', 'dx'); w.push('si'); }
         else { r.push('si', 'di', 'es'); w.push('si', 'di'); }
         if (ins.rep) { r.push('cx'); w.push('cx'); }
       }
@@ -774,9 +853,10 @@ function insEffect(ins) {
  *
  * Returns null, or a sentence naming the first offending read.
  */
-export function firstUndefinedRead(body, { isPseudo, entryDefined = false }) {
-  // An interrupt function starts with every register holding the interrupted code's value.
-  const written = new Set(entryDefined ? ['ds', ...GENERAL] : ['ds']);
+export function firstUndefinedRead(body, { isPseudo, entryDefined = false, entryRegs = [] }) {
+  // An interrupt function starts with every register holding the interrupted code's value; a function
+  // the target states entry registers for (compile.asmEntry) starts with those.
+  const written = new Set(entryDefined ? ['ds', ...GENERAL] : ['ds', ...entryRegs.flatMap((r) => UNITS[r] ?? [])]);
   let clobberedBy = null;
   const check = (units, what) => {
     for (const u of units) {

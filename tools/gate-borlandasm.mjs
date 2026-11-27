@@ -3,10 +3,14 @@
 // A. THE INSTRUCTIONS, against Unicorn. Random real-mode snippets -- the ALU with CF/ZF/SF, 8- and
 //    16-bit registers, every addressing form the 8086 has except bp, segment overrides, shifts by a
 //    constant and by cl, push/pop, pushf/popf, the string instructions with and without rep, forward
-//    conditional jumps and `loop` -- are rendered twice from one description: as Borland `asm`
+//    conditional jumps and `loop` -- and since Wolf3D, OF and the signed jumps that read it, ADC/SBB,
+//    RCL/RCR, MUL/IMUL, and DIV/IDIV on a grid that cannot divide-fault -- are rendered twice from one
+//    description: as Borland `asm`
 //    statements inside a C function for PRISM, and as NASM for Unicorn. Both start from the same
 //    memory (filled from the case's seed by the same generator on both sides) and the same
-//    registers, and must end with the same registers, the same CF/ZF/SF and the same memory.
+//    registers, and must end with the same registers, the same flags and the same memory. A flag the
+//    snippet leaves UNDEFINED (OF after a shift by more than 1, ZF/SF after MUL) is not read back --
+//    PRISM refuses to read one by name -- so the generator tracks which flags each instruction defines.
 //
 //    CAPTURE ONCE, REPLAY FOREVER, as gate-asm does: `--capture` needs nasm and a Python with
 //    unicorn, and writes goldens/borland-asm.json, which is committed; a replay needs neither.
@@ -18,7 +22,7 @@
 //    static (DS-relative), a local and a parameter (SS-relative); jumps to C labels, one of them
 //    named like an enum constant; the far-pointer views; a flag computed on a view refusing to be
 //    read; the return in AX and DX:AX; OFFSET; ports through the machine seam; a pushf word popped
-//    as data; and every refusal by name -- int, call, bp, std, jl, an unknown label, a model whose
+//    as data; and every refusal by name -- int, call, bp, std, jp, an unknown label, a model whose
 //    DGROUP is not at 0. Executed, each probe a function called directly (run() refuses 16-bit).
 import { readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -102,35 +106,58 @@ function snippet(seed) {
   for (const reg of R16) L('mov', [{ k: 'reg', size: 2, name: reg }, { k: 'imm', value: r.val(0x10000) }]);
   let lab = 0;
   const count = 6 + r.int(10);
+  // The flags defined at this point: every instruction below says what it defines and what it leaves
+  // undefined, and only defined flags are tested by a jump or read back at the end.
+  let def = new Set(['cf', 'zf', 'sf', 'of']);
+  const ALL = ['cf', 'zf', 'sf', 'of'];
   const one = (avoidCx = false) => {
     const size = r.pick([1, 2]);
     const avoid = avoidCx ? ['cx', 'cl', 'ch'] : [];
     const kind = r.int(100);
     if (kind < 30) {
-      const op = r.pick(['add', 'sub', 'cmp', 'and', 'or', 'xor', 'test']);
+      let op = r.pick(['add', 'sub', 'cmp', 'and', 'or', 'xor', 'test', 'adc', 'sbb']);
+      if ((op === 'adc' || op === 'sbb') && !def.has('cf')) op = 'add';
+      def = new Set(ALL);
       const shape = r.int(4);
       const d = shape === 3 ? memOp(r, size) : regOp(r, size, avoid);
       const s = shape === 0 ? { k: 'imm', value: r.val(size === 1 ? 256 : 0x10000) }
         : shape === 1 ? (r.int(3) ? regOp(r, size) : d) : shape === 2 ? memOp(r, size) : regOp(r, size);
       L(op, [d, s]);
     } else if (kind < 42) {
-      L(r.pick(['inc', 'dec', 'not', 'neg']), [r.int(3) ? regOp(r, size, avoid) : memOp(r, size)]);
+      const op = r.pick(['inc', 'dec', 'not', 'neg']);
+      L(op, [r.int(3) ? regOp(r, size, avoid) : memOp(r, size)]);
+      if (op === 'neg') def = new Set(ALL);
+      else if (op !== 'not') { def.add('zf'); def.add('sf'); def.add('of'); }
     } else if (kind < 55) {
       const d = r.int(3) ? regOp(r, size, [...avoid, 'cl', 'cx']) : memOp(r, size);
       const bits = size * 8;
-      const c = r.int(3) ? { k: 'imm', value: 1 + r.int(bits - 1) } : { k: 'reg', size: 1, name: 'cl' };
+      let n = 1 + r.int(bits - 1);
+      if (r.int(3) === 0) n = 1;
+      const c = r.int(3) ? { k: 'imm', value: n } : { k: 'reg', size: 1, name: 'cl' };
       if (c.k === 'reg') {
         if (avoidCx) return;
-        L('mov', [{ k: 'reg', size: 1, name: 'cl' }, { k: 'imm', value: 1 + r.int(bits - 1) }]);
+        L('mov', [{ k: 'reg', size: 1, name: 'cl' }, { k: 'imm', value: n }]);
       }
-      L(r.pick(['shl', 'shr', 'sar']), [d, c], { needSize: d.k === 'mem' });
+      let op = r.pick(['shl', 'shr', 'sar', 'rcl', 'rcr']);
+      if ((op === 'rcl' || op === 'rcr') && (avoidCx || !def.has('cf'))) op = 'shl';
+      L(op, [d, c], { needSize: d.k === 'mem' });
+      if (op === 'rcl' || op === 'rcr') def.add('cf'); else { def.add('cf'); def.add('zf'); def.add('sf'); }
+      if (n === 1) def.add('of'); else def.delete('of');
     } else if (kind < 66) {
       const shape = r.int(3);
       if (shape === 0) L('mov', [regOp(r, size, avoid), memOp(r, size)]);
       else if (shape === 1) L('mov', [memOp(r, size), regOp(r, size)]);
       else L('xchg', [regOp(r, size, avoid), r.int(2) ? memOp(r, size) : regOp(r, size, avoid)]);
     } else if (kind < 72) {
+      if (!avoidCx && r.int(3) === 0) {
+        // MUL/IMUL: CF and OF defined, ZF and SF not. Not inside a loop, whose next round would
+        // test them.
+        L(r.pick(['mul', 'imul']), [r.int(3) ? regOp(r, size) : memOp(r, size)], { needSize: true });
+        def = new Set(['cf', 'of']);
+        return;
+      }
       L(r.pick(['clc', 'stc', 'cmc']));
+      def.add('cf');
     } else if (kind < 80) {
       const s = r.pick(['stosb', 'stosw', 'lodsb', 'lodsw', 'movsb', 'movsw']);
       if (!avoidCx && r.int(2)) {
@@ -144,10 +171,15 @@ function snippet(seed) {
     } else if (kind < 92) {
       L('pushf');
       L(r.pick(['add', 'xor', 'sub']), [regOp(r, 2, avoid), { k: 'imm', value: r.val(0x10000) }]);
-      L('popf');
+      L('popf');                                    // the flags, defined or not, as they were
     } else if (kind < 97) {
       const k = lab++;
-      out.push(line(r.pick(['jz', 'jnz', 'jc', 'jnc', 'js', 'jns', 'jbe', 'ja', 'jcxz']), []));
+      const NEEDS = { jz: ['zf'], jnz: ['zf'], jc: ['cf'], jnc: ['cf'], js: ['sf'], jns: ['sf'], jbe: ['cf', 'zf'],
+        ja: ['cf', 'zf'], jcxz: [], jo: ['of'], jno: ['of'], jl: ['sf', 'of'], jge: ['sf', 'of'], jle: ['zf', 'sf', 'of'],
+        jg: ['zf', 'sf', 'of'] };
+      // Inside a loop the next round starts from the flags the body leaves, so OF is not tested there.
+      const ok = Object.keys(NEEDS).filter((j) => NEEDS[j].every((f) => def.has(f)) && !(avoidCx && NEEDS[j].includes('of')));
+      out.push(line(r.pick(ok), []));
       out.at(-1).b += ` L${k}`; out.at(-1).n += ` L${k}`;
       L('inc', [regOp(r, 2, avoid)]);
       out.push({ label: `L${k}` });
@@ -155,11 +187,14 @@ function snippet(seed) {
       const k = lab++;
       L('mov', [{ k: 'reg', size: 2, name: 'cx' }, { k: 'imm', value: 1 + r.int(5) }]);
       out.push({ label: `L${k}` });
+      const before = def;
       one(true); one(true);
       out.push({ b: `loop L${k}`, n: `loop L${k}` });
+      def = new Set([...def].filter((f) => before.has(f) || f !== 'of'));
     }
   };
   for (let i = 0; i < count; i++) one();
+  out.flags = [...def].sort();
   return out;
 }
 
@@ -173,7 +208,7 @@ function nasmSource(lines) {
 }
 
 /** The C function PRISM runs for a case: the snippet, then the machine state written to globals. */
-function cFunction(k, lines) {
+function cFunction(k, lines, flagList = ['cf', 'zf', 'sf']) {
   // Unicorn starts every register at 0; PRISM refuses to read a register the function never wrote
   // (firstUndefinedRead), so the same zeros are written explicitly, with mov, which sets no flag.
   const zero = ['ax', 'bx', 'cx', 'dx', 'si', 'di'].map((r) => ({ b: `mov ${r},0` }));
@@ -181,7 +216,7 @@ function cFunction(k, lines) {
   const save = ['ax', 'bx', 'cx', 'dx', 'si', 'di'].map((r) => `asm mov [WORD PTR ss:g_${r}],${r}`);
   const segs = ['asm mov [WORD PTR ss:g_ax2],ax', 'asm mov ax,ds', 'asm mov [WORD PTR ss:g_ds],ax',
     'asm mov ax,es', 'asm mov [WORD PTR ss:g_es],ax'];
-  const flags = [['jnc', 'cf'], ['jnz', 'zf'], ['jns', 'sf']].map(([j, f]) =>
+  const flags = [['jnc', 'cf'], ['jnz', 'zf'], ['jns', 'sf'], ['jno', 'of']].filter(([, f]) => flagList.includes(f)).map(([j, f]) =>
     `asm ${j} no_${f}_${k}\ng_${f} = 1;\nno_${f}_${k}:`);
   return `void c${k}(void) {\n${[...body, ...flags, ...save, ...segs].join('\n')}\n;}\n`;
 }
@@ -200,6 +235,44 @@ function edgeGrid() {
     for (const op of ['add', 'sub', 'cmp', 'and', 'or', 'xor', 'test']) {
       for (const a of vals) for (const b of vals) {
         out.push([`mov ax,${hex(a)}`, `mov bx,${hex(b)}`, `${op} ${d},${s}`].map((x) => ({ b: x, n: x })));
+      }
+    }
+    for (const op of ['adc', 'sbb']) {
+      for (const a of vals) for (const b of vals) for (const cf of ['clc', 'stc']) {
+        out.push([`mov ax,${hex(a)}`, `mov bx,${hex(b)}`, cf, `${op} ${d},${s}`].map((x) => ({ b: x, n: x })));
+      }
+    }
+    for (const op of ['rcl', 'rcr', 'shl', 'shr', 'sar']) {
+      for (const a of vals) for (const n of [1, 2, w * 8 - 1]) for (const cf of ['clc', 'stc']) {
+        const c = [`mov ax,${hex(a)}`, cf, `${op} ${d},${n}`].map((x) => ({ b: x, n: x }));
+        c.flags = op.startsWith('rc') ? (n === 1 ? ['cf', 'of'] : ['cf']) : (n === 1 ? ['cf', 'of', 'sf', 'zf'] : ['cf', 'sf', 'zf']);
+        out.push(c);
+      }
+    }
+    for (const op of ['mul', 'imul']) {
+      for (const a of vals) for (const b of vals) {
+        const c = [`mov ax,${hex(a)}`, `mov bx,${hex(b)}`, 'mov dx,0x1234', `${op} ${s}`].map((x) => ({ b: x, n: x }));
+        c.flags = ['cf', 'of'];
+        out.push(c);
+      }
+    }
+    // DIV/IDIV on operands that cannot fault: the dividend's high part below the divisor.
+    const divs = w === 2 ? [[0, 0x1234, 0x10], [0x0f, 0xffff, 0x10], [0x7fff, 0xffff, 0x8000], [0, 7, 0xffff], [1, 0, 3]]
+      : [[0, 0x12, 0x10], [0, 0x0fff, 0x10], [0, 0x7f, 0xff], [0, 0x80, 3], [0, 0xfffe, 0xfff0 & 0xff]];
+    for (const op of ['div', 'idiv']) {
+      for (const [hi, lo, dv] of divs) {
+        const ax = w === 2 ? lo : lo & 0xffff, dx = w === 2 ? hi : 0;
+        const ok = op === 'div' ? (w === 2 ? hi < dv : ((ax >> 8) < dv)) : (() => {
+          const n = w === 2 ? ((dx << 16) | ax) : ((ax << 16) >> 16);
+          const d2 = w === 2 ? ((dv << 16) >> 16) : ((dv << 24) >> 24);
+          if (!d2) return false;
+          const q = Math.trunc(n / d2);
+          return w === 2 ? q >= -32768 && q <= 32767 : q >= -128 && q <= 127;
+        })();
+        if (!ok) continue;
+        const c = [`mov ax,${hex(ax)}`, `mov dx,${hex(dx)}`, `mov bx,${hex(dv)}`, `${op} ${s}`].map((x) => ({ b: x, n: x }));
+        c.flags = [];
+        out.push(c);
       }
     }
     for (const op of ['inc', 'dec', 'neg', 'not']) {
@@ -222,7 +295,7 @@ function capture() {
     writeFileSync(src, nasmSource(lines));
     const a = spawnSync('nasm', ['-f', 'bin', src, '-o', bin], { encoding: 'utf8' });
     if (a.status !== 0) throw new Error(`nasm on case ${k}: ${a.stderr}\n${nasmSource(lines)}`);
-    cases.push({ seed, lines, code: readFileSync(bin).toString('hex'), fill: k < CASES });
+    cases.push({ seed, lines, flags: lines.flags ?? ['cf', 'zf', 'sf', 'of'], code: readFileSync(bin).toString('hex'), fill: k < CASES });
   }
   const r = spawnSync(PY, [join(ROOT, 'tools/oracle/unicorn-rm16.py')], {
     input: JSON.stringify({ layout: LAYOUT, cases: cases.map((c) => ({ code: c.code, seed: c.seed, fill: c.fill })) }),
@@ -234,7 +307,7 @@ function capture() {
     _doc: 'Unicorn 16-bit real mode, running nasm -f bin of the SAME snippets PRISM translates from Borland '
       + 'asm syntax. Captured by tools/gate-borlandasm.mjs --capture; replayed without Python or nasm.',
     layout: LAYOUT,
-    cases: cases.map((c, i) => ({ seed: c.seed, fill: c.fill, lines: c.lines.map((l) => (l.label ? { label: l.label } : { b: l.b })), want: results[i] })),
+    cases: cases.map((c, i) => ({ seed: c.seed, fill: c.fill, flags: c.flags, lines: c.lines.map((l) => (l.label ? { label: l.label } : { b: l.b })), want: results[i] })),
   };
   mkdirSync(dirname(GOLDEN), { recursive: true });
   writeFileSync(GOLDEN, `${JSON.stringify(golden)}\n`);
@@ -245,14 +318,14 @@ function capture() {
 function replay() {
   if (!existsSync(GOLDEN)) { console.log('no goldens/borland-asm.json: run with --capture first'); process.exit(1); }
   const g = JSON.parse(readFileSync(GOLDEN, 'utf8'));
-  const globals = ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'ax2', 'ds', 'es', 'cf', 'zf', 'sf'].map((r) => `unsigned g_${r};`).join('\n');
+  const globals = ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'ax2', 'ds', 'es', 'cf', 'zf', 'sf', 'of'].map((r) => `unsigned g_${r};`).join('\n');
   // In batches: one C file of 1,300 functions is a single directive-free run of 250,000 tokens, which
   // PRISM's preprocessor takes for a runaway expansion (its bound is on the run, not on growth).
   const BATCH = 250;
   const builds = [];
   for (let from = 0; from < g.cases.length; from += BATCH) {
     const part = g.cases.slice(from, from + BATCH);
-    const src = `${globals}\n${part.map((c, j) => cFunction(from + j, c.lines)).join('\n')}`;
+    const src = `${globals}\n${part.map((c, j) => cFunction(from + j, c.lines, c.flags ?? ['cf', 'zf', 'sf'])).join('\n')}`;
     builds.push(compileProgram([{ file: 'cases.c', source: src }],
       { resolve: builtinHeaderResolver({}), memory: 8 << 20, collect: true, model: 'dos16m' }));
   }
@@ -270,14 +343,14 @@ function replay() {
       for (const [a, n] of g.layout.fill) {
         if (c.fill) u8.set(fillBytes(c.seed, n), a); else u8.fill(0, a, a + n);
       }
-      for (const r of ['cf', 'zf', 'sf']) dv.setUint16(at(`g_${r}`), 0, true);
+      for (const r of ['cf', 'zf', 'sf', 'of']) dv.setUint16(at(`g_${r}`), 0, true);
       try { p.F[`c${k}`](); } catch (e) { why.push(`threw ${e.message}`); }
       if (!why.length) {
         const got = (r) => dv.getUint16(at(`g_${r}`), true);
         for (const r of ['ax', 'bx', 'cx', 'dx', 'si', 'di', 'ds', 'es']) {
           if (got(r) !== c.want.regs[r]) why.push(`${r} ${hex(got(r))} want ${hex(c.want.regs[r])}`);
         }
-        for (const f of ['cf', 'zf', 'sf']) if (got(f) !== c.want[f]) why.push(`${f} ${got(f)} want ${c.want[f]}`);
+        for (const f of c.flags ?? ['cf', 'zf', 'sf']) if (got(f) !== c.want[f]) why.push(`${f} ${got(f)} want ${c.want[f]}`);
         const h = createHash('sha256');
         for (const [a, n] of g.layout.fill) h.update(u8.subarray(a, a + n));
         if (h.digest('hex') !== c.want.mem) why.push('memory differs');
@@ -469,7 +542,7 @@ int r_clobber(void) { _AX = 5; b_ret16(); return _AX; }
 int r_call(void)  { asm call b_ret16 ; return 0; }
 int r_bp(void)    { asm mov ax,[bp+4] ; return 0; }
 int r_std(void)   { asm std ; return 0; }
-int r_jl(void)    { asm jl here ; here: return 0; }
+int r_jl(void)    { asm jp here ; here: return 0; }
 int r_label(void) { asm jz nowhere ; return 0; }
 int r_nosize(void){ asm xor bx,bx ; asm mov [bx],0 ; return 0; }
 `;
@@ -539,7 +612,7 @@ function partB() {
   report(typeof pf === 'string' && pf.includes('pushf word'), 'B. a pushf word popped as data throws by name', String(pf).slice(0, 60));
   const named = {
     b_far_object: 'outside DGROUP', r_call: 'call', r_bp: 'reads bp before this function wrote it', r_std: 'std',
-    r_jl: 'OF or PF', r_label: 'not a label', r_nosize: 'size nothing states',
+    r_jl: 'reads PF', r_label: 'not a label', r_nosize: 'size nothing states',
     r_undef: 'reads di before this function wrote it', r_clobber: 'after the call to b_ret16()',
   };
   for (const [fn, want] of Object.entries(named)) {

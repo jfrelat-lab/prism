@@ -43,6 +43,10 @@ const STRING_ADD = `
 void far *_fmemcpy(void far *dest, const void far *src, size_t n);
 void far *_fmemset(void far *s, int c, size_t n);
 void movedata(unsigned srcseg, unsigned srcoff, unsigned dstseg, unsigned dstoff, size_t n);
+char far *_fstrcpy(char far *dest, const char far *src);
+size_t _fstrlen(const char far *s);
+int _fmemcmp(const void far *s1, const void far *s2, size_t n);
+int _fstricmp(const char far *s1, const char far *s2);
 #endif
 `;
 
@@ -58,6 +62,14 @@ const STAT_ADD = `
 export const BORLAND_LIB_HEADERS = {
   'stdlib.h': HEADERS['stdlib.h'] + STDLIB_ADD,
   'string.h': HEADERS['string.h'] + STRING_ADD,
+  // Borland's O_TEXT is a mode this file layer never translates in, as O_BINARY is (both 0 here).
+  'fcntl.h': HEADERS['fcntl.h'] + '\n#ifndef O_TEXT\n#define O_TEXT 0\n#endif\n',
+  'io.h': HEADERS['io.h'] + `
+#ifndef __PRISM_BORLAND_IO_H
+#define __PRISM_BORLAND_IO_H
+int creat(const char *path, int amode);
+#endif
+`,
   'mem.h': `#include <string.h>\n`,
   'sys/stat.h': HEADERS['sys/stat.h'] + STAT_ADD,
   'alloc.h': `
@@ -137,6 +149,7 @@ void clrscr(void);
 void textcolor(int newcolor);
 void textbackground(int newcolor);
 void textattr(int newattr);
+void gotoxy(int x, int y);
 #endif
 `,
 };
@@ -157,11 +170,13 @@ const PROTO = Object.freeze({ proto: true });
  */
 export const BORLAND_LIB_BUILTINS = {
   ...Object.fromEntries(['ltoa', 'ultoa', 'coreleft', 'farcoreleft', 'farmalloc', 'farcalloc', 'farfree',
-    '_fmemcpy', '_fmemset', 'movedata', 'findfirst', 'findnext', 'getdate', 'gettime', 'bioskey'].map((n) => [n, PROTO])),
+    '_fmemcpy', '_fmemset', 'movedata', '_fstrcpy', '_fstricmp', 'creat', '_fstrlen', '_fmemcmp', '_dos_write', 'filelength', 'findfirst', 'findnext', 'getdate', 'gettime', 'bioskey'].map((n) => [n, PROTO])),
   clrscr: { ret: T.VOID, params: [] },
   textcolor: { ret: T.VOID, params: [T.INT] },
   textbackground: { ret: T.VOID, params: [T.INT] },
   textattr: { ret: T.VOID, params: [T.INT] },
+  // Wolf3D's Quit calls it with no conio.h in scope, as Keen calls clrscr.
+  gotoxy: { ret: T.VOID, params: [T.INT, T.INT] },
 };
 
 /** Digits of an unsigned value in a radix, as Borland's itoa family writes them: lower case. */
@@ -254,6 +269,27 @@ export function installBorlandLib(M) {
     // Through the device window when a range touches it (M.winCopy/winFill, runtime.js).
     _fmemcpy: (d, s, n) => { M.blockCopy(d, s, n & 0xffff); return d; },
     _fmemset: (d, c, n) => { M.rt.memset(d, c, n & 0xffff); return d; },
+    _fstrcpy: (d, s) => { let i = 0; for (;;) { const c = u8()[s + i]; u8()[d + i] = c; if (!c) break; i++; } return d; },
+    // Compares as Borland's stricmp does: both characters folded to UPPER case.
+    _fstricmp: (a, b) => {
+      const up = (c) => (c >= 97 && c <= 122 ? c - 32 : c);
+      for (let i = 0; ; i++) {
+        const x = up(u8()[a + i]), y = up(u8()[b + i]);
+        if (x !== y || !x) return x - y;
+      }
+    },
+    _fstrlen: (s) => { let n = 0; while (u8()[s + n]) n++; return n; },
+    _fmemcmp: (a, b, n) => { for (let i = 0; i < (n & 0xffff); i++) { const d = u8()[a + i] - u8()[b + i]; if (d) return d; } return 0; },
+    // int 21h AH=40h by another name: 0 and the count written, or the DOS error. The file layer writes all.
+    _dos_write: (fd, buf, len, nwritten) => {
+      const n = M.rt.write(fd, buf, len & 0xffff);
+      if (n < 0) { setErrno(6); return 6; }                // invalid handle
+      if (nwritten) dv().setUint16(nwritten, n & 0xffff, true);
+      return 0;
+    },
+    // creat: a new file, or an existing one truncated, open for writing (Borland's io.h). The text/binary
+    // mode it takes from _fmode matters only to write(), and this layer does no translation.
+    creat: (p) => M.rt.open(p, 0x242),
     movedata: (ss, so, ds, dof, n) => { M.blockCopy(((ds & 0xffff) << 4) + (dof & 0xffff), ((ss & 0xffff) << 4) + (so & 0xffff), n & 0xffff); },
 
     findfirst: (pathPtr, blk, _attrib) => {
@@ -312,6 +348,8 @@ export function installBorlandLib(M) {
     textcolor: (c) => { conio.attr = (conio.attr & 0x70) | (c & 0x8f); },
     textbackground: (c) => { conio.attr = (conio.attr & 0x8f) | ((c & 7) << 4); },
     textattr: (a) => { conio.attr = a & 0xff; },
+    // The cursor conio would move through the BIOS: kept, not shown (there is no BIOS cursor here).
+    gotoxy: (x, y) => { conio.x = x; conio.y = y; },
   };
 
   Object.assign(M.rt, api);

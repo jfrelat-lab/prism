@@ -864,6 +864,9 @@ export class Parser {
 
   /** Parse a declarator, wrapping `base` as the suffixes unwind. Abstract declarators allowed. */
   #declarator(base, { abstract = false } = {}) {
+    // Borland takes a pragma between two declarators of one list: WL_MENU.C ends `MainMenu[]={...},`
+    // ... `SndMenu[]={...},` and has `#pragma warn +sus` before the next one, `far NewEmenu[]=`.
+    while (this.isP('#') && this.peek().bol && this.peek(1)?.v === 'pragma') this.#pragma();
     /*
      * Watcom puts its memory-model and convention keywords BEFORE the star, inside the declarator:
      *

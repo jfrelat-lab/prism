@@ -269,6 +269,20 @@ export function assembleTasm(file, { read }) {
   // ---------------------------------------------------------------- instructions
   const emitIns = (toks, where, generated = false) => {
     if (seg !== 'code') fail(where, 'an instruction outside CODESEG');
+    // TASM's extended CALL: `CALL alOut C,alFreqL,ax` pushes the arguments as the language does
+    // (C: right to left), calls, and for C takes them back off (ADD SP). Word arguments only.
+    if (lc(toks[0]) === 'call' && toks[1]?.k === 'id' && toks[2]?.k === 'id' && /^(c|pascal)$/i.test(toks[2].v) && isP(toks[3], ',')) {
+      const args = [];
+      let cur = [];
+      for (const t of toks.slice(4)) { if (isP(t, ',')) { args.push(cur); cur = []; } else cur.push(t); }
+      args.push(cur);
+      if (args.some((x) => !x.length)) fail(where, 'an empty argument in an extended CALL');
+      const c = lc(toks[2]) === 'c';
+      for (const x of c ? [...args].reverse() : args) emitIns([{ k: 'id', v: 'PUSH' }, ...x], where, true);
+      emitIns(toks.slice(0, 2), where, generated);
+      if (c) emitIns([{ k: 'id', v: 'ADD' }, { k: 'id', v: 'sp' }, { k: 'punct', v: ',' }, { k: 'num', v: String(2 * args.length) }], where, true);
+      return;
+    }
     const t2 = [];
     let depth = 0;
     toks.forEach((t, k) => {
@@ -474,6 +488,10 @@ export function assembleTasm(file, { read }) {
       mod.cpu = parseInt(toks[1].v, 10) % 1000;
       return;
     }
+    // The same in Ideal mode's spelling: P286, P386N, P8086 (WL_DR_A.ASM states P286).
+    if (toks.length === 1 && /^p(8086|186|286|386|486)n?$/i.test(f)) { mod.cpu = parseInt(f.slice(1), 10) % 1000; return; }
+    // JUMPS: a conditional jump out of range becomes the inverted jump over a near JMP (tasm16 sizes it).
+    if (f === 'jumps' || f === 'nojumps') { mod.jumps = f === 'jumps'; return; }
     if (f === 'ideal') { mod.mode = 'ideal'; return; }
     if (f === 'masm') { mod.mode = 'masm'; return; }
     if (f === 'model') {

@@ -468,9 +468,12 @@ export class FunctionEmitter {
      * (SDL_TimingService's `TimerVal = _CX`). src/env/pcirq.js hands those registers over.
      */
     this.isInterrupt = realMode && !!d.type.ret?.cv?.interrupt;
+    // Registers the target states for this function on entry, from the shipped binary (compile.asmEntry).
+    this.asmEntry = realMode ? this.ctx.asmEntry?.[d.name] ?? null : null;
     if (realMode && (this.asm || mentionsPseudo(d.body, this.isPseudo) || callsName(d.body, 'geninterrupt'))) {
       this.usesRegs = true;
-      const why = firstUndefinedRead(d.body, { isPseudo: this.isPseudo, entryDefined: this.isInterrupt });
+      const entryRegs = Object.keys(this.asmEntry ?? {}).filter((k) => !k.startsWith('_'));
+      const why = firstUndefinedRead(d.body, { isPseudo: this.isPseudo, entryDefined: this.isInterrupt, entryRegs });
       if (why) unsup(`a register value only Borland's code could supply: ${why}`);
     }
 
@@ -653,6 +656,7 @@ export class FunctionEmitter {
     // running past its floor would write the heap, silently. i386's megabyte is left unchecked.
     if (this.frameSize && this.ty.INT.size === 2) body.push(`if(_fp<${this.mod.stackLimit})M.stackOverflow(_fp);`);
     if (this.usesRegs) body.push(REGISTER_DECLS);
+    if (this.usesRegs && this.asmEntry) for (const [k, v] of Object.entries(this.asmEntry)) if (!k.startsWith('_')) body.push(`$r.${k}=${v & 0xffff};`);
     if (this.usesMsvcRegs) body.push(MSVC_REGISTER_DECLS);
     if (this.usesRegs && this.isInterrupt) body.push('if(M.isrRegs)for(const _k of ["ax","bx","cx","dx","si","di","bp","es"])$r[_k]=M.isrRegs[_k]&65535;');
     for (const p of pre) body.push('  ' + storeExpr(`(_fp+${p.off}|0)`, p.type, coerce(this.ty, p.from, p.type, p.type)) + ';');
@@ -2013,7 +2017,8 @@ export class FunctionEmitter {
           throw new BorlandAsmError(`the local '${name}', which has no stack slot`);
         }
         const g = this.ctx.globals.get(name);
-        if (g) return { addr: String(g.addr), type: g.type, local: false, near: nearOf(g.addr) };
+        // A raw far pointer (compile.rawFarPointers) is seen by asm as the words C stored, with no view.
+        if (g) return { addr: String(g.addr), type: g.type, local: false, near: nearOf(g.addr), raw: !!this.ctx.rawFar?.has(name) };
         if (this.ctx.funcs.get(name)) return { isFunc: true };
         throw new BorlandAsmError(`'${name}', which is not a variable in scope`);
       },
@@ -2293,7 +2298,15 @@ export class FunctionEmitter {
       if (inner.bitfield || !scalar(to) || !scalar(from)) {
         unsup(`a cast as an lvalue from ${T.typeName(from)} to ${T.typeName(to)}`);
       }
-      if (to.size !== from.size) {
+      // A NARROWER integer over an integer is its low part, at the same address on a little-endian
+      // machine: `(unsigned)postsource = texture` with `long postsource` (WL_DRAW.C), whose two words
+      // the program writes one by one and its asm loads with LDS. Not over a pointer: a PRISM far
+      // pointer is linear, and its low word is not the offset Borland's would hold.
+      // ...and over a far pointer the target declares RAW, whose bytes are the segment:offset its C
+      // writes word by word (Wolf3D's linecmds: `(unsigned)linecmds = *cmdptr--`, its asm reads both).
+      const rawFar = e.expr.n === 'ident' && this.ctx.rawFar?.has(e.expr.name) && !this.locals.has(e.expr.name) && from.k === 'ptr';
+      const narrower = to.size < from.size && (T.isInteger(to) || to.k === 'enum') && (T.isInteger(from) || from.k === 'enum' || rawFar);
+      if (to.size !== from.size && !narrower) {
         unsup(`a cast as an lvalue from ${T.typeName(from)} to ${T.typeName(to)}, which differ in size`);
       }
       if (inner.varJs) throw new EmitError('internal: a cast lvalue on a variable that was not given a slot');
@@ -3050,6 +3063,18 @@ export class FunctionEmitter {
         // The LINKAGE name, not the source name: a file-scope `static` is mangled per translation
         // unit, and using the source name here called a function that was never bound.
         return { js: `F[${JSON.stringify(f.name)}](${args.join(',')})`, type: ft?.ret ?? this.ty.INT };
+      }
+      /*
+       * C89's implicit declaration: a call to a name nothing declares declares `int name()`, and its
+       * arguments go with the default promotions. Borland accepts it with a warning, and Wolf3D's
+       * VW_UpdateScreen calls VH_UpdateScreen (ID_VH_A.ASM) so. Listed with the undefined calls, as
+       * a declared-but-undefined function is; under C99 and later it stays an error.
+       */
+      if (this.ctx.c89) {
+        const where = this.ctx.undefinedCalls;
+        if (where) (where.get(name) ?? where.set(name, new Set()).get(name)).add(this.ctx.unit ?? '?');
+        const args = this.#callArgs(e, null);
+        return { js: `F[${JSON.stringify(name)}](${args.join(',')})`, type: this.ty.INT };
       }
       throw new EmitError(`call to undeclared function '${name}'`);
     }
@@ -3870,8 +3895,9 @@ export function collectAddressTaken(node, out) {
   if (Array.isArray(node)) { for (const x of node) collectAddressTaken(x, out); return; }
   if (node.n === 'unary' && node.op === '&') {
     let e = node.expr;
-    // `&a`, `&a.b`, `&a[i]` all pin `a` in memory.
-    while (e && (e.n === 'member' || e.n === 'index')) e = e.base;
+    // `&a`, `&a.b`, `&a[i]` all pin `a` in memory -- and so does `&(memptr)a`, the address of a cast
+    // lvalue (Wolf3D's MM_GetPtr (&(memptr)temp,size) on a local).
+    while (e && (e.n === 'member' || e.n === 'index' || e.n === 'cast')) e = e.n === 'cast' ? e.expr : e.base;
     if (e?.n === 'ident') out.add(e.name);
   }
   // A cast ASSIGNED THROUGH -- `(unsigned)i = x`, `((int)u)++` -- reinterprets the object's bytes,

@@ -70,6 +70,16 @@ export function installEga(M) {
     (is200(mode) ? PALETTE_200 : PALETTE_350).forEach((v, k) => { attr[k] = v; });
     attr[0x12] = 0x0f;
     crtc[0x13] = mode === 0x0d ? 20 : 40;   // words per line: 320 pixels, or 80 text columns
+    /*
+     * MODE 13h, the VGA's 320x200 in 256 colours, as the BIOS leaves its registers: Chain-4 (every
+     * byte one pixel, planes chosen by the address's low two bits), doubleword scanning, the 256-colour
+     * shift. A program that reads them back to clear bits -- Wolf3D's VL_DePlaneVGA, which turns
+     * Chain-4 and doubleword mode off to draw on the four planes itself -- needs these values.
+     */
+    if (mode === 0x13) {
+      seq[4] = 0x0e; gc[5] = 0x40; gc[6] = 0x05; crtc[0x14] = 0x40; crtc[0x17] = 0xa3; attr[0x10] = 0x41;
+      for (let k = 0; k < 16; k++) attr[k] = k;
+    }
     if (clear) for (const p of planes) p.fill(0);
   };
   setMode(3, false);
@@ -105,9 +115,13 @@ export function installEga(M) {
   };
   const rotate = (v) => { const r = gc[3] & 7; return ((v >>> r) | (v << (8 - r))) & 0xff; };
 
+  // Chain-4 (sequencer index 4, bit 3): a byte is one plane's, plane = address & 3, at the address with
+  // those two bits cleared -- DOSBox's mapping, so a program that unchains sees what it wrote chained.
+  const chained = () => (seq[4] & 8) !== 0;
   const win = {
     r8(a) {
       const off = a - WINDOW;
+      if (chained()) return planes[off & 3][off & ~3];
       for (let p = 0; p < 4; p++) latch[p] = planes[p][off];
       if (gc[5] & 8) {                   // read mode 1: colour compare
         let diff = 0;
@@ -121,6 +135,7 @@ export function installEga(M) {
     },
     w8(a, v) {
       const off = a - WINDOW;
+      if (chained()) { if ((seq[2] >> (off & 3)) & 1) planes[off & 3][off & ~3] = v & 0xff; return; }
       const wm = gc[5] & 3, mask = gc[8], mapMask = seq[2];
       for (let p = 0; p < 4; p++) {
         if (!((mapMask >> p) & 1)) continue;
@@ -140,6 +155,31 @@ export function installEga(M) {
     },
   };
 
+  /*
+   * Mode 13h's picture as palette indices, with the DAC's 256 entries as RGB (src/env/vgadac.js, the
+   * vgadac environment; grey ramps without it). Unchained in byte mode -- Wolf3D's -- pixel x is plane
+   * x & 3 at start + y * pitch + x / 4, the pitch the CRTC offset times two; chained, a pixel is the
+   * linear byte y * 320 + x through the Chain-4 mapping above.
+   */
+  const vga256 = (into) => {
+    const width = 320, height = 200;
+    const pix = into ?? new Uint8Array(width * height);
+    const start = (crtc[0x0c] << 8) | crtc[0x0d];
+    if (chained()) {
+      for (let i = 0; i < width * height; i++) { const l = (start * 4 + i) & 0xffff; pix[i] = planes[l & 3][l & ~3]; }
+    } else {
+      const pitch = crtc[0x13] * ((crtc[0x14] & 0x40) ? 8 : (crtc[0x17] & 0x40) ? 2 : 4);
+      for (let y = 0; y < height; y++) {
+        const line = start + y * pitch;
+        for (let x = 0; x < width; x++) pix[y * width + x] = planes[x & 3][(line + (x >> 2)) & 0xffff];
+      }
+    }
+    const dac = M.dac?.palette;
+    const palette = [];
+    for (let k = 0; k < 256; k++) palette.push(dac ? [dac[3 * k], dac[3 * k + 1], dac[3 * k + 2]] : [k, k, k]);
+    return { width, height, pix, palette };
+  };
+
   const ega = {
     planes, latch, seq, gc, crtc, attr,
     get mode() { return mode; },
@@ -152,6 +192,7 @@ export function installEga(M) {
      * allocation.
      */
     indexed(into = null) {
+      if (mode === 0x13) return vga256(into);
       if (mode !== 0x0d) return null;
       const width = 320, height = 200;
       const pix = into ?? new Uint8Array(width * height);

@@ -16,7 +16,7 @@ ranges in `fill` filled from the case's seed with the generator below -- the SAM
 uses, so no memory image crosses the pipe -- and all registers zero apart from SS:SP. The snippet
 sets its own registers; it ends by running off the end of its code into a HLT.
 
-Output: { "results": [ { "regs": {...}, "cf":0, "zf":1, "sf":0, "mem": "<sha256 of the fill ranges>" } ] }
+Output: { "results": [ { "regs": {...}, "cf":0, "zf":1, "sf":0, "of":0, "mem": "<sha256 of the fill ranges>" } ] }
 """
 import hashlib
 import json
@@ -67,7 +67,7 @@ def run(case, layout):
     for addr, size in layout['fill']:
         h.update(bytes(mu.mem_read(addr, size)))
     return {'regs': {k: mu.reg_read(v) for k, v in REGS.items()},
-            'cf': fl & 1, 'zf': (fl >> 6) & 1, 'sf': (fl >> 7) & 1, 'mem': h.hexdigest()}
+            'cf': fl & 1, 'zf': (fl >> 6) & 1, 'sf': (fl >> 7) & 1, 'of': (fl >> 11) & 1, 'mem': h.hexdigest()}
 
 
 def main():

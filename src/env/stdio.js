@@ -1197,6 +1197,8 @@ export function installStdio(M, {
       h.pos = p; h.eof = false;
       return p;
     },
+    // io.h's filelength (DOS compilers): the size of an open descriptor's file, or -1 and EBADF.
+    filelength: (fd) => { const h = fileOf(fd); if (!h) { setErrno(9); return -1; } return h.bytes.length; },
     fsync: () => 0,
     fdatasync: () => 0,
     // Answered by name: the page, one processor, and EINVAL for a name this host has no answer to.

@@ -16,10 +16,8 @@
 import { assembleTasm } from './tasm.js';
 import { layoutTasm, translateTasm, loadTasm } from './tasm16.js';
 import { readOmf } from './omf.js';
+import { installFarCall, FROM_C } from './farcall.js';
 
-// The return address pushed for a call from C: a code segment no module is loaded at. RETF to it
-// leaves the machine (tasm16.js returns when the popped CS is not its own).
-const FROM_C = 0xffff;
 
 /** Assemble each file and lay it out. `read(name)` returns a source file's text, or null. */
 export function tasmModules(files, read) {
@@ -50,8 +48,14 @@ export function tasmExternData(modules) {
     }
     out.push({ name: `${file}:_DATA`, size: Math.max(mod.data.bytes.length, 2), far: false, align: 16, publics });
     out.push({ name: `${file}:_TEXT`, size: Math.max(lay.size, 2), far: true, align: 16, publics: [] });
-    // FARDATA is a segment of its own (Catacomb's rndtable), reached by SEG: a far block.
-    if (mod.fardata.bytes.length) out.push({ name: `${file}:FAR_DATA`, size: mod.fardata.bytes.length, far: true, align: 16, publics: [] });
+    // FARDATA is a segment of its own (Catacomb's rndtable), reached by SEG: a far block. Its publics
+    // are C's too: WOLFHACK.C declares `extern char far planepics[8192]`, which WHACK_A.ASM defines there.
+    const farPublics = [];
+    for (const name of mod.publics) {
+      const l = mod.fardata.labels.get(name);
+      if (l && cName(mod, name)) farPublics.push({ name: cName(mod, name), offset: l.offset });
+    }
+    if (mod.fardata.bytes.length) out.push({ name: `${file}:FAR_DATA`, size: mod.fardata.bytes.length, far: true, align: 16, publics: farPublics });
   }
   return out;
 }
@@ -136,35 +140,59 @@ export function installTasm(program, modules) {
   const bound = [];
   // The instructions translated to a refusal (tasm16.js): named here, thrown only if one runs.
   bound.refused = [];
-  for (const { file, mod, lay } of modules) {
-    const symbol = (name) => { const n = cName(mod, name); return n === null ? undefined : M.mod.symbols.get(n)?.addr; };
+
+  // Far calls, jumps and returns between modules, C and run-time code: src/asm/farcall.js.
+  installFarCall(M, { funcType: (name) => program.funcTypes.get(name) ?? null });
+  const runFar = M.farRoute;
+  const entries = new Map();             // C name -> far address of a module's public procedure
+  const prepared = modules.map(({ file, mod, lay }) => {
     const text = program.externPlaced.get(`${file}:_TEXT`), data = program.externPlaced.get(`${file}:_DATA`);
     if (text === undefined || data === undefined) throw new Error(`tasm-link: ${file} was not placed at compile time`);
     if (text & 15) throw new Error(`tasm-link: ${file}'s code is not paragraph-aligned`);
+    for (const p of mod.procs) {
+      const c = cName(mod, p.name);
+      if (mod.publics.has(p.name) && c !== null) entries.set(c, (((text >>> 4) << 16) | lay.labels.get(p.name).addr) >>> 0);
+    }
+    return { file, mod, lay, text, data };
+  });
+  for (const { file, mod, lay, text, data } of prepared) {
+    const symbol = (name) => { const n = cName(mod, name); return n === null ? undefined : M.mod.symbols.get(n)?.addr; };
+    // An external procedure's far address: another module's entry, else C's code pointer.
+    const func = (name) => { const n = cName(mod, name); return n === null ? undefined : entries.get(n) ?? M.mod.funcs.get(n)?.addr; };
     const far = program.externPlaced.get(`${file}:FAR_DATA`);
     if (far !== undefined && (far & 15)) throw new Error(`tasm-link: ${file}'s FARDATA is not paragraph-aligned`);
-    const place = { cs: text >>> 4, dgroup: 0, dataBase: data, fardata: far === undefined ? undefined : far >>> 4, symbol };
+    const place = { cs: text >>> 4, dgroup: 0, dataBase: data, fardata: far === undefined ? undefined : far >>> 4, symbol, func };
     loadTasm(mod, lay, D, place);
     const machineOf = (0, eval)(translateTasm(mod, lay, place))(D, io);
+    M.farOwn(text >>> 4, (R) => machineOf.run(R));
     bound.refused.push(...machineOf.refused);
     for (const p of mod.procs) {
       if (!mod.publics.has(p.name)) continue;
       const c = cName(mod, p.name);
-      const ft = c === null ? null : program.funcTypes.get(c);
-      if (!ft) continue;                       // public, and no C declares it
+      // A public no C declares is still bound, for a C89 implicit call (`int name()`): with no
+      // prototype the arguments cannot be laid out, so one called with any is refused by name.
+      const ft = c === null ? null : program.funcTypes.get(c) ?? { params: null, ret: null, implicit: true };
+      if (c === null) continue;
       const entry = lay.labels.get(p.name).addr;
       const params = ft.params ?? [];
+      const implicit = !!ft.implicit;
+      // An interrupt service routine returns with IRET, so it is entered as INT enters it: FLAGS,
+      // then CS:IP. Told apart by its own code -- an IRET and no RET of its own.
+      const ownIns = lay.ins.filter((y) => y.item.proc === p.name);
+      const isr = ownIns.some((y) => y.op === 'iret') && !ownIns.some((y) => /^ret[nf]?$/.test(y.op));
+      if (isr && params.length) throw new Error(`tasm-link: ${p.name} returns with IRET and C gives it parameters`);
       const fn = (...args) => {
+        if (implicit && args.length) throw new Error(`tasm-link: ${p.name} called with arguments and no prototype in scope`);
         const words = [];
         params.forEach((q, i) => words.push(...argWords(q.type, args[i], p.name)));
-        let sp = (M.sp & ~1) - 2 * words.length - 4;
-        const at = sp;
-        D.setUint16(at, 0, true);                          // IP
-        D.setUint16(at + 2, FROM_C, true);                 // CS
-        words.forEach((w, k) => D.setUint16(at + 4 + 2 * k, w, true));
-        const R = { ax: 0, bx: 0, cx: 0, dx: 0, si: 0, di: 0, bp: 0, sp, ds: 0, es: 0, ss: 0, ip: entry,
-          flags: 0x2 | (M.cpu.if << 9) };
-        machineOf.run(R);
+        const flags = 0x2 | (M.cpu.if << 9);
+        const sp = (M.sp & ~1) - 2 * words.length - (isr ? 6 : 4);
+        D.setUint16(sp, 0, true);                          // IP
+        D.setUint16(sp + 2, FROM_C, true);                 // CS
+        if (isr) D.setUint16(sp + 4, flags, true);         // FLAGS, as INT pushes them
+        words.forEach((w, k) => D.setUint16(sp + 4 + 2 * k, w, true));
+        const R = { ax: 0, bx: 0, cx: 0, dx: 0, si: 0, di: 0, bp: 0, sp, ds: 0, es: 0, ss: 0, cs: text >>> 4, ip: entry, flags };
+        runFar(R);
         const was = M.cpu.if;
         M.cpu.if = (R.flags >>> 9) & 1;          // a routine may leave interrupts as it found them, or not
         if (!was && M.cpu.if) M.irqPoll?.();

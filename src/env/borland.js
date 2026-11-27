@@ -49,6 +49,17 @@ typedef void interrupt (far *__prism_vector)(void);
 __prism_vector getvect(int interruptno);
 void setvect(int interruptno, __prism_vector isr);
 void geninterrupt(int intr_num);
+unsigned _dos_write(int handle, const void far *buf, unsigned len, unsigned *nwritten);
+
+/* Laid out as Borland C++ 3.1 lays them out (sizes and offsets measured with oracle-borland). */
+struct diskfree_t { unsigned total_clusters; unsigned avail_clusters; unsigned sectors_per_cluster; unsigned bytes_per_sector; };
+struct dostime_t { unsigned char hour; unsigned char minute; unsigned char second; unsigned char hsecond; };
+struct WORDREGS { unsigned int ax, bx, cx, dx, si, di, cflag, flags; };
+struct BYTEREGS { unsigned char al, ah, bl, bh, cl, ch, dl, dh; };
+union REGS { struct WORDREGS x; struct BYTEREGS h; };
+unsigned _dos_getdiskfree(unsigned char drive, struct diskfree_t *dtable);
+void _dos_gettime(struct dostime_t *timep);
+int int86(int intno, union REGS *inregs, union REGS *outregs);
 
 void harderr(int (far *handler)());
 void hardresume(int axret);
@@ -77,7 +88,7 @@ char **_argv;
 /** The runtime half of <dos.h>, typed by the prototypes there (emit.js, `proto`). */
 const PROTO = Object.freeze({ proto: true });
 export const BORLAND_BUILTINS = Object.fromEntries(['getvect', 'setvect', 'harderr', 'hardresume',
-  'hardretn', 'disable', 'enable', 'inport', 'outport'].map((n) => [n, PROTO]));
+  'hardretn', 'disable', 'enable', 'inport', 'outport', '_dos_getdiskfree', '_dos_gettime', 'int86'].map((n) => [n, PROTO]));
 
 const hex = (n, w = 2) => n.toString(16).toUpperCase().padStart(w, '0');
 
@@ -109,6 +120,32 @@ export function installBorland(M, { services = {} } = {}) {
     enable: () => { M.cpu.if = 1; M.irqPoll?.(); },
     inport: (p) => (M.machine ? M.machine.read(p, 2) & 0xffff : 0xffff),
     outport: (p, v) => { M.machine?.write(p, 2, v | 0); },
+
+    // Borland's own wrappers of int 21h, so they get what the machine's DOS answers (dos.js).
+    _dos_getdiskfree: (drive, t) => {
+      const r = { ax: 0x3600, bx: 0, cx: 0, dx: drive & 0xff, si: 0, di: 0, bp: 0, ds: 0, es: 0, cf: 0, zf: 0, sf: 0 };
+      M.interrupt(0x21, r);
+      if ((r.ax & 0xffff) === 0xffff) return 15;          // invalid drive (DOS error 15)
+      const d = dv();
+      d.setUint16(t, r.dx, true); d.setUint16(t + 2, r.bx, true); d.setUint16(t + 4, r.ax, true); d.setUint16(t + 6, r.cx, true);
+      return 0;
+    },
+    _dos_gettime: (t) => {
+      const r = { ax: 0x2c00, bx: 0, cx: 0, dx: 0, si: 0, di: 0, bp: 0, ds: 0, es: 0, cf: 0, zf: 0, sf: 0 };
+      M.interrupt(0x21, r);
+      const u = M.mod.u8;
+      u[t] = r.cx >>> 8; u[t + 1] = r.cx & 255; u[t + 2] = r.dx >>> 8; u[t + 3] = r.dx & 255;
+    },
+    // int86: union REGS in (WORDREGS: ax..di, cflag, flags), the interrupt, the registers out; AX returned.
+    int86: (n, inp, out) => {
+      const d = dv(), w = (o) => d.getUint16(inp + o, true);
+      const r = { ax: w(0), bx: w(2), cx: w(4), dx: w(6), si: w(8), di: w(10), bp: 0, ds: 0, es: 0, cf: 0, zf: 0, sf: 0 };
+      M.interrupt(n & 255, r);
+      ['ax', 'bx', 'cx', 'dx', 'si', 'di'].forEach((k, i) => d.setUint16(out + 2 * i, r[k] & 0xffff, true));
+      d.setUint16(out + 12, r.cf & 1, true);
+      d.setUint16(out + 14, 2 | (r.cf & 1) | ((r.zf & 1) << 6) | ((r.sf & 1) << 7) | ((M.cpu.if & 1) << 9), true);
+      return r.ax & 0xffff;
+    },
   };
 
   /** `int n`: the program's own handler, else a harness service, else a refusal by name. */

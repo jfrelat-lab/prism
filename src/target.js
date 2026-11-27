@@ -467,6 +467,12 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     enums: c.enums,
     // ...and, for a compiler that could answer sizeof inside #if, the sizes it would have given.
     ppSizeof: c.ppSizeof ?? null,
+    // ...and, for a function whose asm reads a register Borland's caller set, what the caller's own code
+    // leaves there -- read off the shipped binary, not assumed (compile.asmEntry, src/asm/borland.js).
+    asmEntry: c.asmEntry ?? null,
+    // ...and the far pointers its C never dereferences, only writes word by word for its asm to read
+    // (compile.rawFarPointers): their bytes are a real segment:offset, not PRISM's linear address.
+    rawFarPointers: c.rawFarPointers ?? null,
     // ...and whether it let an invalid token paste through, as gcc 2.x did (src/cpp/cpp.js).
     lenientPaste: !!c.lenientPaste,
     cxx: cxxForTarget(c.cxx, target.caseInsensitive),

@@ -15,7 +15,8 @@
 //
 // THE ANSWERS ARE THE MACHINE'S, chosen once: DOS 5.0; a VGA with a colour display (what DOSBox, the
 // oracle this project runs Borland programs on, reports); no EMS, so opening the EMMXXXX0 device
-// fails like any missing file; no mouse driver (int 33h AX=0 returns AX=0).
+// fails like any missing file; no XMS driver (int 2Fh AX=4300h leaves AL alone); no mouse driver
+// (int 33h AX=0 returns AX=0).
 
 const hex = (n, w = 2) => (n >>> 0).toString(16).toUpperCase().padStart(w, '0');
 
@@ -43,6 +44,9 @@ export function installDos(M, { keys = [] } = {}) {
         r.dx = d.getUTCSeconds() << 8;
         return;
       }
+      // free disk space: one disk, answered as DOSBox-X answers for a mounted directory (measured with
+      // Borland's _dos_getdiskfree): 64 sectors a cluster, 61440 of 65535 clusters free, 512 bytes a sector.
+      case 0x36: r.ax = 64; r.bx = 61440; r.cx = 512; r.dx = 65535; return;
       case 0x30: r.ax = 0x0005; r.bx = 0; r.cx = 0; return;     // DOS 5.0
       case 0x3d: {          // open: DS:DX name, AL access
         const name = cstr(lin(r.ds, r.dx));
@@ -130,6 +134,10 @@ export function installDos(M, { keys = [] } = {}) {
   // --- int 33h, the mouse driver this machine does not have
   const int33 = (r) => { if (r.ax === 0) return; refuse(0x33, r); };
 
-  M.pcServices = { 0x10: int10, 0x16: int16, 0x21: int21, 0x33: int33 };
+  // --- int 2Fh, the multiplex: asked for an XMS driver (AX=4300h), there is none -- AL stays
+  // unchanged, not 80h -- as there is no EMS.
+  const int2f = (r) => { if (r.ax === 0x4300) return; refuse(0x2f, r); };
+
+  M.pcServices = { 0x10: int10, 0x16: int16, 0x21: int21, 0x2f: int2f, 0x33: int33 };
   return { video, keyQueue };
 }
