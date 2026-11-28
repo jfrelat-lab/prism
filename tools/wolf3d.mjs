@@ -10,13 +10,13 @@
 //   --seconds  real-time leash: the run is stopped there, wherever the game is
 //   --frame    the VGA picture at the end; --every/--dir one picture every so many virtual seconds
 //   --stack    print where a run that threw was
-//   --mirage   MIRAGE's checkout, for the run-time scalers (default ~/Projects/mirage, or $PRISM_MIRAGE)
+//   --mirage   a MIRAGE checkout to run the scalers on instead of the vendored core (or $PRISM_MIRAGE)
 import { readdirSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
 import { writeIndexedPng } from './png.mjs';
-import { installMirageX86 } from './mirage-x86.mjs';
+import { installTargetX86Node } from './mirage-x86.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const arg = (k, d = null) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3) ?? d;
@@ -31,7 +31,7 @@ const t0 = performance.now();
 const target = loadTarget(join(ROOT, 'targets', 'wolf3d.json'));
 const { program: p, tasmBound } = buildTarget(target, { root: ROOT, envExtra: { stdio: { files }, pcirq: { keys } } });
 // The scalers WL_SCALE.C compiles at run time run on MIRAGE's CPU (tools/mirage-x86.mjs, P11.4).
-const x86 = await installMirageX86(p, { builders: ['SetupScaling'], ...(arg('mirage') ? { mirage: home(arg('mirage')) } : {}) });
+const x86 = await installTargetX86Node(p, target.x86, arg('mirage') ? { mirage: home(arg('mirage')) } : {});
 console.log(`built in ${(performance.now() - t0).toFixed(0)} ms; ${p.failures.length} refused; ${tasmBound.length} TASM routines bound`);
 
 const every = Number(arg('every', 0)) * 1e6, shotDir = arg('dir') && home(arg('dir'));

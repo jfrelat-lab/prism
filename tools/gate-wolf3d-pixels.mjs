@@ -26,8 +26,8 @@
 // and abs(unsigned) handed to the runtime unconverted (a guard 13 tiles away read as 3, fired, and
 // the demo went its own way; src/backend/emit.js).
 //
-// The compiled scalers run on MIRAGE (tools/mirage-x86.mjs): the gate SKIPS without a checkout, as it
-// does without the data set (PRISM_WOLF3D_DATA, default ~/Projects/wolf3d-data/wl6). No game data
+// The compiled scalers run on the vendored MIRAGE core (src/asm/x86-mirage.js). The gate SKIPS without
+// the data set (PRISM_WOLF3D_DATA, default ~/Projects/wolf3d-data/wl6). No game data
 // enters the repository: the golden holds hashes of screens.
 //
 //   node tools/gate-wolf3d-pixels.mjs --capture    # the reference, into goldens/wolf3d-pixels.json
@@ -40,14 +40,13 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { zmbvFrames } from './zmbv.mjs';
 import { skip } from './gate-skip.mjs';
-import { installMirageX86 } from './mirage-x86.mjs';
+import { installTargetX86Node } from './mirage-x86.mjs';
 import { loadTarget, buildTarget } from '../src/target.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const GOLDEN = process.argv.find((a) => a.startsWith('--golden='))?.slice(9) ?? join(ROOT, 'goldens', 'wolf3d-pixels.json');
 const EXE = process.argv.find((a) => a.startsWith('--exe='))?.slice(6) ?? join(ROOT, 'corpus', 'Wolf3D', 'WOLFSRC', 'WOLF3D.EXE');
 const DATA = process.env.PRISM_WOLF3D_DATA ?? join(process.env.HOME ?? '', 'Projects', 'wolf3d-data', 'wl6');
-const MIRAGE = process.env.PRISM_MIRAGE ?? join(process.env.HOME ?? '', 'Projects', 'mirage');
 const STABLE = 3;
 const MIN_SCREENS = 600, DEMO_AFTER = 125;
 const VIRTUAL_SECONDS = Number(process.env.WOLF_SECONDS ?? 140), REF_SECONDS = 150;
@@ -102,7 +101,6 @@ const reuseAt = process.argv.indexOf('--reuse');
 if (process.argv.includes('--capture')) capture(reuseAt > 0 ? process.argv[reuseAt + 1] : null);
 if (!existsSync(GOLDEN)) { console.log('no goldens/wolf3d-pixels.json: run with --capture first'); process.exit(1); }
 if (!existsSync(join(DATA, 'VSWAP.WL6'))) skip(`Wolfenstein 3-D's id/Activision 1.4 WL6 data at ${DATA}`, 'set PRISM_WOLF3D_DATA to the directory holding the *.WL6 files');
-if (!existsSync(join(MIRAGE, 'src', 'machine.js'))) skip(`MIRAGE's checkout at ${MIRAGE}, which runs the compiled scalers`, 'set PRISM_MIRAGE to it');
 const ref = new Set(JSON.parse(readFileSync(GOLDEN, 'utf8')).screens);
 
 // --- PRISM, on the same key
@@ -111,7 +109,7 @@ const files = Object.fromEntries(readdirSync(DATA).filter((f) => /\.WL6$/i.test(
 const target = loadTarget(join(ROOT, 'targets', 'wolf3d.json'));
 const { program: p } = buildTarget(target, { root: ROOT,
   envExtra: { stdio: { files }, pcirq: { keys: PRISM_KEYS.map(([ms, scan]) => ({ ms, scan })) } } });
-await installMirageX86(p, { mirage: MIRAGE, builders: ['SetupScaling'] });
+await installTargetX86Node(p, target.x86);
 const seen = new Map();                                   // hash -> { first, held }
 const dumpDir = process.argv.find((a) => a.startsWith('--dump='))?.slice(7), dumps = new Map();
 let last = null, run = 0, next = 0;

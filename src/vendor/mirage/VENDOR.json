@@ -1,0 +1,19 @@
+{
+  "_doc": "MIRAGE's CPU core, copied verbatim by tools/vendor-mirage.mjs: machine.js and what it imports. Do not edit here; change MIRAGE and vendor again.",
+  "repo": "https://github.com/jfrelat-lab/mirage",
+  "commit": "0ed042327fd3ddaee1b9b3767df3dfcc91ba5e7c",
+  "subject": "Windows' software frames: the screen converted only when it changed, an 8-bit section blitted row by row",
+  "files": {
+    "cpu-profile.js": "392f2c247b20a1733705f714f9780ed2fbb58201005dc15bca0cc4ef43bd4352",
+    "cpu.js": "2deee9fe27053ed3a4e1d13e84c2b0f1b3378df4aa8b843c9bc1d101417a8fb3",
+    "derail.js": "faaf8e58df90cfa9bbe5a133bf387ebfa37ded4405af0da65a3c4d49cadef7ca",
+    "ems.js": "b64eb8605c1d4a32b0a80b8e12d2a864a53959b09e055da766dad3cef31ee0cb",
+    "fpu.js": "dfeea41d3dadb4ddaf8b664507c52efc6d0b9198c26d9fc11141f15e9f53b922",
+    "machine.js": "a80b7ecace15c84a36072c25c3ce21001e911499b5933129e5aa91d78ce92659",
+    "mem-strategy.js": "c43fef5d34cb28fbdf0e37a7530acf3bd7cba423708e7a64ab82b9dc8428d0f0",
+    "memory.js": "6e82f1ade82416025e0209f4fcb1556de6396348e375bfce2d6aae672a415447",
+    "mmx.js": "439ecc15bbb88c5671f6b8bb18ec56e1c7c8c1b5b1494d9c9c4faf61d961cd55",
+    "recompiler.js": "de9e2289e3b613e33f6d1b72cb367217c617a1963c15d7927b6208179ddf31ba",
+    "sse.js": "d59e6869eeae5d72f708536b5ea8b6c217fea5862e9fe0e72ff448fc0b30e5d0"
+  }
+}

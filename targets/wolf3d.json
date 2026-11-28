@@ -24,6 +24,9 @@
     "_codeWriters": "ScaleLine (WL_SCALE.C) patches a RETF into a compiled scaler before each call and restores the byte after; the x86 executor must see both stores."
   },
 
+  "x86": { "executor": "mirage", "builders": ["SetupScaling"] },
+  "_x86": "WL_SCALE.C compiles its scalers at run time; they run on MIRAGE's CPU (src/asm/x86-mirage.js). SetupScaling builds them all, so every translation is dropped when it returns.",
+
   "env": ["stdio", "borland", "dos", "pcirq", "ega", "vgadac"],
   "tasm": ["WHACK_A.ASM", "WL_ASM.ASM", "WL_DR_A.ASM", "ID_SD_A.ASM", "ID_US_A.ASM", "ID_VL_A.ASM", "ID_VH_A.ASM"],
 

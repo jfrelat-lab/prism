@@ -91,5 +91,7 @@ export async function targetAnswer(ROOT, name, { subject = '', bundleFor = () =>
         .find(f => f.toLowerCase() === name.replace(/^.*\//, '').toLowerCase());
       return { ...o, path: found ? `${rel(dirname(join(dir, name)))}/${found}` : null };
     }),
+    // The executor for x86 the program writes at run time (src/asm/x86-mirage.js): Wolf3D's scalers.
+    x86: resolved.x86 ?? null,
   };
 }

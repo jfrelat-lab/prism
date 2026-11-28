@@ -1,0 +1,42 @@
+{
+  "title": "Wolfenstein 3D",
+  "target": "wolf3d",
+  "platform": "borland16",
+  "subtitle": "id Software, 1992 · Borland C++ 3.0, MODEL MEDIUM, seven TASM modules · 16-bit real mode, VGA mode X; its run-time scalers on MIRAGE's CPU",
+  "needsData": {
+    "hint": "the id/Activision 1.4 six-episode data (VSWAP.WL6, VGAGRAPH.WL6, GAMEMAPS.WL6, ...): the set WOLFSRC's GFXV_WL6.H numbers",
+    "dir": "wolf3d",
+    "marker": "VSWAP.WL6"
+  },
+  "controls": [
+    [
+      "arrows",
+      "move"
+    ],
+    [
+      "Ctrl",
+      "fire"
+    ],
+    [
+      "Alt",
+      "strafe"
+    ],
+    [
+      "Shift",
+      "run"
+    ],
+    [
+      "Space",
+      "open"
+    ],
+    [
+      "1-4",
+      "weapon"
+    ],
+    [
+      "Esc",
+      "menu"
+    ]
+  ],
+  "_data": "Only the 1.4 WL6 release matches WOLFSRC's numbering (docs/COMPAT.md); the Apogee registered (161 chunks) and shareware (156) sets do not."
+}

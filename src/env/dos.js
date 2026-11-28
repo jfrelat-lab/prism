@@ -16,7 +16,7 @@
 // THE ANSWERS ARE THE MACHINE'S, chosen once: DOS 5.0; a VGA with a colour display (what DOSBox, the
 // oracle this project runs Borland programs on, reports); no EMS, so opening the EMMXXXX0 device
 // fails like any missing file; no XMS driver (int 2Fh AX=4300h leaves AL alone); no mouse driver
-// (int 33h AX=0 returns AX=0).
+// (int 33h reaches an IRET: AX=0 returns AX=0, every other function changes nothing).
 
 const hex = (n, w = 2) => (n >>> 0).toString(16).toUpperCase().padStart(w, '0');
 
@@ -131,8 +131,11 @@ export function installDos(M, { keys = [] } = {}) {
     return refuse(0x16, r);
   };
 
-  // --- int 33h, the mouse driver this machine does not have
-  const int33 = (r) => { if (r.ax === 0) return; refuse(0x33, r); };
+  // --- int 33h, the mouse driver this machine does not have. Without one the vector reaches an IRET
+  // (DOS points unused vectors at one), so EVERY function returns the registers as they were: a reset
+  // leaves AX=0, "not installed", and the rest do nothing. Wolf3D's SetupControlPanel centres the
+  // mouse (AX=4) whether or not it found one.
+  const int33 = () => {};
 
   // --- int 2Fh, the multiplex: asked for an XMS driver (AX=4300h), there is none -- AL stays
   // unchanged, not 80h -- as there is no EMS.

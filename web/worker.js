@@ -23,6 +23,7 @@ import { buildEnv, envHeaders, envBuiltins, envNames, envVars } from '../src/env
 import { installAsm } from '../src/asm/link.js';
 import { asmText } from '../src/asm/gas.js';
 import { tasmModules, tasmExternData, installTasm, dataObjectBlocks } from '../src/asm/tasm-link.js';
+import { installTargetX86 } from '../src/asm/x86-mirage.js';
 import { installAllegro } from '../src/env/allegro.js';
 import { installStdio } from '../src/env/stdio.js';
 import { installPorts } from '../src/env/ports.js';
@@ -195,6 +196,8 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       tasm: t.tasm ?? [],
       tasmFiles: t.tasmFiles ?? [],
       dataObjects: t.dataObjects ?? [],
+      // An executor for the x86 the program writes at run time (src/asm/x86-mirage.js): Wolf3D's scalers.
+      x86: t.x86 ?? null,
     };
   }
 
@@ -564,6 +567,10 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
       argOrder: program.compile?.argOrder ?? toolchainCompile(program.env).argOrder,
       enums: program.compile?.enums,
       ppSizeof: program.compile?.ppSizeof ?? null,
+      // Registers a Borland caller leaves at entry, read off the shipped binary, and the functions whose
+      // inline asm patches code an x86 executor translated (src/target.js passes both in Node).
+      asmEntry: program.compile?.asmEntry ?? null,
+      codeWriters: program.compile?.codeWriters ?? null,
       lenientPaste: !!program.compile?.lenientPaste,
       cxx: cxxForTarget(program.compile?.cxx, program.caseInsensitive),
       window: program.compile?.window ?? envNames(program.env).includes('ega'),
@@ -1413,12 +1420,15 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     const bound = tasmMods.length ? installTasm(prog, tasmMods) : [];
     log(`Turbo Assembler routines bound: ${bound.length}` +
       (bound.refused?.length ? `; ${bound.refused.length} instruction(s) refused where they stand` : ''));
+    // The x86 it writes at run time runs on MIRAGE's vendored core, loaded only for a target that asks.
+    if (program.x86) { await installTargetX86(prog, program.x86); log(`run-time x86: ${program.x86.executor} (src/vendor/mirage)`); }
     const ega = prog.M.ega, clock = prog.M.vclock;
     if (!ega || !clock) throw new Error("host 'borland16' needs the ega and pcirq environments in the target's env list");
 
     /*
      * THE PICTURE is planes, not memory, so it is composed: palette indices into a buffer of this
-     * host's own, the attribute palette's sixteen colours into the page's palette. Text mode is the
+     * host's own, the colours into the page's palette: the attribute palette's sixteen in mode 0Dh (Keen),
+     * the DAC's 256 in mode 13h, chained or unchained (Wolf3D: src/env/ega.js vga256). Text mode is the
      * guest's own 0xB8000, which the page already draws.
      *
      * The buffer lives at 0xD0000, the upper-memory block where a PC keeps option ROMs: this machine
@@ -1430,9 +1440,9 @@ async function start({ program, control, data, lazyData = [], argv, pipeSab = nu
     const VIEW_AT = 0xd0000;
     if (prog.M.u8.length < VIEW_AT + 320 * 200) throw new Error("host 'borland16': the guest image is too small for the display buffer");
     let view = 0, graphics = false;
-    const lastPal = new Uint8Array(48);
+    const lastPal = new Uint8Array(768);
     const compose = () => {
-      if (ega.mode !== 0x0d) {
+      if (ega.mode !== 0x0d && ega.mode !== 0x13) {
         if (graphics) { Atomics.store(ctrl, SLOT.TEXTMODE, 1); graphics = false; }
         return;
       }

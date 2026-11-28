@@ -19,6 +19,7 @@ fetched into `corpus/`, which git ignores; see each `targets/*.json`.
 | `src/env/sdl2-surface.js` | The clipping of `SDL_UpperBlit` | SDL 2, `src/video/SDL_surface.c` | zlib licence |
 | `src/env/sdl12.js` | The key-name strings of `SDL_GetKeyName` | SDL 1.2, `src/events/SDL_keyboard.c` | LGPL-2.1 |
 | `src/runtime/runtime.js` | `rand`/`random`: the additive-feedback generator and its seeding | 4.3BSD `random(3)`, as glibc and DJGPP's libc carry it | BSD (algorithm), glibc LGPL-2.1 |
+| `src/vendor/mirage/` (copied by `tools/vendor-mirage.mjs`; the commit is in its `VENDOR.json`) | MIRAGE's CPU core -- the x86 CPU, its dynamic recompiler, memory, FPU, SSE and MMX -- that runs code a program writes at run time (`src/asm/x86-mirage.js`) | MIRAGE, PRISM's sibling project, [jfrelat-lab/mirage](https://github.com/jfrelat-lab/mirage) | MIT, its `LICENSE` beside it |
 | `src/runtime/runtime.js`, `src/asm/pragma-aux.js` | `FixedMul`, `FixedDiv2`: the instruction sequences of Heretic and Hexen's `#pragma aux` | Raven's `DOOMDEF.H` | GPL-2.0 (a few instructions) |
 
 Interface facts (constant values, struct layouts, prototypes) of OpenGL, GLUT, SDL, Win32, DJGPP,
