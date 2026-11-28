@@ -2054,7 +2054,12 @@ export class FunctionEmitter {
         throw new BorlandAsmError(`'${name}', which is not a variable in scope`);
       },
       load: (addr, size) => loadExpr(addr, U[size]),
-      store: (addr, size, v) => storeExpr(addr, U[size], v),
+      // A function that patches code an x86 executor translated (Wolf3D's ScaleLine plants a RETF in a
+      // compiled scaler and lifts it after the call) reports each store, so the executor drops what
+      // the bytes no longer say (compile.codeWriters, tools/mirage-x86.mjs). Addresses are pure.
+      store: this.ctx.codeWriters?.includes(this.decl.name)
+        ? (addr, size, v) => `(${storeExpr(addr, U[size], v)},M.codeWritten&&M.codeWritten(${addr},${size}))`
+        : (addr, size, v) => storeExpr(addr, U[size], v),
       /*
        * `OFFSET local` in Borland inline assembly is the local's displacement from BP in BORLAND's
        * frame -- measured: `char emmname[9]` alone in its function gives DX = -10, not the address
@@ -3027,7 +3032,8 @@ export class FunctionEmitter {
         // environment returns (farmalloc's block) comes back as segment:offset.
         const args = e.args.map((a, i) => {
           const t = f.type.params[i]?.type, v = this.#rvalForCall(a, t);
-          return isSegOff(t) ? `M.lin(${v})` : v;
+          // ...and an integer at its parameter's width, as a callee's own parameter would read it.
+          return isSegOff(t) ? `M.lin(${v})` : t && T.isInteger(t) ? fitToWidth(t, v) : v;
         });
         const call = `M.rt.${rt.impl ?? name}(${args.join(',')})`;
         // The runtime returns a plain number, fitted here to the prototype's width: the 16-bit
@@ -3035,7 +3041,12 @@ export class FunctionEmitter {
         return { js: isSegOff(f.type.ret) ? `M.far(${call})` : fitToWidth(f.type.ret, call), type: f.type.ret };
       }
       if (rt) {
-        const args = e.args.map((a, i) => this.#rvalForCall(a, rt.params?.[i]));
+        // The table types in i386; the program's prototype types in its model. Under a 16-bit model an
+        // integer argument is fitted to the PROTOTYPE's parameter, as a callee reading it would: the
+        // conversion is not truncated where it happens, and abs(5u - 18u) handed the runtime 65523
+        // where Borland's abs sees -13 (Wolf3D's T_Chase put a guard 3 tiles off instead of 13).
+        const fit = (i, js) => { const t = f?.type?.params?.[i]?.type; return t && T.isInteger(t) && t.size < 4 ? fitToWidth(t, js) : js; };
+        const args = e.args.map((a, i) => fit(i, this.#rvalForCall(a, rt.params?.[i])));
         // A variadic runtime function takes its extras as one JS array, which is enough for
         // printf-family calls and is all tier-0 promises.
         const impl = rt.impl ?? name;

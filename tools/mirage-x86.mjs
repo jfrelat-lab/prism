@@ -48,6 +48,10 @@ export async function installMirageX86(program, { mirage = process.env.PRISM_MIR
     program.mod.bindFunc(name, wrapped);
   }
 
+  // ScaleLine plants a RETF in a scaler before each call and lifts it after: the target names it in
+  // compile.codeWriters, so each of its stores arrives here and MIRAGE drops the blocks it overlaps.
+  M.codeWritten = (addr, len) => mach.rec.invalidate(addr, len);
+
   const W = ['ax', 'cx', 'dx', 'bx', 'sp', 'bp', 'si', 'di'];
   M.x86exec = (R) => {
     stats.calls++;

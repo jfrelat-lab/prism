@@ -19,7 +19,9 @@
   "compile": { "memory": 16, "c89": true, "model": "dos16m", "signedChar": true, "enums": "int", "collect": true, "safepoints": true,
     "asmEntry": {
       "VGAClearScreen": { "cx": 0, "_why": "Its asm does mov cl,bl / rep stosw and never writes CH, and Borland compiles nothing before it that writes CX (WOLF3D.EXE 0EBC:0A0B). Its one caller, ThreeDRefresh, runs its own mov cx,0x800 / rep stosw just before the call (0EBC:0F28), which leaves CX = 0." }
-    }
+    },
+    "codeWriters": ["ScaleLine"],
+    "_codeWriters": "ScaleLine (WL_SCALE.C) patches a RETF into a compiled scaler before each call and restores the byte after; the x86 executor must see both stores."
   },
 
   "env": ["stdio", "borland", "dos", "pcirq", "ega", "vgadac"],

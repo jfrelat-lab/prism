@@ -470,6 +470,9 @@ export function buildTarget(target, { root, envExtra = {}, compile: overrides = 
     // ...and, for a function whose asm reads a register Borland's caller set, what the caller's own code
     // leaves there -- read off the shipped binary, not assumed (compile.asmEntry, src/asm/borland.js).
     asmEntry: c.asmEntry ?? null,
+    // ...and the functions whose inline asm writes into code an x86 executor has translated: each of
+    // their stores is reported to M.codeWritten (compile.codeWriters, src/backend/emit.js).
+    codeWriters: c.codeWriters ?? null,
     // ...and whether it let an invalid token paste through, as gcc 2.x did (src/cpp/cpp.js).
     lenientPaste: !!c.lenientPaste,
     cxx: cxxForTarget(c.cxx, target.caseInsensitive),

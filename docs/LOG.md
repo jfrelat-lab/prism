@@ -1090,6 +1090,8 @@ mutations turn it red (0.584 and 0.063). The spin damping and installRealClock w
 
 **Why / unblocks:** Wolf3D needs the same thing (its own compiled scalers), so this is not one target's problem.
 
+✅ **2026-11-28 — Wolf3D's run-time scalers run on MIRAGE, and code the C patches is reported.** `tools/mirage-x86.mjs` executes what `src/asm/farcall.js` routes to a segment nothing translated owns. ScaleLine plants a RETF in a compiled scaler before each call and lifts it after; MIRAGE never saw those stores and kept running the unpatched block, so every sprite was drawn too long. A target now names such functions (`compile.codeWriters`); their inline-asm stores call `M.codeWritten`, which the executor maps to MIRAGE's byte-precise invalidation. Found by `gate-wolf3d-pixels`, and red without the entry.
+
 <a id="p11-5"></a>
 
 ### P11.5
@@ -1131,6 +1133,8 @@ mutations turn it red (0.584 and 0.063). The spin damping and installRealClock w
 **Effort:** M
 
 **Why / unblocks:** The wrap is the one that could produce a wrong answer rather than a refusal.
+
+✅ **2026-11-28 — Wolfenstein 3-D's pixel reference, and the defect only a whole game could show.** `gate-wolf3d-pixels` holds PRISM's build to WOLFSRC's own WOLF3D.EXE (the GoodTimes build its source describes, so the signon and the high-score table are the same pictures; the id/Activision binary differs from the source there). Demo playback is DEMOTICS-locked, so a demo is the same GAME on any machine, and the first run diverged at 52.8 s: an officer fired where the reference's walked on. Located by running the reference binary in MIRAGE and comparing per-frame game state (the RNG index, every actor) against PRISM's, with WOLF3D.MAP for the addresses: the same RNG value, a different `chance`. `abs(ob->tilex - player->tilex)` on unsigned tiles: Borland converts 65523 to the parameter's int, -13, and returns 13; PRISM handed the runtime 65523 and truncated the result to -13, so `dist` was 3. A builtin's integer arguments are now fitted to the program's prototype (src/backend/emit.js), held to Borland C++ 2.0 by `tests/dos16/lib.c` (`abs 13 13 25536 13`). After it, 3000 demo frames -- three demos -- match the reference state for state, and 774 of 774 stable screens match its pixels.
 
 ## P12 · More machines, and a second renderer
 

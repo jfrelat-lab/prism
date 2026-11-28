@@ -1097,7 +1097,7 @@ export function compileProgram(units, opts = {}) {
   finally { setPaged(false); setWindow(false); }
 }
 
-function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, asmEntry = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx, stack = null } = {}) {
+function compileProgramInner(units, { defines = {}, resolve = null, memory, includes = {}, collect = false, shared = false, safepoints = false, directCalls = true, pack = null, c89 = false, model = 'i386', signedChar, argOrder, enums, longDouble, floatToInt, x87Precision, ppSizeof = null, asmEntry = null, codeWriters = null, lenientPaste = false, paged = false, window = false, exports: moduleExports = {}, extraBuiltins = null, externData = [], cxx, stack = null } = {}) {
   checkCxxOption(cxx);
   checkFloatToInt(floatToInt);
   // moduleExports: module name -> the names it makes visible to the main module. See `visible` below.
@@ -1468,6 +1468,7 @@ function compileProgramInner(units, { defines = {}, resolve = null, memory, incl
       x87Precision,
       argOrder,
       asmEntry,
+      codeWriters,
       c89,
       builtinRefs,
       undefinedCalls,

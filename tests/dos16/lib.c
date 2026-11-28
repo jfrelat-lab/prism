@@ -45,6 +45,11 @@ int main(int argc, char *argv[])
     printf("hex %ld rest [%s]\n", v, end);
     printf("strtoul %lu\n", strtoul("4000000000", &end, 10));
     printf("atoi %d atol %ld\n", atoi("-77"), atol("100000"));
+    {
+        /* an unsigned argument becomes abs's int: 5u - 18u is -13 to it, 40000u is -25536 (Wolf3D's T_Chase) */
+        unsigned ua = 5, ub = 18, big = 40000u;
+        printf("abs %d %d %d %ld\n", abs(ua - ub), abs(ub - ua), abs(big), labs((long)ua - ub));
+    }
     sp.guard = 1234;
     strtol("99z", &sp.end, 10);
     printf("endptr [%s] guard %d\n", sp.end, sp.guard);
