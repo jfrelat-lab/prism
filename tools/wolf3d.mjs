@@ -15,7 +15,7 @@ import { readdirSync, readFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadTarget, buildTarget } from '../src/target.js';
-import { writeRgbPng } from './png.mjs';
+import { writeIndexedPng } from './png.mjs';
 import { installMirageX86 } from './mirage-x86.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -41,8 +41,8 @@ if (every && shotDir) {
   const sp = p.M.sp_;
   p.M.sp_ = (...a) => {
     if (p.M.vclock.us >= next) {
-      const f = p.M.ega.frame();
-      if (f) writeRgbPng(join(shotDir, `frame${String(n++).padStart(3, '0')}.png`), { bytes: f.rgba, width: f.width, height: f.height });
+      const f = p.M.ega.indexed();
+      if (f) writeIndexedPng(join(shotDir, `frame${String(n++).padStart(3, '0')}.png`), { pixels: f.pix, width: f.width, height: f.height, palette: f.palette.flat() });
       next += every;
     }
     return sp(...a);
@@ -60,6 +60,6 @@ console.log(`x86 run on MIRAGE: ${x86.calls} far calls, ${x86.blocks} blocks, ${
 console.log(`${ended} at ${(p.M.vclock.us / 1e6).toFixed(2)} s virtual, video mode ${p.M.ega.mode.toString(16)}h`);
 const out = arg('frame');
 if (out) {
-  const f = p.M.ega.frame();
-  if (f) { writeRgbPng(home(out), { bytes: f.rgba, width: f.width, height: f.height }); console.log(`frame -> ${out}`); }
+  const f = p.M.ega.indexed();
+  if (f) { writeIndexedPng(home(out), { pixels: f.pix, width: f.width, height: f.height, palette: f.palette.flat() }); console.log(`frame -> ${out}`); }
 }
